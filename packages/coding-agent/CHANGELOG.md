@@ -62,6 +62,9 @@
 ### Fixed
 
 - Fixed Ask dialogs immediately accepting their highlighted single-select answer when they appear while the user is typing a space in the prompt editor ([#5717](https://github.com/can1357/oh-my-pi/issues/5717)).
+### Fixed
+
+- Stopped post-compaction auto-continue from opening another primary turn after a terminal text answer with no queued work, and moved automatic auto-learn capture into an abortable private agent with only `manage_skill` and `learn` tools ([#5715](https://github.com/can1357/oh-my-pi/issues/5715)).
 
 ## [17.0.1] - 2026-07-16
 

@@ -2466,7 +2466,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Auto-Learn",
 			label: "Auto-run capture at stop",
 			description:
-				"When on, auto-run one capture turn at stop (uses extra tokens). Off = passive reminder on your next turn.",
+				"When on, auto-run one private capture turn at stop (uses extra tokens). When off, only standing auto-learn guidance remains.",
 			condition: "autolearnActive",
 		},
 	},

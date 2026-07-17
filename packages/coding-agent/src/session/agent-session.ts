@@ -1953,6 +1953,8 @@ export class AgentSession {
 	#providerSessionId: string | undefined;
 	#freshProviderSessionId: string | undefined;
 	#inheritedProviderPromptCacheKey: string | undefined;
+	#autolearnCaptureAbortController: AbortController | undefined;
+	#autolearnCaptureTask: Promise<void> | undefined;
 	#isDisposed = false;
 	// Extension system
 	#extensionRunner: ExtensionRunner | undefined = undefined;
@@ -4880,7 +4882,28 @@ export class AgentSession {
 		);
 	}
 
-	#scheduleAutoContinuePrompt(generation: number): void {
+	#scheduleCompactionContinuation(options: {
+		generation: number;
+		autoContinue: boolean;
+		terminalTextAnswer: boolean;
+		suppressContinuation: boolean;
+	}): boolean {
+		if (options.suppressContinuation) return false;
+		if (this.agent.hasQueuedMessages()) {
+			this.#scheduleAgentContinue({
+				delayMs: 100,
+				generation: options.generation,
+				shouldContinue: () => this.agent.hasQueuedMessages(),
+			});
+			return true;
+		}
+		if (!options.autoContinue) return false;
+		const activeGoal = this.#goalModeState?.enabled === true && this.#goalModeState.goal.status === "active";
+		if (options.terminalTextAnswer && !activeGoal) return false;
+		return this.#scheduleAutoContinuePrompt(options.generation);
+	}
+
+	#scheduleAutoContinuePrompt(generation: number): boolean {
 		const continuePrompt = async () => {
 			// Compaction summarizes away the first-message eager preludes, so re-assert the
 			// delegate-via-tasks / phased-todo reminders on this auto-resumed turn. This runs
@@ -4905,10 +4928,18 @@ export class AgentSession {
 			async signal => {
 				await Promise.resolve();
 				if (signal.aborted) return;
+				if (this.agent.hasQueuedMessages()) {
+					this.#scheduleAgentContinue({
+						generation,
+						shouldContinue: () => this.agent.hasQueuedMessages(),
+					});
+					return;
+				}
 				await continuePrompt();
 			},
 			{ generation },
 		);
+		return true;
 	}
 
 	async #cancelPostPromptTasks(): Promise<void> {
@@ -6289,6 +6320,43 @@ export class AgentSession {
 			await this.refreshBaseSystemPrompt();
 		}
 	}
+	/** Run one abortable auto-learn capture outside the primary agent loop. */
+	async runAutolearnCapture(capture: (signal: AbortSignal) => Promise<void>): Promise<void> {
+		if (this.#autolearnCaptureTask || this.#isDisposed) return;
+		const controller = new AbortController();
+		this.#autolearnCaptureAbortController = controller;
+		const task = (async () => {
+			try {
+				await capture(controller.signal);
+			} catch (error) {
+				if (!controller.signal.aborted) throw error;
+			} finally {
+				if (this.#autolearnCaptureAbortController === controller) {
+					this.#autolearnCaptureAbortController = undefined;
+				}
+			}
+		})();
+		this.#autolearnCaptureTask = task;
+		try {
+			await task;
+		} finally {
+			if (this.#autolearnCaptureTask === task) this.#autolearnCaptureTask = undefined;
+		}
+	}
+
+	#abortAutolearnCapture(): void {
+		this.#autolearnCaptureAbortController?.abort();
+	}
+
+	async #drainAutolearnCapture(): Promise<void> {
+		const task = this.#autolearnCaptureTask;
+		if (!task) return;
+		try {
+			await withTimeout(task, 3_000, "Timed out draining auto-learn capture during dispose");
+		} catch (error) {
+			logger.warn("Auto-learn capture did not settle during dispose", { error: String(error) });
+		}
+	}
 
 	/** True once dispose() has begun; deferred background work (e.g. the deferred
 	 *  MCP discovery task in sdk.ts) must not touch the session past this point. */
@@ -6311,7 +6379,8 @@ export class AgentSession {
 	 */
 	beginDispose(): void {
 		this.#isDisposed = true;
-		this.#titleGenerationAbortController.abort();
+this.#titleGenerationAbortController.abort();
+		this.#abortAutolearnCapture();
 		this.#flushPendingIrcAsides();
 		this.yieldQueue.clear();
 		this.agent.setAsideMessageProvider(undefined);
@@ -6369,6 +6438,7 @@ export class AgentSession {
 		const postPromptDrain = this.#cancelPostPromptTasks();
 		this.agent.abort();
 		await postPromptDrain;
+		await this.#drainAutolearnCapture();
 		// Cancel jobs this agent registered so a subagent's teardown doesn't
 		// leak its background bash/task work into the parent's manager. Only
 		// the session that owns the manager goes on to dispose it (which itself
@@ -9171,6 +9241,7 @@ export class AgentSession {
 		// auto-starting a fresh turn during cleanup.
 		this.#abortInProgress = true;
 		try {
+			this.#abortAutolearnCapture();
 			this.abortRetry();
 			this.#promptGeneration++;
 			this.#scheduledHiddenNextTurnGeneration = undefined;
@@ -9192,6 +9263,7 @@ export class AgentSession {
 			this.agent.abort(options?.reason);
 			await postPromptDrain;
 			await this.agent.waitForIdle();
+			await this.#drainAutolearnCapture();
 			await this.#goalRuntime.onTaskAborted({ reason: options?.goalReason ?? "interrupted" });
 			// Clear prompt-in-flight state: waitForIdle resolves when the agent loop's finally
 			// block runs, but nested prompt setup/finalizers may still be unwinding. Without this,
@@ -11182,6 +11254,7 @@ export class AgentSession {
 					autoContinue,
 					triggerContextTokens: postMaintenanceContextTokens,
 					phase: "pre_turn",
+					terminalTextAnswer: isTerminalTextAssistantAnswer(assistantMessage),
 				});
 			}
 			logger.debug("Auto-compaction threshold satisfied but context promotion took over", {
@@ -13030,12 +13103,15 @@ export class AgentSession {
 			suppressContinuation?: boolean;
 			suppressHandoff?: boolean;
 			phase?: CodexCompactionContext["phase"];
+			terminalTextAnswer?: boolean;
 		} = {},
 	): Promise<CompactionCheckResult> {
 		const compactionSettings = this.settings.getGroup("compaction");
 		if (compactionSettings.strategy === "off") return COMPACTION_CHECK_NONE;
 		if (reason !== "idle" && !compactionSettings.enabled) return COMPACTION_CHECK_NONE;
 		const generation = this.#promptGeneration;
+		const terminalTextAnswer =
+			options.terminalTextAnswer ?? isTerminalTextAssistantAnswer(this.#findLastAssistantMessage());
 		const suppressContinuation = options.suppressContinuation === true;
 		const shouldAutoContinue =
 			!suppressContinuation && options.autoContinue !== false && compactionSettings.autoContinue !== false;
@@ -13050,6 +13126,7 @@ export class AgentSession {
 				willRetry,
 				generation,
 				shouldAutoContinue,
+				terminalTextAnswer,
 				options.triggerContextTokens,
 				suppressContinuation,
 			);
@@ -13072,7 +13149,10 @@ export class AgentSession {
 				async signal => {
 					await Promise.resolve();
 					if (signal.aborted) return;
-					await this.#runAutoCompaction(reason, willRetry, true, true, { phase: options.phase });
+					await this.#runAutoCompaction(reason, willRetry, true, true, {
+						...options,
+						terminalTextAnswer,
+					});
 				},
 				{ generation },
 			);
@@ -13143,10 +13223,14 @@ export class AgentSession {
 						aborted: false,
 						willRetry: false,
 					});
-					const continuationScheduled = !autoCompactionSignal.aborted && reason !== "idle" && shouldAutoContinue;
-					if (continuationScheduled) {
-						this.#scheduleAutoContinuePrompt(generation);
-					}
+					const continuationScheduled =
+						!autoCompactionSignal.aborted &&
+						this.#scheduleCompactionContinuation({
+							generation,
+							autoContinue: reason !== "idle" && shouldAutoContinue,
+							terminalTextAnswer,
+							suppressContinuation,
+						});
 					return {
 						...(continuationScheduled ? COMPACTION_CHECK_CONTINUATION : COMPACTION_CHECK_NONE),
 						historyRewritten: true,
@@ -13635,20 +13719,13 @@ export class AgentSession {
 			if (retryFits) {
 				this.#scheduleAgentContinue({ delayMs: 100, generation });
 				continuationScheduled = true;
-			} else if (hasHeadroom && shouldAutoContinue) {
-				this.#scheduleAutoContinuePrompt(generation);
-				continuationScheduled = true;
-			}
-			if (!continuationScheduled && !suppressContinuation && this.agent.hasQueuedMessages()) {
-				// Auto-compaction can complete while follow-up/steering/custom messages are waiting.
-				// Kick the loop so queued messages are actually delivered. This remains separate
-				// from the no-progress warning: pausing maintenance must not strand user input.
-				this.#scheduleAgentContinue({
-					delayMs: 100,
+			} else {
+				continuationScheduled = this.#scheduleCompactionContinuation({
 					generation,
-					shouldContinue: () => this.agent.hasQueuedMessages(),
+					autoContinue: hasHeadroom && shouldAutoContinue,
+					terminalTextAnswer,
+					suppressContinuation,
 				});
-				continuationScheduled = true;
 			}
 
 			if (deadEndWarning) {
@@ -13704,6 +13781,7 @@ export class AgentSession {
 		willRetry: boolean,
 		generation: number,
 		autoContinue: boolean,
+		terminalTextAnswer: boolean,
 		triggerContextTokens?: number,
 		suppressContinuation = false,
 	): Promise<CompactionCheckResult | "fallback"> {
@@ -13786,10 +13864,6 @@ export class AgentSession {
 			});
 
 			let continuationScheduled = false;
-			if (!willRetry && reason !== "idle" && autoContinue) {
-				this.#scheduleAutoContinuePrompt(generation);
-				continuationScheduled = true;
-			}
 			if (willRetry) {
 				// The shake rebuild replays every entry, so a trailing error/length
 				// assistant from the failed turn re-enters agent state — drop it before
@@ -13805,13 +13879,13 @@ export class AgentSession {
 				}
 				this.#scheduleAgentContinue({ delayMs: 100, generation });
 				continuationScheduled = true;
-			} else if (!suppressContinuation && this.agent.hasQueuedMessages()) {
-				this.#scheduleAgentContinue({
-					delayMs: 100,
+			} else {
+				continuationScheduled = this.#scheduleCompactionContinuation({
 					generation,
-					shouldContinue: () => this.agent.hasQueuedMessages(),
+					autoContinue: reason !== "idle" && autoContinue,
+					terminalTextAnswer,
+					suppressContinuation,
 				});
-				continuationScheduled = true;
 			}
 			if (!reclaimed) {
 				return willRetry && continuationScheduled
@@ -15830,6 +15904,8 @@ export class AgentSession {
 		// Flush pending writes before branching
 		await this.sessionManager.flush();
 		this.#cancelOwnAsyncJobs();
+		this.#abortAutolearnCapture();
+		await this.#drainAutolearnCapture();
 
 		if (!selectedEntry.parentId) {
 			await this.sessionManager.newSession({ parentSession: previousSessionFile });
@@ -15920,6 +15996,8 @@ export class AgentSession {
 		}
 		await this.sessionManager.flush();
 		this.#cancelOwnAsyncJobs();
+		this.#abortAutolearnCapture();
+		await this.#drainAutolearnCapture();
 
 		this.sessionManager.createBranchedSession(leafId);
 
