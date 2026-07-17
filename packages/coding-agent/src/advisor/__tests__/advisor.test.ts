@@ -35,6 +35,14 @@ import {
 	type WatchdogConfigDoc,
 } from "..";
 
+/** Poll until the drain loop reaches the asserted state — waitForCatchup
+ *  releases IMMEDIATELY on advisor failure (the primary must never park on a
+ *  failing advisor), so failure-path tests cannot use it as a settle barrier. */
+async function settleUntil(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (!predicate() && Date.now() < deadline) await Bun.sleep(2);
+}
+
 describe("advisor", () => {
 	describe("advisor system prompt", () => {
 		it("forbids concrete claims about tool arguments hidden from the advisor transcript", () => {
@@ -1896,6 +1904,94 @@ describe("advisor", () => {
 			expect(promptInputs).toHaveLength(promptsAtHalt);
 		});
 
+		it("never holds the primary agent on the catch-up gate while the advisor is failing", async () => {
+			// CRITICAL contract: a broken advisor (wrong model, dead endpoint)
+			// must not stall the primary agent — not even for one hook. The
+			// onTurnError hook here NEVER resolves, simulating a wedged host
+			// callback; a parked waiter must still be released the moment the
+			// advisor turn fails, and later waits must resolve immediately while
+			// the advisor is mid-failure.
+			const agent: AdvisorAgent = {
+				prompt: async () => {
+					throw new Error("socket hang up");
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const messages: AgentMessage[] = [{ role: "user", content: "aaa", timestamp: 1 } as AgentMessage];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+				onTurnError: () => new Promise<undefined>(() => {}),
+			};
+			const runtime = new AdvisorRuntime(agent, host, 60_000);
+
+			runtime.onTurnEnd(messages);
+			const started = performance.now();
+			// Parked with a huge budget: must release on the failure, not the timer.
+			await runtime.waitForCatchup(60_000, 1);
+			expect(performance.now() - started).toBeLessThan(2_000);
+
+			// While the advisor is mid-failure (retry pending), new waits are free.
+			const again = performance.now();
+			await runtime.waitForCatchup(60_000, 1);
+			expect(performance.now() - again).toBeLessThan(100);
+			runtime.dispose();
+		}, 10_000);
+
+		it("survives a poisoned message without throwing into the caller or losing the delta", async () => {
+			// CRITICAL contract: an advisor render failure (throwing getter,
+			// formatter bug) must neither propagate into the primary agent's
+			// turn-end callback nor park it on the catch-up gate — and the
+			// unrendered delta must survive for the next turn.
+			const promptInputs: string[] = [];
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const messages: AgentMessage[] = [{ role: "user", content: "aaa", timestamp: 1 } as AgentMessage];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+			};
+			const runtime = new AdvisorRuntime(agent, host, 0);
+			runtime.onTurnEnd(messages);
+			await settleUntil(() => promptInputs.length >= 1);
+			expect(promptInputs).toHaveLength(1);
+
+			// Poison: reading `content` throws — during the size probe or render.
+			const poisoned = {
+				role: "user",
+				get content(): string {
+					throw new Error("poisoned message");
+				},
+				timestamp: 2,
+			} as AgentMessage;
+			messages.push(poisoned);
+			expect(() => runtime.onTurnEnd(messages)).not.toThrow();
+			// A parked primary must not wait out the catch-up budget.
+			const started = performance.now();
+			await runtime.waitForCatchup(60_000, 1);
+			expect(performance.now() - started).toBeLessThan(2_000);
+			await settleUntil(() => runtime.backlog === 0);
+
+			// Replace the poison with a healthy message: the cursor was restored,
+			// so the next turn re-renders from the failed position.
+			messages[1] = { role: "user", content: "bbb-recovered", timestamp: 2 } as AgentMessage;
+			messages.push({ role: "user", content: "ccc", timestamp: 3 } as AgentMessage);
+			runtime.onTurnEnd(messages);
+			await settleUntil(() => promptInputs.length >= 2);
+			expect(promptInputs).toHaveLength(2);
+			expect(promptInputs[1]).toContain("bbb-recovered");
+			expect(promptInputs[1]).toContain("ccc");
+			runtime.dispose();
+		}, 10_000);
+
 		// The live incident shape: ONE agent + ONE advisor froze the whole
 		// process. The advisor's delta render (formatSessionHistoryMarkdown over
 		// the transcript slice) ran synchronously on the event loop; a post-reset
@@ -2392,7 +2488,7 @@ describe("advisor", () => {
 			const runtime = new AdvisorRuntime(agent, host, 1);
 
 			runtime.onTurnEnd(messages);
-			await runtime.waitForCatchup(1000, 1);
+			await settleUntil(() => promptInputs.length >= 2 && runtime.backlog === 0);
 
 			expect(promptInputs).toHaveLength(2);
 			expect(turnErrors).toHaveLength(1);
@@ -2439,7 +2535,7 @@ describe("advisor", () => {
 			const runtime = new AdvisorRuntime(agent, host, 1);
 
 			runtime.onTurnEnd(messages);
-			await runtime.waitForCatchup(1000, 1);
+			await settleUntil(() => failures.length >= 1 && runtime.backlog === 0);
 
 			expect(promptInputs).toHaveLength(3);
 			expect(turnErrors.map(error => (error instanceof Error ? error.message : String(error)))).toEqual([
@@ -2495,7 +2591,7 @@ describe("advisor", () => {
 			const runtime = new AdvisorRuntime(agent, host, 1);
 
 			runtime.onTurnEnd(messages);
-			await runtime.waitForCatchup(1000, 1);
+			await settleUntil(() => promptInputs.length >= 2 && runtime.backlog === 0);
 
 			expect(promptInputs).toHaveLength(2);
 			expect(turnErrors).toHaveLength(1);
@@ -2634,7 +2730,7 @@ describe("advisor", () => {
 			const runtime = new AdvisorRuntime(agent, host, 0);
 
 			runtime.onTurnEnd(messages);
-			await runtime.waitForCatchup(1000, 1);
+			await settleUntil(() => promptInputs.length >= 1 && runtime.backlog === 0);
 
 			expect(promptInputs).toHaveLength(1);
 			expect(resetCalls).toBe(1);
@@ -2643,7 +2739,7 @@ describe("advisor", () => {
 
 			messages.push({ role: "user", content: "bbb", timestamp: 2 } as AgentMessage);
 			runtime.onTurnEnd(messages);
-			await runtime.waitForCatchup(1000, 1);
+			await settleUntil(() => promptInputs.length >= 2 && runtime.backlog === 0);
 
 			expect(promptInputs).toHaveLength(2);
 			expect(lengthsBeforePrompt).toEqual([0, 0]);
@@ -2684,7 +2780,7 @@ describe("advisor", () => {
 			messages.push({ role: "user", content: "bbb", timestamp: 2 } as AgentMessage);
 			runtime.onTurnEnd(messages);
 			rejectFirstPrompt(new AdvisorOutputQuarantinedError("quarantined"));
-			await runtime.waitForCatchup(1000, 1);
+			await settleUntil(() => promptInputs.length >= 2 && runtime.backlog === 0);
 
 			expect(promptInputs).toHaveLength(2);
 			expect(promptInputs[1]).toContain("aaa");
@@ -2961,7 +3057,7 @@ describe("advisor", () => {
 			const runtime = new AdvisorRuntime(agent, host, 0);
 
 			runtime.onTurnEnd([{ role: "user", content: "quota-turn", timestamp: 1 } as AgentMessage]);
-			await runtime.waitForCatchup(1000, 1);
+			await settleUntil(() => promptInputs.length >= 3 && runtime.backlog === 0);
 
 			expect(promptInputs).toHaveLength(3);
 			expect(hookErrors).toHaveLength(2);
@@ -3178,7 +3274,7 @@ describe("advisor", () => {
 				{ role: "user", content: "triple-credential", timestamp: 1 } as AgentMessage,
 			];
 			runtime.onTurnEnd(messages);
-			await runtime.waitForCatchup(1000, 1);
+			await settleUntil(() => promptInputs.length >= 3 && runtime.backlog === 0);
 
 			expect(promptInputs).toHaveLength(3);
 			expect(hookErrors).toHaveLength(2);

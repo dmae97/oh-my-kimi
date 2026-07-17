@@ -2623,7 +2623,18 @@ export class AgentSession {
 			this.#advisorPrimaryTurnsCompleted++;
 			if (this.#advisors.length > 0) {
 				for (const a of this.#advisors) {
-					if (!a.runtime.disposed) a.runtime.onTurnEnd(messages, { willContinue: context?.willContinue });
+					if (a.runtime.disposed) continue;
+					try {
+						a.runtime.onTurnEnd(messages, { willContinue: context?.willContinue });
+					} catch (advisorErr) {
+						// CRITICAL boundary: NOTHING an advisor does may abort the
+						// primary agent's turn-end. A throwing advisor loses its
+						// delta; the primary continues untouched.
+						logger.warn("advisor onTurnEnd threw; delta dropped", {
+							advisor: a.name,
+							err: String(advisorErr),
+						});
+					}
 				}
 				const syncBacklog = this.settings.get("advisor.syncBacklog");
 				if (syncBacklog !== "off") {

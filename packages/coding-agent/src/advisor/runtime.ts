@@ -289,6 +289,10 @@ export class AdvisorRuntime {
 	 * explicit {@link reset} (config rebuild, /new, session restart).
 	 */
 	#halted = false;
+	/** True from the moment an advisor turn fails until one succeeds (or an
+	 *  explicit reset/seed). While set, {@link waitForCatchup} resolves
+	 *  immediately: the primary agent NEVER parks on a failing advisor. */
+	#failing = false;
 	#latestMessages?: AgentMessage[];
 	#waiters: CatchupWaiter[] = [];
 	/** Bumped by every external {@link reset}/{@link dispose}. A drain iteration
@@ -361,12 +365,38 @@ export class AdvisorRuntime {
 		// formatted in one synchronous call those block the event loop for
 		// hundreds of milliseconds, freezing EVERY session hosted by a shared
 		// daemon.
-		if (
-			this.#renderBusy === 0 &&
-			all.length - this.#lastCount <= RENDER_CHUNK_MESSAGES &&
-			!deltaExceedsSize(all, this.#lastCount, FAST_RENDER_MAX_CHARS)
-		) {
-			const render = this.#renderDelta(all, wip);
+		let fastPath = false;
+		try {
+			fastPath =
+				this.#renderBusy === 0 &&
+				all.length - this.#lastCount <= RENDER_CHUNK_MESSAGES &&
+				!deltaExceedsSize(all, this.#lastCount, FAST_RENDER_MAX_CHARS);
+		} catch (err) {
+			// A poisoned message (throwing getter) trips the size probe before
+			// any state mutates. Route it through the deferred renderer, whose
+			// catch restores the cursor — never through the caller.
+			logger.warn("advisor delta size probe failed; deferring render", { err: String(err) });
+		}
+		if (fastPath) {
+			let render: string | null = null;
+			// The render advances #lastCount/#seenContext before formatting can
+			// throw; snapshot both so a formatter bug loses NOTHING — the next
+			// turn re-renders this delta.
+			const cursorBefore = this.#lastCount;
+			const seenBefore = [...this.#seenContext];
+			try {
+				render = this.#renderDelta(all, wip);
+			} catch (err) {
+				// A render bug must never propagate into the primary agent's
+				// turn-end callback — the advisor skips this delta and stops
+				// gating the catch-up wait, Luna moves on.
+				this.#lastCount = cursorBefore;
+				this.#seenContext.clear();
+				for (const [key, value] of seenBefore) this.#seenContext.set(key, value);
+				this.#failing = true;
+				this.#wakeAllWaiters();
+				logger.warn("advisor delta render failed", { err: String(err) });
+			}
 			if (render) {
 				this.#pending.push({ text: render, turns: 1, wip });
 				this.#backlog++;
@@ -388,9 +418,20 @@ export class AdvisorRuntime {
 				return;
 			}
 			let render: string | null = null;
+			// Snapshot the cursor/dedup state: a formatter bug mid-render must
+			// lose nothing — the next turn re-renders this delta.
+			const cursorBefore = this.#lastCount;
+			const seenBefore = [...this.#seenContext];
 			try {
 				render = await this.#renderDeltaChunked(all, wip, epoch);
 			} catch (err) {
+				if (!this.disposed && this.#epoch === epoch) {
+					this.#lastCount = cursorBefore;
+					this.#seenContext.clear();
+					for (const [key, value] of seenBefore) this.#seenContext.set(key, value);
+					this.#failing = true;
+					this.#wakeAllWaiters();
+				}
 				logger.warn("advisor delta render failed", { err: String(err) });
 			}
 			if (this.disposed || this.#epoch !== epoch) return;
@@ -423,7 +464,17 @@ export class AdvisorRuntime {
 	}
 
 	waitForCatchup(maxMs: number, threshold: number, signal?: AbortSignal): Promise<void> {
-		if (this.disposed || signal?.aborted || this.#backlog < threshold || this.#quotaExhausted || this.#halted)
+		if (
+			this.disposed ||
+			signal?.aborted ||
+			this.#backlog < threshold ||
+			this.#quotaExhausted ||
+			this.#halted ||
+			// An advisor mid-failure/retry must NEVER gate the primary agent:
+			// its backlog cannot drain until the retry cycle resolves, and the
+			// primary would otherwise park for the full catch-up budget.
+			this.#failing
+		)
 			return Promise.resolve();
 		const { promise, resolve } = Promise.withResolvers<void>();
 		let waiter!: CatchupWaiter;
@@ -487,6 +538,7 @@ export class AdvisorRuntime {
 		this.#epoch++;
 		this.#quotaExhausted = false;
 		this.#halted = false;
+		this.#failing = false;
 		this.#droppedBacklogs = 0;
 		this.#resetAdvisorContext(true, true);
 	}
@@ -502,6 +554,7 @@ export class AdvisorRuntime {
 		this.#pending = [];
 		this.#backlog = 0;
 		this.#consecutiveFailures = 0;
+		this.#failing = false;
 		this.#droppedBacklogs = 0;
 		this.#failureNotified = false;
 		this.#seenContext.clear();
@@ -808,10 +861,17 @@ export class AdvisorRuntime {
 					const turnError = getAdvisorTurnError(this.agent.state.messages.slice(messageSnapshot));
 					if (turnError) throw turnError;
 					success = true;
+					this.#failing = false;
 					this.#consecutiveFailures = 0;
 					this.#failureNotified = false;
 					this.#droppedBacklogs = 0;
 				} catch (err) {
+					// Release any parked primary-agent waiters IMMEDIATELY — before
+					// the async onTurnError hook or any retry sleep — and refuse new
+					// parks until a turn succeeds. A failing advisor must never hold
+					// the primary on the catch-up gate.
+					this.#failing = true;
+					this.#wakeAllWaiters();
 					// reset()/dispose() aborts the in-flight prompt; treat it as a
 					// reset, not a transient failure — drop the stale batch.
 					if (this.#epoch !== epoch) continue;
@@ -842,6 +902,7 @@ export class AdvisorRuntime {
 								const retryTurnError = getAdvisorTurnError(this.agent.state.messages.slice(retrySnapshot));
 								if (retryTurnError) throw retryTurnError;
 								success = true;
+								this.#failing = false;
 								this.#consecutiveFailures = 0;
 								this.#failureNotified = false;
 								this.#droppedBacklogs = 0;
