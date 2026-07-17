@@ -92,13 +92,14 @@ export async function quarantineCorruptModelFile(message: string, cacheDir?: str
 	return true;
 }
 
-async function defaultLocalModelInitializer(options: LocalModelInitOptions): Promise<LocalEmbeddingModel> {
+/** @internal exported for tests — the production seam stays {@link setLocalModelInitializer}. */
+export async function defaultLocalModelInitializer(options: LocalModelInitOptions): Promise<LocalEmbeddingModel> {
 	const { FlagEmbedding } = await loadFastembed();
 	try {
 		return await FlagEmbedding.init(options);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : "";
-		if (/Protobuf parsing failed/i.test(message) && (await quarantineCorruptModelFile(message))) {
+		if (/Protobuf parsing failed/i.test(message) && (await quarantineCorruptModelFile(message, options.cacheDir))) {
 			return FlagEmbedding.init(options);
 		}
 		if (
