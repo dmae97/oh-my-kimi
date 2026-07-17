@@ -147,8 +147,7 @@ describe("issue #816 — plan mode pendingModelSwitch leak", () => {
 		const haiku = modelRegistry.find("anthropic", "claude-haiku-4-5");
 		const opus = modelRegistry.find("anthropic", "claude-opus-4-5");
 		if (!haiku || !opus) throw new Error("Expected claude models in registry");
-		const planModel =
-			session.model?.provider === haiku.provider && session.model.id === haiku.id ? opus : haiku;
+		const planModel = session.model?.provider === haiku.provider && session.model.id === haiku.id ? opus : haiku;
 
 		vi.spyOn(session, "resolveRoleModelWithThinking").mockReturnValue({
 			model: planModel,
