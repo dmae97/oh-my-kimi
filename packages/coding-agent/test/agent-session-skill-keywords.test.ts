@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
-import type { TextContent } from "@oh-my-pi/pi-ai";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -64,10 +63,11 @@ describe("AgentSession skill prompt keyword steering", () => {
 						const content = message.content;
 						if (typeof content === "string") return content;
 						if (!Array.isArray(content)) return "";
-						return content
-							.filter((block): block is TextContent => block.type === "text")
-							.map(block => block.text)
-							.join("\n");
+						const text: string[] = [];
+						for (const block of content) {
+							if (block.type === "text") text.push(block.text);
+						}
+						return text.join("\n");
 					}),
 				});
 				const stream = new AssistantMessageEventStream();

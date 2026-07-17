@@ -1,7 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import { Agent, type AgentEvent, type AgentTool, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { type SimpleStreamOptions, z } from "@oh-my-pi/pi-ai";
+import { type SimpleStreamOptions, type ToolResultMessage, z } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import { kCursorExecResolved } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { createAssistantMessage } from "./helpers";
 
@@ -184,7 +185,7 @@ describe("Agent", () => {
 		expect(lastMessage.errorMessage).toBe(errorText);
 	});
 
-	it("prompt() keeps unrelated provider stream failures out of the assistant lifecycle", async () => {
+	it("prompt() emits assistant error lifecycle for provider stream failures", async () => {
 		const mock = createMockModel({ responses: [] });
 		const errorText = "connection reset";
 		const agent = new Agent({
@@ -201,17 +202,138 @@ describe("Agent", () => {
 		await agent.prompt("trigger");
 		unsubscribe();
 
-		expect(events.some(event => event.type === "message_start" && event.message.role === "assistant")).toBe(false);
-		expect(events.some(event => event.type === "message_end" && event.message.role === "assistant")).toBe(false);
-		const agentEnd = events.find(event => event.type === "agent_end");
-		if (agentEnd?.type !== "agent_end") {
-			throw new Error("agent_end not emitted");
+		const assistantStartIndex = events.findIndex(
+			event => event.type === "message_start" && event.message.role === "assistant",
+		);
+		const assistantEndIndex = events.findIndex(
+			event => event.type === "message_end" && event.message.role === "assistant",
+		);
+		const turnEndIndex = events.findIndex(event => event.type === "turn_end");
+		const agentEndIndex = events.findIndex(event => event.type === "agent_end");
+		expect(assistantStartIndex).toBeGreaterThan(-1);
+		expect(assistantEndIndex).toBeGreaterThan(assistantStartIndex);
+		expect(turnEndIndex).toBeGreaterThan(assistantEndIndex);
+		expect(agentEndIndex).toBeGreaterThan(turnEndIndex);
+
+		const assistantEnd = events[assistantEndIndex];
+		if (assistantEnd?.type !== "message_end" || assistantEnd.message.role !== "assistant") {
+			throw new Error("assistant message_end not emitted");
 		}
-		const errorMessage = agentEnd.messages.find(message => message.role === "assistant");
-		if (errorMessage?.role !== "assistant") {
-			throw new Error("assistant error was not included in agent_end");
-		}
-		expect(errorMessage.errorMessage).toBe(errorText);
+		expect(assistantEnd.message.stopReason).toBe("error");
+		expect(assistantEnd.message.errorMessage).toBe(errorText);
+	});
+
+	it("pairs tool calls from failed partial streams with synthetic tool results", async () => {
+		const mock = createMockModel({ responses: [] });
+		const errorText = "connection reset after tool call";
+		const toolCall = { type: "toolCall" as const, id: "tool-1", name: "alpha", arguments: { value: "hello" } };
+		const started = createAssistantMessage([toolCall]);
+		const agent = new Agent({
+			initialState: { model: mock.model, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: () => {
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => {
+					stream.push({ type: "start", partial: started });
+					stream.push({ type: "toolcall_end", contentIndex: 0, toolCall, partial: started });
+					stream.fail(new Error(errorText));
+				});
+				return stream;
+			},
+		});
+		const events: AgentEvent[] = [];
+		const unsubscribe = agent.subscribe(event => events.push(event));
+
+		await agent.prompt("trigger");
+		unsubscribe();
+
+		const toolResult = agent.state.messages.find(message => message.role === "toolResult");
+		expect(toolResult).toMatchObject({
+			role: "toolResult",
+			toolCallId: "tool-1",
+			toolName: "alpha",
+			isError: true,
+			details: {
+				__synthetic: true,
+				source: "assistant_stop_error",
+				executed: false,
+				upstreamError: errorText,
+			},
+		});
+
+		const turnEnd = events.find(event => event.type === "turn_end");
+		expect(turnEnd).toMatchObject({
+			type: "turn_end",
+			toolResults: [{ role: "toolResult", toolCallId: "tool-1", isError: true }],
+		});
+	});
+
+	it("drops incomplete tool calls when a partial stream fails before toolcall_end", async () => {
+		const mock = createMockModel({ responses: [] });
+		const started = createAssistantMessage([{ type: "toolCall", id: "tool-1", name: "alpha", arguments: {} }]);
+		const agent = new Agent({
+			initialState: { model: mock.model, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: () => {
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => {
+					stream.push({ type: "start", partial: started });
+					stream.push({ type: "toolcall_start", contentIndex: 0, partial: started });
+					stream.push({ type: "toolcall_delta", contentIndex: 0, delta: '{"value":', partial: started });
+					stream.fail(new Error("connection reset during tool arguments"));
+				});
+				return stream;
+			},
+		});
+
+		await agent.prompt("trigger");
+
+		const assistant = agent.state.messages.find(message => message.role === "assistant");
+		expect(assistant?.content.some(block => block.type === "toolCall")).toBe(false);
+		expect(agent.state.messages.some(message => message.role === "toolResult")).toBe(false);
+	});
+
+	it("preserves buffered Cursor results when a partial stream fails", async () => {
+		const mock = createMockModel({ responses: [] });
+		const errorText = "connection reset after Cursor exec";
+		const toolCall = {
+			type: "toolCall" as const,
+			id: "cursor-tool-1",
+			name: "shell",
+			arguments: { command: "pwd" },
+			[kCursorExecResolved]: true,
+		};
+		const started = createAssistantMessage([toolCall]);
+		const realToolResult: ToolResultMessage = {
+			role: "toolResult",
+			toolCallId: toolCall.id,
+			toolName: toolCall.name,
+			content: [{ type: "text", text: "/workspace" }],
+			isError: false,
+			timestamp: Date.now(),
+		};
+		const agent = new Agent({
+			initialState: { model: mock.model, systemPrompt: ["Test"], tools: [], messages: [] },
+			cursorOnToolResult: message => message,
+			streamFn: (_model, _context, options) => {
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(async () => {
+					await options?.cursorOnToolResult?.(realToolResult);
+					stream.push({ type: "start", partial: started });
+					stream.fail(new Error(errorText));
+				});
+				return stream;
+			},
+		});
+
+		await agent.prompt("trigger");
+
+		const toolResults = agent.state.messages.filter(message => message.role === "toolResult");
+		expect(toolResults).toHaveLength(1);
+		expect(toolResults[0]).toMatchObject({
+			toolCallId: toolCall.id,
+			toolName: toolCall.name,
+			content: [{ type: "text", text: "/workspace" }],
+			isError: false,
+		});
 	});
 
 	it("prompt() finalizes an existing assistant stream for Anthropic output-blocked stream errors", async () => {

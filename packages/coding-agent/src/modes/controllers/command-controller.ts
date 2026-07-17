@@ -64,7 +64,7 @@ function showMarkdownPanel(ctx: InteractiveModeContext, title: string, markdown:
 	block.addChild(new Spacer(1));
 	block.addChild(new Markdown(markdown.trim(), 1, 1, getMarkdownTheme()));
 	block.addChild(new DynamicBorder());
-	ctx.present(block);
+	ctx.presentCommandOutput(block);
 }
 
 export class CommandController {

@@ -27,6 +27,8 @@ const callbackList: ((reason: Reason) => Promise<void> | void)[] = [];
 // Tracks cleanup run state (to prevent recursion/reentry issues)
 let cleanupStage: "idle" | "running" | "complete" = "idle";
 const CLEANUP_DEADLINE_MS = 10_000;
+let cleanupPromise: Promise<void> | undefined;
+let stdioDisconnectRegistrations = 0;
 
 /**
  * Internal: runs all registered cleanup callbacks for the given reason.
@@ -40,7 +42,7 @@ function runCleanup(reason: Reason): Promise<void> {
 			cleanupStage = "running";
 			break;
 		case "running":
-			return Promise.resolve();
+			return cleanupPromise ?? Promise.resolve();
 		case "complete":
 			return Promise.resolve();
 	}
@@ -67,9 +69,10 @@ function runCleanup(reason: Reason): Promise<void> {
 		deadline.resolve();
 	}, CLEANUP_DEADLINE_MS);
 	deadlineTimer.unref();
-	return Promise.race([cleanupSettled, deadline.promise]).finally(() => {
+	cleanupPromise = Promise.race([cleanupSettled, deadline.promise]).finally(() => {
 		clearTimeout(deadlineTimer);
 	});
+	return cleanupPromise;
 }
 
 // Register signal and error event handlers to trigger cleanup before exit.
@@ -77,17 +80,40 @@ function runCleanup(reason: Reason): Promise<void> {
 // Worker thread: exit only (workers use self.addEventListener for exceptions)
 let inspectorOpened = false;
 
+/** Origin of an EPIPE raised by a process communication channel. */
+export type BrokenPipeSource = "ipc-send" | "stdio-write";
+
 /**
- * Detect an EPIPE rejection that originated from an IPC `send()` to a worker
- * subprocess (`syscall: "send"`), as opposed to a stdin/stdout pipe write
- * (`syscall: "write"`). Only the IPC-send path can break an optional worker
- * subsystem without affecting the main process, so only this shape is safe to
- * swallow at the global `unhandledRejection` level. See issue #2997.
+ * Classify EPIPE errors from worker IPC and stdio without treating unrelated
+ * broken pipes as globally recoverable.
  */
+export function classifyBrokenPipe(err: Error): BrokenPipeSource | undefined {
+	if (!("code" in err) || err.code !== "EPIPE" || !("syscall" in err)) return undefined;
+	if (err.syscall === "send") return "ipc-send";
+	if (err.syscall === "write") return "stdio-write";
+	return undefined;
+}
+
+/** Whether an EPIPE came from an IPC `send()` to an optional worker. */
 export function isIpcSendEpipe(err: Error): boolean {
-	const code = (err as { code?: unknown }).code;
-	const syscall = (err as { syscall?: unknown }).syscall;
-	return code === "EPIPE" && syscall === "send";
+	return classifyBrokenPipe(err) === "ipc-send";
+}
+
+/**
+ * Treat unhandled stdout EPIPE rejections as a graceful peer disconnect.
+ *
+ * Stdio protocol servers call this for their process lifetime so a closed
+ * client pipe runs registered cleanup callbacks instead of the fatal path.
+ * The returned callback removes the registration.
+ */
+export function registerStdioDisconnectHandling(): () => void {
+	let registered = true;
+	stdioDisconnectRegistrations++;
+	return () => {
+		if (!registered) return;
+		registered = false;
+		stdioDisconnectRegistrations--;
+	};
 }
 
 // Well-known key marking an error as an *expected* teardown artifact (e.g. a
@@ -179,6 +205,7 @@ if (isMainThread) {
 		})
 		.on("unhandledRejection", async reason => {
 			const err = reason instanceof Error ? reason : new Error(String(reason));
+			const brokenPipeSource = classifyBrokenPipe(err);
 			// EPIPE from an IPC `send()` (`syscall: "send"`) originates from a
 			// worker subprocess whose pipe broke between the exit being observed
 			// and the next `proc.send()` — a race window that Bun surfaces as an
@@ -188,8 +215,13 @@ if (isMainThread) {
 			// send pipe must never take down the whole session. Log and continue
 			// instead of exiting; the owning client detects the dead worker via
 			// its own `onExit`/error path and respawns or disables it. See #2997.
-			if (isIpcSendEpipe(err)) {
+			if (brokenPipeSource === "ipc-send") {
 				logger.warn("Ignoring EPIPE from worker IPC send; optional subsystem will self-recover", { err });
+				return;
+			}
+			if (brokenPipeSource === "stdio-write" && stdioDisconnectRegistrations > 0) {
+				logger.warn("Stdio peer disconnected; shutting down gracefully", { err });
+				await quit(0);
 				return;
 			}
 			if (isExpectedCleanupError(reason)) {

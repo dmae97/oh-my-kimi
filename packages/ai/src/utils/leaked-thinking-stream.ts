@@ -25,7 +25,7 @@
  * events are forwarded verbatim.
  */
 
-import type { AssistantMessage, TextContent, ThinkingContent, ToolCall } from "../types";
+import type { AssistantMessage, ImageContent, TextContent, ThinkingContent, ToolCall } from "../types";
 import {
 	clearStreamingPartialJson,
 	getStreamingPartialJson,
@@ -78,6 +78,10 @@ export function wrapLeakedThinkingStream(inner: AssistantMessageEventStream): As
 						projector.thinking(event.delta, block?.type === "thinking" ? block.thinkingSignature : undefined);
 						break;
 					}
+					case "image_end":
+						projector ??= new LeakedThinkingProjector(out, event.partial);
+						projector.image(event.content);
+						break;
 					case "toolcall_start": {
 						projector ??= new LeakedThinkingProjector(out, event.partial);
 						const block = event.partial.content[event.contentIndex];
@@ -161,6 +165,20 @@ class LeakedThinkingProjector {
 		block.thinking += delta;
 		if (signature !== undefined) block.thinkingSignature = signature;
 		this.#out.push({ type: "thinking_delta", contentIndex: index, delta, partial: this.#partial });
+	}
+
+	/** Forward a completed native image after releasing held text. */
+	image(content: ImageContent): void {
+		this.#apply(this.#healer.flushEvents(), this.#lastTextSignature);
+		this.#closeText();
+		this.#closeThinking();
+		this.#partial.content.push(content);
+		this.#out.push({
+			type: "image_end",
+			contentIndex: this.#partial.content.length - 1,
+			content,
+			partial: this.#partial,
+		});
 	}
 
 	/** Forward a native tool call's start, releasing any held-back text first. */

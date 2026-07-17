@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [17.0.1] - 2026-07-16
+
+### Fixed
+
+- Rendered user and host transcript messages as Markdown and separated adjacent assistant content blocks. ([#5559](https://github.com/can1357/oh-my-pi/issues/5559))
+
 ## [17.0.0] - 2026-07-15
 
 ### Changed

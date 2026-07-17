@@ -112,7 +112,12 @@ describe("ProcessTerminal kitty keyboard progressive-enhancement ordering", () =
 		expect(harness.terminal.keyboardEnhancementEnterSequence).toBeNull();
 	});
 
-	it("keeps legacy keyboard input under tmux when kitty is unavailable", async () => {
+	it("enables modifyOtherKeys fallback under tmux so extended-keys panes keep modified keys (#5620)", async () => {
+		// tmux answers DA1 but not `CSI ? u`. omp must still request the xterm
+		// modifyOtherKeys fallback; tmux honors it under `extended-keys on`/`always`
+		// (delivering Ctrl+H and Shift+Enter distinctly) and ignores it under
+		// `extended-keys off`, so tmux — not omp — is the capability gate. A blanket
+		// tmux exclusion (#5502) collapsed those keys to legacy bytes in every pane.
 		Bun.env.TMUX = "/tmp/tmux-501/default,1234,0";
 		delete Bun.env.SSH_CONNECTION;
 		delete Bun.env.SSH_TTY;
@@ -125,8 +130,9 @@ describe("ProcessTerminal kitty keyboard progressive-enhancement ordering", () =
 
 		const out = harness.writes.join("");
 		expect(harness.terminal.kittyProtocolActive).toBe(false);
-		expect(out).not.toContain("\x1b[>4;2m");
-		expect(harness.terminal.keyboardEnhancementEnterSequence).toBeNull();
+		expect(out).toContain("\x1b[>4;2m");
+		expect(out).not.toContain("\x1b[>1u");
+		expect(harness.terminal.keyboardEnhancementEnterSequence).toBe("\x1b[>4;2m");
 	});
 
 	it("reasserts modifyOtherKeys fallback when fullscreen overlays enter the alternate screen", async () => {

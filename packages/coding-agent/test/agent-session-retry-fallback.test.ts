@@ -631,6 +631,114 @@ describe("AgentSession retry fallback", () => {
 		]);
 	});
 
+	it("re-prefixes the failing model's bare id for id-prefixed wildcard chain entries", async () => {
+		const primaryModel = getBundledModel("google", "gemini-2.5-flash");
+		const fallbackModel = getBundledModel("openrouter", "google/gemini-2.5-flash");
+		if (!primaryModel || !fallbackModel) {
+			throw new Error("Expected bundled test models to exist");
+		}
+
+		const requestedModels: string[] = [];
+		const fallbackAppliedEvents: Array<Extract<AgentSessionEvent, { type: "retry_fallback_applied" }>> = [];
+		const agent = createFallbackAgent(primaryModel, requestedModels);
+
+		// `openrouter/google/*` splits into provider `openrouter` + id prefix
+		// `google`: the failing bare id is re-prefixed into the aggregator's
+		// namespace (google/gemini-2.5-flash -> openrouter/google/gemini-2.5-flash).
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.maxRetries": 1,
+			"retry.fallbackChains": {
+				"google/*": ["openrouter/google/*"],
+			},
+		});
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+
+		session.subscribe(event => {
+			if (event.type === "retry_fallback_applied") {
+				fallbackAppliedEvents.push(event);
+			}
+		});
+
+		await session.prompt("Recover via id-prefixed wildcard entry");
+		await session.waitForIdle();
+
+		expect(requestedModels).toEqual([
+			`${primaryModel.provider}/${primaryModel.id}`,
+			`${fallbackModel.provider}/${fallbackModel.id}`,
+		]);
+		expect(session.model?.provider).toBe("openrouter");
+		expect(session.model?.id).toBe(`google/${primaryModel.id}`);
+		expect(fallbackAppliedEvents).toEqual([
+			{
+				type: "retry_fallback_applied",
+				from: `${primaryModel.provider}/${primaryModel.id}`,
+				to: `openrouter/google/${primaryModel.id}`,
+				role: "google/*",
+			},
+		]);
+	});
+
+	it("matches id-prefixed wildcard keys and strips the vendor prefix for direct-provider targets", async () => {
+		const primaryModel = getBundledModel("openrouter", "google/gemini-2.5-flash");
+		const fallbackModel = getBundledModel("google-vertex", "gemini-2.5-flash");
+		if (!primaryModel || !fallbackModel) {
+			throw new Error("Expected bundled test models to exist");
+		}
+
+		const requestedModels: string[] = [];
+		const fallbackAppliedEvents: Array<Extract<AgentSessionEvent, { type: "retry_fallback_applied" }>> = [];
+		const agent = createFallbackAgent(primaryModel, requestedModels);
+
+		// Key `openrouter/google/*` covers only openrouter's google-namespaced
+		// ids; the plain `google-vertex/*` target drops the aggregator's vendor
+		// prefix because vertex only knows the bare id.
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.maxRetries": 1,
+			"retry.fallbackChains": {
+				"openrouter/google/*": ["google-vertex/*"],
+			},
+		});
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+
+		session.subscribe(event => {
+			if (event.type === "retry_fallback_applied") {
+				fallbackAppliedEvents.push(event);
+			}
+		});
+
+		await session.prompt("Recover via id-prefixed wildcard key");
+		await session.waitForIdle();
+
+		expect(requestedModels).toEqual([
+			`${primaryModel.provider}/${primaryModel.id}`,
+			`${fallbackModel.provider}/${fallbackModel.id}`,
+		]);
+		expect(session.model?.provider).toBe("google-vertex");
+		expect(session.model?.id).toBe(fallbackModel.id);
+		expect(fallbackAppliedEvents).toEqual([
+			{
+				type: "retry_fallback_applied",
+				from: `${primaryModel.provider}/${primaryModel.id}`,
+				to: `google-vertex/${fallbackModel.id}`,
+				role: "openrouter/google/*",
+			},
+		]);
+	});
+
 	it("uses the active initial model as the default fallback primary when other role fallback chains are configured", async () => {
 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
 		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");

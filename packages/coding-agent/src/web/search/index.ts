@@ -8,6 +8,7 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import type { AuthStorage } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
+import { ModelRegistry } from "../../config/model-registry";
 import { settings } from "../../config/settings";
 import type { CustomTool, CustomToolContext, RenderResultOptions } from "../../extensibility/custom-tools/types";
 import type { Theme } from "../../modes/theme/theme";
@@ -118,6 +119,7 @@ function hasRenderableSearchContent(response: SearchResponse): boolean {
 
 interface ExecuteSearchOptions {
 	authStorage: AuthStorage;
+	modelRegistry?: ModelRegistry;
 	sessionId?: string;
 	signal?: AbortSignal;
 }
@@ -128,7 +130,7 @@ async function executeSearch(
 	params: SearchQueryParams,
 	options: ExecuteSearchOptions,
 ): Promise<{ content: Array<{ type: "text"; text: string }>; details: SearchRenderDetails }> {
-	const { authStorage, sessionId, signal } = options;
+	const { authStorage, modelRegistry, sessionId, signal } = options;
 	const explicitProvider = params.provider;
 	let candidates: SearchProviderCandidate[];
 	if (explicitProvider && explicitProvider !== "auto") {
@@ -187,6 +189,7 @@ async function executeSearch(
 				temperature: params.temperature,
 				signal,
 				authStorage,
+				modelRegistry,
 				sessionId,
 				antigravityEndpointMode,
 				geminiModel,
@@ -246,16 +249,18 @@ async function executeSearch(
  */
 export async function runSearchQuery(
 	params: SearchQueryParams,
-	options: { authStorage?: AuthStorage; sessionId?: string; signal?: AbortSignal } = {},
+	options: { authStorage?: AuthStorage; modelRegistry?: ModelRegistry; sessionId?: string; signal?: AbortSignal } = {},
 ): Promise<{ content: Array<{ type: "text"; text: string }>; details: SearchRenderDetails }> {
-	const createdAuthStorage = options.authStorage ? undefined : await discoverAuthStorage();
-	const authStorage = options.authStorage ?? createdAuthStorage;
+	const createdAuthStorage = options.authStorage || options.modelRegistry ? undefined : await discoverAuthStorage();
+	const authStorage = options.authStorage ?? options.modelRegistry?.authStorage ?? createdAuthStorage;
 	if (!authStorage) {
 		throw new Error("Failed to initialize authentication storage");
 	}
+	const modelRegistry = options.modelRegistry ?? (createdAuthStorage ? new ModelRegistry(authStorage) : undefined);
 	try {
 		return await executeSearch("cli-web-search", params, {
 			authStorage,
+			modelRegistry,
 			sessionId: options.sessionId,
 			signal: options.signal,
 		});
@@ -295,7 +300,12 @@ export class WebSearchTool implements AgentTool<typeof webSearchSchema, SearchRe
 	): Promise<AgentToolResult<SearchRenderDetails>> {
 		const authStorage = this.#session.authStorage ?? (await discoverAuthStorage());
 		const sessionId = this.#session.getSessionId?.() ?? undefined;
-		return executeSearch(_toolCallId, params, { authStorage, sessionId, signal });
+		return executeSearch(_toolCallId, params, {
+			authStorage,
+			modelRegistry: this.#session.modelRegistry,
+			sessionId,
+			signal,
+		});
 	}
 }
 
@@ -316,7 +326,12 @@ export const webSearchCustomTool: CustomTool<typeof webSearchSchema, SearchRende
 	) {
 		const authStorage = ctx.modelRegistry?.authStorage ?? (await discoverAuthStorage());
 		const sessionId = ctx.sessionManager.getSessionId();
-		return executeSearch(toolCallId, params, { authStorage, sessionId, signal });
+		return executeSearch(toolCallId, params, {
+			authStorage,
+			modelRegistry: ctx.modelRegistry,
+			sessionId,
+			signal,
+		});
 	},
 
 	renderCall(args: SearchToolParams, options: RenderResultOptions, theme: Theme) {

@@ -79,6 +79,10 @@ function sealCommittedSnapshot(child: Component): void {
 	if (block.isDisplaceableBlock?.()) block.seal?.();
 }
 
+function setBlockCommittedRows(child: Component, rows: number): void {
+	(child as Component & Partial<NativeScrollbackCommittedRows>).setNativeScrollbackCommittedRows?.(rows);
+}
+
 // A "plain blank" row is empty or whitespace-only with no ANSI bytes. It marks
 // separation padding (a `Spacer`, or a no-background `paddingY` row) as opposed
 // to a background-colored padding row, whose escape sequences contain `\S` and
@@ -208,11 +212,35 @@ export class TranscriptContainer
 		this.#replayPending = false;
 	}
 
-	setNativeScrollbackCommittedRows(rows: number): void {
+	override setNativeScrollbackCommittedRows(rows: number): void {
 		this.#committedRows = Number.isFinite(rows) ? Math.max(0, Math.trunc(rows)) : 0;
+		for (let i = this.#compactedChildStart; i < this.children.length; i++) {
+			const child = this.children[i]!;
+			const segment = this.#segments[i];
+			if (segment === undefined || segment.component !== child) continue;
+			const committedContribution = Math.min(
+				segment.contribution.length,
+				Math.max(0, this.#committedRows - segment.startRow - segment.sep),
+			);
+			if (committedContribution === 0) {
+				setBlockCommittedRows(child, 0);
+				continue;
+			}
+			// Transcript assembly strips plain blank edges from each block. Map the
+			// committed contribution back into the child's raw render coordinates so
+			// nested containers can split the prefix against their exact child rows.
+			let leadingTrimmedRows = 0;
+			while (leadingTrimmedRows < segment.rawRef.length && isPlainBlank(segment.rawRef[leadingTrimmedRows]!)) {
+				leadingTrimmedRows++;
+			}
+			setBlockCommittedRows(child, Math.min(segment.rawRef.length, leadingTrimmedRows + committedContribution));
+		}
 	}
 
-	prepareNativeScrollbackReplay(): void {
+	override prepareNativeScrollbackReplay(): void {
+		// Replay retires the old terminal tape, so descendants may discard layout
+		// locks whose only purpose was keeping that immutable history byte-stable.
+		super.prepareNativeScrollbackReplay();
 		if (this.#compactedChildStart === 0) return;
 		this.#compactedChildStart = 0;
 		this.#replayPending = true;

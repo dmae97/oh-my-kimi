@@ -1494,13 +1494,31 @@ export function zhipuCodingPlanModelManagerOptions(
 export const FIREWORKS_KIMI_MAX_TOKENS = 32_768;
 
 /**
- * Returns true for any Kimi K2.x public model id served by Fireworks-backed
- * providers (`fireworks` direct, `firepass` router). Matches both the public
- * catalog id (`kimi-k2.5`, `kimi-k2.6`, `kimi-k2.6-turbo`) and the canonical
- * Fireworks wire id (`accounts/fireworks/{models,routers}/kimi-k2…`).
+ * Fireworks' output ceiling for Kimi K2.7-Code specifically. Its `/v1/models`
+ * generic `max_completion_tokens` is 65,536 and Fireworks serves it in full —
+ * verified with a single completion emitting 58,971 output tokens and
+ * `max_tokens: 200000` accepted without error. Unlike the older K2.5/K2.6
+ * family (see {@link FIREWORKS_KIMI_MAX_TOKENS}), K2.7-Code is not clamped to
+ * 32,768; that ceiling only truncated it.
+ */
+export const FIREWORKS_KIMI_K27_CODE_MAX_TOKENS = 65_536;
+
+/**
+ * Returns true for the Kimi K2.5 / K2.6 family served by Fireworks-backed
+ * providers (`fireworks` direct, `firepass` router) that share the 32,768
+ * `maxTokens` ceiling. Matches both the public catalog id (`kimi-k2.5`,
+ * `kimi-k2.6`, `kimi-k2.6-turbo`) and the canonical Fireworks wire id
+ * (`accounts/fireworks/{models,routers}/kimi-k2…`).
+ *
+ * K2.7-Code (incl. `-fast` / `-highspeed`) is deliberately excluded: unlike the
+ * earlier K2 family it serves its full context on Fireworks — verified with a
+ * single completion emitting 58,971 output tokens and `max_tokens: 200000`
+ * accepted without error — so the 32,768 cap would only truncate it. It inherits
+ * Fireworks' reported `max_completion_tokens` (65,536) instead.
  */
 export function isFireworksKimiK2ModelId(modelId: string): boolean {
 	const trimmed = modelId.toLowerCase();
+	if (/kimi[-._]?k2(?:[._-]?|p)7[-._]?code/.test(trimmed)) return false;
 	if (trimmed.startsWith("kimi-k2")) return true;
 	return /\/kimi-k2(?:p\d+)?(?:[._-]|$)/.test(trimmed);
 }
@@ -1657,9 +1675,14 @@ function mapFireworksControlPlaneModel(
 	const supportsImage = toBoolean(record.supportsImageInput) === true;
 	const supportsTools = toBoolean(record.supportsTools);
 	const contextWindow = toPositiveNumber(record.contextLength, reference?.contextWindow ?? null);
-	// The control plane reports no max-output budget; default the Kimi family to
-	// its published cap, everyone else to the discovery fallback, then clamp.
-	const fallbackMaxTokens = isFireworksKimiK2ModelId(publicModelId) ? FIREWORKS_KIMI_MAX_TOKENS : null;
+	// The control plane reports no max-output budget. Default K2.7-Code to its
+	// verified 65,536 ceiling, the older K2.5/K2.6 family to the clamped 32,768,
+	// everyone else to the discovery fallback, then clamp.
+	const fallbackMaxTokens = isKimiK27CodeModelId(publicModelId)
+		? FIREWORKS_KIMI_K27_CODE_MAX_TOKENS
+		: isFireworksKimiK2ModelId(publicModelId)
+			? FIREWORKS_KIMI_MAX_TOKENS
+			: null;
 	const maxTokens = clampFireworksKimiMaxTokens(publicModelId, reference?.maxTokens ?? fallbackMaxTokens);
 	const base: ModelSpec<"openai-completions"> = reference ?? {
 		id: publicModelId,
@@ -3724,7 +3747,8 @@ export interface GithubCopilotModelManagerConfig {
 
 const COPILOT_ANTHROPIC_MODEL_PATTERN = /^claude-(haiku|sonnet|opus|fable|mythos)-\d/;
 const isCopilotResponsesModelId = (modelId: string): boolean =>
-	modelId.startsWith("gpt-5") || modelId.startsWith("oswe");
+	modelId.startsWith("gpt-5") || modelId.startsWith("oswe") || modelId.startsWith("mai-");
+const COPILOT_CACHE_INVALIDATED_MODEL_IDS = ["mai-code-1-flash-picker"];
 
 function inferCopilotApi(modelId: string): Api {
 	if (COPILOT_ANTHROPIC_MODEL_PATTERN.test(modelId)) {
@@ -3888,6 +3912,7 @@ export function githubCopilotModelManagerOptions(config?: GithubCopilotModelMana
 	const resolveReference = createReferenceResolver(providerRefs);
 	return {
 		providerId: "github-copilot",
+		dropCachedModelIdsOnStaticMismatch: COPILOT_CACHE_INVALIDATED_MODEL_IDS,
 		...(apiKey && {
 			fetchDynamicModels: async () => {
 				const longContextVariants: ModelSpec<Api>[] = [];
@@ -4505,7 +4530,12 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CORE: readonly ModelsDevProviderDescriptor
 
 const MODELS_DEV_PROVIDER_DESCRIPTORS_CODING_PLANS: readonly ModelsDevProviderDescriptor[] = [
 	// --- zAI ---
-	anthropicMessagesDescriptor("zai-coding-plan", "zai", "https://api.z.ai/api/anthropic"),
+	// Source the models.dev `zai` (pay-as-you-go) key rather than `zai-coding-plan`:
+	// the coding-plan key reports all-$0 subscription rates, which surface every GLM
+	// SKU as "Free" in `/models`. The PAYG key carries the real per-token rates for
+	// the identical model ids, so the enumerated token costs line up with the other
+	// subscription providers for comparison (issue #5598).
+	anthropicMessagesDescriptor("zai", "zai", "https://api.z.ai/api/anthropic"),
 	// --- Umans AI Coding Plan ---
 	anthropicMessagesDescriptor("umans-ai-coding-plan", "umans", UMANS_BASE_URL),
 	// --- Xiaomi ---

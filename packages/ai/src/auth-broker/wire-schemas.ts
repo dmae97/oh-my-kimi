@@ -55,6 +55,7 @@ export const apiKeyCredentialSchema = type({
 	"+": "reject",
 	type: "'api_key'",
 	key: type("string").atLeastLength(1),
+	"source?": "'login'",
 });
 
 /** Discriminated union accepted on POST /v1/credential (writes). */

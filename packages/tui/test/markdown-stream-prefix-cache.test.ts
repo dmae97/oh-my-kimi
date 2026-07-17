@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { clearRenderCache, Markdown, type MarkdownTheme } from "@oh-my-pi/pi-tui/components/markdown";
 import { defaultMarkdownTheme } from "./test-themes.js";
 
@@ -89,5 +90,42 @@ describe("Markdown streaming prefix render cache", () => {
 		const streamingLines = md.render(WIDTH);
 
 		expect(streamingLines).toEqual(renderCold(prefix, defaultMarkdownTheme));
+	});
+
+	it("keeps table layout keys stable when rendering after a cached prefix", () => {
+		const prefix = `| Archived entry | Code |
+| --- | --- |
+| prefix-column-is-deliberately-wide | P000 |
+
+`;
+		const initialText = `${prefix}| Live entry | Value |
+| --- | --- |
+| short | R000 |`;
+		const expandedText = `${initialText}
+| tail-column-is-even-longer-than-before | R001 |`;
+		const md = new Markdown(initialText, 0, 0, defaultMarkdownTheme);
+		md.transientRenderCache = true;
+
+		const tableAt = (lines: readonly string[], marker: string): { startRow: number; border: string } => {
+			const plain = lines.map(line => stripVTControlCharacters(line).trimEnd());
+			const headerRow = plain.findIndex(line => line.includes(marker));
+			expect(headerRow).toBeGreaterThan(0);
+			return { startRow: headerRow - 1, border: plain[headerRow - 1]! };
+		};
+
+		const initialLines = md.render(WIDTH);
+		const prefixTable = tableAt(initialLines, "Archived entry");
+		const tailTable = tableAt(initialLines, "Live entry");
+		expect(prefixTable.border).not.toBe(tailTable.border);
+		md.setNativeScrollbackCommittedRows(tailTable.startRow + 1);
+
+		md.setText(expandedText);
+		const expandedLines = md.render(WIDTH);
+		const expandedPrefix = tableAt(expandedLines, "Archived entry");
+		const expandedTail = tableAt(expandedLines, "Live entry");
+		expect(expandedPrefix.border).toBe(prefixTable.border);
+		expect(expandedTail.border).toBe(tailTable.border);
+		expect(expandedTail.border).not.toBe(expandedPrefix.border);
+		expect(expandedLines.some(line => stripVTControlCharacters(line).includes("R001"))).toBe(true);
 	});
 });

@@ -18,6 +18,7 @@ import {
 	isKimiK26ModelId,
 	isKimiModelId,
 	isMimoModelIdOrName,
+	isOpenAISamplingRestrictedModelId,
 	isQwenModelId,
 	modelFamilyToken,
 } from "../identity/family";
@@ -37,8 +38,8 @@ const GLM_CODING_PLAN_MODEL_PATTERN = /(^|\/)glm-5(?:[.-]|$)/i;
 const GLM_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS = 600_000;
 /** Direct DeepSeek reasoning models stall between thinking and answer phases. */
 const DEEPSEEK_REASONING_STREAM_IDLE_TIMEOUT_MS = 300_000;
-/** Kimi K2.6 can spend several minutes reasoning before the first visible token. */
-const KIMI_K26_REASONING_STREAM_IDLE_TIMEOUT_MS = 300_000;
+/** Kimi K2.6 and native K2.7 Code can spend several minutes reasoning before the first visible token. */
+const KIMI_REASONING_STREAM_IDLE_TIMEOUT_MS = 300_000;
 /**
  * Native Kimi K2.7 Code requires `thinking.type: "enabled"` and rejects
  * disabled thinking. Match the public id, its Fast variant, and the
@@ -357,14 +358,14 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 	// for minutes while reasoning or cold-loading weights; widen the idle
 	// timeout so warm-ups stop aborting and retrying.
 	const streamIdleTimeoutMs =
-		GLM_CODING_PLAN_MODEL_PATTERN.test(spec.id) && (isZai || isZhipu)
+		GLM_CODING_PLAN_MODEL_PATTERN.test(spec.id) && (isZai || isZhipu || isOpenCodeHost)
 			? GLM_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS
 			: provider === "alibaba-coding-plan"
 				? ALIBABA_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS
 				: isXiaomiMimo
 					? XIAOMI_MIMO_STREAM_IDLE_TIMEOUT_MS
-					: spec.reasoning && isKimiK26ModelId(spec.id)
-						? KIMI_K26_REASONING_STREAM_IDLE_TIMEOUT_MS
+					: spec.reasoning && (isKimiK26ModelId(spec.id) || (isMoonshotKimi && matchesKimiK27CodeFamily(spec)))
+						? KIMI_REASONING_STREAM_IDLE_TIMEOUT_MS
 						: spec.reasoning && isDirectDeepseekApi
 							? DEEPSEEK_REASONING_STREAM_IDLE_TIMEOUT_MS
 							: isLocalOpenAICompatBackend
@@ -409,6 +410,9 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 		supportsReasoningEffort: !isGrok && !isXiaomiMimo && (!(isZai || isZhipu) || supportsZaiReasoningEffort),
 		// GitHub Copilot's chat-completions endpoint rejects reasoning params wholesale.
 		supportsReasoningParams: provider !== "github-copilot",
+		// OpenAI proprietary reasoning models (o-series, gpt-5+) reject explicit
+		// temperature/top_p/… with a 400 on every serving host (#5606).
+		supportsSamplingParams: !isOpenAISamplingRestrictedModelId(spec.id),
 		reasoningEffortMap: isMimoReasoningEffortModel ? MIMO_REASONING_EFFORT_MAP : {},
 		supportsUsageInStreaming: !isCerebras,
 		// pi-ai's thinking-loop guard is gemini-only; default the flag from the
@@ -604,6 +608,9 @@ export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): Resol
 			spec.provider !== "xai-oauth" && !modelMatchesHost({ provider: spec.provider, baseUrl }, "githubCopilot"),
 		reasoningEffortMap: {},
 		supportsReasoningParams: true,
+		// OpenAI proprietary reasoning models (o-series, gpt-5+) reject explicit
+		// temperature/top_p/… with a 400 on every serving host (#5606).
+		supportsSamplingParams: !isOpenAISamplingRestrictedModelId(id),
 		thinkingFormat,
 		reasoningDisableMode: resolveReasoningDisableMode(thinkingFormat),
 		omitReasoningEffort: false,

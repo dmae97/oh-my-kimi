@@ -164,7 +164,9 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		};
 	}
 
-	async function createCompletedAdvisorSession(): Promise<CompletedAdvisorHarness> {
+	async function createCompletedAdvisorSession(
+		severity: "concern" | "blocker" = "concern",
+	): Promise<CompletedAdvisorHarness> {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mock = createMockModel({
 			responses: [
@@ -179,7 +181,7 @@ describe("AgentSession advisor auto-resume suppression", () => {
 						{
 							type: "toolCall",
 							name: "advise",
-							arguments: { note: "Fixture verdict confirmed", severity: "concern" },
+							arguments: { note: "Fixture verdict confirmed", severity },
 						},
 					],
 				},
@@ -266,6 +268,23 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		expect(persisted.at(-1)).toContain("Fixture verdict confirmed");
 		expect(advisorMock.calls.length).toBeGreaterThanOrEqual(1);
 		expect(mock.calls.length).toBe(1);
+	});
+
+	it("steers a late advisor blocker after a terminal answer so the primary corrects it", async () => {
+		const { session, mock } = await createCompletedAdvisorSession("blocker");
+
+		await session.prompt("read five fixture files and answer with exactly one line");
+		await session.waitForIdle();
+		expect(mock.calls.length).toBe(1);
+
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		const advisor = session.getAdvisorAgent();
+		if (!advisor) throw new Error("Expected advisor agent to be live");
+
+		await advisor.prompt("inspect the completed turn");
+		await session.waitForIdle();
+
+		expect(mock.calls.length).toBe(2);
 	});
 
 	it("preserves another late advisor concern after an existing advisor card", async () => {

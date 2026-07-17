@@ -127,6 +127,10 @@ class FakeAgentSession {
 	customMessageOptions: Array<{ streamingBehavior?: "steer" | "followUp"; queueChipText?: string } | undefined> = [];
 	skillsSettings = { enableSkillCommands: true };
 	skills: Array<{ name: string; description: string; filePath: string; baseDir: string; source: string }> = [];
+	refreshSkillsCalls = 0;
+	async refreshSkills(): Promise<void> {
+		this.refreshSkillsCalls++;
+	}
 	planModeState: PlanModeState | undefined;
 	waitForIdleCalls = 0;
 	waitForIdleBlocker: (() => Promise<void>) | undefined;

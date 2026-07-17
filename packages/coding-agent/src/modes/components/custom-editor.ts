@@ -1,6 +1,15 @@
 import { fileURLToPath } from "node:url";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
-import { addKeyAliases, canonicalKeyId, Editor, type KeyId, parseKey, parseKittySequence } from "@oh-my-pi/pi-tui";
+import {
+	addKeyAliases,
+	canonicalKeyId,
+	Editor,
+	type EditorTheme,
+	type KeyId,
+	parseKey,
+	parseKittySequence,
+	TUI,
+} from "@oh-my-pi/pi-tui";
 import { BracketedPasteHandler } from "@oh-my-pi/pi-tui/bracketed-paste";
 import type { AppKeybinding } from "../../config/keybindings";
 import { isSettingsInitialized, settings } from "../../config/settings";
@@ -285,6 +294,31 @@ export function extractImagePathFromText(text: string): string | undefined {
 }
 
 /**
+ * Resolve the {@link EditorTheme} from a `CustomEditor`/`Editor` constructor
+ * argument list, tolerating both the omp `(theme)` and upstream-pi
+ * `(tui, theme, keybindings)` conventions (see {@link CustomEditor}'s
+ * constructor). A real `EditorTheme` is identified structurally — it exposes a
+ * `borderColor` function and a `symbols` object — so a `TUI` passed in the first
+ * slot is skipped rather than mistaken for the theme.
+ */
+function pickEditorTheme(args: readonly unknown[]): EditorTheme {
+	for (const arg of args) {
+		if (isEditorTheme(arg)) return arg;
+	}
+	// Fall back to the first argument so a caller passing a bare theme that
+	// somehow fails the shape probe still reaches the base constructor.
+	return args[0] as EditorTheme;
+}
+
+function isEditorTheme(value: unknown): value is EditorTheme {
+	if (typeof value !== "object" || value === null) return false;
+	const candidate = value as Partial<EditorTheme>;
+	return (
+		typeof candidate.borderColor === "function" && typeof candidate.symbols === "object" && candidate.symbols !== null
+	);
+}
+
+/**
  * Custom editor that handles configurable app-level shortcuts for coding-agent.
  */
 export class CustomEditor extends Editor {
@@ -296,6 +330,33 @@ export class CustomEditor extends Editor {
 	/** Per-image source links (file:// targets) parallel to {@link pendingImages};
 	 *  `undefined` entries are images without a backing reference yet. */
 	pendingImageLinks: (string | undefined)[] = [];
+
+	/**
+	 * The host {@link TUI}, captured when a plugin constructs this editor through
+	 * the upstream-pi `(tui, theme, keybindings)` convention. Undefined for omp's
+	 * own `new CustomEditor(theme)` callers (they drive repaints through the
+	 * interactive-mode wiring instead). Plugins that call `this.tui.requestRender()`
+	 * in their overrides read it here (issue #4766).
+	 */
+	tui?: TUI;
+
+	/**
+	 * Accept both the omp constructor convention — `new CustomEditor(theme)` —
+	 * and the upstream-pi `Editor` convention — `new Editor(tui, theme, keybindings)`
+	 * — that {@link ExtensionUIContext.setEditorComponent}'s factory contract
+	 * advertises `(tui, theme, keybindings)`. Plugins written against upstream pi
+	 * subclass `CustomEditor`/`Editor` and forward `super(tui, theme, keybindings)`;
+	 * without this shim the `TUI` lands in the `theme` slot and every render throws
+	 * `undefined is not an object (evaluating 'this.#theme.symbols.boxRound')`
+	 * (issue #4766). We locate the real {@link EditorTheme} among the args by shape
+	 * (it carries `symbols`/`borderColor`) rather than by position, and capture a
+	 * leading {@link TUI} so plugin overrides calling `this.tui.requestRender()`
+	 * keep working.
+	 */
+	constructor(...args: readonly unknown[]) {
+		super(pickEditorTheme(args));
+		if (args[0] instanceof TUI) this.tui = args[0];
+	}
 
 	/** Clear the composer draft: optionally commit `historyText` to history, then
 	 *  reset the editor text and all pending draft-image state. The shared tail of
