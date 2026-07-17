@@ -385,7 +385,17 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 	async generateAuthUrl(state: string, redirectUri: string): Promise<{ url: string; instructions?: string }> {
 		if (!this.#resolvedClientId) {
 			await this.#tryRegisterClient(redirectUri);
-			if (!this.#resolvedClientId && this.#registrationFailure) {
+			// A definitive DCR rejection — the endpoint returned a 4xx client
+			// error such as 403 unapproved_client — proves the provider requires a
+			// registered client_id and none could be obtained, so block before
+			// probing or launching a clientless authorization URL (issue #5852).
+			// Transport failures (status 0) and 5xx responses are non-definitive:
+			// the DCR endpoint may be temporarily unavailable while a clientless
+			// authorization flow still works, so fall through to
+			// #assertClientIdNotRequired, which permits providers that accept an
+			// authorization request without a client_id.
+			const failure = this.#registrationFailure;
+			if (!this.#resolvedClientId && failure && failure.status >= 400 && failure.status < 500) {
 				throw this.#missingClientIdError();
 			}
 		}
