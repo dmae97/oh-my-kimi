@@ -136,18 +136,22 @@ describe("Kimi K3 thinking transport", () => {
 		vi.spyOn(kimiOauth, "getKimiCommonHeaders").mockReturnValue(KIMI_HEADERS);
 
 		let payload: unknown;
-		const stream = streamSimple(K3_MODEL, {
-			systemPrompt: [],
-			messages: [{ role: "user", content: "Reply OK", timestamp: 0 }],
-			tools: [],
-		}, {
-			apiKey: "test-key",
-			disableReasoning: true,
-			onPayload: body => {
-				payload = body;
-				throw new Error("stop after payload capture");
+		const stream = streamSimple(
+			K3_MODEL,
+			{
+				systemPrompt: [],
+				messages: [{ role: "user", content: "Reply OK", timestamp: 0 }],
+				tools: [],
 			},
-		});
+			{
+				apiKey: "test-key",
+				disableReasoning: true,
+				onPayload: body => {
+					payload = body;
+					throw new Error("stop after payload capture");
+				},
+			},
+		);
 		await stream.result();
 
 		expect(payload).toMatchObject({ thinking: { type: "enabled", effort: Effort.Low } });
