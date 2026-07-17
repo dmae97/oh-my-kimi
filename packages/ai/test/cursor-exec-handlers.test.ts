@@ -552,9 +552,20 @@ describe("Cursor exec local-work tracking (issue #4593)", () => {
 			},
 		};
 
-		await handleServerMessage(serverMsg, output, stream, state, new Map(), h2Request, execHandlers, undefined, {
-			sawTokenDelta: false,
-		}, []);
+		await handleServerMessage(
+			serverMsg,
+			output,
+			stream,
+			state,
+			new Map(),
+			h2Request,
+			execHandlers,
+			undefined,
+			{
+				sawTokenDelta: false,
+			},
+			[],
+		);
 
 		expect(state.resolvedMcpToolCallIds.has("call-mcp-1")).toBe(true);
 	});

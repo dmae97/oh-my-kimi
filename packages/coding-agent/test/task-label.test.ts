@@ -52,7 +52,13 @@ describe("task label generation", () => {
 			return response.promise;
 		});
 
-		const label = generateTaskLabel("Investigate shutdown", createRegistry(model), createSettings(model), undefined, controller.signal);
+		const label = generateTaskLabel(
+			"Investigate shutdown",
+			createRegistry(model),
+			createSettings(model),
+			undefined,
+			controller.signal,
+		);
 		await started.promise;
 		controller.abort();
 

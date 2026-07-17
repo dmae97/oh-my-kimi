@@ -17,7 +17,6 @@ function restoreSearchApiKeyEnv(): void {
 	else process.env.KIMI_SEARCH_API_KEY = originalKimiSearchApiKey;
 }
 
-
 async function withLocalAuthStorage<T>(run: (authStorage: AuthStorage) => Promise<T>): Promise<T> {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "web-search-kimi-auth-"));
 	const authStorage = await AuthStorage.create(path.join(dir, "auth.db"));

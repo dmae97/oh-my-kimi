@@ -8,10 +8,7 @@ import { CombinedAutocompleteProvider } from "@oh-my-pi/pi-tui/autocomplete";
 describe("/clear slash command alias", () => {
 	it("ranks the new-session action above fuzzy description matches", async () => {
 		const provider = new CombinedAutocompleteProvider(
-			[
-				...BUILTIN_SLASH_COMMANDS,
-				{ name: "autoresearch", description: "Clear stale research results" },
-			],
+			[...BUILTIN_SLASH_COMMANDS, { name: "autoresearch", description: "Clear stale research results" }],
 			process.cwd(),
 		);
 

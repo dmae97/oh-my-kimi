@@ -6594,7 +6594,7 @@ export class AgentSession {
 	 */
 	beginDispose(): void {
 		this.#isDisposed = true;
-this.#titleGenerationAbortController.abort();
+		this.#titleGenerationAbortController.abort();
 		this.#abortAutolearnCapture();
 		this.#flushPendingIrcAsides();
 		this.yieldQueue.clear();
