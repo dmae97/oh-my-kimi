@@ -54,6 +54,18 @@ export interface StdioSpawnCommand {
 	 * grandchildren keep stdout routed through our pipe (#3544).
 	 */
 	detached: boolean;
+	/**
+	 * Pass argv to `Bun.spawn` verbatim (Windows only), suppressing the
+	 * default libuv backslash-quoting.
+	 *
+	 * Set when `cmd` already holds a `cmd.exe /d /e:ON /v:OFF /c "<line>"`
+	 * command line escaped for `cmd.exe`'s parser (see `buildCmdExeArgv`).
+	 * libuv's quoting targets `CommandLineToArgvW`, not `cmd.exe`, so letting
+	 * it re-quote a batch launch would corrupt arguments and re-open the
+	 * `%VAR%` / quote-injection holes the escaping closes (BatBadBut,
+	 * CVE-2024-24576).
+	 */
+	windowsVerbatimArguments?: boolean;
 }
 
 /** Inputs used to resolve platform-specific stdio spawn behavior. */
@@ -203,23 +215,6 @@ async function resolveWindowsNpmShimCommand(
 	};
 }
 
-function quoteCmdArg(value: string): string {
-	if (value.length === 0) return '""';
-	let result = '"';
-	for (const char of value) {
-		if (char === '"') {
-			result += '^"';
-		} else if (char === "^") {
-			result += "^^";
-		} else if (char === "%") {
-			result += "^%";
-		} else {
-			result += char;
-		}
-	}
-	return `${result}"`;
-}
-
 function isWindowsBatchCommand(command: string): boolean {
 	return WINDOWS_BATCH_EXTENSIONS.has(path.extname(command).toLowerCase());
 }
@@ -229,10 +224,93 @@ function resolveComSpec(env: Record<string, string | undefined>): string {
 	return comspec && comspec.length > 0 ? comspec : "cmd.exe";
 }
 
-/** `cmd /s /c` strips one outer quote pair; keep inner argv quotes intact. */
-function buildCmdExeCommand(command: string, args: readonly string[]): string {
-	const quotedCommand = [command, ...args].map(quoteCmdArg).join(" ");
-	return `"${quotedCommand}"`;
+// Argument bytes cmd.exe delivers unchanged without quoting. Anything outside
+// this set (spaces, quotes, `%`, shell metacharacters, non-ASCII) forces the
+// quoted+escaped path below. Mirrors the fuzz-tested allow-list from Zig's
+// BatBadBut mitigation.
+const CMD_SAFE_ARG = /^[A-Za-z0-9#$*+\-./:?@\\_]+$/;
+
+/**
+ * Escape the interior of a `cmd.exe`-quoted token: neutralize `%VAR%` expansion
+ * and double any backslash run that precedes a quote (including the caller's
+ * closing quote) so `CommandLineToArgvW` delivers the backslashes literally.
+ *
+ * `cmd.exe` re-parses the whole `/c` string and expands `%…%` *before* the
+ * batch shim's own argv split runs, so both the command path and every argument
+ * must pass through this. Percent → `%%cd:~,%` (which expands to nothing,
+ * leaving a literal `%`) and `"` → `""` are the documented BatBadBut mitigation
+ * (CVE-2024-24576). The caller supplies the surrounding double quotes.
+ *
+ * @see https://flatt.tech/research/posts/batbadbut-you-cant-securely-execute-commands-on-windows/
+ */
+function escapeCmdQuotedInterior(value: string): string {
+	let out = "";
+	let backslashes = 0;
+	for (const ch of value) {
+		if (ch === "\\") {
+			backslashes += 1;
+			out += ch;
+		} else if (ch === '"') {
+			out += "\\".repeat(backslashes);
+			out += '""';
+			backslashes = 0;
+		} else if (ch === "%") {
+			out += "%%cd:~,%";
+			backslashes = 0;
+		} else {
+			backslashes = 0;
+			out += ch;
+		}
+	}
+	// Double the trailing backslash run so it stays literal before the closing
+	// quote the caller appends.
+	out += "\\".repeat(backslashes);
+	return out;
+}
+
+/** Reject bytes that cannot round-trip through `cmd.exe`'s `/c` command line. */
+function assertCmdBatchToken(value: string, kind: "command" | "argument"): void {
+	// NUL/LF act as an end-of-command marker and CR is stripped, so any of them
+	// would silently truncate or corrupt the launch.
+	if (/[\0\r\n]/.test(value)) {
+		throw new Error(`Windows batch MCP ${kind} cannot contain NUL, CR, or LF characters`);
+	}
+}
+
+/**
+ * Escape one argument for `cmd.exe`'s command-line pre-parse so a `.cmd`/`.bat`
+ * shim receives it verbatim. Quotes only when the argument is empty, ends in a
+ * backslash, or holds a byte outside {@link CMD_SAFE_ARG}; the quoted body is
+ * escaped by {@link escapeCmdQuotedInterior}.
+ *
+ * @throws when the argument contains NUL, CR, or LF (see {@link assertCmdBatchToken}).
+ */
+function escapeCmdBatchArg(arg: string): string {
+	assertCmdBatchToken(arg, "argument");
+	const needsQuotes = arg.length === 0 || arg.endsWith("\\") || !CMD_SAFE_ARG.test(arg);
+	// An unquoted arg is pure allow-list bytes (no `%`, `"`, or trailing `\`), so
+	// it needs no interior escaping.
+	return needsQuotes ? `"${escapeCmdQuotedInterior(arg)}"` : arg;
+}
+
+/**
+ * Build the `cmd.exe` argv for a Windows `.cmd`/`.bat` (or unresolved bare)
+ * MCP command.
+ *
+ * The trailing element is a single `/c` string wrapped in an outer quote pair
+ * that `cmd.exe` strips (its opening-quote rule). The command token is always
+ * quoted and, like every argument, escaped so a `%` in the resolved path (e.g.
+ * `C:\work\%TOKEN%\server.cmd`) is not expanded before the shim launches.
+ * `/e:ON` keeps command extensions on (required for the `%%cd:~,%` trick) and
+ * `/v:OFF` disables delayed expansion. The result MUST be spawned with
+ * `windowsVerbatimArguments` so libuv passes it through unmodified.
+ */
+function buildCmdExeArgv(comspec: string, command: string, args: readonly string[]): string[] {
+	assertCmdBatchToken(command, "command");
+	let line = `""${escapeCmdQuotedInterior(command)}"`;
+	for (const arg of args) line += ` ${escapeCmdBatchArg(arg)}`;
+	line += '"';
+	return [comspec, "/d", "/e:ON", "/v:OFF", "/c", line];
 }
 
 /**
@@ -245,7 +323,7 @@ function buildCmdExeCommand(command: string, args: readonly string[]): string {
  * only appends `.exe` for extensionless names — `.cmd`/`.bat` are never
  * tried, so `npx` (which exists only as `npx.cmd` on Windows) crashes the
  * subprocess immediately. When the resolver can't pin the command down,
- * route through `cmd.exe /d /s /c` so Windows's own PATHEXT lookup runs.
+ * route through `cmd.exe` so Windows's own PATHEXT lookup runs.
  */
 export async function resolveStdioSpawnCommand(
 	config: MCPStdioServerConfig,
@@ -271,9 +349,10 @@ export async function resolveStdioSpawnCommand(
 	if (!needsCmdExe) return { cmd: [resolvedCommand, ...args], windowsHide, detached };
 
 	return {
-		cmd: [resolveComSpec(options.env), "/d", "/s", "/c", buildCmdExeCommand(resolvedCommand, args)],
+		cmd: buildCmdExeArgv(resolveComSpec(options.env), resolvedCommand, args),
 		windowsHide,
 		detached,
+		windowsVerbatimArguments: true,
 	};
 }
 
@@ -388,6 +467,7 @@ export class StdioTransport implements MCPTransport {
 			stderr: "pipe",
 			windowsHide: spawnCommand.windowsHide,
 			detached: spawnCommand.detached,
+			windowsVerbatimArguments: spawnCommand.windowsVerbatimArguments,
 		});
 
 		this.#connected = true;
