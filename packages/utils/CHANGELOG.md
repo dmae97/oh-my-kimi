@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed fatal cleanup failing to reach `process.exit()` when terminal stderr is revoked, and isolated rotating log files/audit state per process to prevent concurrent OMP instances from racing compression and rotation ([#5716](https://github.com/can1357/oh-my-pi/issues/5716)).
+
 ## [17.0.1] - 2026-07-16
 
 ### Fixed
