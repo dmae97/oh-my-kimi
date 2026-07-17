@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `history://` read selectors being treated as part of the agent id instead of paging the transcript ([#5806](https://github.com/can1357/oh-my-pi/issues/5806)).
+
 ## [17.0.2] - 2026-07-17
 
 ### Added
