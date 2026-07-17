@@ -4,6 +4,7 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
 import * as kimiOauth from "../../registry/oauth/kimi";
+import { streamSimple } from "../../stream";
 import type { Context, Model } from "../../types";
 import type { MessageCreateParamsStreaming } from "../anthropic-wire";
 import { type KimiApiFormat, streamKimi } from "../kimi";
@@ -129,6 +130,28 @@ describe("Kimi K3 thinking transport", () => {
 
 		expect(payload).toMatchObject({ thinking: { type: "enabled" } });
 		expect(payload).toHaveProperty("thinking.budget_tokens");
+	});
+
+	it("clamps disabled thinking to the lowest effort for a mandatory-thinking K3", async () => {
+		vi.spyOn(kimiOauth, "getKimiCommonHeaders").mockReturnValue(KIMI_HEADERS);
+
+		let payload: unknown;
+		const stream = streamSimple(K3_MODEL, {
+			systemPrompt: [],
+			messages: [{ role: "user", content: "Reply OK", timestamp: 0 }],
+			tools: [],
+		}, {
+			apiKey: "test-key",
+			disableReasoning: true,
+			onPayload: body => {
+				payload = body;
+				throw new Error("stop after payload capture");
+			},
+		});
+		await stream.result();
+
+		expect(payload).toMatchObject({ thinking: { type: "enabled", effort: Effort.Low } });
+		expect(payload).not.toMatchObject({ thinking: { type: "disabled" } });
 	});
 });
 
