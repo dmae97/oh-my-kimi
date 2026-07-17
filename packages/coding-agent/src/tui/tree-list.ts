@@ -18,6 +18,13 @@ export interface TreeListOptions<T> {
 	maxCollapsedLines?: number;
 	itemType?: string;
 	truncateFrom?: "start" | "end";
+	/** Caller-supplied trailing summary line. When set (and not expanded),
+	 *  `renderTreeList` renders exactly the provided `items` (the caller has
+	 *  already applied its own selection/cap) and appends this text as the
+	 *  final `└` row, with the last item using `├`. Empty string renders the
+	 *  items with no summary. Bypasses the built-in truncation/`maxCollapsed`
+	 *  path. */
+	trailingSummary?: string;
 	/** Called once per item with `isLast: false` during budget calculation;
 	 *  line count MUST NOT vary based on `isLast`. */
 	renderItem: (item: T, context: TreeContext) => string | string[];
@@ -35,6 +42,38 @@ export function renderTreeList<T>(options: TreeListOptions<T>, theme: Theme): st
 	} = options;
 	const maxItems = expanded ? items.length : Math.min(items.length, maxCollapsed);
 	const linesBudget = !expanded && maxCollapsedLines !== undefined ? maxCollapsedLines : Infinity;
+
+	// Caller-driven collapse: render exactly the provided items (the caller
+	// already picked/capped them) plus an optional trailing summary row. The
+	// walking-viewport todo policy uses this so item selection lives in the
+	// todo domain, not here.
+	if (!expanded && options.trailingSummary !== undefined) {
+		const summary = options.trailingSummary;
+		const lines: string[] = [];
+		for (let i = 0; i < items.length; i++) {
+			const rendered = renderItem(items[i], {
+				index: i,
+				isLast: false,
+				depth: 0,
+				theme,
+				prefix: "",
+				continuePrefix: "",
+			});
+			const itemLines = Array.isArray(rendered) ? rendered : rendered ? [rendered] : [];
+			if (itemLines.length === 0) continue;
+			const isLast = summary === "" && i === items.length - 1;
+			const prefix = `${theme.fg("dim", getTreeBranch(isLast, theme))} `;
+			const continuePrefix = `${theme.fg("dim", getTreeContinuePrefix(isLast, theme))}`;
+			lines.push(`${prefix}${replaceTabs(itemLines[0]!)}`);
+			for (let j = 1; j < itemLines.length; j++) {
+				lines.push(`${continuePrefix}${replaceTabs(itemLines[j]!)}`);
+			}
+		}
+		if (summary !== "") {
+			lines.push(`${theme.fg("dim", theme.tree.last)} ${theme.fg("muted", summary)}`);
+		}
+		return lines;
+	}
 
 	const candidateIndices: number[] = [];
 	if (truncateFrom === "start") {
