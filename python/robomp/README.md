@@ -39,6 +39,13 @@ Flow: webhook → HMAC verify → `github_events.route` → sqlite `events`
 → `worker.run_task` spawns `omp --mode rpc` with `cwd=worktree`,
 persistent `session_dir`, model randomly drawn from `ROBOMP_MODEL` (CSV).
 
+Queue-worthy submissions use a per-login rolling admission window. Accounts
+reported as `OWNER`, `MEMBER`, or `COLLABORATOR`, plus configured unlimited
+logins, bypass it. When a capped login fills its window, roboomp retains up to
+that cap again as a deferred backlog and re-admits those events oldest-first as
+slots expire; further overflow remains skipped. Configure the window and tier
+caps with the `ROBOMP_RATE_LIMIT_*` variables in `.env.example`.
+
 The agent uses omp's built-in tools (`read`/`edit`/`bash`/`lsp`, scoped to
 the worktree) plus the host tools in `src/host_tools.py` — the
 exclusive surface for GitHub writes. Every host-tool invocation is audited

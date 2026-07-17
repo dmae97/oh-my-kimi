@@ -434,6 +434,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 cap=cap,
             )
             if not admission.accepted:
+                assert cap is not None
                 window = int(cfg.rate_limit_window_seconds)
                 reason = f"rate limit: @{submitter} has used {admission.used}/{cap} submissions in the last {window}s"
                 log.info(
@@ -447,17 +448,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "cap": cap,
                     },
                 )
-                db.record_event(
+                deferred = db.defer_submission_event(
                     delivery_id=x_github_delivery,
                     event_type=x_github_event,
+                    login=submitter,
                     repo=decision.repo,
                     issue_key=decision.issue_key,
                     payload=payload,
-                    state="skipped",
-                    last_error=reason,
+                    cap=cap,
+                    reason=reason,
                 )
+                event_state = "deferred" if deferred else "skipped"
+                if deferred:
+                    bag["pool"].wake()
                 return JSONResponse(
-                    {"delivery": x_github_delivery, "state": "skipped", "reason": "rate_limited"},
+                    {"delivery": x_github_delivery, "state": event_state, "reason": "rate_limited"},
                     status_code=202,
                 )
 

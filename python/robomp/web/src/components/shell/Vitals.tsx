@@ -13,6 +13,7 @@ function relativeAgo(ms: number): string {
 
 const STATE_TONE: Record<string, string> = {
   queued: "var(--color-info)",
+  deferred: "var(--color-ink-300)",
   running: "var(--color-warn)",
   done: "var(--color-ok)",
   failed: "var(--color-err)",
@@ -25,7 +26,7 @@ export function Vitals(): JSX.Element {
   // issue_event_counts ?? event_counts — preserves the Stats.tsx accessor + title.
   const counts = (): Record<string, number> => {
     const status = statusResource();
-    if (!status) return { queued: 0, running: 0, done: 0, failed: 0, skipped: 0 };
+    if (!status) return { queued: 0, deferred: 0, running: 0, done: 0, failed: 0, skipped: 0 };
     return status.issue_event_counts ?? status.event_counts;
   };
 

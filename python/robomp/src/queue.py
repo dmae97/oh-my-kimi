@@ -12,7 +12,7 @@ from contextlib import suppress
 from robomp import tasks
 from robomp.cancellation import clear_current_event, set_current_event
 from robomp.config import Settings
-from robomp.db import Database, EventRow
+from robomp.db import Database, EventRow, iso_seconds_ago
 from robomp.github_backend import GitHubBackend
 from robomp.sandbox import GitTransport, SandboxManager, _reap_slot
 from robomp.slot_pool import SlotPool
@@ -214,7 +214,14 @@ class WorkerPool:
             # Naive but fine for v1 (small queue).
             row = await asyncio.to_thread(self.db.claim_next_event)
             if row is None:
-                return None
+                since = iso_seconds_ago(self.settings.rate_limit_window_seconds)
+                promoted = await asyncio.to_thread(self.db.promote_deferred_submissions, since=since)
+                if not promoted:
+                    return None
+                log.info("deferred submissions promoted", extra={"count": promoted})
+                row = await asyncio.to_thread(self.db.claim_next_event)
+                if row is None:
+                    return None
             key = row.issue_key or row.delivery_id
             if key in self._inflight:
                 # Put it back; another in-flight task is touching the same issue.

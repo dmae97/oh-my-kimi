@@ -23,6 +23,7 @@ const BASE_RUNTIME: RuntimeInfo = {
 function eventCounts(): Record<EventState, number> {
   return {
     queued: 0,
+    deferred: 0,
     running: 0,
     done: 0,
     failed: 0,
