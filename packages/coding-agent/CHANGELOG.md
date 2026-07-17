@@ -394,6 +394,7 @@
 - Fixed the eval tool's status-event tree truncating from the bottom: the newest `log()` progress lines were hidden behind an `… N more` marker while the oldest stayed visible; the tree now shows a tail window behind an `… N earlier` marker, and the expanded view widens to the viewport instead of a fixed 10 events
 - Fixed the `//!world=main` directive being silently ignored for string expressions passed to raw Puppeteer evaluation APIs
 - Fixed tab reuse issues where hung navigation or unhandled modals would cause initialization to stall and trigger a force-kill
+- Fixed advisor context maintenance undercounting the provider context: the compaction decision now anchors on the advisor's provider-reported context usage (cached input + generated output) floored by a full local estimate that includes the advisor system prompt and tool schemas, rejects stale provider usage retained across advisor compaction, and recovers a provider overflow by clearing only the advisor's own context at the current primary cursor — retrying the bounded failing batch once against a fresh context without replaying old primary history and keeping later updates eligible ([#5282](https://github.com/can1357/oh-my-pi/issues/5282))
 - Improved search reliability for Perplexity provider by forcing retrieval for all queries
 - Fixed JS eval cells losing top-level `function` and `var` declarations across cells when the defining cell contained top-level `await` — the async wrapper scoped them to the cell's IIFE instead of publishing them to the worker global
 
