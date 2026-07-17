@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Kimi Code transport selection to follow live per-model protocol metadata by default while preserving explicit OpenAI and Anthropic overrides ([#5893](https://github.com/can1357/oh-my-pi/issues/5893)).
+
 ## [17.0.2] - 2026-07-17
 
 ### Added

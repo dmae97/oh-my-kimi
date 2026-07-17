@@ -2712,6 +2712,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 			return result;
 		};
+		const kimiApiFormatSetting = settings.get("providers.kimiApiFormat");
+		const kimiApiFormat = kimiApiFormatSetting === "auto" ? undefined : kimiApiFormatSetting;
 		agent = new Agent({
 			initialState: {
 				systemPrompt,
@@ -2745,7 +2747,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			presencePenalty: settings.get("presencePenalty") >= 0 ? settings.get("presencePenalty") : undefined,
 			repetitionPenalty: settings.get("repetitionPenalty") >= 0 ? settings.get("repetitionPenalty") : undefined,
 			hideThinkingSummary: settings.get("omitThinking"),
-			kimiApiFormat: settings.get("providers.kimiApiFormat") ?? "anthropic",
+			kimiApiFormat,
 			preferWebsockets: preferOpenAICodexWebsockets,
 			getToolContext: tc => toolContextStore.getContext(tc),
 			getApiKey: requestModel => modelRegistry.resolver(requestModel, agent.sessionId),
@@ -3078,7 +3080,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					serviceTierResolver: agent.serviceTierResolver,
 					hideThinkingSummary: agent.hideThinkingSummary,
 					maxRetryDelayMs: agent.maxRetryDelayMs,
-					kimiApiFormat: settings.get("providers.kimiApiFormat") ?? "anthropic",
+					kimiApiFormat,
 					preferWebsockets: preferOpenAICodexWebsockets,
 					getToolContext: toolCall => toolContextStore.getContext(toolCall),
 					streamFn: settingsAwareStreamFn,

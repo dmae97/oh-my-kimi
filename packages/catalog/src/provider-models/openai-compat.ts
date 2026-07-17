@@ -3,7 +3,7 @@ import {
 	type OpenAICompatibleModelMapperContext,
 	type OpenAICompatibleModelRecord,
 } from "../discovery/openai-compatible";
-import { Effort } from "../effort";
+import { Effort, THINKING_EFFORTS } from "../effort";
 import { FIREWORKS_FAST_SUFFIX, toFireworksPublicModelId } from "../fireworks-model-id";
 import {
 	isGlmVisionModelId,
@@ -2504,6 +2504,45 @@ export interface KimiCodeModelManagerConfig {
 	fetch?: FetchImpl;
 }
 
+function mapKimiThinking(entry: OpenAICompatibleModelRecord): ThinkingConfig | undefined {
+	const raw = entry.think_efforts;
+	if (!isRecord(raw) || raw.support !== true) return undefined;
+	const validEfforts = raw.valid_efforts;
+	if (!Array.isArray(validEfforts)) return undefined;
+	const efforts = THINKING_EFFORTS.filter(effort => validEfforts.includes(effort));
+	if (efforts.length === 0) return undefined;
+
+	const thinking: ThinkingConfig = { mode: "effort", efforts };
+	if (entry.supports_thinking_type === "only") {
+		thinking.requiresEffort = true;
+	}
+	if (typeof raw.default_effort === "string") {
+		const defaultLevel = THINKING_EFFORTS.find(effort => effort === raw.default_effort);
+		if (defaultLevel !== undefined && efforts.includes(defaultLevel)) {
+			thinking.defaultLevel = defaultLevel;
+		}
+	}
+	return thinking;
+}
+
+function kimiSupportsReasoning(entry: OpenAICompatibleModelRecord, modelId: string): boolean {
+	switch (entry.supports_thinking_type) {
+		case "only":
+		case "both":
+			return true;
+		case "no":
+			return false;
+		default:
+			return entry.supports_reasoning === true || modelId.includes("thinking");
+	}
+}
+
+function mapKimiApiFormat(protocol: unknown): OpenAICompat["kimiApiFormat"] {
+	if (protocol === "anthropic") return "anthropic";
+	if (protocol === null) return "openai";
+	return undefined;
+}
+
 export function kimiCodeModelManagerOptions(
 	config?: KimiCodeModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
@@ -2528,15 +2567,19 @@ export function kimiCodeModelManagerOptions(
 						_context: OpenAICompatibleModelMapperContext<"openai-completions">,
 					): ModelSpec<"openai-completions"> => {
 						const id = defaults.id;
+						const reasoning = kimiSupportsReasoning(entry, id);
+						const thinking = reasoning ? mapKimiThinking(entry) : undefined;
 						return {
 							...defaults,
 							name: typeof entry.display_name === "string" ? entry.display_name : defaults.name,
-							reasoning: entry.supports_reasoning === true || id.includes("thinking"),
+							reasoning,
 							input: entry.supports_image_in === true || id.includes("k2.5") ? ["text", "image"] : ["text"],
 							contextWindow: typeof entry.context_length === "number" ? entry.context_length : 262144,
 							maxTokens: 32000,
+							thinking,
 							compat: {
-								thinkingFormat: "zai",
+								thinkingFormat: thinking ? "kimi" : "zai",
+								kimiApiFormat: mapKimiApiFormat(entry.protocol),
 								reasoningContentField: "reasoning_content",
 								supportsDeveloperRole: false,
 							},

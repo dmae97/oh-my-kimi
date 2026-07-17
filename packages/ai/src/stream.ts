@@ -1183,7 +1183,7 @@ export function streamSimple<TApi extends Api>(
 			streamKimi(model as Model<"openai-completions">, context, {
 				...requestOptions,
 				apiKey,
-				format: requestOptions?.kimiApiFormat ?? "anthropic",
+				format: requestOptions?.kimiApiFormat,
 			}),
 		);
 	}

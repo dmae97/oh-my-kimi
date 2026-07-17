@@ -7,7 +7,8 @@ import { getModelDbPath } from "@oh-my-pi/pi-utils";
 import type { Api, Model, ModelSpec } from "./types";
 
 // Rows persist ModelSpec JSON (sparse `compat`, never the resolved record);
-// the model manager rebuilds via `buildModel` on load. v8 invalidates Codex
+// the model manager rebuilds via `buildModel` on load. v9 invalidates Kimi
+// Code rows predating live effort and protocol metadata; v8 invalidated Codex
 // discovery rows predating provider-native V2 compaction metadata; v7
 // invalidated rows predating the Antigravity Gemini budget-mode migration
 // (cached specs still carrying `thinking.mode: "google-level"` and the old
@@ -15,7 +16,7 @@ import type { Api, Model, ModelSpec } from "./types";
 // unknown-limit sentinels (222222/8888); v5 invalidated rows predating
 // effort-tier variant collapsing (raw `-low`/`-high`/`-thinking` member ids);
 // v4 dropped the pre-efforts ThinkingConfig shape.
-const CACHE_SCHEMA_VERSION = 8;
+const CACHE_SCHEMA_VERSION = 9;
 
 interface CacheRow {
 	provider_id: string;
