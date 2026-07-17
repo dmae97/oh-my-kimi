@@ -18,6 +18,13 @@ export interface TreeListOptions<T> {
 	maxCollapsedLines?: number;
 	itemType?: string;
 	truncateFrom?: "start" | "end";
+	/** Index (into `items`) of the task that MUST stay visible when collapsed —
+	 *  the in-progress task or a subagent-matched pending task. When set, the
+	 *  collapsed window slides to include it, emitting leading/trailing
+	 *  `… N more` summaries on whichever side is truncated. Bounds the preview by
+	 *  `maxCollapsed` items; ignores `maxCollapsedLines`. Ignored when expanded or
+	 *  when everything already fits. */
+	anchorIndex?: number;
 	/** Called once per item with `isLast: false` during budget calculation;
 	 *  line count MUST NOT vary based on `isLast`. */
 	renderItem: (item: T, context: TreeContext) => string | string[];
@@ -35,6 +42,51 @@ export function renderTreeList<T>(options: TreeListOptions<T>, theme: Theme): st
 	} = options;
 	const maxItems = expanded ? items.length : Math.min(items.length, maxCollapsed);
 	const linesBudget = !expanded && maxCollapsedLines !== undefined ? maxCollapsedLines : Infinity;
+
+	// Anchored collapse: keep a specific item (in-progress / subagent-matched
+	// task) visible by sliding a `maxItems`-wide window over it, with two-sided
+	// `… N more` summaries. Edge truncation can only keep a head or tail slice,
+	// so an active item in the middle would otherwise vanish.
+	if (
+		!expanded &&
+		options.anchorIndex !== undefined &&
+		options.anchorIndex >= 0 &&
+		options.anchorIndex < items.length &&
+		items.length > maxItems
+	) {
+		const half = Math.floor((maxItems - 1) / 2);
+		const winStart = Math.min(Math.max(options.anchorIndex - half, 0), items.length - maxItems);
+		const winEnd = winStart + maxItems;
+		const before = winStart;
+		const after = items.length - winEnd;
+		const lines: string[] = [];
+		if (before > 0) {
+			lines.push(`${theme.fg("dim", theme.tree.branch)} ${theme.fg("muted", formatMoreItems(before, itemType))}`);
+		}
+		for (let i = winStart; i < winEnd; i++) {
+			const rendered = renderItem(items[i], {
+				index: i,
+				isLast: false,
+				depth: 0,
+				theme,
+				prefix: "",
+				continuePrefix: "",
+			});
+			const itemLines = Array.isArray(rendered) ? rendered : rendered ? [rendered] : [];
+			if (itemLines.length === 0) continue;
+			const isLast = after === 0 && i === winEnd - 1;
+			const prefix = `${theme.fg("dim", getTreeBranch(isLast, theme))} `;
+			const continuePrefix = `${theme.fg("dim", getTreeContinuePrefix(isLast, theme))}`;
+			lines.push(`${prefix}${replaceTabs(itemLines[0]!)}`);
+			for (let j = 1; j < itemLines.length; j++) {
+				lines.push(`${continuePrefix}${replaceTabs(itemLines[j]!)}`);
+			}
+		}
+		if (after > 0) {
+			lines.push(`${theme.fg("dim", theme.tree.last)} ${theme.fg("muted", formatMoreItems(after, itemType))}`);
+		}
+		return lines;
+	}
 
 	const candidateIndices: number[] = [];
 	if (truncateFrom === "start") {

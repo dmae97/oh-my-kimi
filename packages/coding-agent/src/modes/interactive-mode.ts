@@ -1901,9 +1901,20 @@ export class InteractiveMode implements InteractiveModeContext {
 		const renderTasks = (phase: TodoPhase): string[] => {
 			const open = phase.tasks.filter(t => t.status === "pending" || t.status === "in_progress");
 			const base = expanded ? phase.tasks : open.length > 0 ? open : phase.tasks;
-			const items = expanded ? base : base.slice(0, activeTaskCap);
+			// Anchor the collapsed window on the active work — the in-progress task,
+			// else the first subagent-matched pending task — so it stays visible
+			// instead of being dropped by a fixed head slice.
+			let anchorIdx = base.findIndex(t => t.status === "in_progress");
+			if (anchorIdx < 0) anchorIdx = base.findIndex(t => isMatched(t));
 			return renderTreeList(
-				{ items, expanded: true, renderItem: todo => this.#formatTodoLine(todo, "", isMatched(todo)) },
+				{
+					items: base,
+					expanded,
+					maxCollapsed: activeTaskCap,
+					itemType: "task",
+					anchorIndex: anchorIdx >= 0 ? anchorIdx : undefined,
+					renderItem: todo => this.#formatTodoLine(todo, "", isMatched(todo)),
+				},
 				theme,
 			);
 		};

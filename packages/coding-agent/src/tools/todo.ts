@@ -914,6 +914,9 @@ export const todoToolRenderer = {
 					bodyLines.push(uiTheme.fg("accent", chalk.bold(formatPhaseDisplayName(phase.name, p + 1))));
 				}
 				const completionKeys = completionKeysByPhase.get(phase.name) ?? EMPTY_COMPLETION_KEYS;
+				// Anchor the collapsed window on the in-progress task so it stays
+				// visible even mid-phase; tail truncation would otherwise hide it.
+				const activeIdx = phase.tasks.findIndex(task => task.status === "in_progress");
 				const treeLines = renderTreeList(
 					{
 						items: phase.tasks,
@@ -921,6 +924,7 @@ export const todoToolRenderer = {
 						maxCollapsed: PREVIEW_LIMITS.COLLAPSED_ITEMS,
 						itemType: "todo",
 						truncateFrom: "start",
+						anchorIndex: activeIdx >= 0 ? activeIdx : undefined,
 						renderItem: todo => formatTodoLine(todo, uiTheme, "", completionKeys, spinnerFrame),
 					},
 					uiTheme,

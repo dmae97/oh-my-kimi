@@ -288,4 +288,71 @@ describe("renderTreeList maxCollapsedLines", () => {
 		expect(collapsed[3]).toBe("└ d");
 		expect(collapsed[4]).toBe("   d2");
 	});
+
+	describe("anchorIndex", () => {
+		const tasks = Array.from({ length: 14 }, (_, i) => `Task ${i + 1}`);
+
+		it("keeps a mid-list anchored item visible with two-sided summaries", () => {
+			const collapsed = renderTreeList(
+				{ items: tasks, expanded: false, maxCollapsed: 8, itemType: "todo", anchorIndex: 5, renderItem: t => t },
+				stubTheme,
+			);
+			expect(collapsed.some(l => l.includes("Task 6"))).toBe(true);
+			expect(collapsed[0]).toContain("more todos");
+			expect(collapsed.at(-1)).toContain("more todos");
+			// Window holds exactly maxCollapsed items plus both summary rows.
+			expect(collapsed).toHaveLength(10);
+		});
+
+		it("counts hidden items correctly on each side", () => {
+			const collapsed = renderTreeList(
+				{ items: tasks, expanded: false, maxCollapsed: 8, itemType: "todo", anchorIndex: 5, renderItem: t => t },
+				stubTheme,
+			);
+			// anchor 5, half = floor(7/2) = 3 → window [2,10): Task 3..Task 10.
+			expect(collapsed[0]).toContain("2 more todos");
+			expect(collapsed.at(-1)).toContain("4 more todos");
+		});
+
+		it("clamps the window to the tail when the anchor is near the end", () => {
+			const collapsed = renderTreeList(
+				{ items: tasks, expanded: false, maxCollapsed: 8, itemType: "todo", anchorIndex: 13, renderItem: t => t },
+				stubTheme,
+			);
+			expect(collapsed.some(l => l.includes("Task 14"))).toBe(true);
+			expect(collapsed[0]).toContain("6 more todos");
+			// No trailing summary — the window reaches the last item.
+			expect(collapsed.at(-1)).not.toContain("more");
+			expect(collapsed.at(-1)).toContain("└");
+		});
+
+		it("clamps the window to the head when the anchor is near the start", () => {
+			const collapsed = renderTreeList(
+				{ items: tasks, expanded: false, maxCollapsed: 8, itemType: "todo", anchorIndex: 0, renderItem: t => t },
+				stubTheme,
+			);
+			expect(collapsed.some(l => l.includes("Task 1"))).toBe(true);
+			expect(collapsed[0]).not.toContain("more");
+			expect(collapsed.at(-1)).toContain("6 more todos");
+		});
+
+		it("ignores the anchor when every item already fits", () => {
+			const items = ["a", "b", "c"];
+			const collapsed = renderTreeList(
+				{ items, expanded: false, maxCollapsed: 8, itemType: "todo", anchorIndex: 1, renderItem: t => t },
+				stubTheme,
+			);
+			expect(collapsed).toHaveLength(3);
+			expect(collapsed.some(l => l.includes("more"))).toBe(false);
+		});
+
+		it("ignores the anchor in expanded mode", () => {
+			const expandedLines = renderTreeList(
+				{ items: tasks, expanded: true, maxCollapsed: 8, itemType: "todo", anchorIndex: 5, renderItem: t => t },
+				stubTheme,
+			);
+			expect(expandedLines).toHaveLength(14);
+			expect(expandedLines.some(l => l.includes("more"))).toBe(false);
+		});
+	});
 });
