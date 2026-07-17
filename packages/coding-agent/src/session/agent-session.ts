@@ -532,6 +532,43 @@ function reportFromRewindReportContent(content: string): string {
 	return report.trim();
 }
 
+type SemanticCheckpointToolName = "checkpoint" | "rewind";
+
+type SemanticToolResult = {
+	toolName: SemanticCheckpointToolName;
+	details?: unknown;
+};
+
+/**
+ * Normalize checkpoint/rewind results across native calls and `write xd://`
+ * dispatches. Xdev keeps the wrapped tool's result details under `xdev.inner`,
+ * while direct calls put them on the result itself.
+ */
+function semanticToolResult(toolName: string | undefined, result: unknown): SemanticToolResult | undefined {
+	if (toolName === "checkpoint" || toolName === "rewind") {
+		const details = result && typeof result === "object" && "details" in result ? result.details : undefined;
+		return { toolName, details };
+	}
+	const dispatch = writeDeviceDispatch(toolName ?? "", result);
+	if (dispatch?.mode !== "execute" || (dispatch.tool !== "checkpoint" && dispatch.tool !== "rewind")) {
+		return undefined;
+	}
+	return { toolName: dispatch.tool, details: dispatch.inner };
+}
+
+function isTodoPhase(value: unknown): value is TodoPhase {
+	if (!isRecord(value) || typeof value.name !== "string" || !Array.isArray(value.tasks)) return false;
+	return value.tasks.every(
+		task =>
+			isRecord(task) &&
+			typeof task.content === "string" &&
+			(task.status === "pending" ||
+				task.status === "in_progress" ||
+				task.status === "completed" ||
+				task.status === "abandoned"),
+	);
+}
+
 function completedRewindFromEntry(entry: SessionEntry): CompletedRewindState | undefined {
 	if (entry.type !== "custom_message" || entry.customType !== "rewind-report") return undefined;
 	const details = entry.details;
@@ -544,21 +581,18 @@ function completedRewindFromEntry(entry: SessionEntry): CompletedRewindState | u
 		reportFromRewindReportContent(customMessageContentText(entry.content));
 	return report.length > 0 ? { report, startedAt, rewoundAt } : undefined;
 }
-
-function isSuccessfulCheckpointEntry(entry: SessionEntry): entry is SessionMessageEntry & {
-	message: { role: "toolResult"; toolName: "checkpoint"; isError?: false };
-} {
-	return (
-		entry.type === "message" &&
-		entry.message.role === "toolResult" &&
-		entry.message.toolName === "checkpoint" &&
-		entry.message.isError !== true
-	);
+function isSuccessfulCheckpointEntry(
+	entry: SessionEntry,
+): entry is SessionEntry & { type: "message"; message: Extract<AgentMessage, { role: "toolResult" }> } {
+	if (entry.type !== "message" || entry.message.role !== "toolResult" || entry.message.isError === true) {
+		return false;
+	}
+	return semanticToolResult(entry.message.toolName, entry.message)?.toolName === "checkpoint";
 }
 
 function checkpointStartedAtFromEntry(entry: SessionEntry): string | undefined {
 	if (!isSuccessfulCheckpointEntry(entry)) return undefined;
-	const details = entry.message.details;
+	const details = semanticToolResult(entry.message.toolName, entry.message)?.details;
 	if (details && typeof details === "object") {
 		const startedAt = stringProperty(details, "startedAt");
 		if (startedAt) return startedAt;
@@ -4012,7 +4046,7 @@ export class AgentSession {
 		}
 		const skipPersistedRewindResult =
 			message.role === "toolResult" &&
-			message.toolName === "rewind" &&
+			semanticToolResult(message.toolName, message)?.toolName === "rewind" &&
 			this.#rewoundToolResultIds.delete(message.toolCallId);
 		if (!skipPersistedRewindResult) {
 			this.#appendSessionMessage(message);
@@ -4383,29 +4417,28 @@ export class AgentSession {
 				}
 			}
 			if (event.message.role === "toolResult") {
-				const { toolName, toolCallId, details, isError, content } = event.message as {
-					toolCallId?: string;
-					toolName?: string;
-					details?: { op?: string; path?: string; phases?: TodoPhase[]; report?: string; startedAt?: string };
-					isError?: boolean;
-					content?: Array<TextContent | ImageContent>;
-				};
+				const { toolName, toolCallId, isError, content } = event.message;
+				const details = isRecord(event.message.details) ? event.message.details : undefined;
+				const semanticResult = semanticToolResult(toolName, event.message);
+				const semanticDetails = isRecord(semanticResult?.details) ? semanticResult.details : undefined;
 				// A tool actually ran. Clear the post-reminder suppression: the agent did
 				// productive work in response to the prior nudge, so the next text-only stop
 				// is allowed to escalate to the next reminder if todos remain incomplete.
 				this.#todoReminderAwaitingProgress = false;
 				// Invalidate streaming edit cache when edit tool completes to prevent stale data
-				if (toolName === "edit" && details?.path) {
-					this.#invalidateFileCacheForPath(details.path);
+				const editedPath = details ? getStringProperty(details, "path") : undefined;
+				if (toolName === "edit" && editedPath) {
+					this.#invalidateFileCacheForPath(editedPath);
 				}
-				if (toolName === "todo" && !isError && Array.isArray(details?.phases)) {
-					this.setTodoPhases(details.phases);
+				const phases = details?.phases;
+				if (toolName === "todo" && !isError && details && Array.isArray(phases) && phases.every(isTodoPhase)) {
+					this.setTodoPhases(phases);
 					if (this.#isTodoInitResult(details, toolCallId)) {
 						this.#scheduleReplanTitleRefresh();
 					}
 				}
 				if (toolName === "todo" && isError) {
-					const errorText = content?.find(part => part.type === "text")?.text;
+					const errorText = content.find(part => part.type === "text")?.text;
 					const reminderText = [
 						"<system-reminder>",
 						"todo failed, so todo progress is not visible to the user.",
@@ -4423,18 +4456,19 @@ export class AgentSession {
 						{ deliverAs: "nextTurn" },
 					);
 				}
-				if (toolName === "checkpoint" && !isError) {
+				if (semanticResult?.toolName === "checkpoint" && !isError) {
 					const checkpointEntryId = this.sessionManager.getEntries().at(-1)?.id ?? null;
 					this.#checkpointState = {
 						checkpointMessageCount: this.agent.state.messages.length,
 						checkpointEntryId,
-						startedAt: details?.startedAt ?? new Date().toISOString(),
+						startedAt:
+							(semanticDetails && stringProperty(semanticDetails, "startedAt")) ?? new Date().toISOString(),
 					};
 					this.#pendingRewindReport = undefined;
 					this.#lastCompletedRewind = undefined;
 				}
-				if (toolName === "rewind" && !isError && this.#checkpointState) {
-					const detailReport = typeof details?.report === "string" ? details.report.trim() : "";
+				if (semanticResult?.toolName === "rewind" && !isError && this.#checkpointState) {
+					const detailReport = semanticDetails ? (stringProperty(semanticDetails, "report")?.trim() ?? "") : "";
 					const textReport = content?.find(part => part.type === "text")?.text?.trim() ?? "";
 					const report = detailReport || textReport;
 					if (report.length > 0) {
@@ -11628,8 +11662,10 @@ export class AgentSession {
 		if (this.#pendingRewindReport) return this.#pendingRewindReport;
 		for (let i = messages.length - 1; i >= 0; i--) {
 			const message = messages[i];
-			if (message?.role !== "toolResult" || message.toolName !== "rewind" || message.isError) continue;
-			const details = message.details;
+			if (message?.role !== "toolResult" || message.isError) continue;
+			const semanticResult = semanticToolResult(message.toolName, message);
+			if (semanticResult?.toolName !== "rewind") continue;
+			const details = semanticResult.details;
 			const detailReport =
 				details && typeof details === "object" && "report" in details && typeof details.report === "string"
 					? details.report.trim()
@@ -11670,7 +11706,7 @@ export class AgentSession {
 
 		if (activeMessages) {
 			for (const message of activeMessages) {
-				if (message.role === "toolResult" && message.toolName === "rewind") {
+				if (message.role === "toolResult" && semanticToolResult(message.toolName, message)?.toolName === "rewind") {
 					this.#rewoundToolResultIds.add(message.toolCallId);
 				}
 			}
