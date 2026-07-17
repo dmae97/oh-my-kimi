@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `docs/advisor-watchdog.md` overstating advisor delivery for a normal yield: the severity table listed `concern` as unconditionally interrupting and the prose promised a self-ended run could always be steered/resumed. Documented the #4840 terminal-answer exception — a `concern` raised after the primary's final text answer with no queued work is preserved as a passive card, not a resume, while a `blocker` still steers (#5628) ([#5913](https://github.com/can1357/oh-my-pi/issues/5913)).
+
 ## [17.0.3] - 2026-07-17
 
 ### Changed
