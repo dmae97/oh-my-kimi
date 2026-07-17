@@ -8,6 +8,7 @@ import { FIREWORKS_FAST_SUFFIX, toFireworksPublicModelId } from "../fireworks-mo
 import {
 	isGlmVisionModelId,
 	isGrokReasoningEffortCapable,
+	isKimiK3ModelId,
 	isKimiModelId,
 	isReasoningGlmModelId,
 } from "../identity/family";
@@ -2916,6 +2917,23 @@ export interface MoonshotModelManagerConfig {
 	fetch?: FetchImpl;
 }
 
+/**
+ * Moonshot Kimi K3 discovery metadata. K3 is dynamically discovered but absent
+ * from models.dev and the bundled catalog, so `mapWithBundledReference` would
+ * otherwise assign zero cost, null limits, text-only input, and no reasoning —
+ * mislabeling a paid model as "Free" (#5756). Pricing/limits from Moonshot's
+ * official chat-k3 pricing and quickstart guide:
+ *   https://platform.kimi.ai/docs/pricing/chat-k3.md
+ *   https://platform.kimi.ai/docs/guide/kimi-k3-quickstart
+ * K3 always reasons and supports only `reasoning_effort: "max"` — it does NOT
+ * use the K2.x binary `thinking: { type }` block, so the wire path routes it
+ * through OpenAI-style `reasoning_effort` (see `buildOpenAICompat`).
+ */
+const MOONSHOT_KIMI_K3_COST = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 } as const;
+const MOONSHOT_KIMI_K3_CONTEXT_WINDOW = 1_048_576;
+const MOONSHOT_KIMI_K3_MAX_TOKENS = 131_072;
+const MOONSHOT_KIMI_K3_THINKING: ThinkingConfig = { mode: "effort", efforts: [Effort.Max], requiresEffort: true };
+
 export function moonshotModelManagerOptions(
 	config?: MoonshotModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
@@ -2938,6 +2956,25 @@ export function moonshotModelManagerOptions(
 						const reference = references.get(defaults.id);
 						const model = mapWithBundledReference(entry, defaults, reference);
 						const id = model.id.toLowerCase();
+						// Kimi K3 is discovered but has no bundled/models.dev reference, so the
+						// generic dynamic defaults would report it "Free" with no capabilities
+						// (#5756). Stamp the official pricing/limits when the endpoint doesn't
+						// carry them, and mark it reasoning + vision. K3 always reasons via
+						// `reasoning_effort: "max"` and does NOT use the K2.x `thinking` block,
+						// so its thinking config is the single-tier `max` scale — the wire path
+						// routes it through `reasoning_effort` (see `buildOpenAICompat`).
+						if (!reference && isKimiK3ModelId(id)) {
+							const isZeroCost = model.cost.input === 0 && model.cost.output === 0 && model.cost.cacheRead === 0;
+							return {
+								...model,
+								reasoning: true,
+								input: ["text", "image"],
+								cost: isZeroCost ? { ...MOONSHOT_KIMI_K3_COST } : model.cost,
+								contextWindow: model.contextWindow ?? MOONSHOT_KIMI_K3_CONTEXT_WINDOW,
+								maxTokens: model.maxTokens ?? MOONSHOT_KIMI_K3_MAX_TOKENS,
+								thinking: model.thinking ?? { ...MOONSHOT_KIMI_K3_THINKING },
+							};
+						}
 						// Moonshot's K2.x family (K2.5, K2.6, kimi-k2-thinking, …) is reasoning-capable
 						// and vision-capable on the native API. Without these flags the openai-completions
 						// path skips the z.ai-format `thinking` block, and Moonshot K2.6 stalls on first
