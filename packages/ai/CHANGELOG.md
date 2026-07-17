@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed custom OAuth Anthropic-compatible endpoints with explicit header overrides still receiving generated Claude Code fingerprint headers instead. ([#5888](https://github.com/can1357/oh-my-pi/issues/5888))
+
 ## [17.0.2] - 2026-07-17
 
 ### Fixed

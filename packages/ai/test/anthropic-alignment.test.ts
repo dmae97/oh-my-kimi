@@ -642,6 +642,48 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(headers.Authorization).toBe("Bearer sk-ant-oat-test");
 	});
 
+	it("honors opted-in OAuth fingerprint headers on non-official endpoints (#5888)", () => {
+		const options = buildAnthropicClientOptions({
+			model: buildModel({
+				...ANTHROPIC_MODEL_SPEC,
+				provider: "custom-anthropic",
+				baseUrl: "https://proxy.example.com/anthropic",
+				headers: {
+					"anthropic-beta": "custom-beta-token",
+					"x-app": "custom-app-token",
+					"X-Stainless-Runtime-Version": "custom-runtime-token",
+					Authorization: "should-not-leak",
+				},
+				compat: { allowAnthropicHeaderOverrides: true },
+			}),
+			apiKey: "sk-ant-oat-test",
+			stream: true,
+		});
+
+		expect(options.defaultHeaders["anthropic-beta"]).toBe("custom-beta-token");
+		expect(options.defaultHeaders["x-app"]).toBe("custom-app-token");
+		expect(options.defaultHeaders["X-Stainless-Runtime-Version"]).toBe("custom-runtime-token");
+		expect(options.defaultHeaders.Authorization).toBe("Bearer sk-ant-oat-test");
+	});
+
+	it("keeps OAuth fingerprint defaults on official endpoints despite the compat opt-in", () => {
+		const headers = buildAnthropicHeaders({
+			apiKey: "sk-ant-oat-test",
+			baseUrl: "https://api.anthropic.com",
+			isOAuth: true,
+			allowAnthropicHeaderOverrides: true,
+			modelHeaders: {
+				"anthropic-beta": "custom-beta-token",
+				"x-app": "custom-app-token",
+				"X-Stainless-Runtime-Version": "custom-runtime-token",
+			},
+		});
+
+		expect(headers["anthropic-beta"]).not.toBe("custom-beta-token");
+		expect(headers["x-app"]).toBe("cli");
+		expect(headers["X-Stainless-Runtime-Version"]).toBe("v24.3.0");
+	});
+
 	it("suppresses the client-level X-Api-Key when model.headers carries a custom Authorization (#3391)", () => {
 		const options = buildAnthropicClientOptions({
 			model: buildModel({

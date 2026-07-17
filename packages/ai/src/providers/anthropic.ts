@@ -100,6 +100,8 @@ export type AnthropicHeaderOptions = {
 	isCloudflareAiGateway?: boolean;
 	claudeCodeSessionId?: string;
 	claudeCodeBetas?: readonly string[];
+	/** Allow explicit fingerprint headers to replace OAuth defaults on non-official endpoints. */
+	allowAnthropicHeaderOverrides?: boolean;
 };
 
 export function normalizeAnthropicBaseUrl(baseUrl?: string): string | undefined {
@@ -225,22 +227,36 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 	const acceptHeader = oauthToken ? "application/json" : stream ? "text/event-stream" : "application/json";
 	const isCloudflare = options.isCloudflareAiGateway ?? false;
 	const honorAuthorization = !oauthToken && !isCloudflare;
+	const allowAnthropicHeaderOverrides =
+		oauthToken &&
+		options.allowAnthropicHeaderOverrides === true &&
+		!isCloudflare &&
+		!isOfficialAnthropicApiUrl(options.baseUrl);
 	const honorApiKey = !isCloudflare;
 	const modelHeaders: Record<string, string> = {};
+	const anthropicHeaderOverrides: Record<string, string> = {};
 	const filteredEnforcedKeys: string[] = [];
-	for (const [key, value] of Object.entries(options.modelHeaders ?? {})) {
-		const lowerKey = key.toLowerCase();
-		if (enforcedHeaderKeys.has(lowerKey)) {
-			// user-agent is always re-applied explicitly. authorization / x-api-key
-			// are silently re-applied in honoring branches and dropped + logged
-			// where the branch enforces its own credential.
-			if (lowerKey === "user-agent") continue;
-			if (lowerKey === "authorization" && honorAuthorization) continue;
-			if (lowerKey === "x-api-key" && honorApiKey) continue;
-			filteredEnforcedKeys.push(key);
-			continue;
+	const headerSource = options.modelHeaders;
+	if (headerSource) {
+		for (const key in headerSource) {
+			const value = headerSource[key];
+			const lowerKey = key.toLowerCase();
+			if (enforcedHeaderKeys.has(lowerKey)) {
+				if (allowAnthropicHeaderOverrides && overridableAnthropicHeaderKeys.has(lowerKey)) {
+					anthropicHeaderOverrides[key] = value;
+					continue;
+				}
+				// user-agent is always re-applied explicitly. authorization / x-api-key
+				// are silently re-applied in honoring branches and dropped + logged
+				// where the branch enforces its own credential.
+				if (lowerKey === "user-agent") continue;
+				if (lowerKey === "authorization" && honorAuthorization) continue;
+				if (lowerKey === "x-api-key" && honorApiKey) continue;
+				filteredEnforcedKeys.push(key);
+				continue;
+			}
+			modelHeaders[key] = value;
 		}
-		modelHeaders[key] = value;
 	}
 	if (filteredEnforcedKeys.length > 0) {
 		// Caller/env-supplied values (options.headers, ANTHROPIC_CUSTOM_HEADERS)
@@ -266,7 +282,7 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 		const userAgent = isClaudeCodeClientUserAgent(incomingUserAgent)
 			? incomingUserAgent
 			: `claude-cli/${claudeCodeVersion} (external, local-agent, agent-sdk/${claudeAgentSdkVersion})`;
-		return {
+		const headers = {
 			...modelHeaders,
 			...claudeCodeHeaders,
 			Accept: acceptHeader,
@@ -278,6 +294,7 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 			"User-Agent": userAgent,
 			...(incomingApiKey ? { "X-Api-Key": incomingApiKey } : {}),
 		};
+		return allowAnthropicHeaderOverrides ? mergeHeaders(headers, anthropicHeaderOverrides) : headers;
 	} else if (!isOfficialAnthropicApiUrl(options.baseUrl)) {
 		return {
 			...modelHeaders,
@@ -510,6 +527,10 @@ const enforcedHeaderKeys = new Set(
 		"x-client-request-id",
 		"cf-aig-authorization",
 	].map(key => key.toLowerCase()),
+);
+
+const overridableAnthropicHeaderKeys = new Set(
+	[...Object.keys(claudeCodeHeaders), "anthropic-beta", "User-Agent", "x-app"].map(key => key.toLowerCase()),
 );
 
 const CLAUDE_BILLING_HEADER_PREFIX = "x-anthropic-billing-header:";
@@ -2791,6 +2812,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 			dynamicHeaders,
 		),
 		isCloudflareAiGateway: model.provider === "cloudflare-ai-gateway",
+		allowAnthropicHeaderOverrides: model.compat.allowAnthropicHeaderOverrides,
 		claudeCodeSessionId,
 		claudeCodeBetas: oauthToken
 			? buildClaudeCodeBetas(

@@ -584,6 +584,7 @@ describe("ModelRegistry", () => {
 						api: "anthropic-messages",
 						compat: {
 							supportsEagerToolInputStreaming: true,
+							allowAnthropicHeaderOverrides: true,
 						},
 						models: [
 							{
@@ -685,7 +686,10 @@ describe("ModelRegistry", () => {
 
 		test("custom Anthropic providers can opt into eager tool input streaming", () => {
 			const model = customAnthropicCompat.find("anthropic-proxy", "claude-haiku-4.5");
-			expect(model?.compat).toMatchObject({ supportsEagerToolInputStreaming: true });
+			expect(model?.compat).toMatchObject({
+				supportsEagerToolInputStreaming: true,
+				allowAnthropicHeaderOverrides: true,
+			});
 		});
 
 		test("custom Responses providers can disable original image detail", () => {

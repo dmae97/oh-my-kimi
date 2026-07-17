@@ -415,6 +415,11 @@ export interface AnthropicCompat {
 	 */
 	requiresToolResultId?: boolean;
 	/**
+	 * Allow configured Claude Code fingerprint headers to replace generated
+	 * OAuth defaults on non-official Anthropic endpoints.
+	 */
+	allowAnthropicHeaderOverrides?: boolean;
+	/**
 	 * Replay unsigned `thinking` blocks from prior assistant turns as native
 	 * thinking instead of demoting them to text. Official Anthropic enforces
 	 * signature-based thinking-chain integrity, so unsigned blocks must stay
