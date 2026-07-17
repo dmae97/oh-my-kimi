@@ -26,6 +26,7 @@
 
 ### Fixed
 
+- Clarified async task and hub guidance: inspecting a settled job consumes its automatic delivery, job IDs expire from process memory after roughly five minutes, and completion does not verify claimed artifacts ([#5869](https://github.com/can1357/oh-my-pi/issues/5869)).
 - Fixed loading issues for linked legacy extensions importing `DefaultPackageManager` or `linkedom`.
 - Fixed the advisor retrying terminal, non-retriable provider failures (e.g., blocked prompts), ensuring they fail immediately while transient failures still retry.
 - Fixed an issue where reassigning the `plan` role model mid-planning did not take effect until the next plan-mode entry; it now applies at the next turn boundary.

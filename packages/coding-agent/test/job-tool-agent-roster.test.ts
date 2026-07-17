@@ -56,6 +56,14 @@ afterEach(async () => {
 });
 
 describe("hub jobs snapshot", () => {
+	test("description explains settled delivery, expiry, and completion semantics", () => {
+		const tool = new HubTool(createToolSession({ manager: createManager(), agentId: "Main" }));
+
+		expect(tool.description).toContain("that snapshot is the delivery and suppresses duplicate `async-result`");
+		expect(tool.description).toContain("expire roughly five minutes after settlement");
+		expect(tool.description).toContain("`completed` means successful yield/job exit, not artifact acceptance");
+	});
+
 	test("empty jobs snapshot reports 'no jobs' instead of empty output", async () => {
 		const tool = new HubTool(createToolSession({ manager: createManager(), agentId: "Main" }));
 

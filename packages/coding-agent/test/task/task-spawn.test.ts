@@ -105,7 +105,7 @@ describe("task spawn routing", () => {
 		AgentRegistry.resetGlobalForTests();
 	});
 
-	it("returns immediately on spawn and delivers the follow-up hint when the job completes", async () => {
+	it("returns immediately with the async job contract and delivers the follow-up hint", async () => {
 		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
 			agents: [taskAgent],
 			projectAgentsDir: null,
@@ -118,6 +118,8 @@ describe("task spawn routing", () => {
 
 		const manager = createManager();
 		const tool = await TaskTool.create(createSession({ manager }));
+		expect(tool.description).toContain("A settled `hub jobs`/`hub wait` snapshot is the delivery");
+		expect(tool.description).toContain("`completed` means successful yield/job exit, not artifact acceptance");
 
 		const result = await tool.execute("tc-spawn", {
 			agent: "task",
@@ -131,6 +133,12 @@ describe("task spawn routing", () => {
 		const jobId = result.details?.async?.jobId;
 		expect(jobId).toBeTruthy();
 		expect(text).toContain(`job \`${jobId}\``);
+		expect(text).toContain("settled job with `hub jobs` or `hub wait` makes that snapshot its delivery");
+		expect(text).toContain("Job IDs live in process memory for roughly five minutes after settlement");
+		expect(text).toContain("use the agent ID with `hub send`, `agent://<id>`, or `history://<id>`");
+		expect(text).toContain(
+			"`completed` means the subagent yielded successfully, not that claimed artifacts were verified",
+		);
 		const job = manager.getJob(jobId!);
 		expect(job?.status).toBe("running");
 		expect(job?.resultText).toBeUndefined();
