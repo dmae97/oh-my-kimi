@@ -592,7 +592,42 @@ const mathEnvBlockExtension: TokenizerAndRendererExtension = {
 		return (token as { text?: string }).text ?? "";
 	},
 };
-markdownParser.use({ extensions: [customHrExtension, mathBlockExtension, mathEnvBlockExtension, mathExtension] });
+
+// GFM's extended autolinks (`www.`, `http://`, `https://`, `ftp://`) may only
+// begin at a valid left boundary: start of line, whitespace, or one of `* _ ~ (`
+// (https://github.github.com/gfm/#autolinks-extension-). marked's bundled `url`
+// tokenizer instead fires after ANY character, so a local path such as
+// `~/meta/www.share/blog/index.dj` is mangled into a `http://www.share/...`
+// link. This inline extension runs before the built-in tokenizer: when an
+// autolink candidate is glued to an invalid preceding character it emits the
+// bare scheme prefix as literal text, so the remainder never reaches the `url`
+// tokenizer at a valid start. Candidates at a legal boundary fall through
+// (return undefined) to marked's own autolink handling unchanged.
+const AUTOLINK_SCHEME_REGEX = /^(?:www\.|https?:\/\/|ftp:\/\/)/i;
+const AUTOLINK_SCHEME_SCAN = /www\.|https?:\/\/|ftp:\/\//i;
+const VALID_AUTOLINK_LEFT_BOUNDARY = /[\s*_~(]/;
+const boundedAutolinkExtension: TokenizerAndRendererExtension = {
+	name: "boundedAutolink",
+	level: "inline",
+	start(src) {
+		const m = AUTOLINK_SCHEME_SCAN.exec(src);
+		return m ? m.index : undefined;
+	},
+	tokenizer(src, tokens) {
+		const match = AUTOLINK_SCHEME_REGEX.exec(src);
+		if (!match) return undefined;
+		const prevChar = tokens.at(-1)?.raw?.at(-1);
+		// Start of line or a legal delimiter → let marked autolink it.
+		if (prevChar === undefined || VALID_AUTOLINK_LEFT_BOUNDARY.test(prevChar)) return undefined;
+		// Glued to an invalid character (e.g. `/`, a letter, `.`): consume only
+		// the scheme prefix as text so the built-in `url` tokenizer cannot match.
+		const raw = match[0];
+		return { type: "text", raw, text: raw };
+	},
+};
+markdownParser.use({
+	extensions: [customHrExtension, mathBlockExtension, mathEnvBlockExtension, mathExtension, boundedAutolinkExtension],
+});
 
 // ---------------------------------------------------------------------------
 // Module-level LRU render cache
