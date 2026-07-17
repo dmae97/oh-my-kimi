@@ -2190,8 +2190,8 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 					if (token.text === token.href || token.text === hrefForComparison)
 						result += clickableLinkText + stylePrefix;
 					else {
-						const styledLinkUrl = this.#theme.linkUrl(` (${token.href})`);
-						result += clickableLinkText + formatHyperlink(styledLinkUrl, token.href) + stylePrefix;
+						const styledLinkUrl = this.#theme.linkUrl(`(${token.href})`);
+						result += `${clickableLinkText} ${formatHyperlink(styledLinkUrl, token.href)}${stylePrefix}`;
 					}
 					break;
 				}
