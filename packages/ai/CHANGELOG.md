@@ -9,6 +9,7 @@
 - Fixed leaked-thinking healing consuming a literal reasoning tag (e.g. `` `<think>` ``) inside a Markdown inline-code span or fenced code block as a reasoning boundary, which split the visible text into `text` + `thinking` blocks and corrupted the rendered Markdown ([#5665](https://github.com/can1357/oh-my-pi/issues/5665)).
 - Classified HTTP 402 and `balance exhausted` quota responses as persistent usage limits, rotating multi-account requests to a sibling credential.
 - Fixed `kimi-code` Anthropic-format requests ignoring custom provider base URLs ([#5722](https://github.com/can1357/oh-my-pi/issues/5722)).
+- Fixed GPT-5.6 Codex Responses-Lite requests leaving a forced top-level `tool_choice` (e.g. `{ type: "web_search" }`) after the Lite rewrite moves tools into an `additional_tools` developer item and drops top-level `tools`, which the ChatGPT Codex endpoint rejected with `HTTP 400 Tool choice '…' not found in 'tools' parameter`. `applyCodexResponsesLiteShape` now downgrades forced hosted choices to `tool_choice: "auto"` while preserving explicit tool-use constraints ([#5771](https://github.com/can1357/oh-my-pi/issues/5771)).
 
 ## [17.0.1] - 2026-07-16
 
