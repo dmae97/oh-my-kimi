@@ -128,16 +128,27 @@ describe("issue #816 — plan mode pendingModelSwitch leak", () => {
 		const replacementPlanModel =
 			activePlanModel.provider === haiku.provider && activePlanModel.id === haiku.id ? opus : haiku;
 
-		const setModelSpy = vi.spyOn(session, "setModelTemporary").mockResolvedValue(undefined);
+		// The role-change listener resolves the plan role through real async
+		// storage hops (project-scoped roles), so await the apply itself rather
+		// than assuming it lands within one microtask.
+		const applied = Promise.withResolvers<void>();
+		const setModelSpy = vi.spyOn(session, "setModelTemporary").mockImplementation(async () => {
+			applied.resolve();
+		});
 		session.settings.setModelRole("plan", `${replacementPlanModel.provider}/${replacementPlanModel.id}`);
-		await Promise.resolve();
+		await applied.promise;
 
 		expect(setModelSpy).toHaveBeenCalledWith(replacementPlanModel, undefined);
 	});
 
 	it("keeps plan state coherent when restoring the previous model fails", async () => {
-		const planModel = modelRegistry.find("anthropic", "claude-haiku-4-5");
-		if (!planModel) throw new Error("Expected claude-haiku-4-5 in registry");
+		// Pick a plan model that differs from the active session model so plan
+		// entry actually switches models and arms the previous-model restore.
+		const haiku = modelRegistry.find("anthropic", "claude-haiku-4-5");
+		const opus = modelRegistry.find("anthropic", "claude-opus-4-5");
+		if (!haiku || !opus) throw new Error("Expected claude models in registry");
+		const planModel =
+			session.model?.provider === haiku.provider && session.model.id === haiku.id ? opus : haiku;
 
 		vi.spyOn(session, "resolveRoleModelWithThinking").mockReturnValue({
 			model: planModel,
