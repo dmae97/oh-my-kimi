@@ -385,16 +385,10 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 	async generateAuthUrl(state: string, redirectUri: string): Promise<{ url: string; instructions?: string }> {
 		if (!this.#resolvedClientId) {
 			await this.#tryRegisterClient(redirectUri);
-			// A definitive DCR rejection — the endpoint returned a non-retryable
-			// 4xx client error such as 403 unapproved_client — proves the provider
-			// requires a registered client_id and none could be obtained, so block
-			// before probing or launching a clientless authorization URL (issue
-			// #5852). Transport failures (status 0), 5xx responses, and retryable
-			// 4xx statuses (408/425/429) are non-definitive: the DCR endpoint may
-			// be temporarily unavailable while a clientless authorization flow
-			// still works, so fall through to #assertClientIdNotRequired, which
-			// permits providers that accept an authorization request without a
-			// client_id.
+			// `unapproved_client` explicitly establishes that registration cannot
+			// produce the required client id. Other DCR failures stay on the
+			// clientless probe path because they may be transient or caused by
+			// unrelated registration metadata.
 			if (!this.#resolvedClientId && this.#isDefinitiveRegistrationRejection()) {
 				throw this.#missingClientIdError();
 			}
@@ -705,19 +699,16 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 	}
 
 	/**
-	 * Whether the recorded DCR failure definitively proves the provider requires
-	 * a registered `client_id`. True only for non-retryable 4xx client errors
-	 * (e.g. 403 unapproved_client). Transport failures (status 0), 5xx server
-	 * errors, and retryable 4xx statuses (408 Request Timeout, 425 Too Early,
-	 * 429 Too Many Requests) are transient — the caller should fall back to the
-	 * clientless authorization probe rather than fail the login. See issue #5852.
+	 * Whether the provider explicitly rejected this client as unapproved.
+	 *
+	 * HTTP status alone is insufficient: payload errors such as
+	 * `invalid_client_metadata` and `invalid_redirect_uri` do not establish that
+	 * the authorization endpoint requires a client id. Keep those on the
+	 * clientless probe path.
 	 */
 	#isDefinitiveRegistrationRejection(): boolean {
 		const failure = this.#registrationFailure;
-		if (!failure) return false;
-		const { status } = failure;
-		if (status < 400 || status >= 500) return false;
-		return status !== 408 && status !== 425 && status !== 429;
+		return failure?.status === 403 && /\bunapproved_client\b/i.test(failure.detail ?? "");
 	}
 
 	/**

@@ -697,18 +697,18 @@ describe("mcp oauth flow", () => {
 		expect(authorizationRequests).toBe(0);
 	});
 
-	// Issue #5852 review: a non-definitive DCR failure (transient 5xx / transport
-	// error) must not block a provider whose authorization endpoint accepts a
-	// clientless request. The #assertClientIdNotRequired probe still runs.
-	it("keeps the clientless authorization fallback when DCR fails non-definitively", async () => {
+	it.each([
+		["server error", 503, "upstream unavailable"],
+		["rate limit", 429, "slow down"],
+		["invalid client metadata", 400, '{"error":"invalid_client_metadata"}'],
+		["unrelated forbidden response", 403, "Forbidden"],
+	] as const)("keeps the clientless authorization fallback after a %s DCR failure", async (_case, status, body) => {
 		let authorizationProbes = 0;
 		const fetchImpl: FetchImpl = async input => {
 			const url = String(input);
 			if (url === "https://provider.example/oauth/register") {
-				return new Response("upstream unavailable", { status: 503 });
+				return new Response(body, { status });
 			}
-			// The probe hits the built authorization URL and the provider accepts
-			// it without a client_id.
 			if (url.startsWith("https://provider.example/authorize?")) {
 				authorizationProbes += 1;
 				return new Response("ok", { status: 200 });
@@ -726,38 +726,6 @@ describe("mcp oauth flow", () => {
 		);
 
 		const { url } = await flow.generateAuthUrl("state", "http://127.0.0.1:53192/callback");
-
-		expect(new URL(url).searchParams.has("client_id")).toBe(false);
-		expect(authorizationProbes).toBe(1);
-	});
-
-	// Issue #5852 review: a retryable 4xx DCR response (429 rate limit) is
-	// transient, not proof that a client_id is required. It must fall through to
-	// the clientless authorization probe instead of failing the login.
-	it("keeps the clientless authorization fallback when DCR is rate limited", async () => {
-		let authorizationProbes = 0;
-		const fetchImpl: FetchImpl = async input => {
-			const url = String(input);
-			if (url === "https://provider.example/oauth/register") {
-				return new Response("slow down", { status: 429 });
-			}
-			if (url.startsWith("https://provider.example/authorize?")) {
-				authorizationProbes += 1;
-				return new Response("ok", { status: 200 });
-			}
-			throw new Error(`Unexpected fetch: ${url}`);
-		};
-		const flow = new MCPOAuthFlow(
-			{
-				authorizationUrl: "https://provider.example/authorize",
-				tokenUrl: "https://provider.example/token",
-				registrationUrl: "https://provider.example/oauth/register",
-				fetch: fetchImpl,
-			},
-			{},
-		);
-
-		const { url } = await flow.generateAuthUrl("state", "http://127.0.0.1:53193/callback");
 
 		expect(new URL(url).searchParams.has("client_id")).toBe(false);
 		expect(authorizationProbes).toBe(1);
