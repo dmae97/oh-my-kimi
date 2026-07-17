@@ -214,7 +214,7 @@ describe("StatusLineComponent context breakdown", () => {
 		});
 
 		const border = comp.getTopBorder(80);
-		expect(border.lines.length).toBeGreaterThan(0);
+		expect(border.content.length).toBeGreaterThan(0);
 		expect(usageCalls()).toBe(0);
 	});
 
@@ -232,11 +232,7 @@ describe("StatusLineComponent context breakdown", () => {
 		});
 
 		// 5000 / 272000 → 1.8%, window formatted as 272K (matches the footer gauge).
-		const plain = comp
-			.getTopBorder(80)
-			.lines.map(line => line.content)
-			.join("\n")
-			.replaceAll(/\x1b\[[0-9;]*m/g, "");
+		const plain = comp.getTopBorder(80).content.replaceAll(/\x1b\[[0-9;]*m/g, "");
 		expect(plain).toContain("1.8%/272K");
 	});
 
@@ -253,11 +249,7 @@ describe("StatusLineComponent context breakdown", () => {
 			separator: "powerline-thin",
 		});
 
-		const plain = comp
-			.getTopBorder(80)
-			.lines.map(line => line.content)
-			.join("\n")
-			.replaceAll(/\x1b\[[0-9;]*m/g, "");
+		const plain = comp.getTopBorder(80).content.replaceAll(/\x1b\[[0-9;]*m/g, "");
 		expect(plain).toContain("0.5%/272K");
 	});
 
@@ -275,11 +267,7 @@ describe("StatusLineComponent context breakdown", () => {
 			separator: "powerline-thin",
 		});
 
-		const plain = comp
-			.getTopBorder(80)
-			.lines.map(line => line.content)
-			.join("\n")
-			.replaceAll(/\x1b\[[0-9;]*m/g, "");
+		const plain = comp.getTopBorder(80).content.replaceAll(/\x1b\[[0-9;]*m/g, "");
 		expect(plain).toContain("5K/?");
 		expect(plain).not.toContain("0.0%/0");
 	});

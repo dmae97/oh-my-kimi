@@ -77,10 +77,7 @@ describe("StatusLineComponent", () => {
 		// Let's get the border and see if Prewalk is rendered.
 		const border = statusLine.getTopBorder(100);
 		// SGR codes might be included, so we check if the stripped content contains "Prewalk"
-		const stripped = border.lines
-			.map(line => line.content)
-			.join("\n")
-			.replace(/\x1b\[[0-9;]*m/g, "");
+		const stripped = border.content.replace(/\x1b\[[0-9;]*m/g, "");
 		expect(stripped).toContain("Prewalk");
 	});
 });

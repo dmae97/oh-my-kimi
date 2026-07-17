@@ -71,18 +71,12 @@ describe("status line transparent background", () => {
 		// otherwise the negative case below would be vacuous.
 		expect(themeBg).toMatch(/\x1b\[48;/);
 
-		const border = buildComponent(false)
-			.getTopBorder(80)
-			.lines.map(line => line.content)
-			.join("\n");
+		const border = buildComponent(false).getTopBorder(80).content;
 		expect(border).toContain(themeBg);
 	});
 
 	it("drops the theme bg fill and powerline caps when enabled", () => {
-		const border = buildComponent(true)
-			.getTopBorder(80)
-			.lines.map(line => line.content)
-			.join("\n");
+		const border = buildComponent(true).getTopBorder(80).content;
 		const themeBg = theme.getBgAnsi("statusLineBg");
 
 		// No 48; (background) ANSI escape anywhere in the rendered bar — every bg is
