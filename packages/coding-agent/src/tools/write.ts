@@ -36,7 +36,7 @@ import {
 	writeArchive,
 } from "../utils/zip";
 import { routeWriteThroughBridge } from "./acp-bridge";
-import { truncateForPrompt } from "./approval";
+import { resolveToolTier, truncateForPrompt } from "./approval";
 import { assertEditableFile } from "./auto-generated-guard";
 import {
 	type ConflictEntry,
@@ -398,9 +398,27 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			if (xdevTarget.name === REPORT_ISSUE_DEVICE_NAME) return "write";
 			if (xdevTarget.name && isResolutionDeviceName(xdevTarget.name)) return "read";
 			const inst = xdevTarget.name ? this.session.xdevRegistry?.get(xdevTarget.name) : undefined;
-			const decision = typeof inst?.approval === "function" ? undefined : inst?.approval;
-			const tier = typeof decision === "object" ? decision?.tier : decision;
-			return tier ?? "exec";
+			if (!inst) return "exec";
+			// Decode the device JSON payload and evaluate the mounted tool's own
+			// approval (which may be argument-dependent, e.g. ast_edit is read-tier
+			// for internal-URL paths, debug is read-tier for inspection actions).
+			// Malformed JSON, non-object payloads, missing content, and approval
+			// functions that reject schema-invalid objects stay exec so the gate
+			// fails closed — the dispatch itself rejects invalid arguments too.
+			const rawContent = (args as Partial<WriteParams>).content;
+			if (typeof rawContent !== "string") return "exec";
+			let parsed: unknown;
+			try {
+				parsed = JSON.parse(rawContent);
+			} catch {
+				return "exec";
+			}
+			if (!isRecord(parsed)) return "exec";
+			try {
+				return resolveToolTier(inst, parsed);
+			} catch {
+				return "exec";
+			}
 		}
 		// Remote SSH writes open an outbound connection and run a remote shell —
 		// gate them like the exec-tier `ssh` tool, ahead of the handler-write
