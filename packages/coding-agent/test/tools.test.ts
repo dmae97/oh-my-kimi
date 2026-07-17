@@ -601,6 +601,20 @@ describe("Coding Agent Tools", () => {
 			expect(output).not.toContain("Cannot read binary file");
 		});
 
+		it("does not route a legacy .xls through markit's unsupported-format error", async () => {
+			// `.xls` was advertised as convertible but markit only registers the
+			// OOXML `.xlsx` converter, so reading a legacy `.xls` surfaced
+			// "Unsupported format: .xls" instead of falling through to normal
+			// file handling (issue #5808). An OLE2 header (`D0 CF 11 E0`) is a
+			// binary blob, so the read tool now refuses it as binary.
+			const xlsFile = path.join(testDir, "legacy.xls");
+			fs.writeFileSync(xlsFile, Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]));
+
+			const output = getTextOutput(await readTool.execute("test-call-legacy-xls", { path: xlsFile }));
+			expect(output).not.toContain("Unsupported format");
+			expect(output).toContain("Cannot read binary file");
+		});
+
 		it("should reject malformed internal-URL selectors instead of dumping the whole resource", async () => {
 			await expect(readTool.execute("test-call-bad-internal-sel", { path: "artifact://3:-100" })).rejects.toThrow(
 				/Invalid selector ':-100'/,
@@ -734,6 +748,20 @@ describe("Coding Agent Tools", () => {
 			{
 				label: ".zip",
 				path: "fixture-subpath.zip",
+				create: (entries: ArchiveFixtureEntry[]) => createZipArchive(entries),
+			},
+			{
+				// `.jar`/`.war` are ZIP containers under a different extension.
+				// Regression: archiveFormatFromPath / parseArchivePathCandidates
+				// previously excluded them, so `read lib.jar:member` failed with
+				// path-not-found (issue #5808).
+				label: ".jar",
+				path: "fixture-subpath.jar",
+				create: (entries: ArchiveFixtureEntry[]) => createZipArchive(entries),
+			},
+			{
+				label: ".war",
+				path: "fixture-subpath.war",
 				create: (entries: ArchiveFixtureEntry[]) => createZipArchive(entries),
 			},
 		]) {

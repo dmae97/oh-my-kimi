@@ -233,12 +233,27 @@ function ensureParentDirectories(map: Map<string, ArchiveIndexEntry>): void {
 	}
 }
 
+/**
+ * Extensions that are ZIP containers under a different name — JVM (`.jar`,
+ * `.war`, `.ear`) and Android (`.apk`) packages are all ZIP archives. Treated
+ * as `zip` for member read/list and whole-archive rewrite.
+ */
+const ZIP_ALIAS_EXTENSIONS = ["jar", "war", "ear", "apk"] as const;
+
+/**
+ * Regex alternation of every recognized archive extension, longest first so
+ * `.tar.gz` wins over `.tar`. Shared with `parseArchivePathCandidates` as its
+ * split pattern so extension recognition and path splitting never drift.
+ */
+const ARCHIVE_EXTENSION_ALTERNATION = ["tar\\.gz", "tgz", "zip", "tar", ...ZIP_ALIAS_EXTENSIONS].join("|");
+
 /** Infer an archive format from a filesystem path's extension. */
 export function archiveFormatFromPath(filePath: string): ArchiveFormat | undefined {
 	const normalized = filePath.toLowerCase();
 	if (normalized.endsWith(".tar.gz") || normalized.endsWith(".tgz")) return "tar.gz";
 	if (normalized.endsWith(".tar")) return "tar";
 	if (normalized.endsWith(".zip")) return "zip";
+	if (ZIP_ALIAS_EXTENSIONS.some(ext => normalized.endsWith(`.${ext}`))) return "zip";
 	return undefined;
 }
 
@@ -635,7 +650,7 @@ async function readZipEntries(source: ByteSource): Promise<ArchiveIndexEntry[]> 
  */
 export function parseArchivePathCandidates(filePath: string): ArchivePathCandidate[] {
 	const normalized = filePath.replace(/\\/g, "/");
-	const pattern = /\.(?:tar\.gz|tgz|zip|tar)(?=(?::|$))/gi;
+	const pattern = new RegExp(`\\.(?:${ARCHIVE_EXTENSION_ALTERNATION})(?=(?::|$))`, "gi");
 	const seen = new Set<string>();
 	const candidates: ArchivePathCandidate[] = [];
 
