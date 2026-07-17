@@ -845,4 +845,59 @@ describe("StdioTransport.close", () => {
 		expect(closeCount).toBe(1);
 		expect(transport.connected).toBe(false);
 	});
+
+	// Regression for #5578: close() escalates SIGTERM to SIGKILL when the
+	// subprocess ignores the former, so this must stay idempotent even when
+	// the *first* close() had to run the full escalation path, not just the
+	// already-covered "child exited before close()" and "child dies on plain
+	// SIGTERM" cases above.
+	it("is idempotent even when close() had to escalate to SIGKILL", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-stdio-close-escalate-"));
+		const scriptPath = path.join(tempDir, "child.mjs");
+		const readyPath = path.join(tempDir, "ready");
+		try {
+			await fs.writeFile(
+				scriptPath,
+				[
+					"import { writeFileSync } from 'node:fs';",
+					"process.on('SIGTERM', () => {});",
+					`writeFileSync(${JSON.stringify(readyPath)}, '1');`,
+					"setInterval(() => {}, 60_000);",
+				].join("\n"),
+			);
+			transport = new StdioTransport({
+				type: "stdio",
+				command: "bun",
+				args: ["run", scriptPath],
+			});
+
+			await transport.connect();
+
+			// Wait for the child to actually register its SIGTERM handler before
+			// closing: closing too early races the child's startup and hits the
+			// default (terminate) action instead of exercising the escalation
+			// path this test defends.
+			for (let i = 0; i < 100; i++) {
+				try {
+					await fs.access(readyPath);
+					break;
+				} catch {
+					await Bun.sleep(20);
+				}
+			}
+
+			const started = performance.now();
+			await transport.close();
+			const elapsedMs = performance.now() - started;
+			// Escalation only fires after the SIGTERM grace window elapses.
+			expect(elapsedMs).toBeGreaterThanOrEqual(900);
+
+			// Repeat close() calls must not throw or attempt to re-signal a
+			// process the first call already tore down.
+			await expect(transport.close()).resolves.toBeUndefined();
+			await expect(transport.close()).resolves.toBeUndefined();
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	}, 5000);
 });

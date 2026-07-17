@@ -1,6 +1,9 @@
 import { describe, expect, it, spyOn } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 
-import { resolveStdioSpawnCommand, StdioTransport } from "./stdio";
+import { resolveStdioSpawnCommand, StdioTransport, terminateStdioProcess } from "./stdio";
 
 describe("resolveStdioSpawnCommand", () => {
 	it("hides Windows executable MCP servers when the host has no console", async () => {
@@ -148,4 +151,194 @@ describe.skipIf(process.platform === "win32")("StdioTransport request write stal
 			await transport.close();
 		}
 	}, 8000);
+});
+
+function processExists(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+// Regression for #5578: `close()` used a bare `this.#process.kill()` (direct
+// SIGTERM, no wait, no escalate, no process-group signal), so a detached
+// session-leader child (or a grandchild it spawned) that ignores/traps
+// SIGTERM survived host exit and became an orphan pinned to PID 1 on Linux.
+// `sleep`/`bun`/POSIX signal semantics are exercised directly here rather
+// than through `StdioTransport.connect()`, because `connect()` derives
+// `detached` from `resolveStdioSpawnCommand()`, which is tied to the host's
+// real `process.platform` — a POSIX detached session cannot be reproduced
+// end-to-end through `connect()` on a non-Linux dev/CI host, but a real
+// detached process group can still be spawned directly on any POSIX host.
+describe.skipIf(process.platform === "win32")("terminateStdioProcess", () => {
+	it("escalates a detached child that traps SIGTERM to SIGKILL", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-stdio-kill-solo-"));
+		const scriptPath = path.join(tempDir, "child.mjs");
+		const readyPath = path.join(tempDir, "ready");
+		await fs.writeFile(
+			scriptPath,
+			[
+				"import { writeFileSync } from 'node:fs';",
+				"process.on('SIGTERM', () => {});",
+				`writeFileSync(${JSON.stringify(readyPath)}, '1');`,
+				"setInterval(() => {}, 60_000);",
+			].join("\n"),
+		);
+		const proc = Bun.spawn(["bun", "run", scriptPath], {
+			stdin: "ignore",
+			stdout: "ignore",
+			stderr: "ignore",
+			detached: true,
+		});
+		try {
+			// Wait for the child to actually register its SIGTERM handler before
+			// signaling it: signaling too early races the child's startup and
+			// hits the default (terminate) action instead of exercising the trap.
+			for (let i = 0; i < 100; i++) {
+				try {
+					await fs.access(readyPath);
+					break;
+				} catch {
+					await Bun.sleep(20);
+				}
+			}
+
+			const started = performance.now();
+			await terminateStdioProcess(proc, true);
+			await proc.exited;
+			const elapsedMs = performance.now() - started;
+
+			expect(proc.signalCode).toBe("SIGKILL");
+			// Escalation only fires after the ~1s SIGTERM grace window elapses —
+			// a too-fast exit would mean SIGKILL fired without waiting.
+			expect(elapsedMs).toBeGreaterThanOrEqual(900);
+		} finally {
+			try {
+				process.kill(-proc.pid, "SIGKILL");
+			} catch {
+				// Already gone.
+			}
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	}, 5000);
+
+	it("reaches a SIGTERM-trapping grandchild through the group SIGKILL, not just the direct child", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-stdio-group-kill-"));
+		const grandchildScriptPath = path.join(tempDir, "grandchild.mjs");
+		const parentScriptPath = path.join(tempDir, "parent.mjs");
+		const grandchildPidPath = path.join(tempDir, "grandchild.pid");
+
+		// Grandchild also traps SIGTERM, so only an unrestricted SIGKILL to the
+		// whole group — not a signal to the direct (parent) child alone — can
+		// reach and stop it.
+		await fs.writeFile(
+			grandchildScriptPath,
+			[
+				"import { writeFileSync } from 'node:fs';",
+				"process.on('SIGTERM', () => {});",
+				`writeFileSync(${JSON.stringify(grandchildPidPath)}, String(process.pid));`,
+				"setInterval(() => {}, 60_000);",
+			].join("\n"),
+		);
+		await fs.writeFile(
+			parentScriptPath,
+			[
+				"process.on('SIGTERM', () => {});",
+				`Bun.spawn(["bun", "run", ${JSON.stringify(grandchildScriptPath)}], { stdout: "ignore", stderr: "ignore", stdin: "ignore" });`,
+				"setInterval(() => {}, 60_000);",
+			].join("\n"),
+		);
+
+		const proc = Bun.spawn(["bun", "run", parentScriptPath], {
+			stdin: "ignore",
+			stdout: "ignore",
+			stderr: "ignore",
+			detached: true,
+		});
+
+		try {
+			// Polls real wall-clock time rather than an event/promise: the
+			// grandchild process is a real external OS process writing to a real
+			// file, with no in-process signal this test can `await` directly.
+			let grandchildPid: number | undefined;
+			for (let i = 0; i < 100 && grandchildPid === undefined; i++) {
+				try {
+					grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
+				} catch {
+					await Bun.sleep(20);
+				}
+			}
+			if (grandchildPid === undefined) throw new Error("grandchild never reported its pid");
+			expect(processExists(grandchildPid)).toBe(true);
+
+			await terminateStdioProcess(proc, true);
+			await proc.exited;
+			expect(proc.signalCode).toBe("SIGKILL");
+
+			// The group SIGKILL is delivered to every member simultaneously, but
+			// give the kernel a brief window to finish reaping before asserting.
+			let grandchildAlive = processExists(grandchildPid);
+			for (let i = 0; i < 25 && grandchildAlive; i++) {
+				await Bun.sleep(20);
+				grandchildAlive = processExists(grandchildPid);
+			}
+			expect(grandchildAlive).toBe(false);
+		} finally {
+			try {
+				process.kill(-proc.pid, "SIGKILL");
+			} catch {
+				// Already gone.
+			}
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	}, 8000);
+
+	it("never attempts a process-group signal when the transport did not spawn detached", async () => {
+		const proc = Bun.spawn(["bun", "-e", "await Bun.sleep(60_000)"], {
+			stdin: "ignore",
+			stdout: "ignore",
+			stderr: "ignore",
+			detached: false,
+		});
+		const killSpy = spyOn(process, "kill");
+		try {
+			await terminateStdioProcess(proc, false);
+			await proc.exited;
+
+			// Only the direct-child `Subprocess.kill()` path may run; the global
+			// `process.kill()` (used exclusively for the negative-pid group
+			// signal) must never be reached.
+			expect(killSpy).not.toHaveBeenCalled();
+		} finally {
+			killSpy.mockRestore();
+			try {
+				proc.kill("SIGKILL");
+			} catch {
+				// Already gone.
+			}
+		}
+	}, 5000);
+});
+
+describe.skipIf(process.platform === "win32")("StdioTransport.close teardown", () => {
+	it("closes a well-behaved child promptly without escalating to SIGKILL", async () => {
+		const transport = new StdioTransport({
+			command: "bun",
+			args: ["-e", "await Bun.sleep(60_000)"],
+		});
+		try {
+			await transport.connect();
+			const started = performance.now();
+			await transport.close();
+			const elapsedMs = performance.now() - started;
+
+			// No SIGTERM trap => the child dies almost immediately; close() must
+			// not block for the full ~1s TERM grace window before returning.
+			expect(elapsedMs).toBeLessThan(700);
+		} finally {
+			await transport.close();
+		}
+	}, 5000);
 });
