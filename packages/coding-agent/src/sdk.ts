@@ -1069,6 +1069,8 @@ export interface AutoLearnCaptureRunnerOptions {
 	sourceAgent: Agent;
 	captureTools: AgentTool[];
 	createAgent: (options: AgentOptions) => Agent;
+	onPayload?: SimpleStreamOptions["onPayload"];
+	onResponse?: SimpleStreamOptions["onResponse"];
 	createSessionId?: () => string;
 }
 
@@ -1105,6 +1107,8 @@ export function createAutoLearnCaptureRunner(
 			promptCacheKey: captureSessionId,
 			providerSessionState: captureProviderSessionState,
 			getApiKey: requestModel => options.sourceAgent.getApiKey?.(requestModel),
+			onPayload: options.onPayload,
+			onResponse: options.onResponse,
 		});
 		captureAgent.setMetadataResolver(provider => options.sourceAgent.metadataForProvider(provider));
 		const captureMessage: CustomMessage = {
@@ -3013,6 +3017,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const runAutoLearnCapture = createAutoLearnCaptureRunner({
 			sourceAgent: agent,
 			captureTools: autoLearnCaptureTools,
+			onPayload,
+			onResponse,
 			createAgent: captureOptions => {
 				const captureModel = captureOptions.initialState?.model;
 				const captureSessionId = captureOptions.sessionId;

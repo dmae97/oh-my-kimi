@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { Agent, type AgentMessage, type AgentTool } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentMessage, type AgentOptions, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, FetchImpl, Model, ProviderSessionState, Usage } from "@oh-my-pi/pi-ai";
 import { streamGoogle } from "@oh-my-pi/pi-ai/providers/google";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
@@ -440,6 +440,39 @@ describe("isolated auto-learn capture", () => {
 		expect(sourceAssistant?.responseId).toBe("primary-interaction");
 		expect(sourceAgent.peekSteeringQueue()).toEqual([queuedUserMessage]);
 		expect(primaryEvents).toBe(0);
+	});
+
+	it("forwards provider lifecycle hooks to the detached capture", async () => {
+		const captureMock = createMockModel({ responses: [{ content: ["Captured."] }] });
+		const manageSkillTool = captureTool("manage_skill", "Manage reusable skills");
+		const sourceAgent = new Agent({
+			initialState: { model: captureMock, systemPrompt: ["Test"], tools: [manageSkillTool] },
+		});
+		const onPayload: NonNullable<AgentOptions["onPayload"]> = async payload => payload;
+		const onResponse: NonNullable<AgentOptions["onResponse"]> = async () => {};
+		let captureOnPayload: AgentOptions["onPayload"];
+		let captureOnResponse: AgentOptions["onResponse"];
+		const runCapture = createAutoLearnCaptureRunner({
+			sourceAgent,
+			captureTools: [manageSkillTool],
+			onPayload,
+			onResponse,
+			createAgent: options => {
+				captureOnPayload = options.onPayload;
+				captureOnResponse = options.onResponse;
+				return new Agent({
+					...options,
+					convertToLlm,
+					streamFn: captureMock.stream,
+				});
+			},
+		});
+
+		await runCapture("Capture with provider hooks");
+
+		expect(captureMock.calls).toHaveLength(1);
+		expect(captureOnPayload).toBe(onPayload);
+		expect(captureOnResponse).toBe(onResponse);
 	});
 
 	it("adds learn alongside manage_skill when a memory backend provides it", async () => {

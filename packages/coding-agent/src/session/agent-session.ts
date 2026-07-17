@@ -6259,6 +6259,10 @@ export class AgentSession {
 		}
 	}
 
+	#abortAutolearnCapture(): void {
+		this.#autolearnCaptureAbortController?.abort();
+	}
+
 	async #drainAutolearnCapture(): Promise<void> {
 		const task = this.#autolearnCaptureTask;
 		if (!task) return;
@@ -6290,7 +6294,7 @@ export class AgentSession {
 	 */
 	beginDispose(): void {
 		this.#isDisposed = true;
-		this.#autolearnCaptureAbortController?.abort();
+		this.#abortAutolearnCapture();
 		this.#flushPendingIrcAsides();
 		this.yieldQueue.clear();
 		this.agent.setAsideMessageProvider(undefined);
@@ -9125,6 +9129,7 @@ export class AgentSession {
 		// auto-starting a fresh turn during cleanup.
 		this.#abortInProgress = true;
 		try {
+			this.#abortAutolearnCapture();
 			this.abortRetry();
 			this.#promptGeneration++;
 			this.#scheduledHiddenNextTurnGeneration = undefined;
@@ -9146,6 +9151,7 @@ export class AgentSession {
 			this.agent.abort(options?.reason);
 			await postPromptDrain;
 			await this.agent.waitForIdle();
+			await this.#drainAutolearnCapture();
 			await this.#goalRuntime.onTaskAborted({ reason: options?.goalReason ?? "interrupted" });
 			// Clear prompt-in-flight state: waitForIdle resolves when the agent loop's finally
 			// block runs, but nested prompt setup/finalizers may still be unwinding. Without this,
@@ -15749,6 +15755,8 @@ export class AgentSession {
 		// Flush pending writes before branching
 		await this.sessionManager.flush();
 		this.#cancelOwnAsyncJobs();
+		this.#abortAutolearnCapture();
+		await this.#drainAutolearnCapture();
 
 		if (!selectedEntry.parentId) {
 			await this.sessionManager.newSession({ parentSession: previousSessionFile });
@@ -15839,6 +15847,8 @@ export class AgentSession {
 		}
 		await this.sessionManager.flush();
 		this.#cancelOwnAsyncJobs();
+		this.#abortAutolearnCapture();
+		await this.#drainAutolearnCapture();
 
 		this.sessionManager.createBranchedSession(leafId);
 
