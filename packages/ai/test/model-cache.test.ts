@@ -47,7 +47,7 @@ describe("model cache migrations", () => {
 		}
 	});
 
-	it("invalidates and scrubs pre-v9 header-bearing cache rows", async () => {
+	it("invalidates and scrubs pre-v10 header-bearing cache rows", async () => {
 		const legacyModel = {
 			...createModel("legacy-cloud-model", "Legacy Cloud Model"),
 			headers: { "X-Access-Token": "legacy-cached-secret" },
@@ -64,7 +64,7 @@ describe("model cache migrations", () => {
 		`);
 		legacyDb.run(
 			"INSERT INTO model_cache (provider_id, version, updated_at, authoritative, models) VALUES (?, ?, ?, ?, ?)",
-			["ollama-cloud", 8, Date.now(), 1, JSON.stringify([legacyModel])],
+			["ollama-cloud", 9, Date.now(), 1, JSON.stringify([legacyModel])],
 		);
 		legacyDb.close();
 
@@ -115,5 +115,7 @@ describe("model cache migrations", () => {
 
 		const cached = readModelCache<"openai-completions">("runtime-ext", TTL_MS, Date.now, dbPath);
 		expect(cached?.models[0]?.headers).toBeUndefined();
+		expect(cached?.headerOmittedModelIds).toEqual(["gated-model"]);
+		expect(cached?.unrestorableHeaderModelIds).toEqual(["gated-model"]);
 	});
 });

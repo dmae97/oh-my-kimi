@@ -563,6 +563,77 @@ describe("model cache spec round trip", () => {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
 	});
+	it("restores static model headers on fresh cache reads", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-static-headers-"));
+		const dbPath = path.join(tempDir, "models.db");
+		const staticModel = completionsSpec({
+			id: "header-static-model",
+			provider: "header-cache-test",
+			headers: { "X-Project-Id": "project-42" },
+		});
+		let fetches = 0;
+		const options = {
+			providerId: "header-cache-test",
+			staticModels: [staticModel],
+			cacheDbPath: dbPath,
+			fetchDynamicModels: async () => {
+				fetches++;
+				return [];
+			},
+		};
+		try {
+			const online = await resolveProviderModels(options, "online");
+			expect(online.models[0]?.headers).toEqual({ "X-Project-Id": "project-42" });
+			expect(fetches).toBe(1);
+
+			const offline = await resolveProviderModels(options, "offline");
+			expect(offline.models[0]?.headers).toEqual({ "X-Project-Id": "project-42" });
+			expect(fetches).toBe(1);
+
+			const fresh = await resolveProviderModels(options, "online-if-uncached");
+			expect(fresh.models[0]?.headers).toEqual({ "X-Project-Id": "project-42" });
+			expect(fetches).toBe(1);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("refetches dynamic-only models whose headers cannot be restored", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-dynamic-headers-"));
+		const dbPath = path.join(tempDir, "models.db");
+		const dynamicModel = completionsSpec({
+			id: "header-dynamic-model",
+			provider: "header-cache-test",
+			headers: { "X-Required-Route": "route-42" },
+		});
+		let fetches = 0;
+		const options = {
+			providerId: "header-cache-test",
+			staticModels: [],
+			dynamicModelsAuthoritative: true,
+			cacheDbPath: dbPath,
+			fetchDynamicModels: async () => {
+				fetches++;
+				return [dynamicModel];
+			},
+		};
+		try {
+			const online = await resolveProviderModels(options, "online");
+			expect(online.models[0]?.headers).toEqual({ "X-Required-Route": "route-42" });
+			expect(fetches).toBe(1);
+
+			const fresh = await resolveProviderModels(options, "online-if-uncached");
+			expect(fresh.models[0]?.headers).toEqual({ "X-Required-Route": "route-42" });
+			expect(fetches).toBe(2);
+
+			const offline = await resolveProviderModels(options, "offline");
+			expect(offline.models).toEqual([]);
+			expect(offline.stale).toBe(true);
+			expect(fetches).toBe(2);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
 });
 
 describe("isOfficialAnthropicApiUrl", () => {
