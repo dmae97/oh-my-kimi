@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `tab.scroll()` timing out after a queued wheel event waits too long for a busy renderer's acknowledgement ([#5905](https://github.com/can1357/oh-my-pi/issues/5905)).
+
 ## [17.0.3] - 2026-07-17
 
 ### Changed

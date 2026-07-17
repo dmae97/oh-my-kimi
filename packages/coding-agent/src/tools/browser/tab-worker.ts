@@ -144,6 +144,8 @@ interface OpenDialogInfo {
  */
 const QUICK_OP_TIMEOUT_MS = 20_000;
 const ACTION_OP_TIMEOUT_MS = 8_000;
+/** Maximum wait for a renderer acknowledgement after a wheel event is queued. */
+const SCROLL_ACK_TIMEOUT_MS = 2_000;
 /** Headroom subtracted from the cell budget so a per-op deadline fires before it. */
 const OP_DEADLINE_SLACK_MS = CELL_BUDGET_SLACK_MS;
 /**
@@ -173,6 +175,14 @@ export function resolveOpTimeouts(cellTimeoutMs: number): OpTimeouts {
 		quickOpMs: Math.min(budgetBound, QUICK_OP_TIMEOUT_MS),
 		actionOpMs: Math.min(budgetBound, ACTION_OP_TIMEOUT_MS),
 	};
+}
+
+/** Queue a wheel event without treating a delayed renderer acknowledgement as dispatch failure. */
+export async function dispatchScroll(
+	dispatch: () => Promise<void>,
+	ackTimeoutMs = SCROLL_ACK_TIMEOUT_MS,
+): Promise<void> {
+	await Promise.race([dispatch(), Bun.sleep(ackTimeoutMs)]);
 }
 
 /**
@@ -1216,7 +1226,9 @@ export class WorkerCore {
 					await untilAborted(sig, () => page.keyboard.press(key));
 				}),
 			scroll: (deltaX, deltaY) =>
-				op("tab.scroll()", actionOpMs, sig => untilAborted(sig, () => page.mouse.wheel({ deltaX, deltaY }))),
+				op("tab.scroll()", actionOpMs, sig =>
+					untilAborted(sig, () => dispatchScroll(() => page.mouse.wheel({ deltaX, deltaY }))),
+				),
 			drag: (from, to) => op("tab.drag()", actionOpMs, sig => this.#drag(from, to, sig)),
 			waitFor: (selector, opts) => {
 				const w = waitMs(opts?.timeout);
