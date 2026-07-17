@@ -497,6 +497,19 @@ describe("advisor", () => {
 			expect(message.content).toBe(originalContent);
 		});
 
+		it("leaves an authorized Cursor native delete call intact", () => {
+			const message = {
+				role: "assistant",
+				content: [{ type: "toolCall", id: "tc-delete", name: "delete", arguments: { path: "obsolete.txt" } }],
+				stopReason: "toolUse",
+			} as unknown as AssistantMessage;
+			const originalContent = message.content;
+
+			expect(quarantineAdvisorUnsafeOutput(message, new Set(["advise", "write", "delete"]))).toBeUndefined();
+			expect(message.stopReason).toBe("toolUse");
+			expect(message.content).toBe(originalContent);
+		});
+
 		it("sanitizes destructive advise notes even when advise is an allowed tool", () => {
 			const message = {
 				role: "assistant",
