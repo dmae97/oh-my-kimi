@@ -74,6 +74,9 @@
 ### Fixed
 
 - Fixed late user-initiated bash results and minimized-output artifacts being recorded in whichever session or branch was active when execution finished; bash now retains its originating transcript across `new_session`/`switch_session`/`branch`/tree navigation, and an intentionally dropped session stays deleted instead of being recreated by a straggling result ([#5743](https://github.com/can1357/oh-my-pi/issues/5743)).
+### Fixed
+
+- Fixed the editor status line silently dropping lower-priority segments in narrow terminals; configured segments now flow onto continuation rows in priority order ([#5749](https://github.com/can1357/oh-my-pi/issues/5749)).
 
 ## [17.0.1] - 2026-07-16
 

@@ -151,12 +151,26 @@ describe("StatusLineComponent usage refresh", () => {
 		vi.advanceTimersByTime(2_000);
 		await flushMicrotasks();
 
-		expect(plain(component.getTopBorder(80).content)).not.toContain("5h");
+		expect(
+			plain(
+				component
+					.getTopBorder(80)
+					.lines.map(line => line.content)
+					.join("\n"),
+			),
+		).not.toContain("5h");
 
 		late.resolve(usageReport(42));
 		await flushMicrotasks();
 
-		expect(plain(component.getTopBorder(80).content)).toContain("5h 42%");
+		expect(
+			plain(
+				component
+					.getTopBorder(80)
+					.lines.map(line => line.content)
+					.join("\n"),
+			),
+		).toContain("5h 42%");
 	});
 
 	it("re-fetches usage immediately when the session rotates to another org under the same email", async () => {
