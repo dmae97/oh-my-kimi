@@ -225,7 +225,7 @@ describe("selector setting side effects", () => {
 
 			expect(showError).not.toHaveBeenCalled();
 			expect(settings.get("retry.fallbackChains")).toEqual({ default: ["test/retry-fallback-model"] });
-			expect(showStatus).toHaveBeenCalledWith("Default fallbacks: test/retry-fallback-model");
+			expect(showStatus).toHaveBeenCalledWith("DEFAULT fallbacks: test/retry-fallback-model");
 		} finally {
 			hub.dispose();
 		}

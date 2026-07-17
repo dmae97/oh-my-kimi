@@ -6634,7 +6634,9 @@ export class AgentSession {
 		}
 		// Clear any timers extensions scheduled via `ctx.setInterval`/`ctx.setTimeout`
 		// so their background work does not outlive the session (issue #5664).
-		this.#extensionRunner?.clearManagedTimers();
+		// Optional-called: hosts and tests may inject partial runner facades that
+		// implement only the dispatch surface.
+		this.#extensionRunner?.clearManagedTimers?.();
 		this.#fallbackExtensionTimers?.clearAll();
 		// Abort post-prompt work so the drain below can complete. Without this, a
 		// deferred-handoff task that has already advanced into
