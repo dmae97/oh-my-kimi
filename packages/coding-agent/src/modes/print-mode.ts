@@ -8,7 +8,7 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import { logger, sanitizeText } from "@oh-my-pi/pi-utils";
-import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
+import { type AgentSession, type AgentSessionEvent, SHUTDOWN_CONSOLIDATE_BUDGET_MS } from "../session/agent-session";
 import { isSilentAbort } from "../session/messages";
 import { flushTelemetryExport } from "../telemetry-export";
 import { initializeExtensions } from "./runtime-init";
@@ -152,7 +152,7 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 				// OMP-owned Chromium survives this exit (issue #5643). `dispose()`
 				// is idempotent, so the unreachable call below is a harmless no-op.
 				await flushTelemetryExport();
-				await session.dispose();
+				await session.dispose({ mnemopiConsolidateTimeoutMs: SHUTDOWN_CONSOLIDATE_BUDGET_MS });
 				const flushed = process.stderr.write(`${errorLine}\n`);
 				if (flushed) {
 					process.exit(1);
@@ -189,5 +189,5 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 		});
 	});
 
-	await session.dispose();
+	await session.dispose({ mnemopiConsolidateTimeoutMs: SHUTDOWN_CONSOLIDATE_BUDGET_MS });
 }
