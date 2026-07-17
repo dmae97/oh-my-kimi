@@ -227,6 +227,20 @@ describe("OutputSink", () => {
 		expect(chunks).toEqual(["abc", "def"]);
 	});
 
+	test("normalizes carriage-return progress frames across chunk boundaries", async () => {
+		const chunks: string[] = [];
+		const sink = new OutputSink({ onChunk: chunk => chunks.push(chunk) });
+
+		sink.push("start\r");
+		sink.push("one\r");
+		sink.push("two\r");
+		sink.push("\n");
+		const dumped = await sink.dump();
+
+		expect(chunks.join("")).toBe("start\none\ntwo\n");
+		expect(dumped.output).toBe("start\none\ntwo\n");
+	});
+
 	test("preserves SIXEL chunks when passthrough gates are enabled", async () => {
 		const sixel = "\x1bPqabc\x1b\\";
 		Bun.env.PI_FORCE_IMAGE_PROTOCOL = "sixel";
