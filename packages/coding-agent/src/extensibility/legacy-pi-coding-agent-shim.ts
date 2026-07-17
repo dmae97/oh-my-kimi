@@ -13,7 +13,7 @@
  */
 
 import { Database } from "bun:sqlite";
-import * as fs from "node:fs/promises";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { type AuthCredential, SqliteAuthCredentialStore, type TSchema } from "@oh-my-pi/pi-ai";
@@ -612,16 +612,16 @@ export function createLsToolDefinition(cwd: string, options?: LsToolOptions): To
 			const ops = options?.operations;
 			const exists = ops
 				? await ops.exists(absolutePath)
-				: await fs.stat(absolutePath).then(
+				: await fs.promises.stat(absolutePath).then(
 						() => true,
 						() => false,
 					);
 			if (!exists) throw new Error(`Path not found: ${absolutePath}`);
-			const stat = ops ? await ops.stat(absolutePath) : await fs.stat(absolutePath);
+			const stat = ops ? await ops.stat(absolutePath) : await fs.promises.stat(absolutePath);
 			if (!stat.isDirectory()) {
 				return { content: [{ type: "text", text: rawPath }] };
 			}
-			const entries = ops ? await ops.readdir(absolutePath) : await fs.readdir(absolutePath);
+			const entries = ops ? await ops.readdir(absolutePath) : await fs.promises.readdir(absolutePath);
 			const sorted = [...entries].sort((a, b) => a.localeCompare(b));
 			const limited = sorted.slice(0, limit);
 			const output = limited.join("\n");
@@ -1106,7 +1106,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 				: path.resolve(this.#state.cwd, resourcePath);
 			const files: string[] = [];
 			try {
-				const stat = await fs.stat(resolvedPath);
+				const stat = await fs.promises.stat(resolvedPath);
 				if (stat.isDirectory()) {
 					const glob = new Bun.Glob("**/*.md");
 					for await (const entry of glob.scan({ cwd: resolvedPath, absolute: false, onlyFiles: true })) {
@@ -1301,6 +1301,10 @@ export async function createAgentSession(
  * call `AuthStorage.create().get()` during module initialization.
  */
 export class AuthStorage {
+	constructor() {
+		fs.mkdirSync(path.dirname(getAgentDbPath()), { recursive: true, mode: 0o700 });
+	}
+
 	static create(): AuthStorage {
 		return new AuthStorage();
 	}
