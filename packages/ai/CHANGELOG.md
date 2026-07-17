@@ -10,6 +10,7 @@
 - Classified HTTP 402 and `balance exhausted` quota responses as persistent usage limits, rotating multi-account requests to a sibling credential.
 - Fixed `kimi-code` Anthropic-format requests ignoring custom provider base URLs ([#5722](https://github.com/can1357/oh-my-pi/issues/5722)).
 - Fixed GPT-5.6 Codex Responses-Lite requests leaving a forced top-level `tool_choice` (e.g. `{ type: "web_search" }`) after the Lite rewrite moves tools into an `additional_tools` developer item and drops top-level `tools`, which the ChatGPT Codex endpoint rejected with `HTTP 400 Tool choice '…' not found in 'tools' parameter`. `applyCodexResponsesLiteShape` now downgrades forced hosted choices to `tool_choice: "auto"` while preserving explicit tool-use constraints ([#5771](https://github.com/can1357/oh-my-pi/issues/5771)).
+- Fixed Cursor streams reporting success before late CONNECT or gRPC terminal failures were observed, and rejecting transport ends without `turnEnded` ([#5634](https://github.com/can1357/oh-my-pi/issues/5634)).
 
 ## [17.0.1] - 2026-07-16
 
@@ -26,7 +27,6 @@
 - Fixed OpenAI Codex WebSocket connections ignoring `PI_PROXY`, provider-specific proxy settings, and standard HTTPS/ALL proxy variables ([#5384](https://github.com/can1357/oh-my-pi/issues/5384)).
 - Fixed Anthropic account quota exhaustion (`This request would exceed your account's monthly spend limit`) hanging until the local deadline instead of surfacing the error: the `rate_limit_error` "spend limit" wording is now classified as a persistent usage limit, so it fails fast and rotates to a sibling credential rather than looping in the provider retry backoff. ([#4787](https://github.com/can1357/oh-my-pi/issues/4787))
 - Fixed OpenRouter daily free-model allowance errors (`free-models-per-day`) being treated as transient rate limits, so requests rotate from an exhausted API key to a healthy sibling credential. ([#4832](https://github.com/can1357/oh-my-pi/issues/4832))
-- Fixed Cursor streams reporting success before late CONNECT or gRPC terminal failures were observed, and rejecting transport ends without `turnEnded` ([#5634](https://github.com/can1357/oh-my-pi/issues/5634)).
 
 ## [17.0.0] - 2026-07-15
 
