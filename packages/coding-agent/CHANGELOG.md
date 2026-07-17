@@ -16,6 +16,9 @@
 ### Fixed
 
 - Fixed an extension's self-scheduled `setInterval`/`setTimeout` callback throwing being able to tear down the whole session. Such callbacks ran outside the handler-dispatch try/catch, surfaced as a process-level `uncaughtException`, and the global postmortem handler treated them as fatal; extension authors now have sanctioned managed timers (see Added), and the constraint is documented in `docs/extensions.md` / `docs/skills/authoring-extensions.md` ([#5664](https://github.com/can1357/oh-my-pi/issues/5664)).
+### Fixed
+
+- Fixed `/quit` and `/exit` leaving failed or stalled automatic title-generation requests alive during session teardown; disposal now aborts both online provider and local tiny-model title requests ([#5666](https://github.com/can1357/oh-my-pi/issues/5666)).
 
 ## [17.0.1] - 2026-07-16
 
