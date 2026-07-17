@@ -2354,30 +2354,30 @@ export class InteractiveMode implements InteractiveModeContext {
 			if (this.#planModePreviousTools !== undefined) {
 				await this.session.setActiveToolsByName(this.#planModePreviousTools);
 			}
+			if (this.#planModePreviousModelState) {
+				if (!options?.deferModelRestore) {
+					await this.#restorePlanPreviousModel(this.#planModePreviousModelState);
+				}
+				// If #applyPlanModeModel queued a deferred switch to the plan-role model
+				// (because the session was streaming on entry), drop it now: we are
+				// leaving plan mode, so flushing it on the next agent_end would land the
+				// session on the plan-role model after the user has exited plan mode
+				// (issue #816). This runs even when deferModelRestore is set
+				// (compact-approval path): otherwise the stale plan switch survives and
+				// flushPendingModelSwitch() later clobbers the restored/execution model.
+				// Only clear when the pending target matches the plan-role model — leave
+				// any unrelated user-queued switch intact.
+				const pending = this.#pendingModelSwitch;
+				if (pending) {
+					const planResolution = this.session.resolveRoleModelWithThinking("plan");
+					if (planResolution.model && modelsAreEqual(pending.model, planResolution.model)) {
+						this.#pendingModelSwitch = undefined;
+					}
+				}
+			}
 		} catch (error) {
 			this.session.setPlanModeState(planModeState);
 			throw error;
-		}
-		if (this.#planModePreviousModelState) {
-			if (!options?.deferModelRestore) {
-				await this.#restorePlanPreviousModel(this.#planModePreviousModelState);
-			}
-			// If #applyPlanModeModel queued a deferred switch to the plan-role model
-			// (because the session was streaming on entry), drop it now: we are
-			// leaving plan mode, so flushing it on the next agent_end would land the
-			// session on the plan-role model after the user has exited plan mode
-			// (issue #816). This runs even when deferModelRestore is set
-			// (compact-approval path): otherwise the stale plan switch survives and
-			// flushPendingModelSwitch() later clobbers the restored/execution model.
-			// Only clear when the pending target matches the plan-role model — leave
-			// any unrelated user-queued switch intact.
-			const pending = this.#pendingModelSwitch;
-			if (pending) {
-				const planResolution = this.session.resolveRoleModelWithThinking("plan");
-				if (planResolution.model && modelsAreEqual(pending.model, planResolution.model)) {
-					this.#pendingModelSwitch = undefined;
-				}
-			}
 		}
 		this.session.setPlanProposalHandler?.(null);
 		this.planModeEnabled = false;

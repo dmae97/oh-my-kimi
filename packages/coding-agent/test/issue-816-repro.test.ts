@@ -94,6 +94,31 @@ describe("issue #816 — plan mode pendingModelSwitch leak", () => {
 		expect(setModelSpy).not.toHaveBeenCalled();
 	});
 
+	it("keeps plan state coherent when restoring the previous model fails", async () => {
+		const planModel = modelRegistry.find("anthropic", "claude-haiku-4-5");
+		if (!planModel) throw new Error("Expected claude-haiku-4-5 in registry");
+
+		vi.spyOn(session, "resolveRoleModelWithThinking").mockReturnValue({
+			model: planModel,
+			thinkingLevel: undefined,
+			explicitThinkingLevel: false,
+			warning: undefined,
+		});
+		vi.spyOn(session, "sendPlanModeContext").mockResolvedValue(undefined);
+		const setModelSpy = vi.spyOn(session, "setModelTemporary");
+
+		await mode.handlePlanModeCommand();
+		expect(mode.planModeEnabled).toBe(true);
+		expect(session.getPlanModeState()?.enabled).toBe(true);
+
+		setModelSpy.mockRejectedValueOnce(new Error("model restore failed"));
+		vi.spyOn(mode, "showHookConfirm").mockResolvedValue(true);
+		await expect(mode.handlePlanModeCommand()).rejects.toThrow("model restore failed");
+
+		expect(mode.planModeEnabled).toBe(true);
+		expect(session.getPlanModeState()?.enabled).toBe(true);
+	});
+
 	it("does not enter plan mode when plan.enabled is false", async () => {
 		session.settings.set("plan.enabled", false);
 		const warning = vi.spyOn(mode, "showWarning").mockImplementation(() => {});
