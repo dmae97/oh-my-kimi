@@ -18,17 +18,7 @@
 import * as fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import { $flag, getDebugLogPath } from "@oh-my-pi/pi-utils";
-import {
-	DEFAULT_MAX_INLINE_IMAGES,
-	getDirectKittyPlacementRows,
-	getDirectKittyRowWidth,
-	ImageBudget,
-	isDirectKittyContinuation,
-	isDirectKittyPlacement,
-	positionDirectKittyContinuation,
-	unwrapDirectKittyContinuation,
-	unwrapDirectKittyPlacement,
-} from "./components/image";
+import { DEFAULT_MAX_INLINE_IMAGES, ImageBudget } from "./components/image";
 import { planDeccaraFills } from "./deccara";
 import { isKeyRelease, matchesKey } from "./keys";
 import { LoopWatchdog } from "./loop-watchdog";
@@ -2532,48 +2522,6 @@ export class TUI extends Container {
 		}
 	}
 
-	#clipOverlayLines(lines: readonly string[], maxHeight: number, fromBottom: boolean): readonly string[] {
-		const limit = Number.isFinite(maxHeight) ? Math.max(0, Math.trunc(maxHeight)) : lines.length;
-
-		const blocks: (readonly string[])[] = [];
-		for (let index = 0; index < lines.length; ) {
-			if (isDirectKittyContinuation(lines[index]!)) {
-				// Never surface a continuation whose placement was clipped away.
-				index++;
-				continue;
-			}
-			let end = index + 1;
-			if (isDirectKittyPlacement(lines[index]!)) {
-				while (end < lines.length && isDirectKittyContinuation(lines[end]!)) end++;
-				if (end - index !== getDirectKittyPlacementRows(lines[index]!)) {
-					index = end;
-					continue;
-				}
-			}
-			blocks.push(lines.slice(index, end));
-			index = end;
-		}
-
-		const selected: string[] = [];
-		let remaining = limit;
-		if (fromBottom) {
-			for (let index = blocks.length - 1; index >= 0 && remaining > 0; index--) {
-				const block = blocks[index]!;
-				if (block.length > remaining) continue;
-				selected.unshift(...block);
-				remaining -= block.length;
-			}
-		} else {
-			for (const block of blocks) {
-				if (remaining <= 0) break;
-				if (block.length > remaining) continue;
-				selected.push(...block);
-				remaining -= block.length;
-			}
-		}
-		return selected;
-	}
-
 	/**
 	 * Composite all visible overlays into the window slice (screen
 	 * coordinates, in stack order, later = on top). Overlays never touch the
@@ -2589,9 +2537,14 @@ export class TUI extends Container {
 			// Get layout with height=0 first to determine width and maxHeight
 			// (width and maxHeight don't depend on overlay height).
 			const { width, maxHeight } = this.#resolveOverlayLayout(options, 0, termWidth, termHeight);
-			const anchor = options?.anchor ?? "center";
-			const fromBottom = anchor === "bottom-left" || anchor === "bottom-center" || anchor === "bottom-right";
-			const overlayLines = this.#clipOverlayLines(component.render(width), maxHeight, fromBottom);
+			let overlayLines = component.render(width);
+			if (overlayLines.length > maxHeight) {
+				const anchor = options?.anchor ?? "center";
+				overlayLines =
+					anchor === "bottom-left" || anchor === "bottom-center" || anchor === "bottom-right"
+						? overlayLines.slice(overlayLines.length - maxHeight)
+						: overlayLines.slice(0, maxHeight);
+			}
 			const { row, col } = this.#resolveOverlayLayout(options, overlayLines.length, termWidth, termHeight);
 			for (let i = 0; i < overlayLines.length; i++) {
 				const idx = row + i;
@@ -2612,40 +2565,20 @@ export class TUI extends Container {
 		overlayWidth: number,
 		totalWidth: number,
 	): string {
-		const positionedDirectKittyContinuation = positionDirectKittyContinuation(overlayLine, startCol);
-		if (positionedDirectKittyContinuation !== null) return positionedDirectKittyContinuation;
-		if (
-			unwrapDirectKittyPlacement(baseLine) !== null ||
-			isDirectKittyContinuation(baseLine) ||
-			TERMINAL.isImageLine(baseLine)
-		) {
-			return baseLine;
-		}
+		if (TERMINAL.isImageLine(baseLine)) return baseLine;
 
-		// A direct Kitty placement clears its reserved rows when unwrapped. Keep
-		// the base segments in the framed row so that clear is followed by the
-		// text on both sides of a narrow overlay. Its marker has zero terminal
-		// width, so account for its declared cell width explicitly.
-		const directKittyWidth = isDirectKittyPlacement(overlayLine) ? getDirectKittyRowWidth(overlayLine) : null;
-		const effectiveOverlayWidth = Math.max(overlayWidth, directKittyWidth ?? 0);
-
-		// Single pass through baseLine extracts both before and after segments.
-		const afterStart = startCol + effectiveOverlayWidth;
+		// Single pass through baseLine extracts both before and after segments
+		const afterStart = startCol + overlayWidth;
 		const base = extractSegments(baseLine, startCol, afterStart, totalWidth - afterStart, true);
 
-		// Extract overlay with width tracking (strict=true to exclude wide chars at boundary).
-		// Direct Kitty marker control bytes occupy no text cells; its capability
-		// frame supplies their actual cell footprint.
-		const overlay =
-			directKittyWidth === null
-				? sliceWithWidth(overlayLine, 0, overlayWidth, true)
-				: { text: overlayLine, width: directKittyWidth };
+		// Extract overlay with width tracking (strict=true to exclude wide chars at boundary)
+		const overlay = sliceWithWidth(overlayLine, 0, overlayWidth, true);
 
 		// Pad segments to target widths
 		const beforePad = Math.max(0, startCol - base.beforeWidth);
-		const overlayPad = Math.max(0, effectiveOverlayWidth - overlay.width);
+		const overlayPad = Math.max(0, overlayWidth - overlay.width);
 		const actualBeforeWidth = Math.max(startCol, base.beforeWidth);
-		const actualOverlayWidth = Math.max(effectiveOverlayWidth, overlay.width);
+		const actualOverlayWidth = Math.max(overlayWidth, overlay.width);
 		const afterTarget = Math.max(0, totalWidth - actualBeforeWidth - actualOverlayWidth);
 		const afterPad = Math.max(0, afterTarget - base.afterWidth);
 
@@ -2751,10 +2684,6 @@ export class TUI extends Container {
 	}
 
 	#terminalLine(line: string): string {
-		const directKittyPlacement = unwrapDirectKittyPlacement(line);
-		if (directKittyPlacement !== null) return directKittyPlacement;
-		const directKittyContinuation = unwrapDirectKittyContinuation(line);
-		if (directKittyContinuation !== null) return directKittyContinuation;
 		if (TERMINAL.isImageLine(line)) return line;
 		const coalesced = coalesceAdjacentSgr(line);
 		return coalesced + (line.includes("\x1b]8;") ? LINE_TERMINATOR : SEGMENT_RESET);
@@ -3264,7 +3193,7 @@ export class TUI extends Container {
 	}
 
 	#prepareLine(raw: string, width: number): PreparedLine {
-		if (unwrapDirectKittyPlacement(raw) !== null || isDirectKittyContinuation(raw) || TERMINAL.isImageLine(raw)) {
+		if (TERMINAL.isImageLine(raw)) {
 			return { raw, width, line: raw };
 		}
 		const source = this.#lineFitSource(raw, width);
@@ -3416,10 +3345,6 @@ export class TUI extends Container {
 	}
 
 	#lineRewriteSequence(line: string, width: number): string {
-		const directKittyPlacement = unwrapDirectKittyPlacement(line);
-		if (directKittyPlacement !== null) return directKittyPlacement;
-		const directKittyContinuation = unwrapDirectKittyContinuation(line);
-		if (directKittyContinuation !== null) return directKittyContinuation;
 		if (TERMINAL.isImageLine(line)) return ERASE_LINE + line;
 		const terminalLine = this.#terminalLine(line);
 		const asciiWidth = this.#ansiAsciiLineWidth(line, width);

@@ -1,6 +1,5 @@
 import type { Component } from "../tui";
 import { applyBackgroundToLine, getPaddingX, padding, visibleWidth } from "../utils";
-import { getDirectKittyRowWidth } from "./image";
 
 type Cache = {
 	width: number;
@@ -183,13 +182,12 @@ export class Box implements Component {
 	}
 
 	#applyBg(line: string, width: number): string {
-		const directKittyWidth = getDirectKittyRowWidth(line);
-		const visLen = directKittyWidth ?? visibleWidth(line);
+		const visLen = visibleWidth(line);
 		const padNeeded = Math.max(0, width - visLen);
 		const padded = line + padding(padNeeded);
 
 		if (this.#bgFn) {
-			return directKittyWidth === null ? applyBackgroundToLine(padded, width, this.#bgFn) : this.#bgFn(padded);
+			return applyBackgroundToLine(padded, width, this.#bgFn);
 		}
 		return padded;
 	}

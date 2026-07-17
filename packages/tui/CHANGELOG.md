@@ -15,7 +15,6 @@
 
 - Fixed Enter accepting a mid-prompt `/skill:<name>` autocomplete from submitting and clearing the draft; acceptance now inserts the skill token and leaves the prompt open ([#4773](https://github.com/can1357/oh-my-pi/issues/4773)).
 - Fixed Markdown rendering turning local file paths into HTTP links when a `www.` or `http(s)://`/`ftp://` sequence was glued to a preceding character (e.g. `~/meta/www.share/blog/index.dj`); extended autolinks now require a valid GFM left boundary (start of line, whitespace, or one of `*_~(`) ([#5652](https://github.com/can1357/oh-my-pi/issues/5652)).
-- Fixed multi-row direct Kitty images being clipped or detached from their cells in native terminal scrollback ([#5669](https://github.com/can1357/oh-my-pi/pull/5669) by [@jeffscottward](https://github.com/jeffscottward)).
 
 ## [17.0.1] - 2026-07-16
 

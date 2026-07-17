@@ -1,7 +1,6 @@
 import { matchesKey } from "../keys";
 import type { Component } from "../tui";
 import { Ellipsis, replaceTabs, truncateToWidth, visibleWidth } from "../utils";
-import { getDirectKittyPlacementRows, isDirectKittyContinuation, isDirectKittyPlacement } from "./image";
 
 const DEFAULT_TRACK = "│";
 const DEFAULT_THUMB = "█";
@@ -187,41 +186,12 @@ export class ScrollView implements Component {
 		const contentWidth = Math.max(0, safeWidth - (showScrollbar ? 1 : 0));
 		const thumb = showScrollbar ? this.#thumbRange() : undefined;
 		const lines: string[] = [];
-		let sourceIndex = this.#totalRows === undefined ? this.#scrollOffset : 0;
-		let row = 0;
-		while (row < this.#height) {
+		for (let row = 0; row < this.#height; row++) {
+			const sourceIndex = this.#totalRows === undefined ? this.#scrollOffset + row : row;
 			const source = this.#lines[sourceIndex] ?? "";
-
-			// Direct terminal images are atomic viewport blocks. Never emit an
-			// orphan continuation after its placement row has scrolled away, and
-			// never start a placement when all of its protected rows cannot fit.
-			if (isDirectKittyContinuation(source)) {
-				sourceIndex++;
-				continue;
-			}
-			if (isDirectKittyPlacement(source)) {
-				let blockEnd = sourceIndex + 1;
-				while (blockEnd < this.#lines.length && isDirectKittyContinuation(this.#lines[blockEnd] ?? "")) {
-					blockEnd++;
-				}
-				const blockHeight = blockEnd - sourceIndex;
-				if (blockHeight !== getDirectKittyPlacementRows(source) || blockHeight > this.#height - row) {
-					sourceIndex = blockEnd;
-					continue;
-				}
-				while (sourceIndex < blockEnd) {
-					lines.push(this.#lines[sourceIndex] ?? "");
-					sourceIndex++;
-					row++;
-				}
-				continue;
-			}
-
 			const truncated = truncateToWidth(replaceTabs(source), contentWidth, this.#ellipsis);
 			if (!showScrollbar) {
 				lines.push(truncated);
-				sourceIndex++;
-				row++;
 				continue;
 			}
 			const content = `${truncated}${" ".repeat(Math.max(0, contentWidth - visibleWidth(truncated)))}`;
@@ -229,8 +199,6 @@ export class ScrollView implements Component {
 			const styledBar =
 				thumb && row >= thumb.start && row < thumb.end ? this.#theme.thumb(barGlyph) : this.#theme.track(barGlyph);
 			lines.push(`${content}${styledBar}`);
-			sourceIndex++;
-			row++;
 		}
 		return lines;
 	}
