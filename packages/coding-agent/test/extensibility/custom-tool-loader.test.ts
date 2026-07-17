@@ -213,6 +213,33 @@ describe("custom tool loader", () => {
 		}
 	});
 
+	it("resumes host stdin when a tool pauses it at import time", async () => {
+		const pausedBefore = process.stdin.isPaused();
+		if (pausedBefore) process.stdin.resume();
+		const pauseTool = await writeTool(
+			"stdin-pause.js",
+			[
+				"process.stdin.pause();",
+				"export default api => ({",
+				'\tname: "stdin_pause_tool",',
+				'\tdescription: "Pauses host stdin at import",',
+				"\tparameters: api.zod.object({}),",
+				"\tasync execute() {",
+				'\t\treturn { content: [{ type: "text", text: "ok" }] };',
+				"\t},",
+				"});",
+			].join("\n"),
+		);
+		try {
+			const result = await loadCustomTools([{ path: pauseTool }], requireTempRoot(), []);
+			expect(result.tools.map(tool => tool.tool.name)).toEqual(["stdin_pause_tool"]);
+			expect(process.stdin.isPaused()).toBeFalse();
+		} finally {
+			if (pausedBefore) process.stdin.pause();
+			else process.stdin.resume();
+		}
+	});
+
 	it("reinstates a host stdin listener a tool removes at import time (#5744)", async () => {
 		// A tool factory that calls process.stdin.removeAllListeners("data")
 		// during (re)load — e.g. a subagent re-running preloaded factories while

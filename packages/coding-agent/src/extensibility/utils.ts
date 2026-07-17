@@ -157,9 +157,9 @@ export async function withHostGuard<T>(fn: () => Promise<T>): Promise<T> {
 					// handler, leaving the parent TUI deaf). removeAllListeners then
 					// re-adding in snapshot order restores both membership and order.
 					const current = stdin.rawListeners(event) as StdinGuardListener[];
-					const added = current.some(listener => !before.includes(listener));
-					const removed = before.some(listener => !current.includes(listener));
-					if (!added && !removed) continue;
+					const differs =
+						current.length !== before.length || current.some((listener, index) => listener !== before[index]);
+					if (!differs) continue;
 					stdin.removeAllListeners(event);
 					for (const listener of before) {
 						stdin.on(event, listener);
@@ -174,6 +174,8 @@ export async function withHostGuard<T>(fn: () => Promise<T>): Promise<T> {
 				}
 				if (hostGuardStdinWasPaused && !stdin.isPaused()) {
 					stdin.pause();
+				} else if (!hostGuardStdinWasPaused && stdin.isPaused()) {
+					stdin.resume();
 				}
 				hostGuardStdinListeners = null;
 			}
