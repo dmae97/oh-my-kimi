@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Narrowed the `history://` contract in the system prompt to match the implementation: it serves agents in the current session's tree (including their persisted unregistered/released/resumed subagents), not independent top-level OMP sessions whose files persist under the same session directory ([#5839](https://github.com/can1357/oh-my-pi/issues/5839)).
+
 ## [17.0.2] - 2026-07-17
 
 ### Added
