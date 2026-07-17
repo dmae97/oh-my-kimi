@@ -71,6 +71,9 @@
 ### Fixed
 
 - Fixed custom LSP servers such as `roslyn-language-server` crashing after initialization when they request unconfigured `workspace/configuration` sections; missing settings now receive the spec-required `null` instead of `{}` ([#5745](https://github.com/can1357/oh-my-pi/issues/5745)).
+### Fixed
+
+- Fixed late user-initiated bash results and minimized-output artifacts being recorded in whichever session or branch was active when execution finished; bash now retains its originating transcript across `new_session`/`switch_session`/`branch`/tree navigation, and an intentionally dropped session stays deleted instead of being recreated by a straggling result ([#5743](https://github.com/can1357/oh-my-pi/issues/5743)).
 
 ## [17.0.1] - 2026-07-16
 
