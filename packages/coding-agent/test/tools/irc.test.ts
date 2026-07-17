@@ -191,6 +191,198 @@ describe("IRC", () => {
 			expect(receipt.error).toBeTruthy();
 		});
 
+		it("custom-registry bus delivers live without gating on global park state for the same id", async () => {
+			// Global lifecycle has this id adopted + mid-park; a bus on a separate
+			// registry must NOT consult that unrelated state for its live recipient.
+			const globalStub = makeFakeSession();
+			registry.register({
+				id: "0-Sub",
+				displayName: "task",
+				kind: "sub",
+				session: globalStub.session,
+				sessionFile: "/tmp/0-Sub.jsonl",
+				status: "idle",
+			});
+			const { promise: neverDispose } = Promise.withResolvers<void>();
+			globalStub.session.dispose = (async () => {
+				await neverDispose;
+			}) as AgentSession["dispose"];
+			AgentLifecycleManager.global().adopt("0-Sub", { idleTtlMs: 0 });
+			void AgentLifecycleManager.global().park("0-Sub");
+			expect(AgentLifecycleManager.global().has("0-Sub")).toBe(true);
+
+			const customRegistry = new AgentRegistry();
+			const customBus = new IrcBus(customRegistry);
+			const live = makeFakeSession();
+			live.setOutcome("injected");
+			customRegistry.register({ id: "0-Sub", displayName: "task", kind: "sub", session: live.session });
+
+			const receipt = await customBus.send({ from: "0-Main", to: "0-Sub", body: "hi" });
+
+			expect(receipt).toEqual({ to: "0-Sub", outcome: "injected" });
+			expect(live.delivered.map(msg => msg.body)).toEqual(["hi"]);
+			expect(globalStub.delivered).toEqual([]);
+		});
+
+		it("send during pre-detach park keeps the live session and does not revive", async () => {
+			const { promise: disposeGate, resolve: resolveDispose } = Promise.withResolvers<void>();
+			let disposeCalls = 0;
+			const delivered: IrcMessage[] = [];
+			const session = {
+				deliverIrcMessage: async (msg: IrcMessage) => {
+					delivered.push(msg);
+					return "injected" as const;
+				},
+				emitIrcRelayObservation: () => {},
+				dispose: async () => {
+					disposeCalls++;
+					await disposeGate;
+				},
+			} as unknown as AgentSession;
+			registry.register({
+				id: "0-Parking",
+				displayName: "task",
+				kind: "sub",
+				session,
+				sessionFile: "/tmp/0-Parking.jsonl",
+				status: "idle",
+			});
+			let reviverRuns = 0;
+			AgentLifecycleManager.global().adopt("0-Parking", {
+				idleTtlMs: 0,
+				revive: async () => {
+					reviverRuns++;
+					return session;
+				},
+			});
+
+			const parking = AgentLifecycleManager.global().park("0-Parking");
+			// Same tick: cancel window still open — send must keep the live session.
+			const receipt = await bus.send({ from: "0-Main", to: "0-Parking", body: "stay alive" });
+			await parking;
+
+			expect(receipt.outcome).toBe("injected");
+			expect(delivered.map(msg => msg.body)).toEqual(["stay alive"]);
+			expect(disposeCalls).toBe(0);
+			expect(reviverRuns).toBe(0);
+			expect(registry.get("0-Parking")?.session).toBe(session);
+			expect(registry.get("0-Parking")?.status).toBe("idle");
+			expect(bus.unreadCount("0-Parking")).toBe(0);
+			resolveDispose();
+		});
+
+		it("send after park detaches waits for dispose, revives, and delivers once", async () => {
+			const { promise: disposeGate, resolve: resolveDispose } = Promise.withResolvers<void>();
+			let disposeCalls = 0;
+			const oldSession = {
+				deliverIrcMessage: async () => {
+					throw new Error("dying session must not receive mail");
+				},
+				emitIrcRelayObservation: () => {},
+				dispose: async () => {
+					disposeCalls++;
+					await disposeGate;
+				},
+			} as unknown as AgentSession;
+			const revived = makeFakeSession();
+			revived.setOutcome("woken");
+			registry.register({
+				id: "0-Parking",
+				displayName: "task",
+				kind: "sub",
+				session: oldSession,
+				sessionFile: "/tmp/0-Parking.jsonl",
+				status: "idle",
+			});
+			let reviverRuns = 0;
+			AgentLifecycleManager.global().adopt("0-Parking", {
+				idleTtlMs: 0,
+				revive: async () => {
+					reviverRuns++;
+					return revived.session;
+				},
+			});
+
+			const parking = AgentLifecycleManager.global().park("0-Parking");
+			// Pass the cancel window so park detaches before send.
+			await Promise.resolve();
+			await Promise.resolve();
+			expect(registry.get("0-Parking")?.status).toBe("parked");
+			expect(registry.get("0-Parking")?.session).toBeNull();
+			expect(disposeCalls).toBe(1);
+
+			const sendPromise = bus.send({ from: "0-Main", to: "0-Parking", body: "after park" });
+			let sendSettled = false;
+			void sendPromise.then(() => {
+				sendSettled = true;
+			});
+			await Promise.resolve();
+			await Promise.resolve();
+			// Blocked on dispose — must not inject into the dying session or buffer.
+			expect(sendSettled).toBe(false);
+			expect(reviverRuns).toBe(0);
+			expect(bus.unreadCount("0-Parking")).toBe(0);
+
+			resolveDispose();
+			const receipt = await sendPromise;
+			await parking;
+
+			expect(receipt.outcome).toBe("revived");
+			expect(revived.delivered.map(msg => msg.body)).toEqual(["after park"]);
+			expect(reviverRuns).toBe(1);
+			expect(registry.get("0-Parking")?.session).toBe(revived.session);
+			expect(bus.unreadCount("0-Parking")).toBe(0);
+		});
+
+		it("multiple concurrent sends during park coalesce revive and all deliver", async () => {
+			const { promise: disposeGate, resolve: resolveDispose } = Promise.withResolvers<void>();
+			const oldSession = {
+				deliverIrcMessage: async () => {
+					throw new Error("dying session must not receive mail");
+				},
+				emitIrcRelayObservation: () => {},
+				dispose: async () => {
+					await disposeGate;
+				},
+			} as unknown as AgentSession;
+			const revived = makeFakeSession();
+			revived.setOutcome("injected");
+			registry.register({
+				id: "0-Parking",
+				displayName: "task",
+				kind: "sub",
+				session: oldSession,
+				sessionFile: "/tmp/0-Parking.jsonl",
+				status: "idle",
+			});
+			let reviverRuns = 0;
+			AgentLifecycleManager.global().adopt("0-Parking", {
+				idleTtlMs: 0,
+				revive: async () => {
+					reviverRuns++;
+					return revived.session;
+				},
+			});
+
+			const parking = AgentLifecycleManager.global().park("0-Parking");
+			await Promise.resolve();
+			await Promise.resolve();
+
+			const sends = Promise.all([
+				bus.send({ from: "0-Main", to: "0-Parking", body: "one" }),
+				bus.send({ from: "0-Main", to: "0-Parking", body: "two" }),
+				bus.send({ from: "0-Main", to: "0-Parking", body: "three" }),
+			]);
+			resolveDispose();
+			const receipts = await sends;
+			await parking;
+
+			expect(reviverRuns).toBe(1);
+			expect(receipts.every(r => r.outcome === "revived")).toBe(true);
+			expect(revived.delivered.map(msg => msg.body).sort()).toEqual(["one", "three", "two"]);
+			expect(bus.unreadCount("0-Parking")).toBe(0);
+		});
+
 		it("wait consumes a matching send instead of delivering it to the session", async () => {
 			const main = makeFakeSession();
 			registry.register({ id: "0-Main", displayName: "main", kind: "main", session: main.session });
