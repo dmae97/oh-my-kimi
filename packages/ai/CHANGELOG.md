@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed local grammar-constrained OpenAI-compatible backends (llama.cpp, LM Studio, vLLM) rejecting every tool request with `400 "Unable to generate parser for this template ... Unrecognized schema: true"`. The `task` tool's open `outputSchema` field normalizes to a bare boolean `true` subschema (issue #1179), which llama.cpp's JSON-schema→GBNF converter cannot compile. The chat-completions encoder now widens bare boolean subschemas into a value-accepting primitive union (and preserves closed-object `additionalProperties: false`) for these backends via the new `grammar` tool-schema flavor ([#5914](https://github.com/can1357/oh-my-pi/issues/5914)).
+
 ## [17.0.3] - 2026-07-17
 
 ### Fixed

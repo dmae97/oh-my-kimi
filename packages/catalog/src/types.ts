@@ -310,14 +310,25 @@ export interface OpenAICompat {
 	supportsStrictMode?: boolean;
 	/**
 	 * Tool-schema dialect the endpoint validates `tools.function.parameters`
-	 * against. `"moonshot-mfjs"` triggers Moonshot Flavored JSON Schema
-	 * normalization (collapse `const`→`enum`, infer `type` on bare enums, strip
-	 * unsupported validators/`prefixItems`) because Moonshot/Kimi native hosts
-	 * reject standard JSON Schema constructs with HTTP 400. Default:
-	 * auto-detected (`"moonshot-mfjs"` on api.moonshot.ai / api.kimi.com). Set
-	 * `"none"` to opt a custom Moonshot-compatible host out.
+	 * against.
+	 *
+	 * `"moonshot-mfjs"` triggers Moonshot Flavored JSON Schema normalization
+	 * (collapse `const`→`enum`, infer `type` on bare enums, strip unsupported
+	 * validators/`prefixItems`) because Moonshot/Kimi native hosts reject
+	 * standard JSON Schema constructs with HTTP 400.
+	 *
+	 * `"grammar"` triggers grammar-sampler normalization (widen bare boolean
+	 * `true`/`{}` subschemas into a value-accepting union of primitives, strip
+	 * boolean `additionalProperties`/`unevaluatedProperties`) because
+	 * grammar-constrained backends (llama.cpp, LM Studio, vLLM) build a GBNF
+	 * grammar from the JSON Schema and 400 with `Unrecognized schema: true` on a
+	 * bare boolean subschema (issue #5914).
+	 *
+	 * Default: auto-detected (`"moonshot-mfjs"` on api.moonshot.ai /
+	 * api.kimi.com, `"grammar"` on local OpenAI-compatible backends). Set
+	 * `"none"` to opt a custom host out.
 	 */
-	toolSchemaFlavor?: "moonshot-mfjs" | "none";
+	toolSchemaFlavor?: "moonshot-mfjs" | "grammar" | "none";
 	/**
 	 * Stream-watchdog idle-timeout floor in ms for slow reasoning hosts.
 	 * Default: auto-detected (GLM coding-plan hosts, direct DeepSeek reasoning).
