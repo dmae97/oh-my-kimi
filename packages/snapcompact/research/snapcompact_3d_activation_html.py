@@ -41,7 +41,15 @@ def image_data_uri(path: Path) -> str:
     return "data:image/png;base64," + base64.b64encode(path.read_bytes()).decode()
 
 
-def add_surface(fig: go.Figure, z: np.ndarray, row: int, col: int, name: str, colorscale: str, showscale: bool = False) -> None:
+def add_surface(
+    fig: go.Figure,
+    z: np.ndarray,
+    row: int,
+    col: int,
+    name: str,
+    colorscale: str,
+    showscale: bool = False,
+) -> None:
     y = np.arange(z.shape[0])
     x = np.arange(z.shape[1])
     fig.add_trace(
@@ -54,11 +62,23 @@ def add_surface(fig: go.Figure, z: np.ndarray, row: int, col: int, name: str, co
             cmin=0,
             cmax=1,
             showscale=showscale,
-            lighting={"ambient": 0.58, "diffuse": 0.72, "specular": 0.28, "roughness": 0.52},
-            contours={
-                "z": {"show": True, "usecolormap": True, "highlightcolor": "#fff0a8", "project_z": True},
+            lighting={
+                "ambient": 0.58,
+                "diffuse": 0.72,
+                "specular": 0.28,
+                "roughness": 0.52,
             },
-            hovertemplate="layer %{y}<br>image bin %{x}<br>Δ %{z:.3f}<extra>" + name + "</extra>",
+            contours={
+                "z": {
+                    "show": True,
+                    "usecolormap": True,
+                    "highlightcolor": "#fff0a8",
+                    "project_z": True,
+                },
+            },
+            hovertemplate="layer %{y}<br>image bin %{x}<br>Δ %{z:.3f}<extra>"
+            + name
+            + "</extra>",
         ),
         row=row,
         col=col,
@@ -67,8 +87,12 @@ def add_surface(fig: go.Figure, z: np.ndarray, row: int, col: int, name: str, co
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--result-dir", default=str(HERE / "results" / "tensor-heatmap-paddleocr-q7"))
-    ap.add_argument("--out", default=str(HERE / "results" / "snapcompact-activation-terrain.html"))
+    ap.add_argument(
+        "--result-dir", default=str(HERE / "results" / "tensor-heatmap-paddleocr-q7")
+    )
+    ap.add_argument(
+        "--out", default=str(HERE / "results" / "snapcompact-activation-terrain.html")
+    )
     ap.add_argument("--bins", type=int, default=150)
     args = ap.parse_args()
 
@@ -82,22 +106,48 @@ def main() -> None:
     fig = make_subplots(
         rows=2,
         cols=2,
-        specs=[[{"type": "surface"}, {"type": "surface"}], [{"type": "surface", "colspan": 2}, None]],
+        specs=[
+            [{"type": "surface"}, {"type": "surface"}],
+            [{"type": "surface", "colspan": 2}, None],
+        ],
         horizontal_spacing=0.02,
         vertical_spacing=0.03,
-        subplot_titles=("Gold answer erased", "Random equal-size erase", "Answer / random residual scar"),
+        subplot_titles=(
+            "Gold answer erased",
+            "Random equal-size erase",
+            "Answer / random residual scar",
+        ),
     )
     add_surface(fig, answer, 1, 1, "gold answer mask", "Magma")
     add_surface(fig, random, 1, 2, "random mask", "Viridis")
     add_surface(fig, ratio, 2, 1, "answer/random ratio", "Inferno", True)
 
-    camera = {"eye": {"x": 1.65, "y": -1.75, "z": 0.82}, "center": {"x": 0, "y": 0, "z": -0.08}}
+    camera = {
+        "eye": {"x": 1.65, "y": -1.75, "z": 0.82},
+        "center": {"x": 0, "y": 0, "z": -0.08},
+    }
     scene_common = {
         "bgcolor": "rgba(0,0,0,0)",
         "camera": camera,
-        "xaxis": {"title": "image-token bins", "gridcolor": "rgba(140,170,180,0.18)", "color": "#94a3aa", "zeroline": False},
-        "yaxis": {"title": "decoder layer", "gridcolor": "rgba(140,170,180,0.18)", "color": "#94a3aa", "autorange": "reversed", "dtick": 4},
-        "zaxis": {"title": "Δ hidden", "gridcolor": "rgba(140,170,180,0.18)", "color": "#94a3aa", "range": [0, 1]},
+        "xaxis": {
+            "title": "image-token bins",
+            "gridcolor": "rgba(140,170,180,0.18)",
+            "color": "#94a3aa",
+            "zeroline": False,
+        },
+        "yaxis": {
+            "title": "decoder layer",
+            "gridcolor": "rgba(140,170,180,0.18)",
+            "color": "#94a3aa",
+            "autorange": "reversed",
+            "dtick": 4,
+        },
+        "zaxis": {
+            "title": "Δ hidden",
+            "gridcolor": "rgba(140,170,180,0.18)",
+            "color": "#94a3aa",
+            "range": [0, 1],
+        },
         "aspectratio": {"x": 2.6, "y": 0.78, "z": 0.52},
     }
     fig.update_layout(
@@ -117,7 +167,11 @@ def main() -> None:
     q = summary["question"]
     original_uri = image_data_uri(result_dir / "images" / "original.png")
     masked_uri = image_data_uri(result_dir / "images" / "answer-mask.png")
-    graph_html = fig.to_html(full_html=False, include_plotlyjs="cdn", config={"displayModeBar": False, "responsive": True})
+    graph_html = fig.to_html(
+        full_html=False,
+        include_plotlyjs="cdn",
+        config={"displayModeBar": False, "responsive": True},
+    )
     html = f"""<!doctype html>
 <html>
 <head>
@@ -168,10 +222,10 @@ def main() -> None:
         <div class=\"label red\">ANSWER ERASED</div>
         <img class=\"shot\" src=\"{masked_uri}\" />
         <div class=\"q\">question</div>
-        <div class=\"qtext\">{q['q']}</div>
+        <div class=\"qtext\">{q["q"]}</div>
         <div class=\"q\">gold answer</div>
-        <div class=\"answer\">{q['answer_text']}</div>
-        <div class=\"metric muted\">{summary['layers']} layers<br>{summary['image_tokens']} image tokens<br><b style=\"color:#efeede\">answer/random Δ = {summary['answer_over_random_delta']:.2f}×</b></div>
+        <div class=\"answer\">{q["answer_text"]}</div>
+        <div class=\"metric muted\">{summary["layers"]} layers<br>{summary["image_tokens"]} image tokens<br><b style=\"color:#efeede\">answer/random Δ = {summary["answer_over_random_delta"]:.2f}×</b></div>
       </aside>
       <section class=\"card terrain\">
         <div class=\"terrain-title\"><b>interactive 3D residual terrain</b><span>gold-mask spikes rise where the model reacts to losing the answer glyphs</span></div>

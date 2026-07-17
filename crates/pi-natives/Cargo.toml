@@ -21,14 +21,14 @@ clap.workspace = true
 globset.workspace = true
 fontdue.workspace = true
 grep-matcher.workspace = true
+grep-pcre2.workspace = true
 grep-regex.workspace = true
 grep-searcher.workspace = true
 html-to-markdown-rs.workspace = true
 icy_sixel.workspace = true
 ignore.workspace = true
-image.workspace = true
+image = { workspace = true, features = ["bmp"] }
 inferno.workspace = true
-memmap2.workspace = true
 napi.workspace = true
 napi-derive.workspace = true
 parking_lot.workspace = true
@@ -61,6 +61,7 @@ libc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = ["Wdk_Storage_FileSystem", "Win32_Security"] }
+clipboard-win.workspace = true
 winreg.workspace = true
 
 [build-dependencies]

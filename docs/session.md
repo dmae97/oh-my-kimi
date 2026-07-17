@@ -119,7 +119,6 @@ All non-header entries include:
 - `ttsr_injection`
 - `session_init`
 - `mode_change`
-- `mcp_tool_selection`
 
 ### `message`
 
@@ -290,18 +289,6 @@ Extension-provided message that does participate in LLM context. `content` can b
 }
 ```
 
-### `mcp_tool_selection`
-
-```json
-{
-  "type": "mcp_tool_selection",
-  "id": "d2e3f4a5",
-  "parentId": "c2d3e4f5",
-  "timestamp": "2026-02-16T10:28:30.000Z",
-  "selectedToolNames": ["server.tool"]
-}
-```
-
 ### `session_init`
 
 ```json
@@ -400,7 +387,6 @@ Algorithm:
    - model map from `model_change` entries (`role ?? "default"`)
    - fallback `models.default` from assistant message provider/model if no explicit model change
    - deduplicated `injectedTtsrRules` from all `ttsr_injection` entries
-   - selected MCP discovery tools from latest `mcp_tool_selection`
    - mode/modeData from latest `mode_change` (default mode `"none"`)
 4. Build message list:
    - `message` entries pass through
@@ -411,7 +397,7 @@ Algorithm:
      - emit path entries starting at `firstKeptEntryId` up to the compaction boundary
      - emit entries after the compaction boundary
 
-`custom`, `session_init`, `service_tier_change`, `mcp_tool_selection`, and `ttsr_injection` entries do not inject model context directly.
+`custom`, `session_init`, `service_tier_change`, and `ttsr_injection` entries do not inject model context directly.
 
 ## Persistence Guarantees and Failure Model
 

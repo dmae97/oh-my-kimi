@@ -70,6 +70,55 @@ describe("title generator", () => {
 		expect(options?.disableReasoning).toBe(true);
 	});
 
+	it.each([
+		[
+			"<thinking>",
+			"<thinking>Thinking process:\n<title>Wrong internal scratchpad</title>\n</thinking>\n<title>Fix login button</title>",
+		],
+		[
+			"<think>",
+			"<think>Thinking process:\n<title>Wrong internal scratchpad</title>\n</think>\n<title>Fix login button</title>",
+		],
+		[
+			"<reasoning>",
+			"<reasoning>Thinking process:\n<title>Wrong internal scratchpad</title>\n</reasoning>\n<title>Fix login button</title>",
+		],
+		[
+			"```reasoning",
+			"```reasoning\nThinking process:\n<title>Wrong internal scratchpad</title>\n```\n<title>Fix login button</title>",
+		],
+	] as const)("ignores leaked %s reasoning markup before the visible title", async (_marker, responseText) => {
+		const model = getModelOrThrow("claude-sonnet-4-5");
+		vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: responseText }],
+		} as never);
+
+		const title = await generateSessionTitle(
+			"the login button is broken on mobile",
+			createRegistry(model),
+			createSettings(model),
+		);
+
+		expect(title).toBe("Fix login button");
+	});
+
+	it("preserves in-band reasoning syntax inside the parsed title", async () => {
+		const model = getModelOrThrow("claude-sonnet-4-5");
+		vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: "<title>Fix <think> tag parsing</title>" }],
+		} as never);
+
+		const title = await generateSessionTitle(
+			"fix title generation for <think> tag parsing",
+			createRegistry(model),
+			createSettings(model),
+		);
+
+		expect(title).toBe("Fix <think> tag parsing");
+	});
+
 	it("uses the bundled default prompt when no title prompt file is resolved", async () => {
 		const model = getModelOrThrow("claude-sonnet-4-5");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
@@ -188,6 +237,40 @@ describe("title generator", () => {
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: "<title>none</title>" }],
+		} as never);
+
+		const title = await generateSessionTitle(
+			"I have a quick question for you",
+			createRegistry(model),
+			createSettings(model),
+		);
+
+		expect(title).toBeNull();
+		expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("returns null for a self-closing <title/> marker", async () => {
+		const model = getModelOrThrow("claude-sonnet-4-5");
+		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: "<title/>" }],
+		} as never);
+
+		const title = await generateSessionTitle(
+			"I have a quick question for you",
+			createRegistry(model),
+			createSettings(model),
+		);
+
+		expect(title).toBeNull();
+		expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("returns null for a bare <title> marker", async () => {
+		const model = getModelOrThrow("claude-sonnet-4-5");
+		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: "<title>" }],
 		} as never);
 
 		const title = await generateSessionTitle(
@@ -334,6 +417,59 @@ describe("title generator", () => {
 		);
 
 		expect(title).toBe("Fix login button on mobile");
+	});
+
+	it.each([
+		"Here's a thinking process:",
+		"Thinking process:",
+		"Reasoning process:",
+	])("rejects a markerless prose thinking preamble: %s", async responseText => {
+		const model = getModelFor("deepseek", "deepseek-v4-pro");
+		vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: responseText }],
+		} as never);
+
+		const title = await generateSessionTitle(
+			"the login button is broken on mobile",
+			createRegistry(model),
+			createSettings(model),
+		);
+
+		expect(title).toBeNull();
+	});
+
+	it("preserves a markerless title that mentions a <think> tag", async () => {
+		const model = getModelFor("deepseek", "deepseek-v4-pro");
+		vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: "Fix <think> tag parsing" }],
+		} as never);
+
+		const title = await generateSessionTitle(
+			"fix title generation for <think> tag parsing",
+			createRegistry(model),
+			createSettings(model),
+		);
+
+		expect(title).toBe("Fix <think> tag parsing");
+	});
+
+	it("preserves a markerless title that mentions a ```thinking fence", async () => {
+		const model = getModelFor("deepseek", "deepseek-v4-pro");
+		vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: "Fix ```thinking fence parsing" }],
+		} as never);
+
+		const title = await generateSessionTitle(
+			"fix title generation for a ```thinking fence",
+			createRegistry(model),
+			createSettings(model),
+		);
+
+		expect(title).toContain("```thinking");
+		expect(title).toContain("fence");
 	});
 
 	it("strips an unclosed <title> tag from a truncated response", async () => {

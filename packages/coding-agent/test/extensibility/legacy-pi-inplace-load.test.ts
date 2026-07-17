@@ -60,6 +60,24 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 		expect(mod.html).toBe("<html>PLAN-UI</html>");
 	});
 
+	it("loads CommonJS helpers required by an ES module extension", async () => {
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "cjs-helper-ext", version: "1.0.0" }),
+			"config.js": 'module.exports = { value: "config-ok" };\n',
+			"index.js": [
+				'import { createRequire } from "node:module";',
+				"const require = createRequire(import.meta.url);",
+				'const { value } = require("./config.js");',
+				"export { value };",
+				"export default function (pi) { void pi; }",
+			].join("\n"),
+		});
+
+		const mod = (await loadLegacyPiModule(path.join(dir, "index.js"))) as { value: string };
+
+		expect(mod.value).toBe("config-ok");
+	});
+
 	it("reloads an edited entry module without polluting fileURLToPath-derived paths", async () => {
 		const entrySource = (version: string): string =>
 			[
@@ -308,6 +326,22 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 		expect(mod.css).toBe(".x{color:red}");
 	});
 
+	it("leaves JSON import-attribute targets on Bun's native loader", async () => {
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "json-import-ext", version: "1.0.0" }),
+			"prices.json": JSON.stringify({ input: 0.15 }),
+			"index.ts": [
+				'import prices from "./prices.json" with { type: "json" };',
+				"export const inputPrice = prices.input;",
+				"export default function (pi) { void pi; }",
+			].join("\n"),
+		});
+
+		const mod = (await loadLegacyPiModule(path.join(dir, "index.ts"))) as { inputPrice: number };
+
+		expect(mod.inputPrice).toBe(0.15);
+	});
+
 	it("loads the extension's own node_modules deps natively while remapping legacy pi imports", async () => {
 		const dir = await writePackage({
 			"package.json": JSON.stringify({ name: "dep-ext", version: "1.0.0" }),
@@ -502,6 +536,40 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 		expect(expectedEsmDepUrls.some(expected => rewritten.includes(expected))).toBe(true);
 		expect(expectedRootDepUrls.some(expected => rewritten.includes(expected))).toBe(true);
 		expect(rewritten).toContain('from "node:path"');
+	});
+
+	it("pins native-addon package requires to absolute extension paths", async () => {
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "native-require-ext", version: "1.0.0" }),
+			"node_modules/@fixture/native-platform/package.json": JSON.stringify({
+				name: "@fixture/native-platform",
+				version: "1.0.0",
+				main: "binding.node",
+			}),
+			"node_modules/@fixture/native-platform/binding.node": "native fixture",
+			"node_modules/plain-dep/package.json": JSON.stringify({
+				name: "plain-dep",
+				version: "1.0.0",
+				main: "index.js",
+			}),
+			"node_modules/plain-dep/index.js": "module.exports = {};",
+			"index.ts": "",
+		});
+		const importer = path.join(dir, "index.ts");
+		const rewritten = await __rewriteLegacyExtensionSourceForTests(
+			[
+				'const binding = require("@fixture/native-platform");',
+				'const plain = require("plain-dep");',
+				'const local = require("./local.node");',
+				"export { binding, plain, local };",
+			].join("\n"),
+			importer,
+		);
+
+		const addon = await fs.realpath(path.join(dir, "node_modules/@fixture/native-platform/binding.node"));
+		expect(rewritten).toContain(`require("${addon.replaceAll("\\", "/")}")`);
+		expect(rewritten).toContain('require("plain-dep")');
+		expect(rewritten).toContain('require("./local.node")');
 	});
 
 	it("remaps legacy pi-ai utils/oauth subpaths to registry OAuth exports", async () => {

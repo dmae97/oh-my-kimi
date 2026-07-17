@@ -401,7 +401,8 @@ async function loadStickyRulesFile(filePath: string, level: "user" | "project"):
 	const content = await readFile(filePath);
 	if (!content) return null;
 	const source = createSourceMeta(PROVIDER_ID, filePath, level);
-	const rule = buildRuleFromMarkdown("RULES.md", content, filePath, source, { ruleName: "RULES" });
+	const ruleName = level === "project" ? "RULES@project" : "RULES";
+	const rule = buildRuleFromMarkdown("RULES.md", content, filePath, source, { ruleName });
 	// Force alwaysApply regardless of frontmatter — the whole point of RULES.md
 	// is to be reattached every turn.
 	return { ...rule, alwaysApply: true };

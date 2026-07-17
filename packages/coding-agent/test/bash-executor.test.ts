@@ -6,7 +6,7 @@ import { resetSettingsForTest, Settings, type ShellMinimizerSettings } from "@oh
 import { buildMinimizerOptions, executeBash } from "@oh-my-pi/pi-coding-agent/exec/bash-executor";
 import { DEFAULT_MAX_BYTES } from "@oh-my-pi/pi-coding-agent/session/streaming-output";
 import * as shellSnapshot from "@oh-my-pi/pi-coding-agent/utils/shell-snapshot";
-import type { Shell } from "@oh-my-pi/pi-natives";
+import type { Shell, ShellRunResult } from "@oh-my-pi/pi-natives";
 import * as piNatives from "@oh-my-pi/pi-natives";
 import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
 
@@ -402,6 +402,15 @@ exit 64
 		expect(result.output).not.toContain("done");
 	});
 
+	it("does not arm a deadline when timeout is zero", async () => {
+		if (process.platform === "win32") {
+			return;
+		}
+		const result = await executeBash("sleep 1.2; echo done", { cwd: tempDir, timeout: 0 });
+		expect(result.cancelled).toBe(false);
+		expect(result.output.trim()).toBe("done");
+	});
+
 	it("aborts commands", async () => {
 		if (process.platform === "win32") {
 			return;
@@ -466,7 +475,7 @@ exit 64
 			sessionKey: "hung-native-abort",
 		});
 		expect(next.output.trim()).toBe("next");
-		expect(runCalls).toBe(1);
+		expect(runCalls).toBe(2);
 	});
 
 	it("restores persistent sessions after native abort cleanup settles", async () => {
@@ -511,11 +520,7 @@ exit 64
 		expect(next.output.trim()).toBe("still_persistent");
 	});
 
-	it("returns at the JavaScript timeout when native timeout cleanup stalls", async () => {
-		if (process.platform === "win32") {
-			return;
-		}
-
+	it("aborts the shell without aborting its native signal when the JavaScript timeout fallback wins", async () => {
 		// Compress the JS-side fallback timer (floored at 1000ms in the source) so
 		// the safety-net fires deterministically without a real 1s wait. Only long
 		// timers are shrunk — fs/subprocess setup keeps real scheduling — and the
@@ -528,8 +533,12 @@ exit 64
 				...rest,
 			)) as typeof globalThis.setTimeout);
 
-		vi.spyOn(piNatives.Shell.prototype, "run").mockImplementation((_options, onChunk) => {
-			onChunk?.(null, "started\n");
+		let nativeSignal: AbortSignal | undefined;
+		vi.spyOn(piNatives.Shell.prototype, "run").mockImplementation((options, onChunk) => {
+			if (options.signal instanceof AbortSignal) {
+				nativeSignal = options.signal;
+			}
+			onChunk?.(null, "streamed-before-timeout\n");
 			return Promise.withResolvers<never>().promise;
 		});
 		const abortSpy = vi.spyOn(piNatives.Shell.prototype, "abort").mockResolvedValue();
@@ -537,12 +546,60 @@ exit 64
 		const result = await executeBash("sleep 10", {
 			cwd: tempDir,
 			timeout: 1000,
-			sessionKey: "hung-native-timeout",
+			sessionKey: "explicit-timeout-keeps-native-signal",
 		});
 
 		expect(result.cancelled).toBe(true);
+		expect(result.output).toContain("streamed-before-timeout");
 		expect(result.output).toContain("Command timed out after 1 seconds");
-		expect(abortSpy).toHaveBeenCalled();
+		expect(nativeSignal).toBeDefined();
+		expect(nativeSignal?.aborted).toBe(false);
+		expect(abortSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("explicitly aborts an overlapping one-shot shell when timeout cleanup stalls", async () => {
+		const realSetTimeout = globalThis.setTimeout;
+		vi.spyOn(globalThis, "setTimeout").mockImplementation(((handler: () => void, ms?: number, ...rest: unknown[]) =>
+			realSetTimeout(
+				handler,
+				typeof ms === "number" && ms >= 1000 ? 5 : ms,
+				...rest,
+			)) as typeof globalThis.setTimeout);
+
+		const ownerResult = Promise.withResolvers<ShellRunResult>();
+		const isolatedResult = Promise.withResolvers<ShellRunResult>();
+		const ownerDispatched = Promise.withResolvers<void>();
+		const isolatedDispatched = Promise.withResolvers<void>();
+		vi.spyOn(piNatives.Shell.prototype, "run").mockImplementation(options => {
+			if (options.command === "owner") {
+				ownerDispatched.resolve();
+				return ownerResult.promise;
+			}
+			isolatedDispatched.resolve();
+			return isolatedResult.promise;
+		});
+		const abortSpy = vi.spyOn(piNatives.Shell.prototype, "abort").mockResolvedValue();
+
+		const owner = executeBash("owner", {
+			cwd: tempDir,
+			timeout: 0,
+			sessionKey: "stalled-one-shot-timeout",
+		});
+		await ownerDispatched.promise;
+		const overlapping = executeBash("isolated", {
+			cwd: tempDir,
+			timeout: 1000,
+			sessionKey: "stalled-one-shot-timeout",
+		});
+		await isolatedDispatched.promise;
+
+		const result = await overlapping;
+		expect(result.cancelled).toBe(true);
+		expect(abortSpy).toHaveBeenCalledTimes(1);
+
+		isolatedResult.resolve({ exitCode: undefined, cancelled: true, timedOut: true });
+		ownerResult.resolve({ exitCode: 0, cancelled: false, timedOut: false });
+		await owner;
 	});
 
 	it("aborts before follow-up output", async () => {

@@ -22,7 +22,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "../utils";
-import { SelectList, type SelectListLayoutOptions, type SelectListTheme } from "./select-list";
+import { type SelectItem, SelectList, type SelectListLayoutOptions, type SelectListTheme } from "./select-list";
 
 const AUTOCOMPLETE_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
 	overflowSearch: false,
@@ -32,7 +32,6 @@ const SLASH_COMMAND_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
 	minPrimaryColumnWidth: 12,
 	maxPrimaryColumnWidth: 32,
 	overflowSearch: false,
-	wrapDescription: true,
 };
 
 function sanitizeLoadedText(text: string): string {
@@ -383,14 +382,15 @@ export class Editor implements Component, Focusable {
 
 	#theme: EditorTheme;
 	#useTerminalCursor = false;
+	#imeSafeCursorLayout = false;
 
 	/** When set, replaces the normal cursor glyph at end-of-text with this ANSI-styled string. */
 	cursorOverride: string | undefined;
 	/** Display width of the cursorOverride glyph (needed because override may contain ANSI escapes). */
 	cursorOverrideWidth: number | undefined;
-	/** Optional hook that styles displayed input text with zero-width ANSI escapes.
-	 *  MUST preserve visible width (may only add SGR codes, never glyphs). Applied per
-	 *  layout line to the user-text segments — never to the cursor glyph or inline hint. */
+	/** Optional hook that decorates displayed user text after source-text layout.
+	 *  Width-changing output is allowed on lines without the cursor; it is truncated
+	 *  to the content width rather than reflowed. Cursor glyphs and inline hints are excluded. */
 	decorateText: ((text: string) => string) | undefined;
 	#promptGutter: string | undefined;
 
@@ -538,6 +538,11 @@ export class Editor implements Component, Focusable {
 	 */
 	setUseTerminalCursor(useTerminalCursor: boolean): void {
 		this.#useTerminalCursor = useTerminalCursor;
+	}
+
+	/** Render a dedicated bottom border so terminal-local IME preedit cannot shift editor chrome. */
+	setImeSafeCursorLayout(enabled: boolean): void {
+		this.#imeSafeCursorLayout = enabled;
 	}
 
 	getUseTerminalCursor(): boolean {
@@ -853,8 +858,9 @@ export class Editor implements Component, Focusable {
 		}
 
 		// Render each layout line
-		// Emit hardware cursor marker only when focused and not showing autocomplete
-		const emitCursorMarker = this.focused && !this.#autocompleteState;
+		// Keep the hardware cursor at the text insertion point while autocomplete
+		// rows render below it; terminals use that position to anchor IME candidates.
+		const emitCursorMarker = this.focused;
 		const lineContentWidth = contentAreaWidth;
 
 		// Compute inline hint text (dim ghost text after cursor)
@@ -867,6 +873,7 @@ export class Editor implements Component, Focusable {
 			let displayWidth = visibleWidth(layoutLine.text);
 			let cursorPaddingOverflow = 0;
 			let decorated = false;
+			let imeSafeCursorTail = false;
 			const showPromptGutter = promptGutter !== undefined && visibleIndex === 0;
 			const gutterText =
 				promptGutter === undefined ? "" : showPromptGutter ? promptGutter.firstLine : promptGutter.continuation;
@@ -923,7 +930,13 @@ export class Editor implements Component, Focusable {
 				if (marker) {
 					const before = displayText.slice(0, layoutLine.cursorPos);
 					const after = displayText.slice(layoutLine.cursorPos);
-					if (after.length === 0 && inlineHint) {
+					if (this.#imeSafeCursorLayout && after.length === 0 && borderVisible) {
+						// Terminal frontends render IME marked text locally before committed bytes
+						// reach the application. Keep the end-of-input cursor row empty to its
+						// right so that insertion cannot shift box chrome onto the next row.
+						displayText = before + marker;
+						imeSafeCursorTail = true;
+					} else if (after.length === 0 && inlineHint) {
 						const availWidth = Math.max(0, lineContentWidth - displayWidth);
 						const hintText = hintStyle(truncateToWidth(inlineHint, availWidth));
 						displayText = before + marker + hintText;
@@ -1002,6 +1015,13 @@ export class Editor implements Component, Focusable {
 			if (!decorated) {
 				displayText = this.#decorate(displayText);
 			}
+			if (!hasCursor) {
+				displayWidth = visibleWidth(displayText);
+				if (displayWidth > lineContentWidth) {
+					displayText = truncateToWidth(displayText, lineContentWidth);
+					displayWidth = visibleWidth(displayText);
+				}
+			}
 
 			const linePad = padding(Math.max(0, lineContentWidth - displayWidth));
 
@@ -1016,6 +1036,15 @@ export class Editor implements Component, Focusable {
 			// trailing `─`, but never the corner/vertical bar itself.
 			const isLastLine = visibleIndex === visibleLayoutLines.length - 1;
 			const rightChromeCells = Math.max(1, paddingX + 1 - cursorPaddingOverflow);
+			if (isLastLine && imeSafeCursorTail) {
+				const leftBorder = this.borderColor(`${box.vertical}${padding(paddingX)}`);
+				const bottomBorder = this.borderColor(
+					`${box.bottomLeft}${box.horizontal.repeat(Math.max(0, width - 2))}${box.bottomRight}`,
+				);
+				result.push(leftBorder + displayText);
+				result.push(bottomBorder);
+				continue;
+			}
 			if (isLastLine) {
 				const rightPad = Math.max(0, rightChromeCells - 2);
 				const includeHorizontal = rightChromeCells >= 2;
@@ -1168,14 +1197,14 @@ export class Editor implements Component, Focusable {
 					this.#isInSubmittedSlashCommandContext() &&
 					!this.#selectedCompletionIsPath()
 				) {
+					const selected = this.#autocompleteList.getSelectedItem();
 					// Check for stale autocomplete state due to debounce
 					const currentLine = this.#state.lines[this.#state.cursorLine] ?? "";
 					const currentTextBeforeCursor = currentLine.slice(0, this.#state.cursorCol);
-					if (!this.#autocompletePrefixMatchesCursorText(currentTextBeforeCursor)) {
+					if (!this.#autocompletePrefixMatchesCursorText(currentTextBeforeCursor, selected)) {
 						// Autocomplete is stale - cancel and fall through to normal submission
 						this.#cancelAutocomplete();
 					} else {
-						const selected = this.#autocompleteList.getSelectedItem();
 						if (selected && this.#autocompleteProvider) {
 							const result = this.#autocompleteProvider.applyCompletion(
 								this.#state.lines,
@@ -1359,21 +1388,14 @@ export class Editor implements Component, Focusable {
 		} else if (kb.matches(data, "tui.editor.cursorLineEnd")) {
 			this.#moveToLineEnd();
 		}
-		// Page navigation (PageUp/PageDown)
+		// Page navigation (PageUp/PageDown): page the editor viewport only. On a
+		// short draft this is a no-op — it never steps prompt history (that stays
+		// on Up/Down), so an idle empty editor swallows the keys instead of
+		// surprising the user by loading the previous prompt (#4754).
 		else if (kb.matches(data, "tui.editor.pageUp")) {
-			if (this.#isEditorEmpty()) {
-				this.#navigateHistory(-1);
-			} else if (this.#historyIndex > -1 && this.#isOnFirstVisualLine()) {
-				this.#navigateHistory(-1);
-			} else {
-				this.#pageScroll(-1);
-			}
+			this.#pageScroll(-1);
 		} else if (kb.matches(data, "tui.editor.pageDown")) {
-			if (this.#historyIndex > -1 && this.#isOnLastVisualLine()) {
-				this.#navigateHistory(1);
-			} else {
-				this.#pageScroll(1);
-			}
+			this.#pageScroll(1);
 		}
 		// Forward delete (Fn+Backspace or Delete key, including Shift+Delete)
 		else if (kb.matches(data, "tui.editor.deleteCharForward") || matchesKey(data, "shift+delete")) {
@@ -2072,8 +2094,13 @@ export class Editor implements Component, Focusable {
 		this.#resetKillSequence();
 		this.#recordUndoState();
 
+		let removedSlashTrigger = false;
+
 		if (this.#state.cursorCol > 0) {
 			const line = this.#state.lines[this.#state.cursorLine] || "";
+			const textBeforeCursor = line.slice(0, this.#state.cursorCol);
+			const trailingSlashStart = findTrailingSlashCommandStart(textBeforeCursor);
+			removedSlashTrigger = trailingSlashStart === this.#state.cursorCol - 1;
 			// An atomic placeholder token (image/paste marker) deletes as a unit, so a single
 			// backspace never leaves a half-eaten `[Paste #1, +30 lines` behind as stray text.
 			const token = this.#atomicTokenAt(line, this.#state.cursorCol - 1);
@@ -2113,7 +2140,12 @@ export class Editor implements Component, Focusable {
 
 		// Update or re-trigger autocomplete after backspace
 		if (this.#autocompleteState) {
-			this.#debouncedUpdateAutocomplete();
+			if (removedSlashTrigger) {
+				this.#cancelAutocomplete();
+				this.onAutocompleteUpdate?.();
+			} else {
+				this.#debouncedUpdateAutocomplete();
+			}
 		} else {
 			// If autocomplete was cancelled (no matches), re-trigger if we're in a completable context
 			const currentLine = this.#state.lines[this.#state.cursorLine] || "";
@@ -2898,6 +2930,13 @@ export class Editor implements Component, Focusable {
 			if (currentTrailingStart !== null) {
 				const token = currentTextBeforeCursor.slice(currentTrailingStart);
 				if (!token.includes(" ") && !token.slice(1).includes("/")) {
+					// Guard the timing window where the popup was built for an earlier
+					// query (e.g. bare `/`) and the user typed further characters before
+					// the 100 ms debounced refresh fired: accept the stale skill only
+					// when the refreshed popup would still surface it (same gate as
+					// buildMidPromptSkillCompletions). `tmp` after a bare slash
+					// therefore falls through to file completion instead of rewriting
+					// the user's `/tmp` to `/skill:…`.
 					const lowerToken = token.slice(1).toLowerCase();
 					if (midPromptSkillTokenMatches(lowerToken, item.value, item.description)) return true;
 				}
@@ -3022,22 +3061,17 @@ export class Editor implements Component, Focusable {
 		} else if (this.#isInMidPromptSkillSlashContext()) {
 			await this.#handleSlashCommandCompletion();
 			if (!this.#autocompleteState) {
-				await this.#forceFileAutocomplete(true);
+				await this.#forceFileAutocomplete();
 			}
 		} else {
-			await this.#forceFileAutocomplete(true);
+			await this.#forceFileAutocomplete();
 		}
 	}
 	async #handleSlashCommandCompletion(): Promise<void> {
 		await this.#tryTriggerAutocomplete();
 	}
 
-	/*
-https://github.com/EsotericSoftware/spine-runtimes/actions/runs/19536643416/job/559322883
-17 this job fails with https://github.com/EsotericSoftware/spine-runtimes/actions/runs/19
-536643416/job/55932288317 havea  look at .gi
-    */
-	async #forceFileAutocomplete(explicitTab: boolean = false): Promise<void> {
+	async #forceFileAutocomplete(): Promise<void> {
 		if (!this.#autocompleteProvider) return;
 
 		// File-aware providers expose getForceFileSuggestions; slash-only ones fall back to regular completion.
@@ -3057,27 +3091,6 @@ https://github.com/EsotericSoftware/spine-runtimes/actions/runs/19536643416/job/
 		if (requestId !== this.#autocompleteRequestId) return;
 
 		if (suggestions && Array.isArray(suggestions.items) && suggestions.items.length > 0) {
-			// If there's exactly one suggestion and this was an explicit Tab press, apply it immediately
-			if (explicitTab && suggestions.items.length === 1) {
-				const item = suggestions.items[0]!;
-				const result = this.#autocompleteProvider.applyCompletion(
-					this.#state.lines,
-					this.#state.cursorLine,
-					this.#state.cursorCol,
-					item,
-					suggestions.prefix,
-				);
-
-				this.#state.lines = result.lines;
-				this.#state.cursorLine = result.cursorLine;
-				this.#setCursorCol(result.cursorCol);
-
-				if (this.onChange) {
-					this.onChange(this.getText());
-				}
-				return;
-			}
-
 			this.#autocompletePrefix = suggestions.prefix;
 			this.#autocompleteList = this.#createAutocompleteList(suggestions.prefix, suggestions.items);
 			this.#autocompleteState = "force";

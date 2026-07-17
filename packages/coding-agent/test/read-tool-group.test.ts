@@ -5,7 +5,7 @@ import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-ag
 import { getDefault } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
 import {
 	ReadToolGroupComponent,
-	readArgsTargetInternalUrl,
+	readArgsCollapseIntoGroup,
 } from "@oh-my-pi/pi-coding-agent/modes/components/read-tool-group";
 import * as themeModule from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 
@@ -275,7 +275,7 @@ describe("ReadToolGroupComponent", () => {
 	});
 });
 
-describe("readArgsTargetInternalUrl", () => {
+describe("readArgsCollapseIntoGroup", () => {
 	it.each([
 		["skill://my-skill"],
 		["skill://my-skill/file.md"],
@@ -288,26 +288,28 @@ describe("readArgsTargetInternalUrl", () => {
 		["rule://name"],
 		["mcp://server/resource"],
 		["local://PLAN.md"],
-	])("treats %s as an internal URL read", target => {
-		expect(readArgsTargetInternalUrl({ path: target })).toBe(true);
-		expect(readArgsTargetInternalUrl({ file_path: target })).toBe(true);
+	])("keeps %s as a full tool execution (not grouped)", target => {
+		expect(readArgsCollapseIntoGroup({ path: target })).toBe(false);
+		expect(readArgsCollapseIntoGroup({ file_path: target })).toBe(false);
 	});
 
 	it.each([
 		[path.resolve("/tmp/example.ts")],
 		["./relative/path.md"],
 		["https://example.com/file"],
-		[""],
-	])("treats %s as a filesystem/external target", target => {
-		expect(readArgsTargetInternalUrl({ path: target })).toBe(false);
+		["xd://"],
+		["xd://generate_image"],
+	])("collapses %s into the read group", target => {
+		expect(readArgsCollapseIntoGroup({ path: target })).toBe(true);
+		expect(readArgsCollapseIntoGroup({ file_path: target })).toBe(true);
 	});
 
 	it("returns false for non-record / missing arguments", () => {
-		expect(readArgsTargetInternalUrl(undefined)).toBe(false);
-		expect(readArgsTargetInternalUrl(null)).toBe(false);
-		expect(readArgsTargetInternalUrl("skill://x")).toBe(false);
-		expect(readArgsTargetInternalUrl(["skill://x"])).toBe(false);
-		expect(readArgsTargetInternalUrl({})).toBe(false);
-		expect(readArgsTargetInternalUrl({ path: 42 })).toBe(false);
+		expect(readArgsCollapseIntoGroup(undefined)).toBe(false);
+		expect(readArgsCollapseIntoGroup(null)).toBe(false);
+		expect(readArgsCollapseIntoGroup("xd://x")).toBe(false);
+		expect(readArgsCollapseIntoGroup(["xd://x"])).toBe(false);
+		expect(readArgsCollapseIntoGroup({})).toBe(false);
+		expect(readArgsCollapseIntoGroup({ path: 42 })).toBe(false);
 	});
 });

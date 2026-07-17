@@ -117,7 +117,7 @@ export const TAB_METADATA: Record<SettingTab, { label: string; icon: `tab.${stri
  */
 export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
 	appearance: ["Theme", "Status Line", "Display", "Images"],
-	model: ["Thinking", "Sampling", "Prompt", "Retry & Fallback", "Advisor", "Vision"],
+	model: ["Thinking", "Sampling", "Prompt", "Retry & Fallback", "Advisor", "Prewalk", "Vision"],
 	interaction: [
 		"Input",
 		"Approvals",
@@ -285,7 +285,7 @@ const EMPTY_STRING_ARRAY: string[] = [];
 const EMPTY_STRING_RECORD: Record<string, string> = {};
 const EMPTY_NUMBER_RECORD: Record<string, number> = {};
 const DEFAULT_CYCLE_ORDER: string[] = ["smol", "default", "slow"];
-const DEFAULT_TOOL_CALL_LOOP_EXEMPT_TOOLS: string[] = ["job", "irc"];
+const DEFAULT_TOOL_CALL_LOOP_EXEMPT_TOOLS: string[] = ["hub"];
 const EMPTY_MODEL_TAGS_RECORD: ModelTagsSettings = {};
 const HINDSIGHT_RECALL_TYPES_DEFAULT: string[] = ["world", "experience"];
 export const DEFAULT_BASH_INTERCEPTOR_RULES: BashInterceptorRule[] = [
@@ -330,6 +330,25 @@ export const DEFAULT_BASH_INTERCEPTOR_RULES: BashInterceptorRule[] = [
 			"^\\s*(echo|printf|cat\\s*<<)\\s+(?:(?:[^\"'>]|\"[^\"]*\"|'[^']*')|(?<!\\|)>{1,2}\\|?\\s*(?:\"/dev/(?:null|tty|stdout|stderr)\"|'/dev/(?:null|tty|stdout|stderr)'|/dev/(?:null|tty|stdout|stderr))(?:[\\s;&|]|$))*(?<!\\|)>{1,2}\\|?\\s*(?!(?:\"/dev/(?:null|tty|stdout|stderr)\"|'/dev/(?:null|tty|stdout|stderr)'|/dev/(?:null|tty|stdout|stderr))(?:[\\s;&|]|$))[$\\w./~\"'-]",
 		tool: "write",
 		message: "Use the `write` tool instead of echo/cat redirection. It handles encoding and provides confirmation.",
+	},
+	{
+		pattern: "^\\s*nohup\\s+|(?<!&)\\&\\s*$",
+		tool: "hub",
+		message:
+			'Use the `hub` tool (`op:"start"`) instead of nohup or background shell syntax so the process stays observable and managed.',
+	},
+	{
+		pattern:
+			"^\\s*(?:(?:bun|npm|pnpm|yarn)\\s+(?:run\\s+)?(?:dev|start)(?:\\s|$)|(?:vite|next\\s+dev|nuxt\\s+dev|nodemon|lldb|gdb|tail\\s+-f)(?:\\s|$)|docker\\s+compose\\s+up(?!.*(?:\\s-d(?:\\s|$)|--detach))(?:\\s|$))",
+		tool: "hub",
+		message:
+			'Use the `hub` tool (`op:"start"`) for services, watchers, and debuggers so other omp instances can observe and control them.',
+	},
+	{
+		pattern:
+			"^\\s*(?:(?:bun|npm|pnpm|yarn)\\s+(?:run\\s+)?\\S+|cargo\\s+watch|watchexec|pytest|vitest|jest|tsc)(?:.|\\n)*(?:--watch|-w)(?:\\s|$)",
+		tool: "hub",
+		message: 'Use the `hub` tool (`op:"start"`) for watch mode so its output, input, and lifecycle stay managed.',
 	},
 ];
 
@@ -401,6 +420,17 @@ export const SETTINGS_SCHEMA = {
 			label: "Enable Advisor",
 			description:
 				"Pair a second model (assigned to the 'advisor' role) that passively reviews each turn and injects notes.",
+		},
+	},
+	"prewalk.enabled": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "model",
+			group: "Prewalk",
+			label: "Enable Prewalk",
+			description:
+				"Start on the active model, then switch to a fast/cheap model (default the 'smol' role) at the first edit/write after the plan nudge's todo list exists — the strong model plans, commits the todos, and starts the implementation before handing off. Overridable per session with --prewalk / --no-prewalk.",
 		},
 	},
 	"advisor.subagents": {
@@ -694,7 +724,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Output Limits",
 			label: "Output Column Cap",
 			description:
-				"Per-line byte cap for streaming tool outputs (bash, ssh, python, js eval) and `read`. Lines wider than this are ellipsis-truncated; remaining bytes up to the next newline are dropped. 0 disables.",
+				"Per-line byte cap for streaming tool outputs (bash, python, js eval) and `read`. Lines wider than this are ellipsis-truncated; remaining bytes up to the next newline are dropped. 0 disables.",
 			options: [
 				{ value: "0", label: "Off", description: "No per-line cap" },
 				{ value: "256", label: "256", description: "Tight" },
@@ -867,6 +897,17 @@ export const SETTINGS_SCHEMA = {
 			description: "Remove the 1-character horizontal padding from the left and right of the terminal output",
 		},
 	},
+	"tui.scrollbackRebuild": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "appearance",
+			group: "Display",
+			label: "Rewrite Scrollback",
+			description:
+				"Erase and replay terminal scrollback when a block's final form replaces its live preview. When off (default), stale preview copies remain in history and the final content is appended below.",
+		},
+	},
 
 	"display.shimmer": {
 		type: "enum",
@@ -918,6 +959,18 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"display.collapseCompacted": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "appearance",
+			group: "Display",
+			label: "Collapse Compacted History",
+			description:
+				"Collapse pre-compaction history behind the summary divider on the live transcript; disable to keep the full transcript inline with dividers at each compaction point",
+		},
+	},
+
 	showHardwareCursor: {
 		type: "boolean",
 		default: true, // will be computed based on platform if undefined
@@ -929,6 +982,17 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"tui.imeSafeCursor": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "appearance",
+			group: "Display",
+			label: "IME-Safe Prompt Layout",
+			description: "Move the prompt's bottom border to a separate row so macOS IME preedit cannot displace it",
+		},
+	},
+
 	// ────────────────────────────────────────────────────────────────────────
 	// Model
 	// ────────────────────────────────────────────────────────────────────────
@@ -936,7 +1000,7 @@ export const SETTINGS_SCHEMA = {
 	// Reasoning and prompts
 	defaultThinkingLevel: {
 		type: "enum",
-		values: [...THINKING_EFFORTS, AUTO_THINKING, "max"],
+		values: [...THINKING_EFFORTS, AUTO_THINKING],
 		default: "high",
 		ui: {
 			tab: "model",
@@ -1239,7 +1303,7 @@ export const SETTINGS_SCHEMA = {
 	textVerbosity: {
 		type: "enum",
 		values: ["low", "medium", "high"] as const,
-		default: "high",
+		default: "medium",
 		ui: {
 			tab: "model",
 			group: "Sampling",
@@ -1247,8 +1311,8 @@ export const SETTINGS_SCHEMA = {
 			description: "OpenAI Responses and Codex response verbosity (low, medium, or high)",
 			options: [
 				{ value: "low", label: "Low", description: "Prefer concise responses" },
-				{ value: "medium", label: "Medium", description: "Balance brevity and detail" },
-				{ value: "high", label: "High", description: "Prefer detailed responses (default)" },
+				{ value: "medium", label: "Medium", description: "Balance brevity and detail (default)" },
+				{ value: "high", label: "High", description: "Prefer detailed responses" },
 			],
 		},
 	},
@@ -1367,7 +1431,17 @@ export const SETTINGS_SCHEMA = {
 			description: "Allow retry recovery to switch to configured fallback models",
 		},
 	},
-	"retry.fallbackChains": { type: "record", default: {} as Record<string, string[]> },
+	"retry.fallbackChains": {
+		type: "record",
+		default: {} as Record<string, string[]>,
+		ui: {
+			tab: "model",
+			group: "Retry & Fallback",
+			label: "Retry Fallback Chains",
+			description:
+				'JSON object mapping model roles, model selectors ("provider/model-id"), or provider wildcards ("provider/*") to ordered fallback selectors, e.g. {"default":["openai/gpt-4o-mini"],"google-antigravity/*":["google/*","google-vertex/*"]}. Model-oriented keys apply whenever that model/provider is active, regardless of role; a "provider/*" entry keeps the failing model\'s id and swaps the provider. An id-prefixed wildcard ("openrouter/google/*") re-prefixes the failing model\'s bare id (google-antigravity/gemini-x -> openrouter/google/gemini-x) and, used as a key, matches only that provider\'s ids under the prefix.',
+		},
+	},
 	"retry.fallbackRevertPolicy": {
 		type: "enum",
 		values: ["cooldown-expiry", "never"] as const,
@@ -2587,14 +2661,14 @@ export const SETTINGS_SCHEMA = {
 			group: "Mnemopi",
 			label: "Mnemopi LLM Mode",
 			description:
-				"Use no LLM, the online tiny model (the TINY role from /models, else pi/smol), or a remote OpenAI-compatible endpoint",
+				"Use no LLM, the online tiny model (the TINY role from /models, else @smol), or a remote OpenAI-compatible endpoint",
 			condition: "mnemopiActive",
 			options: [
 				{ value: "none", label: "None", description: "Disable Mnemopi LLM-backed extraction" },
 				{
 					value: "smol",
 					label: "Online (tiny)",
-					description: "Use the online tiny model (the TINY role from /models, else pi/smol)",
+					description: "Use the online tiny model (the TINY role from /models, else @smol)",
 				},
 				{ value: "remote", label: "Remote", description: "Use the Mnemopi remote LLM settings below" },
 			],
@@ -2946,6 +3020,17 @@ export const SETTINGS_SCHEMA = {
 			group: "Editing",
 			label: "Block Auto-Generated Files",
 			description: "Prevent editing of files that appear to be auto-generated (protoc, sqlc, swagger, etc.)",
+		},
+	},
+
+	"edit.enforceSeenLines": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "files",
+			group: "Editing",
+			label: "Enforce Seen-Line Guard",
+			description: "Reject edits anchored on lines a prior read/search never displayed in full",
 		},
 	},
 
@@ -3340,7 +3425,7 @@ export const SETTINGS_SCHEMA = {
 					value: "write",
 					label: "Write",
 					description:
-						"Auto-approve read-only and write tools; require confirmation for exec tools such as bash, eval, browser, task, and ssh.",
+						"Auto-approve read-only and write tools; require confirmation for exec tools such as bash, eval, browser, and task.",
 				},
 				{
 					value: "yolo",
@@ -3375,7 +3460,7 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"todo.reminders.max": {
+	"todo.remindersMax": {
 		type: "number",
 		default: 3,
 		ui: {
@@ -3475,7 +3560,7 @@ export const SETTINGS_SCHEMA = {
 
 	"astGrep.enabled": {
 		type: "boolean",
-		default: true,
+		default: false,
 		ui: {
 			tab: "tools",
 			group: "Available Tools",
@@ -3508,6 +3593,17 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"launch.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tools",
+			group: "Available Tools",
+			label: "Launch",
+			description: "Enable the launch tool for supervising shared long-running project processes",
+		},
+	},
+
 	"speechgen.enabled": {
 		type: "boolean",
 		default: false,
@@ -3516,6 +3612,17 @@ export const SETTINGS_SCHEMA = {
 			group: "Available Tools",
 			label: "Speech Generation",
 			description: "Enable the tts tool for on-device (Kokoro) or xAI Grok Voice speech-file synthesis",
+		},
+	},
+	"generate_image.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tools",
+			group: "Available Tools",
+			label: "Generate Image",
+			description:
+				"Enable the generate_image tool (text-to-image generation and editing). Exposed as an xd:// device when tools.xdev is on.",
 		},
 	},
 
@@ -3620,6 +3727,17 @@ export const SETTINGS_SCHEMA = {
 			group: "Available Tools",
 			label: "Web Search",
 			description: "Enable the web_search tool for live web results",
+		},
+	},
+
+	"ask.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tools",
+			group: "Available Tools",
+			label: "Ask",
+			description: "Enable the ask tool for interactive user questions",
 		},
 	},
 
@@ -3736,7 +3854,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Execution",
 			label: "Max Poll Time",
 			description:
-				"How long the poll tool waits for background job updates before returning the current state. A fixed value waits that exact duration every time. `smart` adapts: it starts at 5s and lengthens with each back-to-back poll (up to 5m), then resets to 5s after about a minute without polling.",
+				"How long a `hub` wait watches background jobs before returning the current state. A fixed value waits that exact duration every time. `smart` adapts: it starts at 5s and lengthens with each back-to-back wait (up to 5m), then resets to 5s after about a minute without waiting.",
 			options: [
 				{ value: "5s", label: "5 seconds" },
 				{ value: "10s", label: "10 seconds" },
@@ -3755,7 +3873,8 @@ export const SETTINGS_SCHEMA = {
 			tab: "tools",
 			group: "Execution",
 			label: "IRC Timeout",
-			description: "Default timeout for irc wait (and send await:true) in milliseconds; 0 disables the timeout",
+			description:
+				"Default timeout for hub message waits (and send await:true) in milliseconds; 0 disables the timeout",
 			options: [
 				{ value: "0", label: "Disabled" },
 				{ value: "30000", label: "30 seconds" },
@@ -3771,29 +3890,15 @@ export const SETTINGS_SCHEMA = {
 		default: 60_000,
 	},
 
-	// Tool Discovery
-	"tools.discoveryMode": {
-		type: "enum",
-		values: ["auto", "off", "mcp-only", "all"] as const,
-		default: "auto",
+	"tools.xdev": {
+		type: "boolean",
+		default: true,
 		ui: {
 			tab: "tools",
 			group: "Discovery & MCP",
-			label: "Tool Discovery",
+			label: "xd:// Tools",
 			description:
-				"Hide tools behind a search tool to save tokens. 'auto' hides MCP tools once the tool set has more than 40 tools; 'mcp-only' always hides MCP tools; 'all' hides all non-essential built-ins too.",
-		},
-	},
-
-	"tools.essentialOverride": {
-		type: "array",
-		default: [] as string[],
-		ui: {
-			tab: "tools",
-			group: "Discovery & MCP",
-			label: "Essential Tools Override",
-			description:
-				"Override the always-loaded built-in tools (default: read, bash, edit, write, glob, eval). Leave empty to use defaults.",
+				"Mount rarely-used (discoverable) tools under xd:// device URLs driven via read/write instead of shipping their schemas on every request. Disable to expose every enabled tool top-level.",
 		},
 	},
 
@@ -3806,28 +3911,6 @@ export const SETTINGS_SCHEMA = {
 			group: "Discovery & MCP",
 			label: "MCP Project Config",
 			description: "Load .mcp.json/mcp.json from project root",
-		},
-	},
-
-	"mcp.discoveryMode": {
-		type: "boolean",
-		default: false,
-		ui: {
-			tab: "tools",
-			group: "Discovery & MCP",
-			label: "MCP Tool Discovery",
-			description: "Hide MCP tools by default and expose them through a tool discovery tool",
-		},
-	},
-
-	"mcp.discoveryDefaultServers": {
-		type: "array",
-		default: [] as string[],
-		ui: {
-			tab: "tools",
-			group: "Discovery & MCP",
-			label: "MCP Discovery Default Servers",
-			description: "Keep MCP tools from these servers visible while discovery mode hides other MCP tools",
 		},
 	},
 
@@ -4132,31 +4215,31 @@ export const SETTINGS_SCHEMA = {
 
 	"task.softRequestBudget": {
 		type: "number",
-		default: 90,
+		default: 200,
 		ui: {
 			tab: "tasks",
 			group: "Subagents",
 			label: "Soft Subagent Request Budget",
 			description:
-				"Soft per-subagent request budget (assistant requests per run). Crossing it can inject a steering notice when task.softRequestBudgetNotice is enabled; at 1.5x the budget the run is aborted gracefully, salvaging partial output. 0 disables the guard. Bundled explore/sonic agents use a lower built-in budget.",
+				"Soft per-subagent request budget (assistant requests per run). Crossing it injects a wrap-up steering notice (see task.softRequestBudgetNotice); at 1.5x the budget the run is force-stopped and the agent must yield its partial findings. 0 disables the guard. Bundled scout/sonic agents use a lower built-in budget.",
 			options: [
 				{ value: "0", label: "Disabled" },
-				{ value: "40", label: "40 requests" },
-				{ value: "90", label: "90 requests", description: "Default" },
+				{ value: "90", label: "90 requests" },
 				{ value: "150", label: "150 requests" },
+				{ value: "200", label: "200 requests", description: "Default" },
 			],
 		},
 	},
 
 	"task.softRequestBudgetNotice": {
 		type: "boolean",
-		default: false,
+		default: true,
 		ui: {
 			tab: "tasks",
 			group: "Subagents",
 			label: "Soft Request Budget Notice",
 			description:
-				"Inject one steering notice when a subagent crosses its soft request budget. Off by default; enabling it asks the child to wrap up before the 1.5x graceful abort guard.",
+				"Inject one steering notice when a subagent crosses its soft request budget, asking it to wrap up before the 1.5x forced-yield stop.",
 		},
 	},
 
@@ -4168,6 +4251,21 @@ export const SETTINGS_SCHEMA = {
 	"task.agentModelOverrides": {
 		type: "record",
 		default: {} as Record<string, string>,
+	},
+	"task.agentPrewalk": {
+		type: "record",
+		default: {} as Record<string, string>,
+	},
+	"task.prewalk": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tasks",
+			group: "Subagents",
+			label: "Generic Task Prewalk",
+			description:
+				"Arm prewalk for the bundled generic `task` subagent: it starts on its resolved model, plans and begins the implementation, then hands off to the 'smol' role at its first edit/write. Per-agent overrides (task.agentPrewalk, toggled with P in /agents) and user agent `prewalk` frontmatter apply regardless of this toggle.",
+		},
 	},
 
 	"tasks.todoClearDelay": {
@@ -4381,7 +4479,8 @@ export const SETTINGS_SCHEMA = {
 				{
 					value: "auto",
 					label: "Auto",
-					description: "Priority: GPT model image tool > Antigravity > xAI > OpenRouter > Gemini",
+					description:
+						"Priority: active session provider > GPT model image tool > Antigravity > xAI > OpenRouter > Gemini",
 				},
 				{ value: "openai", label: "OpenAI", description: "Uses the active GPT Responses/Codex model" },
 				{
@@ -4526,7 +4625,7 @@ export const SETTINGS_SCHEMA = {
 			group: "Tiny Model",
 			label: "Tiny Model",
 			description:
-				"Session-title model: online (the TINY role from /models, else pi/smol) by default, or a local on-device model",
+				"Session-title model: online (the TINY role from /models, else @smol) by default, or a local on-device model",
 			options: TINY_TITLE_MODEL_OPTIONS,
 		},
 	},
@@ -4926,8 +5025,10 @@ export const SETTINGS_SCHEMA = {
 	 *
 	 * Owned by `packages/coding-agent/src/tools/report-tool-issue.ts` via the
 	 * process-global consent handler registered by `InteractiveMode`.
+	 *
+	 * @default "unset"
 	 */
-	"dev.autoqa.consent": {
+	"dev.autoqaConsent": {
 		type: "enum",
 		values: ["unset", "granted", "denied"] as const,
 		default: "unset" as const,
@@ -4954,6 +5055,8 @@ export const SETTINGS_SCHEMA = {
 	"thinkingBudgets.high": { type: "number", default: 16384 },
 
 	"thinkingBudgets.xhigh": { type: "number", default: 32768 },
+
+	"thinkingBudgets.max": { type: "number", default: 32768 },
 } as const;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -5170,6 +5273,7 @@ export interface ThinkingBudgetsSettings {
 	medium: number;
 	high: number;
 	xhigh: number;
+	max: number;
 }
 
 export interface SttSettings {

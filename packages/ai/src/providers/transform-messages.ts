@@ -554,6 +554,13 @@ export function transformMessages<TApi extends Api>(
 					return [];
 				}
 
+				if (block.type === "image") {
+					// Assistant images are display artifacts. No provider accepts them
+					// in an assistant replay turn; the native Responses result remains
+					// in providerPayload for OpenAI replay.
+					return [];
+				}
+
 				if (block.type === "text") {
 					if (isSameModel) return block;
 					return {

@@ -275,6 +275,7 @@ export class StatusLineComponent implements Component {
 	#planModeStatus: { enabled: boolean; paused: boolean } | null = null;
 	#loopModeStatus: { enabled: boolean } | null = null;
 	#goalModeStatus: { enabled: boolean; paused: boolean } | null = null;
+	#vibeModeStatus: { enabled: boolean } | null = null;
 	#collabStatus: CollabStatus | null = null;
 	#focusedAgentId: string | undefined;
 	#activeRepoCache: ActiveRepoCache | undefined;
@@ -501,6 +502,10 @@ export class StatusLineComponent implements Component {
 
 	setGoalModeStatus(status: { enabled: boolean; paused: boolean } | undefined): void {
 		this.#goalModeStatus = status ?? null;
+	}
+
+	setVibeModeStatus(status: { enabled: boolean } | undefined): void {
+		this.#vibeModeStatus = status ?? null;
 	}
 
 	setCollabStatus(status: CollabStatus | null): void {
@@ -775,7 +780,16 @@ export class StatusLineComponent implements Component {
 		const activeProvider = session.state.model?.provider ?? session.model?.provider ?? "";
 		if (!activeProvider) return "";
 		const identity = session.modelRegistry?.authStorage?.getOAuthAccountIdentity(activeProvider, session.sessionId);
-		return [activeProvider, identity?.accountId ?? "", identity?.email ?? "", identity?.projectId ?? ""].join("\0");
+		// orgId is part of the key: rotating between two same-email Anthropic
+		// subscriptions must invalidate the cached usage immediately instead of
+		// showing the previous org's quota for the rest of the cache TTL.
+		return [
+			activeProvider,
+			identity?.accountId ?? "",
+			identity?.email ?? "",
+			identity?.projectId ?? "",
+			identity?.orgId ?? "",
+		].join("\0");
 	}
 
 	/**
@@ -1046,7 +1060,12 @@ export class StatusLineComponent implements Component {
 			compactThinkingLevel: this.#resolveSettings().compactThinkingLevel ?? false,
 			planMode: this.#planModeStatus,
 			loopMode: this.#loopModeStatus,
+			prewalk:
+				typeof this.session.getPrewalkState === "function" && this.session.getPrewalkState()
+					? { enabled: true }
+					: null,
 			goalMode: this.#goalModeStatus,
+			vibeMode: this.#vibeModeStatus,
 			collab: this.#collabStatus,
 			usageStats,
 			contextPercent,
@@ -1235,9 +1254,21 @@ export class StatusLineComponent implements Component {
 					}
 				}
 			}
+			const leftOverflowDropIndex = (): number => {
+				// Preserve the current working directory as long as possible. The
+				// previous right-to-left pop could collapse a normal-width bar to
+				// just the model segment, hiding the path before less-critical left
+				// segments such as model/mode/collab were removed.
+				for (let i = leftSegIds.length - 1; i >= 0; i--) {
+					if (leftSegIds[i] !== "path") return i;
+				}
+				return left.length - 1;
+			};
+
 			while (totalWidth() > topFillWidth && left.length > 0) {
-				left.pop();
-				leftSegIds.pop();
+				const dropIdx = leftOverflowDropIndex();
+				left.splice(dropIdx, 1);
+				leftSegIds.splice(dropIdx, 1);
 				leftWidth = groupWidth(left, leftCapWidth, leftSepWidth);
 			}
 		}
@@ -1303,10 +1334,8 @@ export class StatusLineComponent implements Component {
 			return [];
 		}
 
-		const sortedStatuses = Array.from(this.#hookStatuses.entries())
+		return Array.from(this.#hookStatuses.entries())
 			.sort(([a], [b]) => a.localeCompare(b))
-			.map(([, text]) => sanitizeStatusText(text));
-		const hookLine = sortedStatuses.join(" ");
-		return [truncateToWidth(hookLine, width)];
+			.map(([, text]) => truncateToWidth(sanitizeStatusText(text), width));
 	}
 }

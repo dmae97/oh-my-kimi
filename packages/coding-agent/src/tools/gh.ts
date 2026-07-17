@@ -3419,7 +3419,9 @@ async function executeSearchCode(
 	signal: AbortSignal | undefined,
 ): Promise<AgentToolResult<GhToolDetails>> {
 	const query = requireNonEmpty(params.query, "query");
-	if (params.since !== undefined || params.until !== undefined) {
+	const since = normalizeOptionalString(params.since);
+	const until = normalizeOptionalString(params.until);
+	if (since !== undefined || until !== undefined) {
 		throw new ToolError("search_code does not support since/until; GitHub code search has no date qualifier.");
 	}
 	const limit = resolveSearchLimit(params.limit);

@@ -30,13 +30,16 @@ import {
 	type AgentMessage,
 	type AgentState,
 	type AgentTool,
+	type AgentToolResult,
 	type AgentTurnEndContext,
 	AppendOnlyContextManager,
 	type AsideMessage,
 	type CompactionSummaryMessage,
 	countTokens,
+	createToolScopedAbortReason,
 	resolveTelemetry,
 	type StreamFn,
+	TERMINAL_TOOL_RESULT_ABORT_REASON,
 	ThinkingLevel,
 	type ToolChoiceDirective,
 } from "@oh-my-pi/pi-agent-core";
@@ -83,6 +86,7 @@ import type {
 	AssistantMessageEvent,
 	AssistantRetryRecovery,
 	AssistantRetryRecoveryKind,
+	CodexCompactionContext,
 	Context,
 	ImageContent,
 	Message,
@@ -108,6 +112,7 @@ import {
 	clearAnthropicFastModeFallback,
 	deriveClaudeDeviceId,
 	Effort,
+	isUsageLimitOutcome,
 	parseRateLimitReason,
 	realizesPriorityServiceTier,
 	resolveModelServiceTier,
@@ -115,6 +120,7 @@ import {
 	streamSimple,
 } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
+import { resetOpenAICodexHistoryAfterCompaction } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { GeminiHeaderRunDetector, isGeminiThinkingModel } from "@oh-my-pi/pi-ai/utils/thinking-loop";
 import { type RepeatedToolCallDetection, ToolCallLoopGuard } from "@oh-my-pi/pi-ai/utils/tool-call-loop-guard";
@@ -124,6 +130,7 @@ import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { MacOSPowerAssertion } from "@oh-my-pi/pi-natives";
 import {
 	escapeXmlText,
+	extractHttpStatusFromError,
 	extractRetryHint,
 	formatDuration,
 	getAgentDbPath,
@@ -146,13 +153,18 @@ import {
 	AdvisorEmissionGuard,
 	type AdvisorMessageDetails,
 	type AdvisorNote,
+	AdvisorOutputQuarantinedError,
 	AdvisorRuntime,
 	type AdvisorSeverity,
 	AdvisorTranscriptRecorder,
 	advisorTranscriptFilename,
+	annotateForStaleness,
+	buildAdvisorQuarantineSourceText,
 	formatAdvisorBatchContent,
+	getOrCreateAdvisorProviderSessionId,
 	isAdvisorInterruptImmuneTurnActive,
 	isInterruptingSeverity,
+	quarantineAdvisorUnsafeOutput,
 	resolveAdvisorDeliveryChannel,
 	slugifyAdvisorName,
 } from "../advisor";
@@ -175,13 +187,17 @@ import {
 	resolveModelOverride,
 	resolveModelRoleValue,
 } from "../config/model-resolver";
-import { MODEL_ROLE_IDS, MODEL_ROLES } from "../config/model-roles";
+import { getKnownRoleIds, MODEL_ROLE_IDS, MODEL_ROLES } from "../config/model-roles";
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
 import { buildServiceTierByFamily, serviceTierForAllFamilies, serviceTierSettingToTier } from "../config/service-tier";
 import type { Settings, SkillsSettings } from "../config/settings";
-import { getDefault, onAppendOnlyModeChanged, validateProviderMaxInFlightRequests } from "../config/settings";
+import {
+	getDefault,
+	onAppendOnlyModeChanged,
+	onModelRolesChanged,
+	validateProviderMaxInFlightRequests,
+} from "../config/settings";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
-import { loadCapability } from "../discovery";
 import { expandApplyPatchToEntries, normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../edit";
 import { getFileSnapshotStore } from "../edit/file-snapshot-store";
 import { disposeJuliaKernelSessionsByOwner } from "../eval/jl/executor";
@@ -222,7 +238,7 @@ import type { CompactOptions, ContextUsage } from "../extensibility/extensions/t
 import { ExtensionToolWrapper } from "../extensibility/extensions/wrapper";
 import type { HookCommandContext } from "../extensibility/hooks/types";
 import type { RecoveredRetryError } from "../extensibility/shared-events";
-import type { Skill, SkillWarning } from "../extensibility/skills";
+import { loadSkills, type Skill, type SkillWarning, setActiveSkills } from "../extensibility/skills";
 import { expandSlashCommand, type FileSlashCommand } from "../extensibility/slash-commands";
 import { GoalRuntime } from "../goals/runtime";
 import type { Goal, GoalModeState } from "../goals/state";
@@ -237,7 +253,8 @@ import { theme } from "../modes/theme/theme";
 import { parseTurnBudget } from "../modes/turn-budget";
 import { containsUltrathink, ULTRATHINK_NOTICE } from "../modes/ultrathink";
 import { computeNonMessageBreakdown, computeNonMessageTokens } from "../modes/utils/context-usage";
-import { containsWorkflow, WORKFLOW_NOTICE } from "../modes/workflow";
+import { containsWorkflow, renderWorkflowNotice } from "../modes/workflow";
+import { resolveApprovedPlan } from "../plan-mode/approved-plan";
 import { createPlanReadMatcher } from "../plan-mode/plan-protection";
 import type { PlanModeState } from "../plan-mode/state";
 import advisorSystemPrompt from "../prompts/advisor/system.md" with { type: "text" };
@@ -258,6 +275,10 @@ import planModeReferencePrompt from "../prompts/system/plan-mode-reference.md" w
 import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool-decision-reminder.md" with {
 	type: "text",
 };
+import planYoloHandoffPrompt from "../prompts/system/plan-yolo-handoff.md" with { type: "text" };
+import prewalkChecklistPrompt from "../prompts/system/prewalk-checklist.md" with { type: "text" };
+import prewalkContinuePrompt from "../prompts/system/prewalk-continue.md" with { type: "text" };
+import prewalkPlanPrompt from "../prompts/system/prewalk-plan.md" with { type: "text" };
 import rewindReportTemplate from "../prompts/system/rewind-report.md" with { type: "text" };
 import sideChannelNoToolsReminder from "../prompts/system/side-channel-no-tools.md" with { type: "text" };
 import thinkingLoopRedirectTemplate from "../prompts/system/thinking-loop-redirect.md" with { type: "text" };
@@ -265,6 +286,8 @@ import toolCallLoopRedirectTemplate from "../prompts/system/tool-call-loop-redir
 import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { type: "text" };
 import ttsrToolReminderTemplate from "../prompts/system/ttsr-tool-reminder.md" with { type: "text" };
 import unexpectedStopRetryTemplate from "../prompts/system/unexpected-stop-retry.md" with { type: "text" };
+import vibeModeActivePrompt from "../prompts/system/vibe-mode-active.md" with { type: "text" };
+import xdevMountNoticePrompt from "../prompts/system/xdev-mount-notice.md" with { type: "text" };
 import { AgentRegistry } from "../registry/agent-registry";
 import {
 	deobfuscateAssistantContent,
@@ -273,7 +296,7 @@ import {
 	obfuscateProviderContext,
 	type SecretObfuscator,
 } from "../secrets/obfuscator";
-import { invalidateHostMetadata } from "../ssh/connection-manager";
+import { usesCodexTaskPrompt } from "../task/prompt-policy";
 import {
 	AUTO_THINKING,
 	type ConfiguredThinkingLevel,
@@ -285,37 +308,36 @@ import {
 	shouldDisableReasoning,
 	toReasoningEffort,
 } from "../thinking";
-import { formatTitleConversationContext, type TitleConversationTurn } from "../tiny/text";
+import { formatTitleConversationContext, type TitleConversationTurn } from "../tiny/message-preproc";
 import { shutdownTinyTitleClient } from "../tiny/title-client";
-import { countToolsForAutoDiscovery, resolveEffectiveToolDiscoveryMode } from "../tool-discovery/mode";
-import {
-	buildDiscoverableToolSearchIndex,
-	collectDiscoverableTools,
-	type DiscoverableTool,
-	type DiscoverableToolSearchIndex,
-	filterBySource,
-	isMCPToolName,
-	selectDiscoverableToolNamesByServer,
-} from "../tool-discovery/tool-index";
 import { assertEditableFile } from "../tools/auto-generated-guard";
 import { releaseTabsForOwner } from "../tools/browser/tab-supervisor";
-import { normalizeToolNames } from "../tools/builtin-names";
+import { isMCPToolName, normalizeToolNames } from "../tools/builtin-names";
 import type { CheckpointState, CompletedRewindState } from "../tools/checkpoint";
 import { outputMeta, wrapToolWithMetaNotice } from "../tools/output-meta";
-import { normalizeLocalScheme, resolveToCwd } from "../tools/path-utils";
-import { isAutoQaEnabled } from "../tools/report-tool-issue";
-import { buildResolveReminderMessage } from "../tools/resolve";
+import { isInternalUrlPath, normalizeLocalScheme, resolveToCwd } from "../tools/path-utils";
+import {
+	buildResolveReminderMessage,
+	isPreviewResolutionToolCall,
+	isProposeToolCall,
+	type PlanProposalHandler,
+	PROPOSE_DEVICE_NAME,
+	writeDeviceDispatch,
+} from "../tools/resolve";
 import { getLatestTodoPhasesFromEntries, type TodoItem, type TodoPhase } from "../tools/todo";
 import { ToolAbortError, ToolError } from "../tools/tool-errors";
 import { clampTimeout } from "../tools/tool-timeouts";
+import { isMountableUnderXdev, type XdevRegistry } from "../tools/xdev";
 import { parseCommandArgs } from "../utils/command-args";
 import { type EditMode, resolveEditMode } from "../utils/edit-mode";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { extractFileMentions, generateFileMentionMessages } from "../utils/file-mentions";
 import { normalizeModelContextImages } from "../utils/image-loading";
 import { describeAttachedImagesForTextModel } from "../utils/image-vision-fallback";
+import { formatLocalCalendarDate } from "../utils/local-date";
 import { generateSessionTitle } from "../utils/title-generator";
 import { buildNamedToolChoice, isToolChoiceActive } from "../utils/tool-choice";
+import type { VibeModeState } from "../vibe/state";
 import type { AuthStorage } from "./auth-storage";
 import type { ClientBridge, ClientBridgePermissionOption, ClientBridgePermissionOutcome } from "./client-bridge";
 import {
@@ -328,6 +350,7 @@ import {
 import { findCompactMode } from "./compact-modes";
 import {
 	collectPendingToolCalls,
+	createInterruptedTurnAbortMessage,
 	SESSION_EXIT_CUSTOM_TYPE,
 	type SessionExitData,
 	summarizeToolArguments,
@@ -369,7 +392,6 @@ import { YieldQueue } from "./yield-queue";
 
 const SESSION_STOP_CONTINUATION_CAP = 8;
 const PLAN_MODE_REMINDER_MAX = 3;
-const PLAN_DECISION_TOOLS = new Set(["ask", "resolve"]);
 
 /**
  * Mutating tool results (`bash`/`eval`/`edit`/`write`/`ast_edit`) without the
@@ -383,7 +405,7 @@ const PLAN_DECISION_TOOLS = new Set(["ask", "resolve"]);
  */
 const MID_RUN_TODO_NUDGE_MUTATION_THRESHOLD = 12;
 /** Mid-run nudges per prompt cycle. Deliberately tighter than
- *  `todo.reminders.max` (the stop-time budget): this is a gentle hidden hint,
+ *  `todo.remindersMax` (the stop-time budget): this is a gentle hidden hint,
  *  not an escalation ladder. */
 const MID_RUN_TODO_NUDGE_MAX_PER_CYCLE = 2;
 /** Tool results that count as landed work for the mid-run todo nudge. */
@@ -394,10 +416,90 @@ const MID_RUN_TODO_NUDGE_MUTATING_TOOLS: Record<string, true> = {
 	write: true,
 	ast_edit: true,
 };
+const MARKDOWN_PROMPT_PREFIX_RE = /^(?:>\s*)?(?:(?:[-*+]|\d+[.)])\s+)*/;
+const PROMPT_LABEL_RE = /^(?:q(?:uestion)?|ask)\s*\d*\s*[:.)-]\s*/i;
+const QUESTION_PROMPT_RE =
+	/^(?:what|which|when|where|why|how|who|whom|whose|do|does|did|can|could|would|will|should|is|are|am|may|shall)\b/i;
+const USER_DIRECTED_PROMPT_RE = /\b(?:you|your|we|our)\b/i;
+const USER_RESPONSE_CUE_RE =
+	/^(?:please\s+)?(?:confirm|reply|choose|pick|decide|advise)\b|^(?:please\s+)?answer\b|^(?:please\s+)?(?:let\s+me\s+know|tell\s+me)\b/i;
+
+function assistantText(message: AssistantMessage): string {
+	return message.content
+		.filter((content): content is TextContent => content.type === "text")
+		.map(content => content.text)
+		.join("\n")
+		.trim();
+}
+
+interface PromptLine {
+	text: string;
+	hadPromptLabel: boolean;
+}
+
+function promptLine(line: string): PromptLine {
+	const withoutMarkdownPrefix = line.trim().replace(MARKDOWN_PROMPT_PREFIX_RE, "").trim();
+	const withoutPromptLabel = withoutMarkdownPrefix.replace(PROMPT_LABEL_RE, "").trim();
+	return {
+		text: withoutPromptLabel,
+		hadPromptLabel: withoutPromptLabel !== withoutMarkdownPrefix,
+	};
+}
+
+function isQuestionPromptLine(line: string): boolean {
+	const candidate = promptLine(line);
+	if (!/[?？]\s*$/.test(candidate.text)) return false;
+	return (
+		candidate.hadPromptLabel ||
+		QUESTION_PROMPT_RE.test(candidate.text) ||
+		USER_DIRECTED_PROMPT_RE.test(candidate.text)
+	);
+}
+
+function isResponseCueLine(line: string): boolean {
+	const candidate = promptLine(line)
+		.text.replace(/[.!?。！？]+$/, "")
+		.trim();
+	return USER_RESPONSE_CUE_RE.test(candidate);
+}
+
+function isAwaitingUserAnswer(message: AssistantMessage): boolean {
+	const text = assistantText(message);
+	if (!text) return false;
+	const lastLine = text.split(/\r?\n/).at(-1)?.trim();
+	return lastLine !== undefined && (isQuestionPromptLine(lastLine) || isResponseCueLine(lastLine));
+}
 /** `customType` for the hidden mid-run todo nudge; `display: false`, so it reaches
  *  the model but never renders in the TUI or transcript. */
 const MID_RUN_TODO_NUDGE_MESSAGE_TYPE = "mid-run-todo-nudge";
-
+/** Hidden plan nudge injected by prewalk; scrubbed from the LLM context
+ *  when the switch happens. */
+const PREWALK_PLAN_MESSAGE_TYPE = "prewalk-plan";
+/** Hidden safety-net nudge forcing one more turn after a text-only reply to
+ *  the plan nudge, which would otherwise end the run with no code written. */
+const PREWALK_CONTINUE_MESSAGE_TYPE = "prewalk-continue";
+/** Hidden "verify before finishing" checklist steered into the run at the
+ *  switch, aimed at the fast model's specific failure patterns: partial
+ *  multi-site fixes, unnecessarily broad rewrites, and reported-test-only
+ *  verification. */
+const PREWALK_CHECKLIST_MESSAGE_TYPE = "prewalk-checklist";
+/** Hidden steered notice announcing a mid-session `xd://` mount/unmount delta
+ *  (see {@link AgentSession.#notifyXdevMountDelta}). */
+const XDEV_MOUNT_NOTICE_MESSAGE_TYPE = "xdev-mount-notice";
+/** Tools whose first successful call triggers the switch — once the todo
+ *  gate is open (see {@link AgentSession.#prewalkTodoSeen}). Bash is
+ *  deliberately excluded: it doubles as exploration (ls/cat) and fired
+ *  turn-1 switches in practice. `todo` is deliberately NOT a trigger: firing
+ *  at the todo init handed the fast model 100% of the implementation with
+ *  zero started work and measurably regressed pass rates. */
+const PREWALK_ACTION_TOOLS: Record<string, true> = {
+	edit: true,
+	write: true,
+};
+/** `customType` for the hidden hand-off message steered to the target model
+ *  once PlanYolo auto-approves the plan. Unlike prewalk's plan nudge this
+ *  is never scrubbed — it IS the instruction the target model acts on. */
+const PLAN_YOLO_HANDOFF_MESSAGE_TYPE = "plan-yolo-handoff";
 /** Abort reason for the Gemini reasoning-header runaway interrupt. Surfaced on the
  *  discarded assistant turn only; never reaches the model. */
 const GEMINI_HEADER_INTERRUPT_REASON = "Interrupted: emit a tool call instead of more planning";
@@ -583,14 +685,29 @@ const COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION: CompactionCheckResult = {
 
 /**
  * User-facing notice for a compaction dead end: maintenance freed too little
- * to retry safely. `remedies` names the recovery actions available on the
- * emitting path (the shake-rescue path can additionally offer `/shake images`).
+ * to retry safely. `remedies` names the recovery actions left on the emitting
+ * path — by the time the post-pass dead end fires, the tiered rescue has
+ * already attempted both elide and image-drop automatically.
  */
 function compactionDeadEndWarning(remedies: string): string {
 	return (
 		"Compaction freed too little context to make progress — pausing automatic maintenance to avoid a compaction loop. " +
 		`The most recent turn alone is too large to reduce further; ${remedies} or switch to a larger-context model.`
 	);
+}
+
+function createCodexCompactionContext(options: {
+	trigger: CodexCompactionContext["trigger"];
+	reason: CodexCompactionContext["reason"];
+	phase: CodexCompactionContext["phase"];
+}): CodexCompactionContext {
+	return {
+		operationId: crypto.randomUUID(),
+		trigger: options.trigger,
+		reason: options.reason,
+		phase: options.phase,
+		strategy: "memento",
+	};
 }
 
 /**
@@ -650,6 +767,34 @@ export interface AsyncJobSnapshot {
 }
 
 export type { ShakeMode, ShakeResult };
+/**
+ * Prewalk: switches an active session one-way from its starting model to
+ * a fast/cheap `target` at the first completed turn that runs an edit/write
+ * tool once the todo list exists. A hidden plan nudge asks the starting
+ * model to write a plan, initialize its todo list from it, and start; the
+ * todo call opens the trigger gate (it never fires the switch itself), so
+ * the starting model always begins the implementation. A hidden
+ * checklist nudge asks the target model to verify its work before
+ * finishing. Both are always on — this is the one mechanism that won out
+ * over turn-count and ungated variants in testing.
+ */
+export interface Prewalk {
+	target: Model;
+	thinkingLevel?: ConfiguredThinkingLevel;
+}
+
+/**
+ * PlanYolo: forces the session into read-only plan mode at start, then
+ * auto-approves the plan the instant the model calls `resolve({ action:
+ * "apply" })` for it — no interactive review — and switches to a fast/cheap
+ * `target` model to implement it. The headless counterpart to interactive
+ * plan mode's "Approve and execute", for print/non-interactive runs where
+ * there is no one to click Approve.
+ */
+export interface PlanYolo {
+	target: Model;
+	thinkingLevel?: ConfiguredThinkingLevel;
+}
 
 // ============================================================================
 // Types
@@ -665,6 +810,12 @@ export interface AgentSessionConfig {
 	scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
 	/** Initial session thinking selector. */
 	thinkingLevel?: ConfiguredThinkingLevel;
+	/** Prewalk from the starting model to a fast/cheap target at the first edit/write once the todo list exists. */
+	prewalk?: Prewalk;
+	/** Force read-only plan mode at start, auto-approve on the model's first
+	 *  plan proposal (`write xd://propose`), then switch to the target to implement. */
+	planYolo?: PlanYolo;
+
 	/** Initial per-family service tiers (OpenAI / Anthropic / Google) for the live session. */
 	serviceTierByFamily?: ServiceTierByFamily;
 	/** Prompt templates for expansion */
@@ -677,6 +828,8 @@ export interface AgentSessionConfig {
 	skills?: Skill[];
 	/** Skill loading warnings (already captured by SDK) */
 	skillWarnings?: SkillWarning[];
+	/** Whether runtime reloads may rediscover disk-backed skills for this session. */
+	skillsReloadable?: boolean;
 	/** Custom commands (TypeScript slash commands) */
 	customCommands?: LoadedCustomCommand[];
 	skillsSettings?: SkillsSettings;
@@ -684,8 +837,12 @@ export interface AgentSessionConfig {
 	modelRegistry: ModelRegistry;
 	/** Tool registry for LSP and settings */
 	toolRegistry?: Map<string, AgentTool>;
+	/** Creates the tools registered only while `/vibe` mode is active. */
+	createVibeTools?: () => AgentTool[];
 	/** Tool names whose current registry entry is still the built-in implementation. */
 	builtInToolNames?: Iterable<string>;
+	/** Update tool-session predicates that render guidance from the live active tool set. */
+	setActiveToolNames?: (names: Iterable<string>) => void;
 	/** Current session pre-LLM message transform pipeline */
 	transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => AgentMessage[] | Promise<AgentMessage[]>;
 	/**
@@ -724,8 +881,14 @@ export interface AgentSessionConfig {
 	convertToLlm?: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	/** System prompt builder that can consider tool availability. Returns ordered provider-facing blocks. */
 	rebuildSystemPrompt?: (toolNames: string[], tools: Map<string, AgentTool>) => Promise<{ systemPrompt: string[] }>;
-	/** Rebuild the SSH tool from current capability discovery results. */
-	reloadSshTool?: () => Promise<AgentTool | null>;
+	/** Local calendar date provider used by prompt-cache invalidation. Defaults to the host local date. */
+	getLocalCalendarDate?: () => string;
+	/** Entries of tools mounted under `xd://` (name + one-line summary), for /tools display. */
+	getXdevToolEntries?: () => Array<{ name: string; summary: string }>;
+	/** Session-owned `xd://` device registry; reconciled as the active tool set changes. */
+	xdevRegistry?: XdevRegistry;
+	/** Discoverable tools mounted under `xd://` in the initial enabled set (startup partition in `sdk.ts`). */
+	initialMountedXdevToolNames?: string[];
 	requestedToolNames?: ReadonlySet<string>;
 	/**
 	 * Optional accessor for live MCP server instructions. Read by the session's
@@ -734,16 +897,6 @@ export interface AgentSessionConfig {
 	 * signature comparison and silently keep a stale prompt cached.
 	 */
 	getMcpServerInstructions?: () => Map<string, string> | undefined;
-	/** Enable hidden-by-default MCP tool discovery for this session. */
-	mcpDiscoveryEnabled?: boolean;
-	/** MCP tool names to activate for the current session when discovery mode is enabled. */
-	initialSelectedMCPToolNames?: string[];
-	/** Whether constructor-provided MCP defaults should be persisted immediately. */
-	persistInitialMCPToolSelection?: boolean;
-	/** MCP server names whose tools should seed discovery-mode sessions whenever those servers are connected. */
-	defaultSelectedMCPServerNames?: string[];
-	/** MCP tool names that should seed brand-new sessions created from this AgentSession. */
-	defaultSelectedMCPToolNames?: string[];
 	/** TTSR manager for time-traveling stream rules */
 	ttsrManager?: TtsrManager;
 	/** Secret obfuscator for deobfuscating streaming edit content */
@@ -780,6 +933,8 @@ export interface AgentSessionConfig {
 	 * so that credential sticky selection is consistent with the session's streaming calls.
 	 */
 	providerSessionId?: string;
+	/** Marks `agent.promptCacheKey` as fork-inherited so incompatible route changes can clear it. */
+	providerPromptCacheKeySource?: "explicit" | "fork";
 	/**
 	 * Full advisor toolset, pre-built in `createAgentSession` against a distinct,
 	 * advisor-scoped `ToolSession` (its own `-advisor` session/agent id) so the
@@ -870,6 +1025,7 @@ export interface HandoffResult {
 export interface SessionHandoffOptions {
 	autoTriggered?: boolean;
 	signal?: AbortSignal;
+	onSwitchCancelled?: () => void;
 }
 
 /** Result from cycleModel() */
@@ -1021,6 +1177,7 @@ export interface FreshSessionResult {
 
 /** Standard thinking levels */
 
+/** `retry.fallbackChains` config: chain key (role name or model selector) → ordered fallback selectors. */
 type RetryFallbackChains = Record<string, string[]>;
 
 type RetryFallbackRevertPolicy = "never" | "cooldown-expiry";
@@ -1033,6 +1190,7 @@ interface RetryFallbackSelector {
 }
 
 interface ActiveRetryFallbackState {
+	/** Chain key that produced this fallback: a model-role name or a model-selector key. */
 	role: string;
 	originalSelector: string;
 	originalThinkingLevel: ConfiguredThinkingLevel | undefined;
@@ -1047,7 +1205,7 @@ function parseRetryFallbackSelector(
 	const trimmed = selector.trim();
 	if (!trimmed) return undefined;
 	const parsed = parseModelString(trimmed, {
-		allowMaxAlias: true,
+		allowMaxSuffix: true,
 		allowAutoAlias: true,
 		isLiteralModelId: (provider, id) => modelLookup?.find(provider, id) !== undefined,
 	});
@@ -1058,6 +1216,42 @@ function parseRetryFallbackSelector(
 		id: parsed.id,
 		thinkingLevel: concreteThinkingLevel(parsed.thinkingLevel),
 	};
+}
+
+/**
+ * `retry.fallbackChains` keys are either model-role names (`smol`, `default`)
+ * or model selectors (`provider/model-id[:thinking]`). Role names never
+ * contain a slash, so its presence marks a model-keyed chain whose primary is
+ * the key itself — the chain follows the model across role reassignments.
+ */
+function isRetryFallbackModelKey(key: string): boolean {
+	return key.includes("/");
+}
+
+/**
+ * A wildcard fallback-chain key/entry: `provider/*` matches any model of that
+ * provider; an id-prefixed `provider/prefix/*` (e.g. `openrouter/google/*`)
+ * scopes it to ids under that prefix — aggregators namespace model ids by
+ * upstream vendor.
+ */
+function isRetryFallbackWildcardKey(key: string): boolean {
+	return key.endsWith("/*");
+}
+
+/**
+ * Split a `…/*` wildcard key/entry into its provider and optional id prefix
+ * (`google-vertex/*` → provider only; `openrouter/google/*` → provider
+ * `openrouter`, prefix `google`). A template that names a known provider in
+ * full wins over the split, so provider ids containing `/` keep working.
+ */
+function parseRetryFallbackWildcard(
+	key: string,
+	isKnownProvider: (provider: string) => boolean,
+): { provider: string; idPrefix: string | undefined } {
+	const template = key.slice(0, -2);
+	const slash = template.indexOf("/");
+	if (slash < 0 || isKnownProvider(template)) return { provider: template, idPrefix: undefined };
+	return { provider: template.slice(0, slash), idPrefix: template.slice(slash + 1) };
 }
 
 function formatRetryFallbackSelector(model: Model, thinkingLevel: ThinkingLevel | undefined): string {
@@ -1166,6 +1360,7 @@ const noOpUIContext: ExtensionUIContext = {
 	pasteToEditor: () => {},
 	getEditorText: () => "",
 	editor: async () => undefined,
+	addAutocompleteProvider: () => {},
 	get theme() {
 		return theme;
 	},
@@ -1362,15 +1557,20 @@ function queuedTextContent(message: AgentMessage): string | undefined {
 	if (!("content" in message)) return undefined;
 	const content = message.content;
 	if (typeof content === "string") return content;
-	return content.find((part): part is TextContent => part.type === "text")?.text;
+	for (const part of content) {
+		if (part.type === "text") return part.text;
+	}
+	return undefined;
 }
 
 function queuedImageContent(message: AgentMessage): ImageContent[] | undefined {
 	if (!("content" in message) || typeof message.content === "string") return undefined;
-	const images = message.content.filter(
-		(part): part is ImageContent =>
-			part.type === "image" && typeof part.data === "string" && typeof part.mimeType === "string",
-	);
+	const images: ImageContent[] = [];
+	for (const part of message.content) {
+		if (part.type === "image" && typeof part.data === "string" && typeof part.mimeType === "string") {
+			images.push(part);
+		}
+	}
 	return images.length > 0 ? images : undefined;
 }
 
@@ -1380,6 +1580,21 @@ function isDisplayableQueuedMessage(message: AgentMessage): boolean {
 
 function isAdvisorCard(message: AgentMessage): message is CustomMessage {
 	return message.role === "custom" && message.customType === "advisor";
+}
+
+function isTerminalTextAssistantAnswer(message: AgentMessage | undefined): message is AssistantMessage {
+	if (message?.role !== "assistant" || message.stopReason !== "stop") return false;
+	let hasText = false;
+	for (const part of message.content) {
+		if (part.type === "toolCall") return false;
+		if (part.type === "text") {
+			if (part.text.trim().length > 0) hasText = true;
+			continue;
+		}
+		if (part.type === "thinking" || part.type === "redactedThinking" || part.type === "fallback") continue;
+		return false;
+	}
+	return hasText;
 }
 
 /**
@@ -1532,6 +1747,8 @@ export class AgentSession {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
 	readonly settings: Settings;
+	/** Entries of tools mounted under `xd://`; empty when virtual devices are unmounted. */
+	getXdevToolEntries: () => Array<{ name: string; summary: string }>;
 	readonly yieldQueue: YieldQueue;
 	fileSnapshotStore?: InMemorySnapshotStore;
 	#autoApprove: boolean;
@@ -1547,6 +1764,19 @@ export class AgentSession {
 	#autoThinking: boolean = false;
 	/** The level `auto` last resolved to (for UI); undefined until a turn is classified. */
 	#autoResolvedLevel: Effort | undefined;
+	#prewalk: Prewalk | undefined;
+	/** True once the plan nudge has been queued; scrubbed from context at the switch. */
+	#prewalkPlanInjected = false;
+	/** Armed by plan/tool progress; consumed by one text-only continuation. */
+	#prewalkContinuePending = false;
+	/** True once any successful `todo` call landed — opens the prewalk
+	 *  trigger gate: the switch fires at the first edit/write AFTER the todo
+	 *  list exists (sessions without an ACTIVE todo tool skip the gate). */
+	#prewalkTodoSeen = false;
+	#planYolo: PlanYolo | undefined;
+	#planYoloPreviousTools: string[] | undefined;
+	#planYoloArmed = false;
+
 	#promptTemplates: PromptTemplate[];
 	#slashCommands: FileSlashCommand[];
 
@@ -1555,6 +1785,7 @@ export class AgentSession {
 	#cancelExitRecorder?: () => void;
 	#exitRecorded = false;
 	#unsubscribeAppendOnly?: () => void;
+	#unsubscribeModelRoles?: () => void;
 	/** Last (enable, providerId) tuple resolved by `#syncAppendOnlyContext` — used to skip no-op invalidations. */
 	#lastAppendOnlyResolution?: { enable: boolean; providerId: string | undefined };
 	#eventListeners: AgentSessionEventListener[] = [];
@@ -1571,6 +1802,7 @@ export class AgentSession {
 	#advisorPrimaryTurnsCompleted = 0;
 	#advisorInterruptImmuneTurnStart: number | undefined;
 	#planModeState: PlanModeState | undefined;
+	#vibeModeState: VibeModeState | undefined;
 	#goalModeState: GoalModeState | undefined;
 	#goalRuntime: GoalRuntime;
 	#advisorEnabled = false;
@@ -1583,6 +1815,8 @@ export class AgentSession {
 	#advisors: ActiveAdvisor[] = [];
 	/** Configured advisor roster from WATCHDOG.yml; undefined/empty → single legacy advisor. */
 	#advisorConfigs?: AdvisorConfig[];
+	/** Provider-facing UUIDv7 identities keyed by primary provider session and advisor slug. */
+	#advisorProviderSessionIds = new Map<string, string>();
 	/** Aggregate of the most recent stop's recorder closes; awaited by dispose() and
 	 *  used as the open barrier for the next build so two writers never share a file. */
 	#advisorRecorderClosed: Promise<void> = Promise.resolve();
@@ -1681,6 +1915,7 @@ export class AgentSession {
 	#agentKind: "main" | "sub" = "main";
 	#providerSessionId: string | undefined;
 	#freshProviderSessionId: string | undefined;
+	#inheritedProviderPromptCacheKey: string | undefined;
 	#isDisposed = false;
 	// Extension system
 	#extensionRunner: ExtensionRunner | undefined = undefined;
@@ -1698,12 +1933,15 @@ export class AgentSession {
 	#mcpPromptCommands: LoadedCustomCommand[] = [];
 
 	#skillsSettings: SkillsSettings | undefined;
+	#skillsReloadable: boolean;
 
 	// Model registry for API key resolution
 	#modelRegistry: ModelRegistry;
 
 	// Tool registry and prompt builder for extensions
 	#toolRegistry: Map<string, AgentTool>;
+	#createVibeTools: (() => AgentTool[]) | undefined;
+	#installedVibeToolNames = new Set<string>();
 	#transformContext: (messages: AgentMessage[], signal?: AbortSignal) => AgentMessage[] | Promise<AgentMessage[]>;
 	#onPayload: SimpleStreamOptions["onPayload"] | undefined;
 	#onResponse: SimpleStreamOptions["onResponse"] | undefined;
@@ -1716,8 +1954,9 @@ export class AgentSession {
 	#rebuildSystemPrompt:
 		| ((toolNames: string[], tools: Map<string, AgentTool>) => Promise<{ systemPrompt: string[] }>)
 		| undefined;
+	#getLocalCalendarDate: () => string;
 	#getMcpServerInstructions: (() => Map<string, string> | undefined) | undefined;
-	#reloadSshTool: (() => Promise<AgentTool | null>) | undefined;
+	#setActiveToolNames: ((names: Iterable<string>) => void) | undefined;
 	#disconnectOwnedMcpManager: (() => Promise<void>) | undefined;
 	#requestedToolNames: ReadonlySet<string> | undefined;
 	#baseSystemPrompt: string[];
@@ -1736,17 +1975,12 @@ export class AgentSession {
 	 * to decide whether the cached prompt is stale.
 	 */
 	#promptModelKey: string | undefined;
-	#mcpDiscoveryEnabled = false;
-	#discoverableMCPTools = new Map<string, DiscoverableTool>();
-	#selectedMCPToolNames = new Set<string>();
-	// Generic tool discovery (covers built-in + MCP + extension when tools.discoveryMode === "all")
-	#discoverableToolSearchIndex: DiscoverableToolSearchIndex | null = null;
-	#selectedDiscoveredToolNames = new Set<string>();
 	#builtInToolNames = new Set<string>();
 	#rpcHostToolNames = new Set<string>();
-	#defaultSelectedMCPServerNames = new Set<string>();
-	#defaultSelectedMCPToolNames = new Set<string>();
-	#sessionDefaultSelectedMCPToolNames = new Map<string, string[]>();
+	/** Session-owned `xd://` device registry (built-ins + dynamic mounts); `undefined` when the transport is off. */
+	#xdevRegistry: XdevRegistry | undefined;
+	/** Names of discoverable tools currently mounted under `xd://` (dynamic mounts only, not built-in devices). */
+	#mountedXdevToolNames = new Set<string>();
 
 	// TTSR manager for time-traveling stream rules
 	#ttsrManager: TtsrManager | undefined = undefined;
@@ -1761,7 +1995,7 @@ export class AgentSession {
 	#ttsrResumeResolve: (() => void) | undefined = undefined;
 
 	/** One-shot flag for expected internal plan-mode aborts. Approval actions may
-	 *  abort the post-`resolve` continuation before compaction, execution, or
+	 *  abort the post-approval continuation before compaction, execution, or
 	 *  manual refinement. Consumed inside `#handleAgentEvent` for the matching
 	 *  `message_end` + `stopReason: "aborted"`; callers clear it in `finally` so
 	 *  it cannot leak into later unrelated aborts. */
@@ -1797,6 +2031,7 @@ export class AgentSession {
 	// on `agent_end` can fire its next `prompt` before #promptWithMessage's finally
 	#emptyStopRetryCount = 0;
 	#unexpectedStopRetryCount = 0;
+	#acceptTerminalEmptyStopForPrompt = false;
 	#promptGeneration = 0;
 	#pendingAgentEndEmit: AgentSessionEvent | undefined;
 	#pendingContextSnapshot:
@@ -1828,6 +2063,7 @@ export class AgentSession {
 	 * Cleared before every new prompt turn so the next turn evaluates cleanly.
 	 */
 	#yieldTerminationPending = false;
+	#synchronouslyTerminatedYieldToolCallIds = new Set<string>();
 	#providerSessionState = new Map<string, ProviderSessionState>();
 	#hindsightSessionState: HindsightSessionState | undefined = undefined;
 	readonly rawSseDebugBuffer: RawSseDebugBuffer;
@@ -1836,6 +2072,7 @@ export class AgentSession {
 		this.#emptyStopRetryCount = 0;
 		this.#unexpectedStopRetryCount = 0;
 		this.#yieldTerminationPending = false;
+		this.#acceptTerminalEmptyStopForPrompt = false;
 	}
 
 	#acquirePowerAssertion(): void {
@@ -2021,6 +2258,257 @@ export class AgentSession {
 		this.#emit(pending);
 	}
 
+	/** Advance the one-way prewalk switch at a completed assistant-turn boundary. */
+	async #advancePrewalk(liveMessages: AgentMessage[], context: AgentTurnEndContext | undefined): Promise<void> {
+		const prewalk = this.#prewalk;
+		if (!prewalk || context?.message.role !== "assistant") return;
+
+		const todoCalledThisTurn = context.toolResults.some(result => result.toolName === "todo");
+		if (todoCalledThisTurn) {
+			this.#prewalkTodoSeen = true;
+		}
+
+		// The plan nudge asks for a prose plan before implementation begins,
+		// but the agent loop treats each text-only reply as terminal — observed
+		// silently killing production SWE-bench runs before any code was ever
+		// written. Tool progress re-arms one continuation, allowing split flows
+		// such as plan → todo → prose → read → prose → edit/write. Consuming the
+		// arm before steering also detects completion: two consecutive text-only
+		// replies have no intervening progress, so the second ends naturally
+		// instead of producing the #5551 loop.
+		const hasToolResults = context.toolResults.length > 0;
+		if (this.#prewalkPlanInjected && hasToolResults) {
+			this.#prewalkContinuePending = true;
+		} else if (this.#prewalkContinuePending) {
+			this.#prewalkContinuePending = false;
+			this.agent.steer({
+				role: "custom",
+				customType: PREWALK_CONTINUE_MESSAGE_TYPE,
+				content: prewalkContinuePrompt,
+				attribution: "agent",
+				display: false,
+				timestamp: Date.now(),
+			});
+		}
+
+		// Todo gate: the plan nudge instructs "finish the plan, then init the
+		// todo list from it and start" — so the switch waits until a todo list
+		// exists AND the model has actually started implementing (first
+		// edit/write). The todo call itself never triggers: firing there handed
+		// the fast model the whole implementation cold. The gate keys on the
+		// ACTIVE tool set, not the registry: a registered-but-deactivated todo
+		// (e.g. a restricted active-tool slate) is uncallable and would
+		// deadlock the switch.
+		const todoGateOpen = this.#prewalkTodoSeen || !this.getActiveToolNames().includes("todo");
+		const action = todoGateOpen
+			? context.toolResults.find(result => PREWALK_ACTION_TOOLS[result.toolName])
+			: undefined;
+		if (!action) {
+			if (!this.#prewalkPlanInjected) {
+				this.#prewalkPlanInjected = true;
+				this.#prewalkContinuePending = true;
+				this.agent.steer({
+					role: "custom",
+					customType: PREWALK_PLAN_MESSAGE_TYPE,
+					content: prewalkPlanPrompt,
+					display: false,
+					attribution: "agent",
+					timestamp: Date.now(),
+				});
+				this.emitNotice("info", "Prewalk: injected deep-plan nudge.", "prewalk");
+			}
+			return;
+		}
+
+		await this.#waitForSessionMessagePersistence(context.message);
+		for (const toolResult of context.toolResults) {
+			await this.#waitForSessionMessagePersistence(toolResult);
+		}
+
+		this.#scrubPrewalkPlanNudge(liveMessages);
+		const target = prewalk.target;
+		if (this.model && modelsAreEqual(this.model, target)) {
+			this.#prewalk = undefined;
+			return;
+		}
+
+		await this.setModelTemporary(target, prewalk.thinkingLevel, { ephemeral: true });
+		this.#prewalk = undefined;
+		this.emitNotice(
+			"info",
+			`Prewalk: switched to ${target.provider}/${target.id} after first ${action.toolName} call.`,
+			"prewalk",
+		);
+		this.agent.steer({
+			role: "custom",
+			customType: PREWALK_CHECKLIST_MESSAGE_TYPE,
+			content: prewalkChecklistPrompt,
+			attribution: "agent",
+			display: false,
+			timestamp: Date.now(),
+		});
+	}
+
+	/**
+	 * Arm prewalk outside the normal startup path (the `/prewalk` slash
+	 * command): sets the target and immediately steers the plan nudge rather
+	 * than waiting for the next turn boundary, since an explicit manual
+	 * invocation means "start this now." A no-op with a notice if a prewalk
+	 * is already armed and waiting.
+	 */
+	armPrewalk(target: Model, thinkingLevel?: ConfiguredThinkingLevel): void {
+		if (this.#prewalk) {
+			this.emitNotice(
+				"info",
+				`Prewalk: already armed for ${this.#prewalk.target.provider}/${this.#prewalk.target.id}, waiting for the first edit/write.`,
+				"prewalk",
+			);
+			return;
+		}
+		this.#prewalk = { target, thinkingLevel };
+		this.#prewalkPlanInjected = true;
+		this.#prewalkContinuePending = true;
+		this.agent.steer({
+			role: "custom",
+			customType: PREWALK_PLAN_MESSAGE_TYPE,
+			content: prewalkPlanPrompt,
+			display: false,
+			attribution: "agent",
+			timestamp: Date.now(),
+		});
+		this.emitNotice(
+			"info",
+			`Prewalk: armed for ${target.provider}/${target.id} — will switch at the first edit/write once the todo list exists.`,
+			"prewalk",
+		);
+	}
+
+	/**
+	 * Remove the plan nudge from the LLM context before the model switch: the
+	 * fast model inherits the plan the nudge produced, not the nudge itself.
+	 * Splices the loop's live context array in place (the run streams from
+	 * it) and mirrors the removal into agent state. The persisted transcript
+	 * keeps the message for audit; a session reload re-materializes it,
+	 * which is acceptable for prewalk's single-run lifecycle.
+	 */
+	#scrubPrewalkPlanNudge(liveMessages: AgentMessage[]): void {
+		if (!this.#prewalkPlanInjected) return;
+		const isPlanNudge = (m: AgentMessage): boolean =>
+			m.role === "custom" && m.customType === PREWALK_PLAN_MESSAGE_TYPE;
+		for (let i = liveMessages.length - 1; i >= 0; i--) {
+			if (isPlanNudge(liveMessages[i])) liveMessages.splice(i, 1);
+		}
+		const stateMessages = this.agent.state.messages;
+		const filtered = stateMessages.filter(m => !isPlanNudge(m));
+		if (filtered.length !== stateMessages.length) this.agent.replaceMessages(filtered);
+	}
+
+	/**
+	 * Lazily arm PlanYolo before the first prompt is built: restricts tools to
+	 * the plan-mode read-only set (plus `write`, which carries the resolution
+	 * devices including `xd://propose`), marks plan-mode state so
+	 * `#buildPlanModeMessage` injects the standard plan-mode-active instructions
+	 * on this and every following prompt, and registers the auto-approve plan-proposal handler.
+	 * Idempotent — a no-op once armed or when PlanYolo is not configured.
+	 */
+	async #armPlanYoloIfNeeded(): Promise<void> {
+		if (!this.#planYolo || this.#planYoloArmed) return;
+		this.#planYoloArmed = true;
+		const previousTools = this.getEnabledToolNames();
+		const augmentations = this.hasBuiltInTool("write") ? ["write"] : [];
+		await this.setActiveToolsByName([...new Set([...previousTools, ...augmentations])]);
+		this.#planYoloPreviousTools = previousTools;
+		this.setPlanModeState({
+			enabled: true,
+			planFilePath: this.getPlanReferencePath() || "local://PLAN.md",
+			workflow: "parallel",
+		});
+		this.setPlanProposalHandler(title => this.#approvePlanYoloProposal(title));
+	}
+
+	/**
+	 * Plan-proposal handler while PlanYolo's plan phase is active. Auto-approves
+	 * the instant the model writes the plan slug/title to `xd://propose` — no
+	 * interactive review, the headless counterpart to plan mode's "Approve and
+	 * execute" — then restores tools, exits plan-mode state, switches to the
+	 * configured `target`, and hands off the approved plan for it to implement.
+	 */
+	#approvePlanYoloProposal(title: string): Promise<AgentToolResult<unknown>> {
+		return this.#finalizePlanYoloProposal(title);
+	}
+
+	async #finalizePlanYoloProposal(title: string): Promise<AgentToolResult<unknown>> {
+		const planYolo = this.#planYolo;
+		const state = this.getPlanModeState();
+		if (!planYolo || !state?.enabled) {
+			throw new ToolError("Plan mode is not active.");
+		}
+		const { planFilePath, title: resolvedTitle } = await resolveApprovedPlan({
+			suppliedTitle: title,
+			statePlanFilePath: state.planFilePath,
+			readPlan: url => this.#readPlanYoloFile(url),
+			listPlanFiles: () => this.#listPlanYoloFiles(),
+		});
+		const previousTools = this.#planYoloPreviousTools;
+		if (previousTools) {
+			await this.setActiveToolsByName(previousTools);
+		}
+		this.setPlanProposalHandler(null);
+		this.setPlanModeState(undefined);
+		this.#planYolo = undefined;
+		this.#planYoloPreviousTools = undefined;
+		await this.setModelTemporary(planYolo.target, planYolo.thinkingLevel, { ephemeral: true });
+		this.emitNotice(
+			"info",
+			`Plan-yolo: plan approved, switched to ${planYolo.target.provider}/${planYolo.target.id} to implement "${resolvedTitle}".`,
+			"plan-yolo",
+		);
+		this.agent.steer({
+			role: "custom",
+			customType: PLAN_YOLO_HANDOFF_MESSAGE_TYPE,
+			content: prompt.render(planYoloHandoffPrompt, { planFilePath, title: resolvedTitle }),
+			attribution: "agent",
+			display: false,
+			timestamp: Date.now(),
+		});
+		return {
+			content: [{ type: "text" as const, text: `Plan approved. Implementing now with ${planYolo.target.id}.` }],
+			details: { planFilePath, title: resolvedTitle, planExists: true },
+		};
+	}
+
+	async #readPlanYoloFile(planFilePath: string): Promise<string | null> {
+		const resolvedPath = planFilePath.startsWith("local:")
+			? resolveLocalUrlToPath(normalizeLocalScheme(planFilePath), this.#localProtocolOptions())
+			: resolveToCwd(planFilePath, this.sessionManager.getCwd());
+		try {
+			return await Bun.file(resolvedPath).text();
+		} catch (error) {
+			if (isEnoent(error)) return null;
+			throw error;
+		}
+	}
+
+	/** `local://` URLs of plan files in the session-local root, newest first —
+	 *  a fallback for `resolveApprovedPlan` when the agent dropped `extra.title`. */
+	async #listPlanYoloFiles(): Promise<string[]> {
+		const localRoot = resolveLocalUrlToPath("local://", this.#localProtocolOptions());
+		try {
+			const entries = await fs.promises.readdir(localRoot, { withFileTypes: true });
+			const plans = await Promise.all(
+				entries
+					.filter(entry => entry.isFile() && /plan\.md$/i.test(entry.name))
+					.map(async entry => {
+						const stat = await fs.promises.stat(path.join(localRoot, entry.name)).catch(() => null);
+						return { url: `local://${entry.name}`, mtime: stat?.mtimeMs ?? 0 };
+					}),
+			);
+			return plans.sort((a, b) => b.mtime - a.mtime).map(plan => plan.url);
+		} catch {
+			return [];
+		}
+	}
+
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
@@ -2041,13 +2529,21 @@ export class AgentSession {
 		} else {
 			this.#thinkingLevel = config.thinkingLevel;
 		}
+		if (config.prewalk) {
+			this.#prewalk = config.prewalk;
+		}
+		if (config.planYolo) {
+			this.#planYolo = config.planYolo;
+		}
 		this.#applyThinkingLevelToAgent(this.#thinkingLevel);
+
 		this.#promptTemplates = config.promptTemplates ?? [];
 		this.#slashCommands = config.slashCommands ?? [];
 		this.#extensionRunner = config.extensionRunner;
 		this.#skills = config.skills ?? [];
 		this.#skillWarnings = config.skillWarnings ?? [];
 		this.#customCommands = config.customCommands ?? [];
+		this.#skillsReloadable = config.skillsReloadable ?? true;
 		this.#skillsSettings = config.skillsSettings;
 		this.#modelRegistry = config.modelRegistry;
 		// Resolve the wire service-tier per request so the Fireworks Priority
@@ -2064,6 +2560,7 @@ export class AgentSession {
 		this.#pruneToolDescriptions = config.pruneToolDescriptions === true;
 		this.#validateRetryFallbackChains();
 		this.#toolRegistry = config.toolRegistry ?? new Map();
+		this.#createVibeTools = config.createVibeTools;
 		this.#builtInToolNames = new Set(config.builtInToolNames ?? []);
 		this.#requestedToolNames = config.requestedToolNames;
 		this.#transformContext = config.transformContext ?? (messages => messages);
@@ -2113,10 +2610,11 @@ export class AgentSession {
 				});
 				if (detection) this.#maybeInjectToolCallLoopRedirect(messages, detection);
 			}
+			await this.#advancePrewalk(messages, context);
 			this.#advisorPrimaryTurnsCompleted++;
 			if (this.#advisors.length > 0) {
 				for (const a of this.#advisors) {
-					if (!a.runtime.disposed) a.runtime.onTurnEnd(messages);
+					if (!a.runtime.disposed) a.runtime.onTurnEnd(messages, { willContinue: context?.willContinue });
 				}
 				const syncBacklog = this.settings.get("advisor.syncBacklog");
 				if (syncBacklog !== "off") {
@@ -2146,7 +2644,7 @@ export class AgentSession {
 		// Background-job completions / late diagnostics are pulled into the run at
 		// each step boundary as non-interrupting asides. Peer IRCs share the aside
 		// injection boundary, but also expose a non-consuming interrupt peek so
-		// `job poll` / `irc wait` can return early before the boundary drains them.
+		// `hub` waits can return early before the boundary drains them.
 		this.agent.hasIrcInterrupts = () => this.#pendingIrcInterrupts.length > 0;
 		this.agent.setAsideMessageProvider(() => {
 			const pendingIrc = [...this.#pendingIrcInterrupts, ...this.#pendingIrcAsides];
@@ -2161,37 +2659,22 @@ export class AgentSession {
 		});
 		this.#convertToLlm = config.convertToLlm ?? convertToLlm;
 		this.#rebuildSystemPrompt = config.rebuildSystemPrompt;
+		this.#getLocalCalendarDate = config.getLocalCalendarDate ?? formatLocalCalendarDate;
 		this.#getMcpServerInstructions = config.getMcpServerInstructions;
-		this.#reloadSshTool = config.reloadSshTool;
+		this.getXdevToolEntries = config.getXdevToolEntries ?? (() => []);
+		this.#xdevRegistry = config.xdevRegistry;
+		this.#mountedXdevToolNames = new Set(config.initialMountedXdevToolNames ?? []);
+		this.#setActiveToolNames = config.setActiveToolNames;
 		this.#disconnectOwnedMcpManager = config.disconnectOwnedMcpManager;
 		this.#baseSystemPrompt = this.agent.state.systemPrompt;
 		this.#promptModelKey = this.#currentPromptModelKey();
-		this.#mcpDiscoveryEnabled = config.mcpDiscoveryEnabled ?? false;
-		this.#setDiscoverableMCPTools(this.#collectDiscoverableMCPToolsFromRegistry());
-		this.#selectedMCPToolNames = new Set(config.initialSelectedMCPToolNames ?? []);
-		this.#defaultSelectedMCPServerNames = new Set(config.defaultSelectedMCPServerNames ?? []);
-		this.#defaultSelectedMCPToolNames = new Set(config.defaultSelectedMCPToolNames ?? []);
-		this.#pruneSelectedMCPToolNames();
-		const persistedSelectedMCPToolNames = this.buildDisplaySessionContext().selectedMCPToolNames;
-		const currentSelectedMCPToolNames = this.getSelectedMCPToolNames();
-		const persistInitialMCPToolSelection =
-			config.persistInitialMCPToolSelection ?? this.sessionManager.getBranch().length === 0;
-		if (
-			this.#mcpDiscoveryEnabled &&
-			persistInitialMCPToolSelection &&
-			!this.#selectedMCPToolNamesMatch(persistedSelectedMCPToolNames, currentSelectedMCPToolNames)
-		) {
-			this.sessionManager.appendMCPToolSelection(currentSelectedMCPToolNames);
-		}
-		this.#rememberSessionDefaultSelectedMCPToolNames(
-			this.sessionManager.getSessionFile(),
-			this.#getConfiguredDefaultSelectedMCPToolNames(),
-		);
 		this.#ttsrManager = config.ttsrManager;
 		this.#obfuscator = config.obfuscator;
 		this.#agentId = config.agentId;
 		this.#agentKind = config.agentKind ?? "main";
 		this.#providerSessionId = config.providerSessionId;
+		this.#inheritedProviderPromptCacheKey =
+			config.providerPromptCacheKeySource === "fork" ? this.agent.promptCacheKey : undefined;
 		this.agent.setAssistantMessageEventInterceptor((message, assistantMessageEvent) => {
 			const event: AgentEvent = {
 				type: "message_update",
@@ -2202,8 +2685,8 @@ export class AgentSession {
 			this.#maybeAbortStreamingEdit(event);
 			this.#maybeInterruptGeminiHeaderRunaway(message, assistantMessageEvent);
 		});
-		// Per-tool TTSR reminders are folded into the matched tool's result via this hook.
-		this.agent.afterToolCall = ctx => this.#ttsrAfterToolCall(ctx);
+		// Tool-result hook owns synchronous post-tool actions that must affect the current loop.
+		this.agent.afterToolCall = ctx => this.#afterToolCall(ctx);
 		this.agent.providerSessionState = this.#providerSessionState;
 		this.#syncAgentSessionId();
 		this.#syncTodoPhasesFromBranch();
@@ -2259,6 +2742,11 @@ export class AgentSession {
 		this.#unsubscribeAgent = this.agent.subscribe(this.#handleAgentEvent);
 		// Re-evaluate append-only context mode when the setting changes at runtime.
 		this.#unsubscribeAppendOnly = onAppendOnlyModeChanged(_value => this.#syncAppendOnlyContext(this.model));
+		this.#unsubscribeModelRoles = onModelRolesChanged(() => {
+			if (!this.#advisorEnabled || this.#isDisposed) return;
+			if (this.#advisors.length > 0 && !this.#advisorRuntimeMatchesCurrentConfig()) this.#stopAdvisorRuntime();
+			this.#buildAdvisorRuntime(true);
+		});
 	}
 	// -------------------------------------------------------------------------
 	// Advisor runtime lifecycle
@@ -2391,7 +2879,9 @@ export class AgentSession {
 	#advisorRuntimeSignature(config: AdvisorConfig, slug: string, model: Model, thinkingLevel: ThinkingLevel): string {
 		const tools = config.tools?.length ? config.tools.join("\u001e") : "";
 		const instructions = config.instructions?.trim() ?? "";
-		return [config.name, slug, model.provider, model.id, thinkingLevel, tools, instructions].join("\u001f");
+		return [config.name, slug, formatModelStringWithRouting(model), thinkingLevel, tools, instructions].join(
+			"\u001f",
+		);
 	}
 
 	#advisorRuntimeMatchesCurrentConfig(): boolean {
@@ -2447,21 +2937,37 @@ export class AgentSession {
 			if (this.#advisorSharedInstructions) systemPrompt.push(this.#advisorSharedInstructions);
 			if (config.instructions?.trim()) systemPrompt.push(config.instructions.trim());
 
-			const names = config.tools?.length ? new Set(config.tools) : ADVISOR_DEFAULT_TOOL_NAMES;
+			const names = config.tools === undefined ? ADVISOR_DEFAULT_TOOL_NAMES : new Set(config.tools);
 			const tools = (this.#advisorTools ?? []).filter(t => names.has(t.name));
+			const availableAdvisorToolNames = new Set<string>();
+			availableAdvisorToolNames.add(adviseTool.name);
+			for (const tool of tools) {
+				availableAdvisorToolNames.add(tool.name);
+				if (tool.customWireName !== undefined) availableAdvisorToolNames.add(tool.customWireName);
+			}
+			let quarantinedAdvisorOutput: string | undefined;
+			let currentAdvisorInput = "";
 
-			const advisorSessionId = this.#advisorSessionId(slug);
+			const primaryProviderSessionId = this.sessionId;
+			const advisorSessionLabel = slug
+				? `${primaryProviderSessionId}-advisor-${slug}`
+				: `${primaryProviderSessionId}-advisor`;
+			const advisorProviderSessionId = getOrCreateAdvisorProviderSessionId(
+				this.#advisorProviderSessionIds,
+				primaryProviderSessionId,
+				slug,
+			);
 			const appendOnlyContext = new AppendOnlyContextManager();
 
 			// Thread the primary's telemetry into the advisor loop so the advisor
-			// model's GenAI spans + usage/cost hooks fire stamped with the advisor's
-			// own identity. `conversationId` is cleared so the advisor loop falls back
-			// to its own session id; undefined telemetry stays undefined.
+			// model's GenAI spans + usage/cost hooks fire stamped with the local advisor
+			// identity. `conversationId` is cleared so provider telemetry falls back to
+			// the UUIDv7 provider session id, not the local `-advisor` label.
 			const advisorTelemetry = this.agent.telemetry
 				? {
 						...this.agent.telemetry,
 						agent: {
-							id: advisorSessionId,
+							id: advisorSessionLabel,
 							name: slug ? `${MODEL_ROLES.advisor.name}: ${advisorName}` : MODEL_ROLES.advisor.name,
 							description: formatModelString(advisorModel),
 						},
@@ -2473,10 +2979,10 @@ export class AgentSession {
 			// advisor's requests cache, route, and obfuscate like the main turn.
 			// `promptCacheKey` preserves an explicitly pinned provider cache key
 			// unchanged so tan/shared-session advisor calls read the exact shard the
-			// parent turn populated, while keeping only `sessionId` advisor-scoped;
-			// sessions without a pinned key fall back to the advisor session id for
-			// stable advisor-local caching (see can1357/oh-my-pi#3639).
-			const advisorPromptCacheKey = this.agent.promptCacheKey ?? advisorSessionId;
+			// parent turn populated. Otherwise the advisor uses its provider UUIDv7 so
+			// Codex request identity remains UUID-shaped while local labels keep the
+			// `-advisor` suffix.
+			const advisorPromptCacheKey = this.agent.promptCacheKey ?? advisorProviderSessionId;
 			const advisorAgent = new Agent({
 				initialState: {
 					systemPrompt,
@@ -2485,17 +2991,24 @@ export class AgentSession {
 					tools: [adviseTool, ...tools],
 				},
 				appendOnlyContext,
-				sessionId: advisorSessionId,
+				sessionId: advisorProviderSessionId,
 				promptCacheKey: advisorPromptCacheKey,
 				providerSessionState: this.#providerSessionState,
 				preferWebsockets: this.#preferWebsockets,
-				getApiKey: requestModel => this.#modelRegistry.resolver(requestModel, advisorSessionId),
+				getApiKey: requestModel => this.#modelRegistry.resolver(requestModel, advisorProviderSessionId),
 				streamFn: this.#advisorStreamFn,
 				onPayload: this.#onPayload,
 				onResponse: this.#onResponse,
 				onSseEvent: this.#onSseEvent,
 				transformProviderContext: this.#transformProviderContext,
 				intentTracing: false,
+				transformAssistantMessage: message => {
+					quarantinedAdvisorOutput = quarantineAdvisorUnsafeOutput(
+						message,
+						availableAdvisorToolNames,
+						buildAdvisorQuarantineSourceText(currentAdvisorInput, advisorAgent.state.messages),
+					);
+				},
 				telemetry: advisorTelemetry,
 				serviceTier: undefined,
 				serviceTierResolver: advisorServiceTierResolver,
@@ -2503,7 +3016,19 @@ export class AgentSession {
 			advisorAgent.setDisableReasoning(shouldDisableReasoning(advisorThinkingLevel));
 
 			const advisorAgentFacade: AdvisorAgent = {
-				prompt: input => advisorAgent.prompt(input),
+				prompt: async input => {
+					let quarantined: string | undefined;
+					try {
+						quarantinedAdvisorOutput = undefined;
+						currentAdvisorInput = input;
+						await advisorAgent.prompt(input);
+						quarantined = quarantinedAdvisorOutput;
+					} finally {
+						quarantinedAdvisorOutput = undefined;
+						currentAdvisorInput = "";
+					}
+					if (quarantined) throw new AdvisorOutputQuarantinedError(quarantined);
+				},
 				abort: reason => advisorAgent.abort(reason),
 				reset: () => {
 					advisorAgent.reset();
@@ -2539,6 +3064,25 @@ export class AgentSession {
 				maintainContext: incomingTokens => this.#maintainAdvisorContext(advisorRef, incomingTokens),
 				obfuscator: this.#obfuscator,
 				beginAdvisorUpdate: () => advisorRef.emissionGuard.beginUpdate(),
+				onTurnError: async error => {
+					// Mirror the auth-gateway's usage-limit remedy: the in-stream a/b/c
+					// auth retry rotates through siblings within one request but never
+					// blocks the LAST failing credential, so without this the advisor
+					// re-picks the same exhausted account every retry. Usage limits
+					// only — other failures keep the plain retry/notify path (never
+					// suspect-mark a credential on a transient advisor error).
+					const message = error instanceof Error ? error.message : String(error);
+					if (!isUsageLimitOutcome(extractHttpStatusFromError(error), message)) return;
+					await this.#modelRegistry.authStorage.markUsageLimitReached(
+						advisorModel.provider,
+						advisorProviderSessionId,
+						{
+							retryAfterMs: extractRetryHint(undefined, message),
+							baseUrl: advisorModel.baseUrl,
+							modelId: advisorModel.id,
+						},
+					);
+				},
 				notifyFailure: error => {
 					const message = error instanceof Error ? error.message : String(error);
 					this.emitNotice(
@@ -2591,28 +3135,36 @@ export class AgentSession {
 		return this.#advisors.length > 0;
 	}
 
-	/** Provider/session id for an advisor's loop. The slug suffix MUST match the
-	 *  advisor's transcript filename so stats/telemetry attribute the same advisor. */
-	#advisorSessionId(slug: string): string | undefined {
-		if (!this.sessionId) return undefined;
-		return slug ? `${this.sessionId}-advisor-${slug}` : `${this.sessionId}-advisor`;
-	}
-
 	/**
 	 * Route one accepted advice note from `advisor` to the primary. Concern and
 	 * blocker interrupt the running agent through the steering channel; once the
-	 * loop has yielded, `triggerTurn` resumes it. After a deliberate user interrupt
-	 * auto-resume is suppressed while idle/unwinding (the note becomes a preserved
-	 * card re-entering on resume); a live-streaming turn is steered in directly. A
-	 * plain nit always rides the non-interrupting YieldQueue aside. Suppression by
-	 * the per-advisor emission guard drops the note silently — the model still saw
-	 * `Recorded.`, so it isn't tempted to rephrase the same note past the dedupe.
+	 * loop has yielded, `triggerTurn` resumes it. After a terminal text answer with
+	 * no queued work, a concern is preserved as a visible advisor card, while a
+	 * blocker wakes the primary to acknowledge work it handed off incorrectly.
+	 * After a deliberate user interrupt auto-resume is suppressed while idle/unwinding
+	 * (the note becomes a preserved card re-entering on resume); a live-streaming turn is
+	 * steered in directly. A plain nit always rides the non-interrupting YieldQueue
+	 * aside. Suppression by the per-advisor emission guard drops the note silently —
+	 * the model still saw `Recorded.`, so it isn't tempted to rephrase the same note
+	 * past the dedupe.
 	 */
+	#hasTerminalTextAnswerWithoutQueuedWork(): boolean {
+		if (this.agent.hasQueuedMessages() || this.#pendingNextTurnMessages.length > 0) return false;
+		const messages = this.agent.state.messages;
+		let tail = messages.length - 1;
+		while (tail >= 0 && isAdvisorCard(messages[tail])) tail--;
+		return isTerminalTextAssistantAnswer(messages[tail]);
+	}
+
 	#routeAdvice(advisor: ActiveAdvisor, note: string, severity?: AdvisorSeverity): void {
 		if (!advisor.emissionGuard.accept(note)) {
 			logger.debug("advisor advice suppressed by emission guard", { severity, advisor: advisor.name });
 			return;
 		}
+		// When newer primary turns already arrived while the advisor model was
+		// processing this batch, the advice was generated without seeing them.
+		// Append a lightweight staleness caveat so the primary can weigh recency.
+		const deliveredNote = annotateForStaleness(note, advisor.runtime.hasFreshBacklog);
 		// The implicit single ("default") advisor stamps no source name, so its
 		// agent-facing `<advisory>` bytes stay identical to the pre-multi-advisor path.
 		const source = advisor.slug ? advisor.name : undefined;
@@ -2625,13 +3177,14 @@ export class AgentSession {
 			// loop consumes a steer at its next boundary.
 			streaming: this.agent.state.isStreaming,
 			aborting: this.#abortInProgress,
+			terminalAnswerNoQueuedWork: this.#hasTerminalTextAnswerWithoutQueuedWork(),
 			interruptImmuneTurnActive: interrupting && this.#isAdvisorInterruptImmuneTurnActive(),
 		});
 		if (channel === "aside") {
-			this.yieldQueue.enqueue("advisor", { note, severity, advisor: source });
+			this.yieldQueue.enqueue("advisor", { note: deliveredNote, severity, advisor: source });
 			return;
 		}
-		const notes: AdvisorNote[] = [{ note, severity, advisor: source }];
+		const notes: AdvisorNote[] = [{ note: deliveredNote, severity, advisor: source }];
 		const content = formatAdvisorBatchContent(notes);
 		const details = { notes } satisfies AdvisorMessageDetails;
 		if (channel === "preserve") {
@@ -2646,10 +3199,19 @@ export class AgentSession {
 			});
 			return;
 		}
-		this.#recordAdvisorInterruptDelivered();
-		if (this.#planModeState?.enabled) {
-			// Plan mode: record advice visibly in context but never wake an
-			// autonomous turn — only user-driven turns converge on ask/resolve.
+		// A steered interrupting note only continues the run when the session can
+		// actually start (or is already running) a turn. Two idle cases cannot, so
+		// `sendCustomMessage({ triggerTurn: true })` would silently bury the card in
+		// `#pendingNextTurnMessages` until the next user prompt — strictly worse than
+		// the visible preserved card. Preserve instead:
+		//  - Plan mode: only user-driven turns converge on ask/resolve.
+		//  - ACP bridges with `deferAgentInitiatedTurns`: the client cannot show an
+		//    agent-initiated turn as busy, so idle triggers are refused (#5628 review).
+		const cannotAutoTrigger =
+			!this.agent.state.isStreaming &&
+			this.#clientBridge?.deferAgentInitiatedTurns === true &&
+			!this.#allowAcpAgentInitiatedTurns;
+		if (this.#planModeState?.enabled || cannotAutoTrigger) {
 			this.#preserveAdvisorCard({
 				role: "custom",
 				customType: "advisor",
@@ -2661,6 +3223,11 @@ export class AgentSession {
 			});
 			return;
 		}
+		// Arm the post-interrupt immune window only now that a turn is actually
+		// being steered/triggered. A merely preserved card never interrupts, so
+		// arming earlier would downgrade the next `advisor.immuneTurns` worth of
+		// real concerns/blockers to skip-idle-flush asides (#5628 review).
+		this.#recordAdvisorInterruptDelivered();
 		void this.sendCustomMessage(
 			{ customType: "advisor", content, display: true, attribution: "agent", details },
 			{ deliverAs: "steer", triggerTurn: true },
@@ -2803,11 +3370,15 @@ export class AgentSession {
 			// No compaction candidates, fallback to re-prime
 			return true;
 		}
-		const advisorSessionId = this.#advisorSessionId(advisor.slug);
+		const advisorProviderSessionId = getOrCreateAdvisorProviderSessionId(
+			this.#advisorProviderSessionIds,
+			this.sessionId,
+			advisor.slug,
+		);
 		const preparation = prepareCompaction(
 			pathEntries,
 			compactionSettings,
-			await this.#runnableCompactionCandidates(candidates, advisorSessionId),
+			await this.#runnableCompactionCandidates(candidates, advisorProviderSessionId),
 		);
 		if (!preparation) {
 			// Cannot prepare compaction, fallback to re-prime
@@ -2827,17 +3398,23 @@ export class AgentSession {
 		let lastError: unknown;
 		// Instrument the advisor's overflow-compaction one-shot like the primary
 		// compaction path so the advisor model's maintenance call also emits spans.
-		const telemetry = resolveTelemetry(agent.telemetry, advisorSessionId);
+		const telemetry = resolveTelemetry(agent.telemetry, advisorProviderSessionId);
+
+		const codexCompaction = createCodexCompactionContext({
+			trigger: "auto",
+			reason: "context_limit",
+			phase: "pre_turn",
+		});
 
 		for (const candidate of candidates) {
-			const apiKey = await this.#modelRegistry.getApiKey(candidate, advisorSessionId);
+			const apiKey = await this.#modelRegistry.getApiKey(candidate, advisorProviderSessionId);
 			if (!apiKey) continue;
 
 			try {
 				compactResult = await compact(
 					preparation,
 					candidate,
-					this.#modelRegistry.resolver(candidate, advisorSessionId),
+					this.#modelRegistry.resolver(candidate, advisorProviderSessionId),
 					undefined,
 					undefined,
 					{
@@ -2845,8 +3422,10 @@ export class AgentSession {
 						convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
 						telemetry,
 						tools: agent.state.tools,
-						sessionId: advisorSessionId,
-						promptCacheKey: advisorSessionId,
+						sessionId: advisorProviderSessionId,
+						promptCacheKey: advisorProviderSessionId,
+						providerSessionState: this.#providerSessionState,
+						codexCompaction,
 					},
 				);
 				break;
@@ -2905,7 +3484,8 @@ export class AgentSession {
 	 *      consuming (advances the queue generator);
 	 *   2. else, when a non-forcing preview is pending, a {@link SoftToolRequirement} — a
 	 *      PEEK (advances/pops nothing), so the agent-loop injects the reminder once per head
-	 *      and escalates to a forced `resolve` only if the model declines. A compliant turn
+	 *      and escalates to a forced `write` only if the model declines to
+	 *      resolve via `xd://resolve` or `xd://reject`. A compliant turn
 	 *      pays ZERO tool_choice change (no prompt-cache messages-cache invalidation);
 	 *   3. else undefined.
 	 */
@@ -2917,19 +3497,23 @@ export class AgentSession {
 			return {
 				soft: true,
 				id: head.id,
-				toolName: "resolve",
+				// Preview resolution is a `write` to xd://resolve or xd://reject;
+				// only those exact shapes satisfy the requirement — a plain write
+				// elsewhere is a detour.
+				toolName: "write",
+				satisfies: isPreviewResolutionToolCall,
 				reminder: [buildResolveReminderMessage(head.sourceToolName)],
 			};
 		}
 		return undefined;
 	}
 
-	/** Peek the head non-forcing pending preview invoker, for the `resolve` tool's dispatch. */
+	/** Peek the head non-forcing pending preview invoker, for the preview-resolution dispatch. */
 	peekPendingInvoker(): ((input: unknown) => Promise<unknown> | unknown) | undefined {
 		return this.#toolChoiceQueue.peekPendingInvoker();
 	}
 
-	/** Clear stale non-forcing pending preview invokers after `resolve` proves none can run. */
+	/** Clear stale non-forcing pending preview invokers after a resolve dispatch proves none can run. */
 	clearPendingInvokers(): void {
 		this.#toolChoiceQueue.clearPendingInvokers();
 	}
@@ -2960,22 +3544,20 @@ export class AgentSession {
 		return this.#toolChoiceQueue;
 	}
 
-	/** Peek the in-flight directive's invocation handler for use by the resolve tool. */
+	/** Peek the in-flight directive's invocation handler for the preview-resolution dispatch. */
 	peekQueueInvoker(): ((input: unknown) => Promise<unknown> | unknown) | undefined {
 		return this.#toolChoiceQueue.peekInFlightInvoker();
 	}
 
-	/** Standing (long-lived) handler the `resolve` tool falls back to when no
-	 *  queue invoker is in flight. Used by plan mode so the agent can submit
-	 *  approval via `resolve` without forcing the tool choice every turn. */
-	#standingResolveHandler: ((input: unknown) => Promise<unknown> | unknown) | undefined;
+	/** Plan-proposal handler consulted by `xd://propose` while plan mode is active. */
+	#planProposalHandler: PlanProposalHandler | undefined;
 
-	peekStandingResolveHandler(): ((input: unknown) => Promise<unknown> | unknown) | undefined {
-		return this.#standingResolveHandler;
+	peekPlanProposalHandler(): PlanProposalHandler | undefined {
+		return this.#planProposalHandler;
 	}
 
-	setStandingResolveHandler(handler: ((input: unknown) => Promise<unknown> | unknown) | null): void {
-		this.#standingResolveHandler = handler ?? undefined;
+	setPlanProposalHandler(handler: PlanProposalHandler | null): void {
+		this.#planProposalHandler = handler ?? undefined;
 	}
 
 	#sessionSwitchReconciler: (() => Promise<void>) | undefined;
@@ -3092,7 +3674,7 @@ export class AgentSession {
 	 * a settle observed now is a scheduling pause rather than a terminal stop:
 	 * stop-time passes (todo reminder, session_stop hooks) defer to the settle
 	 * reached once the session is fully idle. Suppressed deliveries
-	 * (acknowledged, or watched by an in-flight `job` poll) never wake the loop,
+	 * (acknowledged, or watched by an in-flight `hub` wait) never wake the loop,
 	 * so they don't count.
 	 */
 	#hasPendingAsyncWake(): boolean {
@@ -3624,14 +4206,20 @@ export class AgentSession {
 				await this.#goalRuntime.onToolCompleted(event.toolName);
 			}
 			this.#planModeReminderAwaitingProgress = false;
-			if (this.#isPlanDecisionTool(event.toolName)) {
+			if (
+				event.toolName === "ask" ||
+				writeDeviceDispatch(event.toolName, event.result)?.tool === PROPOSE_DEVICE_NAME
+			) {
 				this.#planModeReminderCount = 0;
 				this.#planModeReminderAwaitingProgress = false;
 			}
 		}
-		if (event.type === "tool_execution_end" && event.toolName === "yield" && !event.isError) {
-			this.#lastSuccessfulYieldToolCallId = event.toolCallId;
-			this.#yieldTerminationPending = true;
+		if (event.type === "tool_execution_end" && this.#isTerminalYieldToolResult(event)) {
+			const alreadyTerminated = this.#synchronouslyTerminatedYieldToolCallIds.delete(event.toolCallId);
+			if (!alreadyTerminated) {
+				this.#markTerminalYieldToolCall(event.toolCallId);
+				this.agent.abort(TERMINAL_TOOL_RESULT_ABORT_REASON);
+			}
 		}
 
 		// TTSR: Check for pattern matches on assistant text/thinking and tool argument deltas
@@ -3723,6 +4311,16 @@ export class AgentSession {
 			if (event.message.role === "assistant") {
 				this.#lastAssistantMessage = event.message;
 				const assistantMsg = event.message as AssistantMessage;
+				// Fold this turn's timing into per-model perf aggregates (drives the
+				// /models TPS/TTFT display). Errored turns measure nothing; aborted
+				// turns with reported usage are still valid throughput samples.
+				if (assistantMsg.stopReason !== "error" && assistantMsg.duration !== undefined) {
+					this.settings.getStorage()?.recordModelPerf(`${assistantMsg.provider}/${assistantMsg.model}`, {
+						outputTokens: assistantMsg.usage.output,
+						durationMs: assistantMsg.duration,
+						ttftMs: assistantMsg.ttft,
+					});
+				}
 				if (
 					assistantMsg.disabledFeatures?.includes("priority") &&
 					this.#serviceTierByFamily.anthropic === "priority"
@@ -4009,6 +4607,17 @@ export class AgentSession {
 					await emitAgentEndNotification();
 					return;
 				}
+			} else if (this.#isHardErrorFallbackEligible(msg)) {
+				// A non-retryable hard error on a model covered by a configured
+				// fallback chain: retrying the SAME model is pointless, but a
+				// DIFFERENT model is a fresh chance — consult the chain before
+				// surfacing the failure. #handleRetryableError bails out (no
+				// backoff-retry of the failing model) when no switch happens.
+				const didRetry = await this.#handleRetryableError(msg, { hardErrorFallback: true });
+				if (didRetry) {
+					await emitAgentEndNotification();
+					return;
+				}
 			}
 			// Classifier refusals are persisted-skipped above; also prune the trailing
 			// stub from active context so the next turn's prompt does not replay it.
@@ -4058,7 +4667,7 @@ export class AgentSession {
 					await emitAgentEndNotification();
 					return;
 				}
-				const todoContinuationScheduled = await this.#checkTodoCompletion();
+				const todoContinuationScheduled = await this.#checkTodoCompletion(msg);
 				if (todoContinuationScheduled) {
 					await emitAgentEndNotification();
 					return;
@@ -4376,6 +4985,21 @@ export class AgentSession {
 		}
 	}
 
+	#afterToolCall(ctx: AfterToolCallContext): AfterToolCallResult | undefined {
+		if (
+			this.#isTerminalYieldToolResult({
+				toolName: ctx.toolCall.name,
+				isError: ctx.isError,
+				result: ctx.result,
+			})
+		) {
+			this.#markTerminalYieldToolCall(ctx.toolCall.id);
+			this.#synchronouslyTerminatedYieldToolCallIds.add(ctx.toolCall.id);
+			this.agent.abort(TERMINAL_TOOL_RESULT_ABORT_REASON);
+		}
+		return this.#ttsrAfterToolCall(ctx);
+	}
+
 	/** `afterToolCall` hook: fold any per-tool TTSR reminders into the result. */
 	#ttsrAfterToolCall(ctx: AfterToolCallContext): AfterToolCallResult | undefined {
 		const rules = this.#perToolTtsrInjections.get(ctx.toolCall.id);
@@ -4666,7 +5290,8 @@ export class AgentSession {
 		// Decide first: a non-interrupting tool-source match attaches to the
 		// specific tool call's result instead of driving a loop-wide follow-up.
 		const shouldInterrupt = this.#shouldInterruptForTtsrMatch(matches, matchContext);
-		const perToolId = shouldInterrupt ? undefined : this.#extractTtsrToolCallId(matchContext);
+		const matchedToolId = this.#extractTtsrToolCallId(matchContext);
+		const perToolId = shouldInterrupt ? undefined : matchedToolId;
 		if (perToolId) {
 			this.#addPerToolTtsrInjections(perToolId, matches);
 			this.#emitSessionEvent({ type: "ttsr_triggered", rules: matches }).catch(() => {});
@@ -4682,7 +5307,16 @@ export class AgentSession {
 		// Abort the stream immediately — do not gate on extension callbacks
 		this.#ttsrAbortPending = true;
 		this.#ensureTtsrResumePromise();
-		this.agent.abort(this.#formatTtsrAbortReason(matches));
+		const abortReason = this.#formatTtsrAbortReason(matches);
+		this.agent.abort(
+			matchedToolId
+				? createToolScopedAbortReason(
+						abortReason,
+						{ [matchedToolId]: abortReason },
+						"TTSR interrupt on another tool call",
+					)
+				: abortReason,
+		);
 		// Notify extensions (fire-and-forget, does not block abort)
 		this.#emitSessionEvent({ type: "ttsr_triggered", rules: matches }).catch(() => {});
 		// Schedule retry after a short delay
@@ -4993,10 +5627,9 @@ export class AgentSession {
 
 		// `local://` URLs (e.g. local://PLAN.md for plan-mode) resolve to a real
 		// on-disk artifacts path; pre-caching works as long as we ask the
-		// local-protocol handler. Other internal-scheme URLs (agent://, skill://,
-		// rule://, mcp://, artifact://) have no stable filesystem representation;
-		// skip pre-cache entirely for those — the edit tool itself will reject
-		// them through its normal dispatch path.
+		// local-protocol handler. Other internal-scheme URLs have no local
+		// filesystem representation; skip pre-cache entirely for those — the
+		// edit tool itself will reject them through its normal dispatch path.
 		const resolvedPath = this.#resolveSessionFsPath(path);
 		if (resolvedPath === undefined) return undefined;
 
@@ -5096,9 +5729,8 @@ export class AgentSession {
 	 * - `local://` URLs route through the local-protocol handler so they map
 	 *   onto the session's on-disk artifacts directory; pre-caching, ENOENT
 	 *   handling, and post-edit invalidation all work normally.
-	 * - Other internal-scheme URLs (agent://, skill://, rule://, mcp://,
-	 *   artifact://) have no stable filesystem path; this returns `undefined`
-	 *   so callers skip filesystem-only operations.
+	 * - Other internal-scheme URLs have no local filesystem path; this returns
+	 *   `undefined` so callers skip filesystem-only operations.
 	 * - Cwd-relative and absolute paths resolve via `resolveToCwd`.
 	 */
 	#resolveSessionFsPath(filePath: string): string | undefined {
@@ -5106,15 +5738,7 @@ export class AgentSession {
 		if (normalized.startsWith("local:")) {
 			return resolveLocalUrlToPath(normalized, this.#localProtocolOptions());
 		}
-		if (
-			normalized.startsWith("agent://") ||
-			normalized.startsWith("skill://") ||
-			normalized.startsWith("rule://") ||
-			normalized.startsWith("mcp://") ||
-			normalized.startsWith("artifact://")
-		) {
-			return undefined;
-		}
+		if (isInternalUrlPath(normalized)) return undefined;
 		return resolveToCwd(normalized, this.sessionManager.getCwd());
 	}
 
@@ -5518,6 +6142,23 @@ export class AgentSession {
 		return this.#freshProviderSessionId ?? this.#providerSessionId ?? sessionId ?? this.sessionManager.getSessionId();
 	}
 
+	#adoptInheritedProviderPromptCacheKey(): void {
+		const key = this.sessionManager.getHeader()?.providerPromptCacheKey;
+		if (!key) return;
+		if (this.#inheritedProviderPromptCacheKey !== undefined || this.agent.promptCacheKey === undefined) {
+			this.agent.promptCacheKey = key;
+			this.#inheritedProviderPromptCacheKey = key;
+		}
+	}
+
+	#clearInheritedProviderPromptCacheKey(): void {
+		const key = this.#inheritedProviderPromptCacheKey;
+		this.#inheritedProviderPromptCacheKey = undefined;
+		if (key !== undefined && this.agent.promptCacheKey === key) {
+			this.agent.promptCacheKey = undefined;
+		}
+	}
+
 	/**
 	 * Set agent.sessionId from the session manager and install a dynamic
 	 * metadata resolver so every Anthropic API request carries
@@ -5755,6 +6396,10 @@ export class AgentSession {
 			this.#unsubscribeAppendOnly();
 			this.#unsubscribeAppendOnly = undefined;
 		}
+		if (this.#unsubscribeModelRoles) {
+			this.#unsubscribeModelRoles();
+			this.#unsubscribeModelRoles = undefined;
+		}
 		this.#eventListeners = [];
 	}
 
@@ -5878,72 +6523,8 @@ export class AgentSession {
 		return this.#retryAttempt;
 	}
 
-	#collectDiscoverableMCPToolsFromRegistry(): Map<string, DiscoverableTool> {
-		const mcpTools = filterBySource(collectDiscoverableTools(this.#toolRegistry.values()), "mcp");
-		return new Map(mcpTools.map(tool => [tool.name, tool] as const));
-	}
-
-	#setDiscoverableMCPTools(discoverableMCPTools: Map<string, DiscoverableTool>): void {
-		this.#discoverableMCPTools = discoverableMCPTools;
-		this.#invalidateDiscoveryCaches();
-	}
-
-	/** Single point for invalidating cached discovery indices. Call after any change that can
-	 *  affect which tools should be discoverable: registry mutations (refreshMCPTools,
-	 *  refreshRpcHostTools) or active-tool mutations (#applyActiveToolsByName). */
-	#invalidateDiscoveryCaches(): void {
-		this.#discoverableToolSearchIndex = null;
-	}
-
-	#filterSelectableMCPToolNames(toolNames: Iterable<string>): string[] {
-		return Array.from(toolNames).filter(name => this.#discoverableMCPTools.has(name) && this.#toolRegistry.has(name));
-	}
-
-	#getConfiguredDefaultSelectedMCPToolNames(): string[] {
-		return this.#filterSelectableMCPToolNames([
-			...this.#defaultSelectedMCPToolNames,
-			...selectDiscoverableToolNamesByServer(
-				this.#discoverableMCPTools.values(),
-				this.#defaultSelectedMCPServerNames,
-			),
-		]);
-	}
-
-	#pruneSelectedMCPToolNames(): void {
-		this.#selectedMCPToolNames = new Set(this.#filterSelectableMCPToolNames(this.#selectedMCPToolNames));
-	}
-
-	#selectedMCPToolNamesMatch(left: string[], right: string[]): boolean {
-		return left.length === right.length && left.every((name, index) => name === right[index]);
-	}
-
-	#rememberSessionDefaultSelectedMCPToolNames(
-		sessionFile: string | null | undefined,
-		toolNames: Iterable<string>,
-	): void {
-		if (!sessionFile) return;
-		this.#sessionDefaultSelectedMCPToolNames.set(
-			path.resolve(sessionFile),
-			this.#filterSelectableMCPToolNames(toolNames),
-		);
-	}
-
-	#getSessionDefaultSelectedMCPToolNames(sessionFile: string | null | undefined): string[] {
-		if (!sessionFile) return [];
-		return this.#sessionDefaultSelectedMCPToolNames.get(path.resolve(sessionFile)) ?? [];
-	}
-
-	#persistSelectedMCPToolNamesIfChanged(previousSelectedMCPToolNames: string[]): void {
-		if (!this.#mcpDiscoveryEnabled) return;
-		const nextSelectedMCPToolNames = this.getSelectedMCPToolNames();
-		if (this.#selectedMCPToolNamesMatch(previousSelectedMCPToolNames, nextSelectedMCPToolNames)) {
-			return;
-		}
-		this.sessionManager.appendMCPToolSelection(nextSelectedMCPToolNames);
-	}
-
 	#getActiveNonMCPToolNames(): string[] {
-		return this.getActiveToolNames().filter(name => !isMCPToolName(name) && this.#toolRegistry.has(name));
+		return this.getEnabledToolNames().filter(name => !isMCPToolName(name) && this.#toolRegistry.has(name));
 	}
 
 	/**
@@ -5952,6 +6533,22 @@ export class AgentSession {
 	 */
 	getActiveToolNames(): string[] {
 		return this.agent.state.tools.map(t => t.name);
+	}
+
+	/**
+	 * Enabled tool names: top-level active tools plus discoverable tools mounted
+	 * under `xd://`. Reconcile callers (MCP refresh, discovery, plan/goal mode)
+	 * build their next active set from this so a mount survives an active-set
+	 * change; {@link getActiveToolNames} stays the top-level-only view.
+	 */
+	getEnabledToolNames(): string[] {
+		if (this.#mountedXdevToolNames.size === 0) return this.getActiveToolNames();
+		return [...this.getActiveToolNames(), ...this.#mountedXdevToolNames];
+	}
+
+	/** Names of discoverable tools currently mounted under `xd://` (dynamic mounts). */
+	getMountedXdevToolNames(): string[] {
+		return [...this.#mountedXdevToolNames];
 	}
 
 	/** Whether the edit tool is registered in this session. */
@@ -5978,6 +6575,48 @@ export class AgentSession {
 		return Array.from(this.#toolRegistry.keys());
 	}
 
+	#wrapRuntimeTool(tool: AgentTool): AgentTool {
+		const wrapped = wrapToolWithMetaNotice(tool);
+		return this.#extensionRunner ? new ExtensionToolWrapper(wrapped, this.#extensionRunner) : wrapped;
+	}
+
+	/**
+	 * Registers the ephemeral vibe tools and activates them alongside `baseToolNames`.
+	 *
+	 * @throws When this session cannot create vibe tools or the factory returns duplicate names.
+	 */
+	async activateVibeTools(baseToolNames: string[]): Promise<void> {
+		const createVibeTools = this.#createVibeTools;
+		if (!createVibeTools) {
+			throw new Error("Vibe tools are unavailable in this session.");
+		}
+
+		const tools = createVibeTools();
+		const vibeToolNames = tools.map(tool => tool.name);
+		if (new Set(vibeToolNames).size !== vibeToolNames.length) {
+			throw new Error("Vibe tool names must be unique.");
+		}
+
+		for (const tool of tools) {
+			if (this.#toolRegistry.has(tool.name)) continue;
+			this.#toolRegistry.set(tool.name, this.#wrapRuntimeTool(tool));
+			this.#builtInToolNames.add(tool.name);
+			this.#installedVibeToolNames.add(tool.name);
+		}
+
+		await this.#applyActiveToolsByName([...new Set([...baseToolNames, ...vibeToolNames])]);
+	}
+
+	/** Removes tools installed by {@link activateVibeTools} and activates `nextToolNames`. */
+	async deactivateVibeTools(nextToolNames: string[]): Promise<void> {
+		for (const name of this.#installedVibeToolNames) {
+			this.#toolRegistry.delete(name);
+			this.#builtInToolNames.delete(name);
+		}
+		this.#installedVibeToolNames.clear();
+		await this.#applyActiveToolsByName(nextToolNames);
+	}
+
 	#getEditModeSession() {
 		return {
 			settings: this.settings,
@@ -5989,165 +6628,27 @@ export class AgentSession {
 		return resolveEditMode(this.#getEditModeSession());
 	}
 
-	/**
-	 * Model key (`provider/id`) currently surfaced in the system prompt, or
-	 * undefined when the model is unset or `includeModelInPrompt` is disabled.
-	 */
+	/** Cache key for model-dependent prompt content: displayed id or hidden-policy cohort. */
 	#currentPromptModelKey(): string | undefined {
-		if (!this.settings.get("includeModelInPrompt")) return undefined;
-		return this.model ? formatModelString(this.model) : undefined;
+		const model = this.model ? formatModelString(this.model) : undefined;
+		if (!model || this.settings.get("includeModelInPrompt")) return model;
+		return usesCodexTaskPrompt(model) ? "task-policy:gpt-5.6" : "task-policy:default";
 	}
 
 	async #syncAfterModelChange(previousEditMode: EditMode): Promise<void> {
 		const currentEditMode = this.#resolveActiveEditMode();
 		const editModeChanged = previousEditMode !== currentEditMode && this.getActiveToolNames().includes("edit");
-		// The system prompt may surface the active model; a switch makes the cached prompt stale.
+		// The system prompt selects model-specific policy even when it does not display the model id.
 		const modelChanged = this.#currentPromptModelKey() !== this.#promptModelKey;
 		if (editModeChanged || modelChanged) {
 			await this.refreshBaseSystemPrompt();
 		}
 	}
 
-	isMCPDiscoveryEnabled(): boolean {
-		return this.#mcpDiscoveryEnabled;
-	}
-
-	/**
-	 * Flip MCP discovery on after deferred discovery learns the real tool count.
-	 * UI sessions resolve `tools.discoveryMode: "auto"` before MCP servers
-	 * connect, so a large MCP toolset discovered later must be able to upgrade
-	 * the session from the force-activate path to the discovery path. One-way:
-	 * discovery is never downgraded mid-session.
-	 */
-	enableMCPDiscovery(): void {
-		this.#mcpDiscoveryEnabled = true;
-	}
-
 	getSelectedMCPToolNames(): string[] {
-		if (!this.#mcpDiscoveryEnabled) {
-			return this.getActiveToolNames().filter(name => isMCPToolName(name) && this.#toolRegistry.has(name));
-		}
-		return this.#filterSelectableMCPToolNames(this.#selectedMCPToolNames);
-	}
-
-	async activateDiscoveredMCPTools(toolNames: string[]): Promise<string[]> {
-		const nextSelectedMCPToolNames = new Set(this.#selectedMCPToolNames);
-		const activated: string[] = [];
-		for (const name of toolNames) {
-			if (!isMCPToolName(name) || !this.#discoverableMCPTools.has(name) || !this.#toolRegistry.has(name)) {
-				continue;
-			}
-			nextSelectedMCPToolNames.add(name);
-			activated.push(name);
-		}
-		if (activated.length === 0) {
-			return [];
-		}
-		const nextActive = [
-			...this.#getActiveNonMCPToolNames(),
-			...this.#filterSelectableMCPToolNames(nextSelectedMCPToolNames),
-		];
-		await this.setActiveToolsByName(nextActive);
-		return [...new Set(activated)];
-	}
-
-	// ── Generic tool discovery (covers built-in + MCP + extension) ────────────
-
-	/** Resolve effective discovery mode from the current registry size. */
-	#resolveEffectiveDiscoveryMode(): "off" | "mcp-only" | "all" {
-		const mode = resolveEffectiveToolDiscoveryMode(
-			this.settings,
-			countToolsForAutoDiscovery(this.#toolRegistry.keys()),
-		);
-		if (mode !== "off") return mode;
-		return this.#mcpDiscoveryEnabled ? "mcp-only" : "off";
-	}
-
-	isToolDiscoveryEnabled(): boolean {
-		return this.#resolveEffectiveDiscoveryMode() !== "off";
-	}
-
-	getDiscoverableTools(filter?: { source?: DiscoverableTool["source"] }): DiscoverableTool[] {
-		// For "all" mode we combine built-in registry entries + MCP tools.
-		// For "mcp-only" mode we only return MCP tools.
-		const mode = this.#resolveEffectiveDiscoveryMode();
-		const activeNames = new Set(this.getActiveToolNames());
-		const mcpTools = Array.from(this.#discoverableMCPTools.values()).filter(t => !activeNames.has(t.name));
-		const builtinTools: DiscoverableTool[] = mode === "all" ? this.#collectDiscoverableBuiltinTools() : [];
-		const allTools = [...builtinTools, ...mcpTools];
-		return filter?.source ? allTools.filter(t => t.source === filter.source) : allTools;
-	}
-
-	/** Collect built-in tools the model can discover via search_tool_bm25. Restricted to tool
-	 *  definitions whose `loadMode === "discoverable"`. This keeps hidden/internal tools
-	 *  (resolve, yield, report_finding, report_tool_issue) out of the index
-	 *  and avoids mislabeling extension/custom default-inactive tools as built-ins. */
-	#collectDiscoverableBuiltinTools(): DiscoverableTool[] {
-		const activeNames = new Set(this.getActiveToolNames());
-		const result: DiscoverableTool[] = [];
-		for (const tool of this.#toolRegistry.values()) {
-			if (tool.loadMode !== "discoverable") continue;
-			if (activeNames.has(tool.name)) continue;
-			const collected = collectDiscoverableTools([tool], { source: "builtin" });
-			result.push(...collected);
-		}
-		return result;
-	}
-
-	getDiscoverableToolSearchIndex(): DiscoverableToolSearchIndex {
-		if (!this.#discoverableToolSearchIndex) {
-			this.#discoverableToolSearchIndex = buildDiscoverableToolSearchIndex(this.getDiscoverableTools());
-		}
-		return this.#discoverableToolSearchIndex;
-	}
-
-	/** Invalidate the generic search index cache (call after tool set changes).
-	 *  Delegates to {@link #invalidateDiscoveryCaches} so all discovery-related caches stay in sync. */
-	#invalidateDiscoverableToolSearchIndex(): void {
-		this.#invalidateDiscoveryCaches();
-	}
-
-	getSelectedDiscoveredToolNames(): string[] {
-		// Union of MCP-selected and generic non-MCP selected. Non-MCP selections are only
-		// selected while they are still active; otherwise BM25 must be able to rediscover them.
-		const activeNames = new Set(this.getActiveToolNames());
-		const mcpSelected = this.getSelectedMCPToolNames();
-		const nonMcpSelected = Array.from(this.#selectedDiscoveredToolNames).filter(
-			name => activeNames.has(name) && this.#toolRegistry.has(name) && !isMCPToolName(name),
-		);
-		return [...new Set([...mcpSelected, ...nonMcpSelected])];
-	}
-
-	async activateDiscoveredTools(toolNames: string[]): Promise<string[]> {
-		const mcpNames = toolNames.filter(isMCPToolName);
-		const nonMcpNames = toolNames.filter(name => !isMCPToolName(name));
-		const activated: string[] = [];
-
-		// Activate MCP tools via existing path
-		if (mcpNames.length > 0) {
-			const activatedMcp = await this.activateDiscoveredMCPTools(mcpNames);
-			activated.push(...activatedMcp);
-		}
-
-		// Activate non-MCP tools (built-ins that are in the registry but not currently active)
-		if (nonMcpNames.length > 0) {
-			const currentActiveNames = new Set(this.getActiveToolNames());
-			const newlyAdded: string[] = [];
-			for (const name of nonMcpNames) {
-				if (this.#toolRegistry.has(name) && !currentActiveNames.has(name)) {
-					newlyAdded.push(name);
-					this.#selectedDiscoveredToolNames.add(name);
-					activated.push(name);
-				}
-			}
-			if (newlyAdded.length > 0) {
-				const nextActive = [...this.getActiveToolNames(), ...newlyAdded];
-				await this.setActiveToolsByName(nextActive);
-				this.#invalidateDiscoverableToolSearchIndex();
-			}
-		}
-
-		return [...new Set(activated)];
+		// Every connected MCP tool is enabled; presentation (top-level vs xd://) is
+		// decided by loadMode. Return the enabled MCP tools in the current set.
+		return this.getEnabledToolNames().filter(name => isMCPToolName(name) && this.#toolRegistry.has(name));
 	}
 
 	/**
@@ -6268,47 +6769,33 @@ export class AgentSession {
 		);
 	}
 
-	async #applyActiveToolsByName(
-		toolNames: string[],
-		options?: { persistMCPSelection?: boolean; previousSelectedMCPToolNames?: string[] },
-	): Promise<void> {
+	async #applyActiveToolsByName(toolNames: string[]): Promise<void> {
 		toolNames = normalizeToolNames(toolNames);
-		const previousSelectedMCPToolNames = options?.previousSelectedMCPToolNames ?? this.getSelectedMCPToolNames();
 		const tools: AgentTool[] = [];
 		const validToolNames: string[] = [];
+		const mountedTools: AgentTool[] = [];
 		for (const name of toolNames) {
 			const tool = this.#toolRegistry.get(name);
-			if (tool) {
+			if (!tool) continue;
+			// Discoverable tools are presented as `xd://` devices (kept out of the
+			// top-level schema) when the transport is active; everything else stays
+			// top-level. `loadMode` decides presentation only — selection is upstream.
+			if (this.#xdevRegistry && isMountableUnderXdev(tool)) {
+				mountedTools.push(tool);
+			} else {
 				tools.push(this.#wrapToolForAcpPermission(tool));
 				validToolNames.push(name);
 			}
 		}
-		// Auto-QA tool must survive any runtime tool-set mutation.
-		if (isAutoQaEnabled(this.settings) && !validToolNames.includes("report_tool_issue")) {
-			const qaTool = this.#toolRegistry.get("report_tool_issue");
-			if (qaTool) {
-				tools.push(this.#wrapToolForAcpPermission(qaTool));
-				validToolNames.push("report_tool_issue");
-			}
-		}
-		if (this.#mcpDiscoveryEnabled) {
-			this.#selectedMCPToolNames = new Set(
-				validToolNames.filter(
-					name => isMCPToolName(name) && this.#discoverableMCPTools.has(name) && this.#toolRegistry.has(name),
-				),
-			);
-		}
-		const activeNameSet = new Set(validToolNames);
-		for (const name of Array.from(this.#selectedDiscoveredToolNames)) {
-			if (!activeNameSet.has(name) || isMCPToolName(name) || !this.#toolRegistry.has(name)) {
-				this.#selectedDiscoveredToolNames.delete(name);
-			}
-		}
+		// Reconcile the dynamic `xd://` mounts: newly-active discoverable tools are
+		// mounted, deactivated ones dropped (built-in devices are preserved). A
+		// removed or disconnected tool must not stay callable through a stale device.
+		const previousMounted = this.#mountedXdevToolNames;
+		this.#mountedXdevToolNames = new Set(mountedTools.map(tool => tool.name));
+		this.#xdevRegistry?.reconcile(mountedTools);
+		this.#notifyXdevMountDelta(previousMounted);
+		this.#setActiveToolNames?.(validToolNames);
 		this.agent.setTools(tools);
-
-		// Active tool set changed → discoverable tool list (which excludes already-active tools)
-		// is now stale. Invalidate before any prompt-template hook reads the discovery list.
-		this.#invalidateDiscoveryCaches();
 
 		// Rebuild base system prompt with new tool set, but only when the tool set
 		// actually changed. MCP servers can reconnect at arbitrary times and call
@@ -6318,6 +6805,9 @@ export class AgentSession {
 		if (this.#rebuildSystemPrompt) {
 			const signature = this.#computeAppliedToolSignature(validToolNames, tools);
 			if (signature !== this.#lastAppliedToolSignature) {
+				if (this.#lastAppliedToolSignature !== undefined) {
+					this.#clearInheritedProviderPromptCacheKey();
+				}
 				const built = await this.#rebuildSystemPrompt(validToolNames, this.#toolRegistry);
 				this.#baseSystemPrompt = built.systemPrompt;
 				this.#baseSystemPromptBeforeMemoryPromotion = undefined;
@@ -6326,48 +6816,65 @@ export class AgentSession {
 				this.#promptModelKey = this.#currentPromptModelKey();
 			}
 		}
-		if (options?.persistMCPSelection !== false) {
-			this.#persistSelectedMCPToolNamesIfChanged(previousSelectedMCPToolNames);
-		}
 	}
 
 	/**
-	 * Reload the SSH tool from disk-backed capability discovery and make the
-	 * refreshed definition visible to the next model call without restarting.
+	 * Announce a mid-session `xd://` mount delta to the model as a steered
+	 * system notice instead of rewriting the system prompt: the prompt (and
+	 * its provider cache prefix) stays byte-stable across MCP connects and
+	 * disconnects, and the model learns about new devices from the notice
+	 * (docs + schema stay one `read xd://<tool>` away). The full docs join
+	 * the system prompt opportunistically on the next unrelated rebuild.
 	 */
-	async refreshSshTool(options?: { activateIfAvailable?: boolean }): Promise<void> {
-		resetCapabilities();
-		if (!this.#reloadSshTool) return;
-		const previousSshTool = this.#toolRegistry.get("ssh");
-		const previousActiveToolNames = this.getActiveToolNames();
-		const hadSshTool = previousSshTool !== undefined;
-		const wasActive = previousActiveToolNames.includes("ssh");
-		const previousHostNames =
-			previousSshTool && "hostNames" in previousSshTool && Array.isArray(previousSshTool.hostNames)
-				? [...previousSshTool.hostNames]
-				: [];
-		const candidateHostNames = new Set(previousHostNames);
-		const capability = await loadCapability<{ name: string }>("ssh", { cwd: this.sessionManager.getCwd() });
-		for (const host of capability.items) {
-			if (typeof host?.name === "string") {
-				candidateHostNames.add(host.name);
-			}
-		}
-		await invalidateHostMetadata(candidateHostNames);
-		const sshAllowed = this.#requestedToolNames === undefined || this.#requestedToolNames.has("ssh");
-		const refreshedTool = await this.#reloadSshTool();
-		if (refreshedTool) {
-			this.#toolRegistry.set(refreshedTool.name, refreshedTool);
-		} else {
-			this.#toolRegistry.delete("ssh");
-			this.#selectedDiscoveredToolNames.delete("ssh");
+	#notifyXdevMountDelta(previousMounted: ReadonlySet<string>): void {
+		const registry = this.#xdevRegistry;
+		if (!registry) return;
+		const current = this.#mountedXdevToolNames;
+		const addedNames = [...current].filter(name => !previousMounted.has(name));
+		const removed = [...previousMounted].filter(name => !current.has(name)).map(name => ({ name }));
+		if (addedNames.length === 0 && removed.length === 0) return;
+		const summaries = new Map(registry.entries().map(entry => [entry.name, entry.summary]));
+		const added = addedNames.map(name => ({ name, summary: summaries.get(name) ?? "" }));
+		this.agent.steer({
+			role: "custom",
+			customType: XDEV_MOUNT_NOTICE_MESSAGE_TYPE,
+			content: prompt.render(xdevMountNoticePrompt, { added, removed }),
+			attribution: "agent",
+			display: false,
+			timestamp: Date.now(),
+		});
+		const parts: string[] = [];
+		if (added.length > 0) parts.push(`mounted ${added.map(entry => entry.name).join(", ")}`);
+		if (removed.length > 0) parts.push(`unmounted ${removed.map(entry => entry.name).join(", ")}`);
+		this.emitNotice("info", `xd://: ${parts.join("; ")}`, "xdev");
+	}
+
+	/**
+	 * Rediscover disk-backed skills and rebuild prompt-facing state without
+	 * recreating the session. Explicit skill snapshots (`--no-skills`,
+	 * SDK-provided `skills`) remain fixed for the lifetime of the session.
+	 */
+	async refreshSkills(): Promise<void> {
+		if (!this.#skillsReloadable) {
+			return;
 		}
 
-		const nextActive = previousActiveToolNames.filter(name => name !== "ssh" && this.#toolRegistry.has(name));
-		if (refreshedTool && sshAllowed && (wasActive || (options?.activateIfAvailable && !hadSshTool))) {
-			nextActive.push(refreshedTool.name);
+		resetCapabilities();
+		const skillsSettings = this.settings.getGroup("skills");
+		const discovered = await loadSkills({
+			...skillsSettings,
+			cwd: this.sessionManager.getCwd(),
+			disabledExtensions: this.settings.get("disabledExtensions") ?? [],
+		});
+		this.#skills = discovered.skills;
+		this.#skillWarnings = discovered.warnings;
+		this.#skillsSettings = skillsSettings;
+
+		if (this.#agentKind === "main") {
+			setActiveSkills(this.#skills);
 		}
-		await this.#applyActiveToolsByName(nextActive);
+		await this.refreshBaseSystemPrompt();
+		this.#notifyCommandMetadataChanged();
 	}
 
 	/**
@@ -6380,32 +6887,21 @@ export class AgentSession {
 		await this.#applyActiveToolsByName(toolNames);
 	}
 
-	async #restoreMCPSelectionsForSessionContext(
-		sessionContext: SessionContext,
-		options?: { fallbackSelectedMCPToolNames?: Iterable<string> },
-	): Promise<void> {
-		if (!this.#mcpDiscoveryEnabled) return;
-		const nextActiveNonMCPToolNames = this.#getActiveNonMCPToolNames();
-		const fallbackSelectedMCPToolNames =
-			options?.fallbackSelectedMCPToolNames ?? this.#getConfiguredDefaultSelectedMCPToolNames();
-		const restoredMCPToolNames = sessionContext.hasPersistedMCPToolSelection
-			? this.#filterSelectableMCPToolNames(sessionContext.selectedMCPToolNames)
-			: this.#filterSelectableMCPToolNames(fallbackSelectedMCPToolNames);
-		this.#rememberSessionDefaultSelectedMCPToolNames(
-			this.sessionFile,
-			this.#getConfiguredDefaultSelectedMCPToolNames(),
-		);
-		await this.#applyActiveToolsByName([...nextActiveNonMCPToolNames, ...restoredMCPToolNames], {
-			persistMCPSelection: false,
-		});
-	}
 	/** Rebuild the base system prompt using the current active tool set. */
 	async refreshBaseSystemPrompt(): Promise<void> {
 		if (!this.#rebuildSystemPrompt) return;
 		const activeToolNames = this.getActiveToolNames();
+		this.#setActiveToolNames?.(activeToolNames);
+		const previousBaseSystemPrompt = this.#baseSystemPrompt;
 		const built = await this.#rebuildSystemPrompt(activeToolNames, this.#toolRegistry);
 		this.#baseSystemPrompt = built.systemPrompt;
 		this.#baseSystemPromptBeforeMemoryPromotion = undefined;
+		if (
+			previousBaseSystemPrompt.length !== this.#baseSystemPrompt.length ||
+			previousBaseSystemPrompt.some((part, index) => part !== this.#baseSystemPrompt[index])
+		) {
+			this.#clearInheritedProviderPromptCacheKey();
+		}
 		this.agent.setSystemPrompt(this.#baseSystemPrompt);
 		this.#promptModelKey = this.#currentPromptModelKey();
 		// Refresh the cached signature so a subsequent `#applyActiveToolsByName` with
@@ -6503,17 +6999,6 @@ export class AgentSession {
 		const describeTool = (tool: AgentTool): string =>
 			`${tool.name}=${tool.label ?? ""}|${tool.description ?? ""}|${tool.customWireName ?? ""}`;
 		const descriptionSegment = tools.map(describeTool).join("\u0002");
-		let registrySegment = "";
-		if (this.#mcpDiscoveryEnabled) {
-			// Registry iteration order is not load-bearing for the prompt content, so we
-			// sort to keep the signature insensitive to incidental insertion order.
-			const entries: string[] = [];
-			for (const tool of this.#toolRegistry.values()) {
-				entries.push(describeTool(tool));
-			}
-			entries.sort();
-			registrySegment = entries.join("\u0004");
-		}
 		let instructionsSegment = "";
 		const serverInstructions = this.#getMcpServerInstructions?.();
 		if (serverInstructions && serverInstructions.size > 0) {
@@ -6525,21 +7010,22 @@ export class AgentSession {
 			entries.sort();
 			instructionsSegment = entries.join("\u0006");
 		}
-		const date = new Date().toISOString().slice(0, 10);
-		return `${nameSegment}\u0003${descriptionSegment}\u0005${registrySegment}\u0007${instructionsSegment}|${date}`;
+		// The xd:// device inventory is deliberately NOT part of the signature:
+		// a mount/unmount announces itself via `#notifyXdevMountDelta` instead of
+		// rewriting the system prompt, so MCP connects/disconnects keep the
+		// prompt (and its provider cache prefix) byte-stable. Rebuilds triggered
+		// by other inputs pick up the current device docs opportunistically.
+		const date = this.#getLocalCalendarDate();
+		return `${nameSegment}\u0003${descriptionSegment}\u0007${instructionsSegment}|${date}`;
 	}
 
 	/**
-	 * Replace MCP tools in the registry and recompute the visible MCP tool set immediately.
-	 * This allows /mcp add/remove/reauth to take effect without restarting the session.
-	 *
-	 * @param mcpTools The new MCP tools to register.
-	 * @param options.activateAll When true, force-activates every newly registered MCP tool
-	 *   regardless of prior selection state. Used when an ACP client provisions MCP servers
-	 *   for a session where MCP discovery is disabled.
+	 * Replace MCP tools in the registry and enable them immediately. Every
+	 * connected MCP tool becomes available (mounted under `xd://` when that
+	 * transport is active, else top-level). Lets `/mcp add/remove/reauth` take
+	 * effect without restarting the session.
 	 */
-	async refreshMCPTools(mcpTools: CustomTool[], options?: { activateAll?: boolean }): Promise<void> {
-		const previousSelectedMCPToolNames = this.getSelectedMCPToolNames();
+	async refreshMCPTools(mcpTools: CustomTool[]): Promise<void> {
 		const existingNames = Array.from(this.#toolRegistry.keys());
 		for (const name of existingNames) {
 			if (isMCPToolName(name)) {
@@ -6556,6 +7042,8 @@ export class AgentSession {
 			abort: () => {
 				this.agent.abort();
 			},
+			settings: this.settings,
+			localProtocolOptions: this.#localProtocolOptions(),
 		});
 
 		for (const customTool of mcpTools) {
@@ -6566,33 +7054,10 @@ export class AgentSession {
 			this.#toolRegistry.set(finalTool.name, finalTool);
 		}
 
-		this.#setDiscoverableMCPTools(this.#collectDiscoverableMCPToolsFromRegistry());
-		this.#pruneSelectedMCPToolNames();
-		if (!this.buildDisplaySessionContext().hasPersistedMCPToolSelection) {
-			this.#selectedMCPToolNames = new Set([
-				...this.#selectedMCPToolNames,
-				...this.#getConfiguredDefaultSelectedMCPToolNames(),
-			]);
-		}
-		this.#rememberSessionDefaultSelectedMCPToolNames(
-			this.sessionFile,
-			this.#getConfiguredDefaultSelectedMCPToolNames(),
-		);
-
-		if (options?.activateAll) {
-			// Force-activate every newly registered MCP tool. This path is used
-			// when an ACP client provisions MCP servers for a session where MCP
-			// discovery is disabled — without it, getSelectedMCPToolNames()
-			// returns only already-active tools (circular deadlock: tools can
-			// only become active if they're already active).
-			const newMcpNames = mcpTools.map(t => t.name);
-			const nextActive = [...new Set([...this.#getActiveNonMCPToolNames(), ...newMcpNames])];
-			await this.#applyActiveToolsByName(nextActive, { previousSelectedMCPToolNames });
-			return;
-		}
-
-		const nextActive = [...this.#getActiveNonMCPToolNames(), ...this.getSelectedMCPToolNames()];
-		await this.#applyActiveToolsByName(nextActive, { previousSelectedMCPToolNames });
+		// Every connected MCP tool is enabled; re-derive the active set from the
+		// current non-MCP tools plus all freshly registered MCP tools.
+		const nextActive = [...new Set([...this.#getActiveNonMCPToolNames(), ...mcpTools.map(tool => tool.name)])];
+		await this.#applyActiveToolsByName(nextActive);
 	}
 
 	/**
@@ -6612,7 +7077,7 @@ export class AgentSession {
 		}
 
 		const previousRpcHostToolNames = new Set(this.#rpcHostToolNames);
-		const previousActiveToolNames = this.getActiveToolNames();
+		const previousActiveToolNames = this.getEnabledToolNames();
 		for (const name of previousRpcHostToolNames) {
 			this.#toolRegistry.delete(name);
 		}
@@ -6626,11 +7091,6 @@ export class AgentSession {
 			this.#toolRegistry.set(finalTool.name, finalTool);
 			this.#rpcHostToolNames.add(finalTool.name);
 		}
-
-		// Registry contents changed — invalidate discovery caches so the next BM25 lookup sees
-		// the new RPC-host tool set. (#applyActiveToolsByName below also invalidates, but doing
-		// it here too keeps the contract local to "registry mutated".)
-		this.#invalidateDiscoveryCaches();
 
 		const activeNonRpcToolNames = previousActiveToolNames.filter(name => !previousRpcHostToolNames.has(name));
 		const preservedRpcToolNames = previousActiveToolNames.filter(
@@ -6695,12 +7155,13 @@ export class AgentSession {
 	 * `agent.replaceMessages` or a provider.
 	 */
 	buildTranscriptSessionContext(
-		options?: Pick<BuildSessionContextOptions, "collapseCompactedHistory">,
+		options?: Pick<BuildSessionContextOptions, "collapseCompactedHistory" | "keepDanglingToolCalls">,
 	): SessionContext {
 		return deobfuscateSessionContext(
 			this.sessionManager.buildSessionContext({
 				transcript: true,
 				collapseCompactedHistory: options?.collapseCompactedHistory,
+				keepDanglingToolCalls: options?.keepDanglingToolCalls,
 			}),
 			this.#obfuscator,
 		);
@@ -6904,6 +7365,11 @@ export class AgentSession {
 		return this.#planModeState;
 	}
 
+	/** Prewalk state, if armed and active */
+	getPrewalkState(): Prewalk | undefined {
+		return this.#prewalk;
+	}
+
 	setPlanModeState(state: PlanModeState | undefined): void {
 		this.#planModeState = state;
 		if (state?.enabled) {
@@ -6924,6 +7390,14 @@ export class AgentSession {
 
 	setGoalModeState(state: GoalModeState | undefined): void {
 		this.#goalModeState = state;
+	}
+
+	getVibeModeState(): VibeModeState | undefined {
+		return this.#vibeModeState;
+	}
+
+	setVibeModeState(state: VibeModeState | undefined): void {
+		this.#vibeModeState = state;
 	}
 
 	get goalRuntime(): GoalRuntime {
@@ -7058,6 +7532,21 @@ export class AgentSession {
 		);
 	}
 
+	async sendVibeModeContext(options?: { deliverAs?: "steer" | "followUp" | "nextTurn" }): Promise<void> {
+		const message = this.#buildVibeModeMessage();
+		if (!message) return;
+		await this.sendCustomMessage(
+			{
+				customType: message.customType,
+				content: message.content,
+				display: message.display,
+				details: message.details,
+				attribution: message.attribution,
+			},
+			options ? { deliverAs: options.deliverAs } : undefined,
+		);
+	}
+
 	resolveRoleModel(role: string): Model | undefined {
 		return this.#resolveRoleModelFull(role, this.#modelRegistry.getAvailable(), this.model).model;
 	}
@@ -7069,6 +7558,30 @@ export class AgentSession {
 	 */
 	resolveRoleModelWithThinking(role: string): ResolvedModelRoleValue {
 		return this.#resolveRoleModelFull(role, this.#modelRegistry.getAvailable(), this.model);
+	}
+
+	/**
+	 * Resolve the explicit thinking suffix that should apply when a temporary
+	 * picker selects a model already assigned to a configured role.
+	 */
+	resolveTemporaryModelThinkingLevel(model: Model): ConfiguredThinkingLevel | undefined {
+		const availableModels = this.#modelRegistry.getAvailable();
+		if (availableModels.length === 0) return undefined;
+
+		const matchPreferences = getModelMatchPreferences(this.settings);
+		for (const role of getKnownRoleIds(this.settings)) {
+			const roleValue = this.settings.getModelRole(role);
+			if (!roleValue) continue;
+
+			const resolved = resolveModelRoleValue(roleValue, availableModels, {
+				settings: this.settings,
+				matchPreferences,
+			});
+			if (!resolved.explicitThinkingLevel || resolved.thinkingLevel === undefined || !resolved.model) continue;
+			if (modelsAreEqual(resolved.model, model)) return resolved.thinkingLevel;
+		}
+
+		return undefined;
 	}
 
 	get promptTemplates(): ReadonlyArray<PromptTemplate> {
@@ -7186,6 +7699,18 @@ export class AgentSession {
 		};
 	}
 
+	#buildVibeModeMessage(): CustomMessage | null {
+		if (!this.#vibeModeState?.enabled) return null;
+		return {
+			role: "custom",
+			customType: "vibe-mode-context",
+			content: prompt.render(vibeModeActivePrompt),
+			display: false,
+			attribution: "agent",
+			timestamp: Date.now(),
+		};
+	}
+
 	#sanitizeGoalTodoText(text: string): string {
 		return escapeXmlText(text)
 			.replace(/\r\n/g, "\\n")
@@ -7197,12 +7722,8 @@ export class AgentSession {
 
 	#buildGoalTodoContext(): string | undefined {
 		if (!this.settings.get("todo.enabled")) return undefined;
-		const activeToolNames = this.getActiveToolNames();
-		const canCallTodoTool = activeToolNames.includes("todo");
-		const canDiscoverTodoTool =
-			!canCallTodoTool && this.getDiscoverableTools({ source: "builtin" }).some(tool => tool.name === "todo");
-		const canActivateTodoTool = canDiscoverTodoTool && activeToolNames.includes("search_tool_bm25");
-		if (!canCallTodoTool && !canDiscoverTodoTool) return undefined;
+		const canCallTodoTool = this.getActiveToolNames().includes("todo");
+		if (!canCallTodoTool) return undefined;
 		const phases = this.getTodoPhases().filter(phase => phase.tasks.length > 0);
 		if (phases.length === 0) return undefined;
 
@@ -7224,7 +7745,6 @@ export class AgentSession {
 
 		return prompt.render(goalTodoContextPrompt, {
 			canCallTodoTool,
-			canActivateTodoTool,
 			closed: String(closed),
 			open: String(open),
 			phases: promptPhases,
@@ -7342,11 +7862,15 @@ export class AgentSession {
 				timestamp,
 			});
 		}
-		if (this.#magicKeywordEnabled("workflow") && containsWorkflow(text)) {
+		if (
+			this.#magicKeywordEnabled("workflow") &&
+			containsWorkflow(text) &&
+			this.getActiveToolNames().includes("task")
+		) {
 			keywordNotices.push({
 				role: "custom",
 				customType: "workflow-notice",
-				content: WORKFLOW_NOTICE,
+				content: renderWorkflowNotice({ taskBatch: this.settings.get("task.batch") }),
 				display: false,
 				attribution: "user",
 				timestamp,
@@ -7559,6 +8083,7 @@ export class AgentSession {
 		options?: Pick<PromptOptions, "toolChoice" | "images" | "skipCompactionCheck"> & {
 			prependMessages?: AgentMessage[];
 			skipPostPromptRecoveryWait?: boolean;
+			acceptTerminalEmptyStop?: boolean;
 		},
 	): Promise<void> {
 		this.#beginInFlight();
@@ -7575,6 +8100,7 @@ export class AgentSession {
 			this.#mutationsSinceLastTodoTouch = 0;
 			this.#midRunNudgeCount = 0;
 			this.#resetPromptMaintenanceState();
+			this.#acceptTerminalEmptyStopForPrompt = options?.acceptTerminalEmptyStop === true;
 
 			await this.#maybeRestoreRetryFallbackPrimary();
 
@@ -7605,6 +8131,8 @@ export class AgentSession {
 				await this.#checkCompaction(lastAssistant, false, false, false);
 			}
 
+			await this.#armPlanYoloIfNeeded();
+
 			// Build messages array (session context, eager todo prelude, then active prompt message)
 			const messages: AgentMessage[] = [];
 			const planReferenceMessage = await this.#buildPlanReferenceMessage?.();
@@ -7618,6 +8146,10 @@ export class AgentSession {
 			const goalModeMessage = this.#buildGoalModeMessage();
 			if (goalModeMessage) {
 				messages.push(goalModeMessage);
+			}
+			const vibeModeMessage = this.#buildVibeModeMessage();
+			if (vibeModeMessage) {
+				messages.push(vibeModeMessage);
 			}
 			if (options?.prependMessages) {
 				messages.push(...options.prependMessages);
@@ -7792,8 +8324,11 @@ export class AgentSession {
 			},
 			hasPendingMessages: () => this.queuedMessageCount > 0,
 			shutdown: () => {
-				void this.dispose();
-				process.exit(0);
+				// Await the idempotent dispose() before exiting so the browser
+				// reaper and other bounded teardown complete — a fire-and-forget
+				// `void this.dispose()` raced process.exit() and could leave an
+				// OMP-owned Chromium alive (#5643).
+				void this.dispose().finally(() => process.exit(0));
 			},
 			getContextUsage: () => this.getContextUsage(),
 			waitForIdle: () => this.waitForIdle(),
@@ -8110,12 +8645,21 @@ export class AgentSession {
 		}
 	}
 
-	async #promptAgentInitiatedMessage(message: CustomMessage): Promise<void> {
+	async #promptAgentInitiatedMessage(
+		message: CustomMessage,
+		options?: { acceptTerminalEmptyStop?: boolean },
+	): Promise<void> {
 		this.#beginInFlight();
 		try {
+			const acceptTerminalEmptyStop = options?.acceptTerminalEmptyStop === true;
+			if (acceptTerminalEmptyStop) {
+				this.#resetPromptMaintenanceState();
+			}
+			this.#acceptTerminalEmptyStopForPrompt = acceptTerminalEmptyStop;
 			await this.agent.prompt(message);
 			await this.#waitForPostPromptRecovery();
 		} finally {
+			this.#acceptTerminalEmptyStopForPrompt = false;
 			this.#endInFlight();
 		}
 	}
@@ -8170,7 +8714,12 @@ export class AgentSession {
 	 */
 	async sendCustomMessage<T = unknown>(
 		message: CustomMessagePayload<T>,
-		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn"; queueChipText?: string },
+		options?: {
+			triggerTurn?: boolean;
+			deliverAs?: "steer" | "followUp" | "nextTurn";
+			queueChipText?: string;
+			acceptTerminalEmptyStop?: boolean;
+		},
 	): Promise<boolean> {
 		const normalizedPayload = normalizeCustomMessagePayload<T>(message);
 		const details =
@@ -8213,7 +8762,9 @@ export class AgentSession {
 					this.#queueHiddenNextTurnMessage(normalizedAppMessage, false);
 					return false;
 				}
-				await this.#promptAgentInitiatedMessage(normalizedAppMessage);
+				await this.#promptAgentInitiatedMessage(normalizedAppMessage, {
+					acceptTerminalEmptyStop: options.acceptTerminalEmptyStop === true,
+				});
 				return true;
 			}
 			this.agent.appendMessage(normalizedAppMessage);
@@ -8248,11 +8799,10 @@ export class AgentSession {
 	}
 
 	/**
-	 * Send a user message to the agent.
-	 * When deliverAs is set, queue the message instead of starting a new turn.
+	 * Send a user message through the prompt flow.
 	 *
-	 * @param content User message content (string or content array)
-	 * @param options.deliverAs Delivery mode: "steer" or "followUp"
+	 * Omitted `deliverAs` starts a turn when idle and queues as a steer while streaming.
+	 * Explicit `deliverAs` queues without starting a turn in either state.
 	 */
 	async sendUserMessage(
 		content: string | (TextContent | ImageContent)[],
@@ -8287,10 +8837,13 @@ export class AgentSession {
 			return;
 		}
 
-		// Use prompt() with expandPromptTemplates: false to skip command handling and template expansion
+		// Use prompt() with expandPromptTemplates: false to skip command handling and template expansion.
+		// `streamingBehavior: "steer"` preserves prompt-flow side effects during streaming while
+		// covering the narrow race where a stream starts before prompt() acquires the turn.
 		await this.prompt(text, {
 			expandPromptTemplates: false,
 			images,
+			streamingBehavior: "steer",
 		});
 	}
 
@@ -8482,12 +9035,7 @@ export class AgentSession {
 
 	#syncTodoPhasesFromBranch(): void {
 		const phases = getLatestTodoPhasesFromEntries(this.sessionManager.getBranch());
-		// Strip completed/abandoned tasks — they were done in a previous run,
-		// so they have no bearing on progress tracking for the new turn.
-		for (const phase of phases) {
-			phase.tasks = phase.tasks.filter(t => t.status !== "completed" && t.status !== "abandoned");
-		}
-		this.setTodoPhases(phases.filter(p => p.tasks.length > 0));
+		this.setTodoPhases(phases);
 	}
 
 	#cloneTodoPhases(phases: TodoPhase[]): TodoPhase[] {
@@ -8592,12 +9140,6 @@ export class AgentSession {
 	 */
 	async newSession(options?: NewSessionOptions): Promise<boolean> {
 		const previousSessionFile = this.sessionFile;
-		const nextDiscoverySessionToolNames = this.#mcpDiscoveryEnabled
-			? [
-					...this.#getActiveNonMCPToolNames(),
-					...this.#filterSelectableMCPToolNames(this.#defaultSelectedMCPToolNames),
-				]
-			: undefined;
 
 		// Emit session_before_switch event with reason "new" (can be cancelled)
 		if (this.#extensionRunner?.hasHandlers("session_before_switch")) {
@@ -8640,6 +9182,7 @@ export class AgentSession {
 		this.#clearCheckpointRuntimeState();
 		this.setTodoPhases([]);
 		this.#freshProviderSessionId = undefined;
+		this.#clearInheritedProviderPromptCacheKey();
 		this.#syncAgentSessionId();
 		this.#rekeyHindsightMemoryForCurrentSessionId();
 		this.#rekeyMnemopiMemoryForCurrentSessionId();
@@ -8649,16 +9192,6 @@ export class AgentSession {
 
 		this.sessionManager.appendThinkingLevelChange(this.thinkingLevel, this.configuredThinkingLevel());
 		this.sessionManager.appendServiceTierChange(this.#serviceTierEntry());
-		if (nextDiscoverySessionToolNames) {
-			await this.#applyActiveToolsByName(nextDiscoverySessionToolNames, { persistMCPSelection: false });
-			if (this.getSelectedMCPToolNames().length > 0) {
-				this.sessionManager.appendMCPToolSelection(this.getSelectedMCPToolNames());
-			}
-		}
-		this.#rememberSessionDefaultSelectedMCPToolNames(
-			this.sessionFile,
-			this.#getConfiguredDefaultSelectedMCPToolNames(),
-		);
 
 		this.#todoReminderCount = 0;
 		this.#todoReminderAwaitingProgress = false;
@@ -8740,6 +9273,7 @@ export class AgentSession {
 
 		// Update agent session ID
 		this.#freshProviderSessionId = undefined;
+		this.#adoptInheritedProviderPromptCacheKey();
 		this.#syncAgentSessionId();
 		this.#rekeyHindsightMemoryForCurrentSessionId();
 		this.#rekeyMnemopiMemoryForCurrentSessionId();
@@ -8787,6 +9321,7 @@ export class AgentSession {
 
 		const targetModel = await this.#modelRegistry.refreshSelectedModelMetadata(model);
 
+		this.#modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(targetModel));
 		this.#clearActiveRetryFallback();
 		this.#setModelWithProviderSessionReset(targetModel);
 		this.sessionManager.appendModelChange(`${targetModel.provider}/${targetModel.id}`, role);
@@ -8824,6 +9359,7 @@ export class AgentSession {
 
 		const targetModel = await this.#modelRegistry.refreshSelectedModelMetadata(model);
 
+		this.#modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(targetModel));
 		this.#clearActiveRetryFallback();
 		this.#setModelWithProviderSessionReset(targetModel);
 		this.sessionManager.appendModelChange(
@@ -8983,6 +9519,7 @@ export class AgentSession {
 		const next = scopedModels[nextIndex];
 
 		// Apply model
+		this.#modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(next.model));
 		this.#clearActiveRetryFallback();
 		this.#setModelWithProviderSessionReset(next.model);
 		this.sessionManager.appendModelChange(`${next.model.provider}/${next.model.id}`);
@@ -9013,6 +9550,7 @@ export class AgentSession {
 			throw new Error(`No API key for ${nextModel.provider}/${nextModel.id}`);
 		}
 
+		this.#modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(nextModel));
 		this.#clearActiveRetryFallback();
 		this.#setModelWithProviderSessionReset(nextModel);
 		this.sessionManager.appendModelChange(`${nextModel.provider}/${nextModel.id}`);
@@ -9032,7 +9570,7 @@ export class AgentSession {
 		const all = this.#modelRegistry.getAvailable();
 		const patterns = this.settings.get("enabledModels");
 		if (!patterns || patterns.length === 0) return all;
-		return filterAvailableModelsByEnabledPatterns(all, patterns);
+		return filterAvailableModelsByEnabledPatterns(all, patterns, this.settings);
 	}
 
 	// =========================================================================
@@ -9057,6 +9595,9 @@ export class AgentSession {
 			this.#autoThinking = true;
 			this.#autoResolvedLevel = undefined;
 			this.#thinkingLevel = provisional;
+			if (!wasAuto) {
+				this.#clearInheritedProviderPromptCacheKey();
+			}
 			this.#applyThinkingLevelToAgent(provisional);
 			if (persist) {
 				this.settings.set("defaultThinkingLevel", AUTO_THINKING);
@@ -9080,6 +9621,7 @@ export class AgentSession {
 		this.#applyThinkingLevelToAgent(effectiveLevel);
 
 		if (isChanging) {
+			this.#clearInheritedProviderPromptCacheKey();
 			this.sessionManager.appendThinkingLevelChange(effectiveLevel, effectiveLevel);
 			if (persist && effectiveLevel !== undefined && effectiveLevel !== ThinkingLevel.Off) {
 				this.settings.set("defaultThinkingLevel", effectiveLevel);
@@ -9098,7 +9640,7 @@ export class AgentSession {
 	}
 
 	/**
-	 * Cycle to next thinking level: off → auto → minimal..xhigh → off.
+	 * Cycle to next thinking level: off → auto → minimal..max → off.
 	 * @returns New selector, or undefined if model doesn't support thinking
 	 */
 	cycleThinkingLevel(): ConfiguredThinkingLevel | undefined {
@@ -9140,8 +9682,9 @@ export class AgentSession {
 		let resolved: Effort | undefined;
 		if (this.#magicKeywordEnabled("ultrathink") && containsUltrathink(promptText)) {
 			// The user explicitly asked for maximum thinking; bypass the classifier
-			// and jump straight to the highest auto-supported level for this model.
-			resolved = clampAutoThinkingEffort(model, Effort.XHigh);
+			// (and its xhigh auto ceiling) and jump straight to the highest
+			// supported level for this model.
+			resolved = clampAutoThinkingEffort(model, Effort.Max);
 		} else {
 			const controller = new AbortController();
 			const timer = setTimeout(() => controller.abort(), AgentSession.#AUTO_THINKING_TIMEOUT_MS);
@@ -9363,6 +9906,11 @@ export class AgentSession {
 	 * candidate is small or the session has been idle long enough that the
 	 * provider prompt cache is cold), so it is cheap to run every turn. Gated
 	 * on the `compaction.supersedeReads` and `compaction.dropUseless` settings.
+	 *
+	 * Persists via `rewriteEntries` like every other history rewrite — the
+	 * session file must match the live (pruned) context or file-based forks
+	 * (`/fork`, `/tan`) and resume rebuild a divergent prefix and cold-miss the
+	 * provider prompt cache.
 	 */
 	async #pruneStaleToolResults(): Promise<{ prunedCount: number; tokensSaved: number } | undefined> {
 		const { supersedeReads, dropUseless } = this.settings.getGroup("compaction");
@@ -9385,6 +9933,7 @@ export class AgentSession {
 			return undefined;
 		}
 
+		await this.sessionManager.rewriteEntries();
 		const sessionContext = this.buildDisplaySessionContext();
 		this.agent.replaceMessages(sessionContext.messages);
 		this.#resetAllAdvisorRuntimes();
@@ -9636,24 +10185,37 @@ export class AgentSession {
 
 			// Strategy honored on manual /compact too. Custom instructions (public
 			// user focus OR internal plan-mode guidance) imply a directed LLM
-			// summary; a text-only model cannot read snapcompact frames. When
-			// snapcompact itself was requested, fail locally instead of silently
-			// converting the "no LLM call" path into a provider-backed summary.
+			// summary; a text-only model cannot read snapcompact frames.
 			const wantsSnapcompact =
 				compactionPrep.kind !== "fromHook" &&
 				effectiveSettings.strategy === "snapcompact" &&
 				!customInstructions &&
 				!options?.internalGuidance;
-			const snapcompactReady = wantsSnapcompact;
+			// `/compact snapcompact` is an explicit no-LLM archive request: honor
+			// its contract by failing locally rather than silently shipping the
+			// transcript to a provider. The default-configured snapcompact
+			// strategy, in contrast, falls back to LLM compaction (mirroring the
+			// auto-compaction path) so a routine /compact still completes on a
+			// text-only model (issue #5064).
+			const explicitSnapcompact = compactMode?.name === "snapcompact";
+			let snapcompactReady = wantsSnapcompact;
 			const snapcompactShapeSetting = this.settings.get("snapcompact.shape");
 			let snapcompactShape: snapcompact.Shape | undefined;
 			if (wantsSnapcompact && !this.model.input.includes("image")) {
+				if (explicitSnapcompact) {
+					this.emitNotice(
+						"warning",
+						`snapcompact needs a vision-capable model (${this.model.id} is text-only)`,
+						"compaction",
+					);
+					throw new Error(`snapcompact cannot run locally: ${this.model.id} is text-only.`);
+				}
 				this.emitNotice(
 					"warning",
-					`snapcompact needs a vision-capable model (${this.model.id} is text-only)`,
+					`snapcompact needs a vision-capable model (${this.model.id} is text-only); falling back to LLM compaction`,
 					"compaction",
 				);
-				throw new Error(`snapcompact cannot run locally: ${this.model.id} is text-only.`);
+				snapcompactReady = false;
 			} else if (snapcompactReady) {
 				const text = snapcompact.serializeConversation(
 					convertToLlm(preparation.messagesToSummarize.concat(preparation.turnPrefixMessages)),
@@ -9683,6 +10245,7 @@ export class AgentSession {
 			let firstKeptEntryId: string;
 			let tokensBefore: number;
 			let details: unknown;
+			let codexCompaction: CodexCompactionContext | undefined;
 
 			// Snapcompact runs locally first. The frame cap is sized from the live
 			// model window via #computeSnapcompactMaxFrames so the post-render context
@@ -9762,6 +10325,11 @@ export class AgentSession {
 				details = snapcompactResult.details;
 				preserveData = { ...(compactionPrep.preserveData ?? {}), ...(snapcompactResult.preserveData ?? {}) };
 			} else {
+				codexCompaction = createCodexCompactionContext({
+					trigger: "manual",
+					reason: "user_requested",
+					phase: "standalone_turn",
+				});
 				// Generate compaction result. Only convert known abort-shaped
 				// rejections (AbortError raised while the abort signal is set,
 				// or an already-typed sentinel) into `CompactionCancelledError`
@@ -9783,6 +10351,7 @@ export class AgentSession {
 							extraContext: compactionPrep.hookContext,
 							remoteInstructions: this.#baseSystemPrompt.join("\n\n"),
 							convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
+							codexCompaction,
 						},
 						compactionCandidates,
 					);
@@ -9819,13 +10388,18 @@ export class AgentSession {
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.buildDisplaySessionContext();
 			this.agent.replaceMessages(sessionContext.messages);
+			this.#rebasePendingContextSnapshotAfterCompaction();
 			// Compaction discarded the conversation history that carried the approved
 			// plan reference. Clear the sent-flag so #buildPlanReferenceMessage re-reads
 			// the plan from disk and re-injects it on the next turn (issue #1246).
 			this.#planReferenceSent = false;
 			this.#resetAllAdvisorRuntimes();
 			this.#syncTodoPhasesFromBranch();
-			this.#closeCodexProviderSessionsForHistoryRewrite();
+			if (codexCompaction) {
+				this.#resetCodexProviderAfterCompaction(codexCompaction);
+			} else {
+				this.#closeCodexProviderSessionsForHistoryRewrite();
+			}
 
 			// Get the saved compaction entry for the hook
 			const savedCompactionEntry = newEntries.find(e => e.type === "compaction" && e.summary === summary) as
@@ -10041,6 +10615,17 @@ export class AgentSession {
 
 			// Start a new session
 			const previousSessionFile = this.sessionFile;
+			if (this.#extensionRunner?.hasHandlers("session_before_switch")) {
+				const result = (await this.#extensionRunner.emit({
+					type: "session_before_switch",
+					reason: "handoff",
+				})) as SessionBeforeSwitchResult | undefined;
+
+				if (result?.cancel) {
+					options?.onSwitchCancelled?.();
+					return undefined;
+				}
+			}
 			await this.sessionManager.flush();
 			this.#cancelOwnAsyncJobs();
 			await this.sessionManager.newSession(previousSessionFile ? { parentSession: previousSessionFile } : undefined);
@@ -10097,6 +10682,13 @@ export class AgentSession {
 			this.agent.replaceMessages(sessionContext.messages);
 			this.#resetAllAdvisorRuntimes();
 			this.#syncTodoPhasesFromBranch();
+			if (this.#extensionRunner) {
+				await this.#extensionRunner.emit({
+					type: "session_switch",
+					reason: "handoff",
+					previousSessionFile,
+				});
+			}
 
 			return { document: handoffText, savedPath };
 		} catch (error) {
@@ -10173,6 +10765,7 @@ export class AgentSession {
 		await this.#runAutoCompaction("threshold", false, false, false, {
 			autoContinue: false,
 			triggerContextTokens: contextTokens,
+			phase: "pre_turn",
 		});
 	}
 
@@ -10247,6 +10840,7 @@ export class AgentSession {
 			suppressContinuation: true,
 			suppressHandoff: true,
 			triggerContextTokens: contextTokens,
+			phase: "mid_turn",
 		});
 
 		if (signal?.aborted) return;
@@ -10493,6 +11087,7 @@ export class AgentSession {
 				return await this.#runAutoCompaction("threshold", false, false, allowDefer, {
 					autoContinue,
 					triggerContextTokens: postMaintenanceContextTokens,
+					phase: "pre_turn",
 				});
 			}
 			logger.debug("Auto-compaction threshold satisfied but context promotion took over", {
@@ -10503,6 +11098,24 @@ export class AgentSession {
 		}
 		return COMPACTION_CHECK_NONE;
 	}
+	#isTerminalYieldToolResult(event: { toolName: string; isError?: boolean; result?: { details?: unknown } }): boolean {
+		if (event.toolName !== "yield" || event.isError) return false;
+		const details = event.result?.details;
+		if (!details || typeof details !== "object") return true;
+		const record = details as Record<string, unknown>;
+		return !(
+			record.status === "success" &&
+			Array.isArray(record.type) &&
+			record.type.length > 0 &&
+			record.type.every(item => typeof item === "string")
+		);
+	}
+
+	#markTerminalYieldToolCall(toolCallId: string): void {
+		this.#lastSuccessfulYieldToolCallId = toolCallId;
+		this.#yieldTerminationPending = true;
+	}
+
 	#assistantMessageHasSuccessfulYieldToolCall(assistantMessage: AssistantMessage, toolCallId: string): boolean {
 		const lastToolCall = assistantMessage.content
 			.slice()
@@ -10660,23 +11273,30 @@ export class AgentSession {
 			return false;
 		}
 
+		if (this.#acceptTerminalEmptyStopForPrompt && assistantMessage.stopReason === "stop") {
+			this.#acceptTerminalEmptyStopForPrompt = false;
+			this.#discardAcceptedTerminalEmptyStop(assistantMessage);
+			this.#emptyStopRetryCount = 0;
+			return false;
+		}
+
 		this.#emptyStopRetryCount++;
 		if (this.#emptyStopRetryCount > EMPTY_STOP_MAX_RETRIES) {
-			logger.warn("Assistant returned empty stop after retry cap", {
-				attempts: this.#emptyStopRetryCount - 1,
+			const attempts = this.#emptyStopRetryCount - 1;
+			const finalError = "Assistant returned empty stop after retry cap";
+			logger.warn(finalError, {
+				attempts,
 				model: assistantMessage.model,
 				provider: assistantMessage.provider,
 			});
-			if (this.#retryAttempt > 0) {
-				await this.#emitSessionEvent({
-					type: "auto_retry_end",
-					success: false,
-					attempt: this.#retryAttempt,
-					finalError: "Assistant returned empty stop after retry cap",
-				});
-				this.#clearPendingRecoveredRetryErrors();
-				this.#retryAttempt = 0;
-			}
+			await this.#emitSessionEvent({
+				type: "auto_retry_end",
+				success: false,
+				attempt: this.#retryAttempt > 0 ? this.#retryAttempt : attempts,
+				finalError,
+			});
+			this.#clearPendingRecoveredRetryErrors();
+			this.#retryAttempt = 0;
 			this.#resolveRetry();
 			// Tool-use orphans corrupt Anthropic message history (tool_result without
 			// matching tool_use). Always remove them even when the retry cap is hit.
@@ -10853,7 +11473,11 @@ export class AgentSession {
 	): Promise<CompactionCheckResult> {
 		const compactionEntryBefore = getLatestCompactionEntry(this.sessionManager.getBranch());
 		await this.#dropPersistedAssistantTurn(assistantMessage);
-		const result = await this.#runAutoCompaction(reason, true, false, allowDefer, options);
+		const result = await this.#runAutoCompaction(reason, true, false, allowDefer, {
+			autoContinue: options.autoContinue,
+			triggerContextTokens: options.triggerContextTokens,
+			phase: "mid_turn",
+		});
 		const compactionEntryAfter = getLatestCompactionEntry(this.sessionManager.getBranch());
 		if (result.historyRewritten !== true && compactionEntryAfter === compactionEntryBefore) {
 			this.#restoreFailedAssistantTurn(assistantMessage);
@@ -10871,6 +11495,38 @@ export class AgentSession {
 			return;
 		}
 		this.agent.appendMessage(assistantMessage);
+	}
+
+	#discardAcceptedTerminalEmptyStop(assistantMessage: AssistantMessage): void {
+		const branch = this.sessionManager.getBranch();
+		const branchEntry = branch
+			.slice()
+			.reverse()
+			.find(
+				entry =>
+					entry.type === "message" &&
+					entry.message.role === "assistant" &&
+					this.#isSameAssistantMessage(entry.message, assistantMessage),
+			);
+		const parentEntry =
+			branchEntry?.parentId === null || branchEntry?.parentId === undefined
+				? undefined
+				: branch.find(entry => entry.id === branchEntry.parentId);
+		const prunePrompt = parentEntry?.type === "custom_message";
+
+		this.#removeAssistantMessageFromActiveContext(assistantMessage, "accepted-terminal-empty-stop");
+		if (prunePrompt && this.agent.state.messages.at(-1)?.role === "custom") {
+			this.agent.replaceMessages(this.agent.state.messages.slice(0, -1));
+		}
+
+		if (!branchEntry) return;
+		const targetParentId = prunePrompt ? parentEntry.parentId : branchEntry.parentId;
+		if (targetParentId === null) {
+			this.sessionManager.resetLeaf();
+		} else {
+			this.sessionManager.branch(targetParentId);
+		}
+		this.sessionManager.appendCustomEntry("accepted-terminal-empty-stop");
 	}
 
 	/**
@@ -10988,7 +11644,6 @@ export class AgentSession {
 		if (activeMessages) {
 			activeMessages.splice(0, activeMessages.length, ...sessionContext.messages);
 		}
-		await this.#restoreMCPSelectionsForSessionContext(sessionContext);
 		this.agent.replaceMessages(activeMessages ?? sessionContext.messages);
 		this.#resetAdvisorSessionState();
 		this.#syncTodoPhasesFromBranch();
@@ -10996,8 +11651,9 @@ export class AgentSession {
 		this.#checkpointState = undefined;
 		this.#pendingRewindReport = undefined;
 	}
-	#isPlanDecisionTool(name: string): boolean {
-		return PLAN_DECISION_TOOLS.has(name);
+	/** Plan-mode decision affordances: `ask`, or plan approval via `write xd://propose`. */
+	#isPlanDecisionTool(toolCall: { name: string; arguments?: Record<string, unknown> }): boolean {
+		return toolCall.name === "ask" || isProposeToolCall(toolCall);
 	}
 
 	async #enforcePlanModeDecisionAtSettle(): Promise<boolean> {
@@ -11013,7 +11669,7 @@ export class AgentSession {
 		}
 
 		const calledDecisionTool = assistantMessage.content.some(
-			content => content.type === "toolCall" && this.#isPlanDecisionTool(content.name),
+			content => content.type === "toolCall" && this.#isPlanDecisionTool(content),
 		);
 		if (calledDecisionTool) {
 			this.#planModeReminderCount = 0;
@@ -11032,9 +11688,9 @@ export class AgentSession {
 			logger.debug("Plan mode convergence: reminder cap reached; yielding to user");
 			return false;
 		}
-		const hasRequiredTools = this.#toolRegistry.has("ask") && this.#toolRegistry.has("resolve");
+		const hasRequiredTools = this.#toolRegistry.has("ask") && this.#toolRegistry.has("write");
 		if (!hasRequiredTools) {
-			logger.warn("Plan mode enforcement skipped because ask/resolve tools are unavailable", {
+			logger.warn("Plan mode enforcement skipped because ask/write tools are unavailable", {
 				activeToolNames: this.agent.state.tools.map(tool => tool.name),
 			});
 			return false;
@@ -11115,9 +11771,9 @@ export class AgentSession {
 			}
 		}
 
-		// Must check the active tool set, not just the registry: tool discovery
-		// (tools.discoveryMode === "all") can register `todo` while hiding it from
-		// the exposed tools. Forcing a named tool_choice for an inactive tool makes
+		// Must check the active tool set, not just the registry: a registered
+		// tool can be hidden from the exposed tools (e.g. unmounted under the
+		// xd:// transport). Forcing a named tool_choice for an inactive tool makes
 		// the provider reject the request (HTTP 400).
 		if (!this.getActiveToolNames().includes("todo")) {
 			logger.warn("Eager todo enforcement skipped because todo is not active", {
@@ -11202,7 +11858,7 @@ export class AgentSession {
 	/**
 	 * Check if agent stopped with incomplete todos and prompt to continue.
 	 */
-	async #checkTodoCompletion(): Promise<boolean> {
+	async #checkTodoCompletion(message: AssistantMessage): Promise<boolean> {
 		// Skip todo reminders when the most recent turn was driven by an explicit user force —
 		// the user wanted exactly that tool, not a follow-up nag about incomplete todos.
 		const lastServedLabel = this.#toolChoiceQueue.consumeLastServedLabel();
@@ -11236,7 +11892,7 @@ export class AgentSession {
 			return false;
 		}
 
-		const remindersMax = this.settings.get("todo.reminders.max");
+		const remindersMax = this.settings.get("todo.remindersMax");
 		if (this.#todoReminderCount >= remindersMax) {
 			logger.debug("Todo completion: max reminders reached", { count: this.#todoReminderCount });
 			return false;
@@ -11264,6 +11920,13 @@ export class AgentSession {
 		if (incomplete.length === 0) {
 			this.#todoReminderCount = 0;
 			this.#todoReminderAwaitingProgress = false;
+			return false;
+		}
+
+		if (isAwaitingUserAnswer(message)) {
+			logger.debug("Todo completion: assistant is waiting for user input; skipping reminder", {
+				incomplete: incomplete.length,
+			});
 			return false;
 		}
 
@@ -11452,6 +12115,9 @@ export class AgentSession {
 		const currentModel = this.model;
 		if (currentModel) {
 			this.#closeProviderSessionsForModelSwitch(currentModel, model);
+			if (!modelsAreEqual(currentModel, model)) {
+				this.#clearInheritedProviderPromptCacheKey();
+			}
 		}
 		this.agent.setModel(model);
 
@@ -11463,6 +12129,14 @@ export class AgentSession {
 		const currentModel = this.model;
 		if (currentModel?.api !== "openai-codex-responses") return;
 		this.#closeProviderSessionsForModelSwitch(currentModel, currentModel);
+	}
+
+	#resetCodexProviderAfterCompaction(compaction: CodexCompactionContext): void {
+		resetOpenAICodexHistoryAfterCompaction({
+			providerSessionState: this.#providerSessionState,
+			sessionId: this.sessionId,
+			compaction,
+		});
 	}
 
 	#resetCurrentResponsesProviderSession(reason: string): void {
@@ -11740,7 +12414,7 @@ export class AgentSession {
 		if (!trimmedTarget) return undefined;
 
 		const parsed = parseModelString(trimmedTarget, {
-			allowMaxAlias: true,
+			allowMaxSuffix: true,
 			allowAutoAlias: true,
 			isLiteralModelId: (provider, id) =>
 				availableModels.some(model => model.provider === provider && model.id === id),
@@ -11835,18 +12509,6 @@ export class AgentSession {
 
 		return candidates;
 	}
-	#isCompactionAuthFailure(error: unknown): boolean {
-		if (!(error instanceof Error)) return false;
-		// Real provider 401/403 — surfaced as `.status` by the compaction layer
-		// (see `createSummarizationError` in packages/agent/src/compaction/compaction.ts).
-		// Without this branch, an expired/revoked Anthropic key would bypass the
-		// authenticated-fallback path and dump the raw HTTP body into the UI.
-		const status = (error as Error & { status?: number }).status;
-		if (status === 401 || status === 403) return true;
-		// pi-native gateway synthetic for "no credential configured" (issue #986).
-		// Carries no HTTP status, so the legacy message regex stays.
-		return /auth_unavailable|no auth available/i.test(error.message);
-	}
 
 	#buildCompactionAuthError(): Error {
 		const currentModel = this.model;
@@ -11896,6 +12558,7 @@ export class AgentSession {
 						tools: this.agent.state.tools,
 						sessionId: this.sessionId,
 						promptCacheKey: this.sessionId,
+						providerSessionState: this.#providerSessionState,
 						// Route every summarization HTTP request through the
 						// session's side-stream transport so the provider
 						// concurrency cap (e.g. providers.ollama-cloud.maxConcurrency)
@@ -11911,7 +12574,7 @@ export class AgentSession {
 					},
 				);
 			} catch (error) {
-				if (!this.#isCompactionAuthFailure(error)) {
+				if (!AIError.is(AIError.classify(error, candidate.api), AIError.Flag.AuthFailed)) {
 					throw error;
 				}
 			}
@@ -12166,49 +12829,85 @@ export class AgentSession {
 	}
 
 	/**
-	 * Last-resort reducer when {@link #runAutoCompaction} would otherwise dead-end.
-	 * The summarizer cut at the only available turn boundary, but the kept tail is
-	 * still over the recovery band because a single recent turn (a large
-	 * tool-result, a heavy fenced/XML block) is itself bigger than the band and
-	 * `findCutPoint` cannot cut inside one message. `shake("elide")` reaches INSIDE
-	 * that tail — it offloads heavy tool-result / block content to one
-	 * `artifact://` blob and leaves a recoverable placeholder — so residual context
-	 * genuinely drops instead of the guard pausing maintenance and looping the
-	 * warning. Without it the guard would pause/warn here; with it the caller
-	 * re-tests its progress predicate after the elide pass and only falls through
-	 * to the warning when residual stays over.
+	 * Last-resort tiered reducer when {@link #runAutoCompaction} would otherwise
+	 * dead-end. The summarizer cut at the only available turn boundary, but the
+	 * kept tail is still over the recovery band because a single recent turn (a
+	 * large tool-result, a heavy fenced/XML block, attached images) is itself
+	 * bigger than the band and `findCutPoint` cannot cut inside one message.
 	 *
-	 * Image-only tails are out of scope: `collectShakeRegions` skips image-only
-	 * tool results and user-message images aren't counted by the local estimate
-	 * that gates the dead-end, so those still surface the warning (remedy:
-	 * `/shake images`).
+	 * Tier 1 — `shake("elide")` reaches INSIDE that tail: heavy tool-result /
+	 * block content is offloaded to one `artifact://` blob behind a recoverable
+	 * placeholder. Skipped when this pass already ran a shake (`skipElide`).
+	 * Tier 2 — `dropImages()`: the manual `/shake images` remedy, automated.
+	 * Image blocks are stripped from the branch; unlike elided text they are NOT
+	 * artifact-recoverable, so this tier only runs once elide has failed the
+	 * progress re-test.
 	 *
-	 * Returns the elide {@link ShakeResult} when something was offloaded (so the
-	 * caller can re-test and report), or `undefined` when nothing was eligible or
-	 * the pass aborted/failed.
+	 * Each tier that rewrote history re-anchors the in-flight context snapshot,
+	 * then the caller's progress predicate is re-tested; the first tier that
+	 * restores progress emits one info notice describing everything freed and
+	 * stops. Returns whether progress was restored — `false` falls through to
+	 * the dead-end warning.
 	 */
-	async #tryShakeRescueForDeadEnd(signal: AbortSignal): Promise<ShakeResult | undefined> {
-		if (signal.aborted) return undefined;
+	async #rescueCompactionDeadEnd(
+		signal: AbortSignal,
+		options: { skipElide: boolean; hasProgress: () => boolean },
+	): Promise<boolean> {
+		if (signal.aborted) return false;
+		let elided = 0;
+		let elidedTokens = 0;
+		let elideSink = "placeholders";
+		if (!options.skipElide) {
+			try {
+				const result = await this.shake("elide", { signal });
+				elided = result.toolResultsDropped + result.blocksDropped;
+				elidedTokens = result.tokensFreed;
+				if (result.artifactId) elideSink = "an artifact";
+				if (elided > 0) {
+					// The elide pass rewrote history; re-anchor the in-flight snapshot
+					// so the caller's headroom/retry-fit re-test measures the shaken
+					// context.
+					this.#rebasePendingContextSnapshotAfterCompaction();
+				}
+			} catch (error) {
+				logger.warn("Dead-end shake rescue failed", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+			if (elided > 0 && options.hasProgress()) {
+				this.emitNotice(
+					"info",
+					`Compaction dead-end recovery: ${this.#describeElideRescue(elided, elidedTokens, elideSink)} so maintenance could make progress.`,
+					"compaction",
+				);
+				return true;
+			}
+		}
+		if (signal.aborted) return false;
+		let imagesDropped = 0;
 		try {
-			const result = await this.shake("elide", { signal });
-			return result.toolResultsDropped + result.blocksDropped > 0 ? result : undefined;
+			imagesDropped = (await this.dropImages()).removed;
+			if (imagesDropped > 0) this.#rebasePendingContextSnapshotAfterCompaction();
 		} catch (error) {
-			logger.warn("Dead-end shake rescue failed", {
+			logger.warn("Dead-end image-drop rescue failed", {
 				error: error instanceof Error ? error.message : String(error),
 			});
-			return undefined;
 		}
+		if (imagesDropped > 0 && options.hasProgress()) {
+			const elidedPart = elided > 0 ? `${this.#describeElideRescue(elided, elidedTokens, elideSink)} and ` : "";
+			this.emitNotice(
+				"info",
+				`Compaction dead-end recovery: ${elidedPart}dropped ${imagesDropped} attached image${imagesDropped === 1 ? "" : "s"} so maintenance could make progress.`,
+				"compaction",
+			);
+			return true;
+		}
+		return false;
 	}
 
-	/** Notice describing a successful dead-end elide rescue. */
-	#emitShakeRescueNotice(result: ShakeResult): void {
-		const elided = result.toolResultsDropped + result.blocksDropped;
-		const sink = result.artifactId ? "an artifact" : "placeholders";
-		this.emitNotice(
-			"info",
-			`Compaction dead-end recovery: elided ${elided} heavy block${elided === 1 ? "" : "s"} (~${result.tokensFreed.toLocaleString()} tokens) to ${sink} so maintenance could make progress.`,
-			"compaction",
-		);
+	/** Notice fragment for a dead-end elide tier: what was freed and where it went. */
+	#describeElideRescue(elided: number, tokensFreed: number, sink: string): string {
+		return `elided ${elided} heavy block${elided === 1 ? "" : "s"} (~${tokensFreed.toLocaleString()} tokens) to ${sink}`;
 	}
 
 	/**
@@ -12234,6 +12933,7 @@ export class AgentSession {
 			triggerContextTokens?: number;
 			suppressContinuation?: boolean;
 			suppressHandoff?: boolean;
+			phase?: CodexCompactionContext["phase"];
 		} = {},
 	): Promise<CompactionCheckResult> {
 		const compactionSettings = this.settings.getGroup("compaction");
@@ -12276,7 +12976,7 @@ export class AgentSession {
 				async signal => {
 					await Promise.resolve();
 					if (signal.aborted) return;
-					await this.#runAutoCompaction(reason, willRetry, true);
+					await this.#runAutoCompaction(reason, willRetry, true, true, { phase: options.phase });
 				},
 				{ generation },
 			);
@@ -12313,13 +13013,17 @@ export class AgentSession {
 			// queue, not the core steering queue (which handoff's agent.reset() would wipe).
 			await this.#emitSessionEvent({ type: "auto_compaction_start", reason, action });
 			if (action === "handoff") {
+				let handoffSwitchCancelled = false;
 				const handoffFocus = AUTO_HANDOFF_THRESHOLD_FOCUS;
 				const handoffResult = await this.handoff(handoffFocus, {
 					autoTriggered: true,
 					signal: autoCompactionSignal,
+					onSwitchCancelled: () => {
+						handoffSwitchCancelled = true;
+					},
 				});
 				if (!handoffResult) {
-					const aborted = autoCompactionSignal.aborted;
+					const aborted = autoCompactionSignal.aborted || handoffSwitchCancelled;
 					if (aborted) {
 						await this.#emitSessionEvent({
 							type: "auto_compaction_end",
@@ -12419,6 +13123,7 @@ export class AgentSession {
 			let hookCompaction: CompactionResult | undefined;
 			let fromExtension = false;
 			let preserveData: Record<string, unknown> | undefined;
+			let codexCompaction: CodexCompactionContext | undefined;
 
 			if (this.#extensionRunner?.hasHandlers("session_before_compact")) {
 				const hookResult = (await this.#extensionRunner.emit({
@@ -12557,6 +13262,13 @@ export class AgentSession {
 				const telemetry = resolveTelemetry(this.agent.telemetry, this.sessionId);
 				let compactResult: CompactionResult | undefined;
 				let lastError: unknown;
+				codexCompaction = createCodexCompactionContext({
+					trigger: "auto",
+					reason: "context_limit",
+					phase:
+						options.phase ??
+						(reason === "threshold" ? "pre_turn" : reason === "idle" ? "standalone_turn" : "mid_turn"),
+				});
 
 				for (let candidateIndex = 0; candidateIndex < candidates.length; candidateIndex++) {
 					const candidate = candidates[candidateIndex];
@@ -12589,6 +13301,8 @@ export class AgentSession {
 									tools: this.agent.state.tools,
 									sessionId: this.sessionId,
 									promptCacheKey: this.sessionId,
+									providerSessionState: this.#providerSessionState,
+									codexCompaction,
 								},
 							);
 							break;
@@ -12599,7 +13313,7 @@ export class AgentSession {
 
 							const message = error instanceof Error ? error.message : String(error);
 							const id = AIError.classify(error, candidate.api);
-							if (this.#isCompactionAuthFailure(error)) {
+							if (AIError.is(id, AIError.Flag.AuthFailed)) {
 								lastError = this.#buildCompactionAuthError();
 								break;
 							}
@@ -12701,13 +13415,18 @@ export class AgentSession {
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.buildDisplaySessionContext();
 			this.agent.replaceMessages(sessionContext.messages);
+			this.#rebasePendingContextSnapshotAfterCompaction();
 			// Compaction discarded the conversation history that carried the approved
 			// plan reference. Clear the sent-flag so #buildPlanReferenceMessage re-reads
 			// the plan from disk and re-injects it on the next turn (issue #1246).
 			this.#planReferenceSent = false;
 			this.#resetAllAdvisorRuntimes();
 			this.#syncTodoPhasesFromBranch();
-			this.#closeCodexProviderSessionsForHistoryRewrite();
+			if (codexCompaction) {
+				this.#resetCodexProviderAfterCompaction(codexCompaction);
+			} else {
+				this.#closeCodexProviderSessionsForHistoryRewrite();
+			}
 
 			// Get the saved compaction entry for the hook
 			const savedCompactionEntry = newEntries.find(e => e.type === "compaction" && e.summary === summary) as
@@ -12730,23 +13449,28 @@ export class AgentSession {
 				details,
 				preserveData,
 			};
-			await this.#emitSessionEvent({ type: "auto_compaction_end", action, result, aborted: false, willRetry });
-
-			// Post-maintenance progress guard. Snapcompact can project over budget and
-			// fall back to a context-full summary; the summarizer keeps `keepRecentTokens`
-			// of recent history verbatim and findCutPoint can only cut at turn
-			// boundaries (never tool results), so a single oversized recent turn (e.g. a
-			// huge tool result) leaves the rewritten context still above threshold.
-			// Scheduling the continuation regardless means the next agent_end re-enters
-			// #checkCompaction over the same oversized tail and re-fires forever. The
-			// retry and the threshold auto-continue use different progress tests (a
-			// recoverable overflow only has to fit; the auto-continue thrash needs the
-			// stricter recovery band), so each branch evaluates its own below.
+			// Post-maintenance progress guard — evaluated BEFORE emitting
+			// auto_compaction_end so the TUI rebuild triggered by that event
+			// already reflects any rescue rewrite (elide / image-drop) and the
+			// dead-end warning stamped on the compaction entry. Snapcompact can
+			// project over budget and fall back to a context-full summary; the
+			// summarizer keeps `keepRecentTokens` of recent history verbatim and
+			// findCutPoint can only cut at turn boundaries (never tool results),
+			// so a single oversized recent turn (e.g. a huge tool result) leaves
+			// the rewritten context still above threshold. Scheduling the
+			// continuation regardless means the next agent_end re-enters
+			// #checkCompaction over the same oversized tail and re-fires forever.
+			// The retry and the threshold auto-continue use different progress
+			// tests (a recoverable overflow only has to fit; the auto-continue
+			// thrash needs the stricter recovery band), so each branch evaluates
+			// its own below.
 			let continuationScheduled = false;
 			// A non-idle pass that wanted to continue (retry or auto-continue) but freed
 			// too little for that path to proceed is a dead-end: warn once so the user
 			// understands why maintenance paused instead of silently looping.
 			let noProgressDeadEnd = false;
+			let retryFits = false;
+			let hasHeadroom = false;
 
 			if (willRetry) {
 				const messages = this.agent.state.messages;
@@ -12762,6 +13486,7 @@ export class AgentSession {
 						(reason === "incomplete" && lastAssistant.stopReason === "length");
 					if (shouldDrop) {
 						this.agent.replaceMessages(messages.slice(0, -1));
+						this.#rebasePendingContextSnapshotAfterCompaction();
 					}
 				}
 
@@ -12770,18 +13495,14 @@ export class AgentSession {
 				// won't include) is excluded. Reusing the auto-continue recovery band
 				// here turned recoverable overflows into manual dead-ends (#3412 review),
 				// so use the looser fit budget.
-				let retryFits = this.#compactionCreatedRetryFit();
-				if (!retryFits && !fallbackFromShake) {
-					const rescue = await this.#tryShakeRescueForDeadEnd(autoCompactionSignal);
-					if (rescue && this.#compactionCreatedRetryFit()) {
-						retryFits = true;
-						this.#emitShakeRescueNotice(rescue);
-					}
+				retryFits = this.#compactionCreatedRetryFit();
+				if (!retryFits) {
+					retryFits = await this.#rescueCompactionDeadEnd(autoCompactionSignal, {
+						skipElide: fallbackFromShake,
+						hasProgress: () => this.#compactionCreatedRetryFit(),
+					});
 				}
-				if (retryFits) {
-					this.#scheduleAgentContinue({ delayMs: 100, generation });
-					continuationScheduled = true;
-				} else {
+				if (!retryFits) {
 					noProgressDeadEnd = true;
 				}
 			} else if (reason !== "idle") {
@@ -12792,22 +13513,35 @@ export class AgentSession {
 				// when auto-continue is disabled, a no-headroom threshold pass must still
 				// block later automatic continuations (todo reminders/session_stop hooks)
 				// from re-entering the same oversized context.
-				let hasHeadroom = this.#compactionCreatedHeadroom();
-				if (!hasHeadroom && !fallbackFromShake) {
-					const rescue = await this.#tryShakeRescueForDeadEnd(autoCompactionSignal);
-					if (rescue && this.#compactionCreatedHeadroom()) {
-						hasHeadroom = true;
-						this.#emitShakeRescueNotice(rescue);
-					}
+				hasHeadroom = this.#compactionCreatedHeadroom();
+				if (!hasHeadroom) {
+					hasHeadroom = await this.#rescueCompactionDeadEnd(autoCompactionSignal, {
+						skipElide: fallbackFromShake,
+						hasProgress: () => this.#compactionCreatedHeadroom(),
+					});
 				}
-				if (hasHeadroom) {
-					if (shouldAutoContinue) {
-						this.#scheduleAutoContinuePrompt(generation);
-						continuationScheduled = true;
-					}
-				} else {
+				if (!hasHeadroom) {
 					noProgressDeadEnd = true;
 				}
+			}
+
+			const deadEndWarning = noProgressDeadEnd ? compactionDeadEndWarning("clear large tool output") : undefined;
+			if (deadEndWarning && savedCompactionEntry) {
+				// Stamp the divider: the compaction bar badges the dead-end and
+				// carries the full warning in its ctrl+o detail, so the pause
+				// stays explained even after the notice row scrolls away.
+				savedCompactionEntry.warning = deadEndWarning;
+				await this.sessionManager.rewriteEntries();
+			}
+
+			await this.#emitSessionEvent({ type: "auto_compaction_end", action, result, aborted: false, willRetry });
+
+			if (retryFits) {
+				this.#scheduleAgentContinue({ delayMs: 100, generation });
+				continuationScheduled = true;
+			} else if (hasHeadroom && shouldAutoContinue) {
+				this.#scheduleAutoContinuePrompt(generation);
+				continuationScheduled = true;
 			}
 			if (!continuationScheduled && !suppressContinuation && this.agent.hasQueuedMessages()) {
 				// Auto-compaction can complete while follow-up/steering/custom messages are waiting.
@@ -12821,12 +13555,8 @@ export class AgentSession {
 				continuationScheduled = true;
 			}
 
-			if (noProgressDeadEnd) {
-				this.emitNotice(
-					"warning",
-					compactionDeadEndWarning("clear large tool output, run `/shake images` to drop attached images,"),
-					"compaction",
-				);
+			if (deadEndWarning) {
+				this.emitNotice("warning", deadEndWarning, "compaction");
 			}
 			if (continuationScheduled) return COMPACTION_CHECK_CONTINUATION;
 			return noProgressDeadEnd ? COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION : COMPACTION_CHECK_NONE;
@@ -13074,19 +13804,23 @@ export class AgentSession {
 	}
 
 	/**
-	 * Retry an empty, reason-less provider abort: a turn that ended `aborted`
-	 * with no content and the generic sentinel (bare `abort()`), but only while
-	 * the session is neither aborting nor tearing down. A user/lifecycle abort
-	 * (`#abortInProgress`), a dispose-driven abort (`#isDisposed`), or a
-	 * session-induced streaming-edit guard abort (`#streamingEditAbortTriggered` —
-	 * auto-generated-file guard or failed-patch preview) is deliberate and MUST
-	 * settle the turn instead: routing it through retry would orphan
-	 * `#retryPromise` on a continuation the guard skips (hanging the in-flight
-	 * `prompt()`) or silently undo the guard's intended abort.
+	 * Retry an empty, reason-less provider abort: a turn with no content that
+	 * carries the generic sentinel (bare `abort()`), whether the provider
+	 * finalized it as `stopReason: "aborted"` or leaked it as `stopReason:
+	 * "error"` (a stalled/dropped stream reported as an error rather than an
+	 * abort — issue #5375). Only fires while the session is neither aborting nor
+	 * tearing down. A user/lifecycle abort (`#abortInProgress`), a dispose-driven
+	 * abort (`#isDisposed`), or a session-induced streaming-edit guard abort
+	 * (`#streamingEditAbortTriggered` — auto-generated-file guard or failed-patch
+	 * preview) is deliberate and MUST settle the turn instead: routing it through
+	 * retry would orphan `#retryPromise` on a continuation the guard skips
+	 * (hanging the in-flight `prompt()`) or silently undo the guard's intended
+	 * abort. Deliberate user interrupts (`UserInterrupt`) and silent aborts carry
+	 * their own marker, not the generic sentinel, so they never match here.
 	 */
 	#isRetryableReasonlessAbort(message: AssistantMessage): boolean {
 		if (
-			message.stopReason !== "aborted" ||
+			(message.stopReason !== "aborted" && message.stopReason !== "error") ||
 			message.content.length !== 0 ||
 			this.#abortInProgress ||
 			this.#isDisposed ||
@@ -13096,7 +13830,7 @@ export class AgentSession {
 		}
 
 		const id = this.#classifyRetryMessage(message);
-		if (AIError.is(id, AIError.Flag.Abort)) return true;
+		if (message.stopReason === "aborted" && AIError.is(id, AIError.Flag.Abort)) return true;
 		if (!this.#isGenericAbortSentinel(message)) return false;
 
 		message.errorId = AIError.create(AIError.Flag.Abort);
@@ -13135,6 +13869,11 @@ export class AgentSession {
 		return stopType === "refusal" || stopType === "sensitive";
 	}
 
+	/** True when any registered model belongs to `provider`. */
+	#hasProviderModels(provider: string): boolean {
+		return this.#modelRegistry.getAll().some(model => model.provider === provider);
+	}
+
 	#getRetryFallbackChains(): RetryFallbackChains {
 		const configuredChains = this.settings.get("retry.fallbackChains");
 		if (!configuredChains || typeof configuredChains !== "object") return {};
@@ -13154,36 +13893,68 @@ export class AgentSession {
 		const configuredChains = this.settings.get("retry.fallbackChains");
 		if (configuredChains === undefined) return;
 		if (!configuredChains || typeof configuredChains !== "object" || Array.isArray(configuredChains)) {
-			const msg = "retry.fallbackChains must be a mapping of role names to selector arrays.";
+			const msg = "retry.fallbackChains must be a mapping of role names or model selectors to selector arrays.";
 			logger.warn(msg);
 			this.configWarnings.push(msg);
 			return;
 		}
 
-		for (const [role, chain] of Object.entries(configuredChains)) {
+		for (const key in configuredChains) {
+			const chain = (configuredChains as RetryFallbackChains)[key];
+			const keyKind = isRetryFallbackModelKey(key) ? "model" : "role";
+			if (keyKind === "model") {
+				if (isRetryFallbackWildcardKey(key)) {
+					const { provider } = parseRetryFallbackWildcard(key, p => this.#hasProviderModels(p));
+					if (!this.#hasProviderModels(provider)) {
+						const msg = `retry.fallbackChains wildcard key references unknown provider: ${key}`;
+						logger.warn(msg);
+						this.configWarnings.push(msg);
+					}
+				} else {
+					const parsedKey = parseRetryFallbackSelector(key, this.#modelRegistry);
+					if (!parsedKey) {
+						const msg = `Invalid model selector key in retry.fallbackChains: ${key}`;
+						logger.warn(msg);
+						this.configWarnings.push(msg);
+					} else if (!this.#modelRegistry.find(parsedKey.provider, parsedKey.id)) {
+						const msg = `retry.fallbackChains key references unknown model: ${key}`;
+						logger.warn(msg);
+						this.configWarnings.push(msg);
+					}
+				}
+			}
 			if (!Array.isArray(chain)) {
-				const msg = `Fallback chain for role '${role}' must be an array of selector strings.`;
+				const msg = `Fallback chain for ${keyKind} '${key}' must be an array of selector strings.`;
 				logger.warn(msg);
 				this.configWarnings.push(msg);
 				continue;
 			}
 			for (const selectorStr of chain) {
 				if (typeof selectorStr !== "string") {
-					const msg = `Fallback chain for role '${role}' contains a non-string selector.`;
+					const msg = `Fallback chain for ${keyKind} '${key}' contains a non-string selector.`;
 					logger.warn(msg);
 					this.configWarnings.push(msg);
 					continue;
 				}
+				if (isRetryFallbackWildcardKey(selectorStr)) {
+					const { provider } = parseRetryFallbackWildcard(selectorStr, p => this.#hasProviderModels(p));
+					if (!this.#hasProviderModels(provider)) {
+						const msg = `Fallback chain for ${keyKind} '${key}' references unknown provider: ${selectorStr}`;
+						logger.warn(msg);
+						this.configWarnings.push(msg);
+					}
+					continue;
+				}
 				const parsed = parseRetryFallbackSelector(selectorStr, this.#modelRegistry);
 				if (!parsed) {
-					const msg = `Invalid fallback selector format in role '${role}': ${selectorStr}`;
+					const msg = `Invalid fallback selector format in ${keyKind} '${key}': ${selectorStr}`;
 					logger.warn(msg);
 					this.configWarnings.push(msg);
 					continue;
 				}
 				const exists = this.#modelRegistry.find(parsed.provider, parsed.id);
 				if (!exists) {
-					const msg = `Fallback chain for role '${role}' references unknown model: ${selectorStr}`;
+					const msg = `Fallback chain for ${keyKind} '${key}' references unknown model: ${selectorStr}`;
 					logger.warn(msg);
 					this.configWarnings.push(msg);
 				}
@@ -13196,6 +13967,8 @@ export class AgentSession {
 	}
 
 	#getRetryFallbackPrimarySelector(role: string): RetryFallbackSelector | undefined {
+		if (isRetryFallbackWildcardKey(role)) return undefined;
+		if (isRetryFallbackModelKey(role)) return parseRetryFallbackSelector(role, this.#modelRegistry);
 		const configuredSelector = this.settings.getModelRole(role);
 		return configuredSelector ? parseRetryFallbackSelector(configuredSelector, this.#modelRegistry) : undefined;
 	}
@@ -13217,9 +13990,17 @@ export class AgentSession {
 		this.#modelRegistry.suppressSelector(currentSelector, Date.now() + cooldownMs);
 	}
 
+	/**
+	 * Map the failing model selector to the chain key that owns it, by
+	 * specificity: an exact model-selector key, then a `provider/*` wildcard,
+	 * then a model role whose current assignment matches, then `default`.
+	 * Model-oriented keys win over roles so a chain follows the model across
+	 * role reassignments.
+	 */
 	#resolveRetryFallbackRole(currentSelector: string): string | undefined {
 		const parsedCurrent = parseRetryFallbackSelector(currentSelector, this.#modelRegistry);
 		if (!parsedCurrent) return undefined;
+		const chains = this.#getRetryFallbackChains();
 		const currentBaseSelector = formatRetryFallbackBaseSelector(parsedCurrent);
 		const currentPlainSelector = this.model
 			? formatModelSelectorValue(formatModelString(this.model), parsedCurrent.thinkingLevel)
@@ -13229,28 +14010,113 @@ export class AgentSession {
 				? formatRetryFallbackBaseSelector(parseRetryFallbackSelector(currentPlainSelector) ?? parsedCurrent)
 				: undefined;
 
-		for (const role of Object.keys(this.#getRetryFallbackChains())) {
-			const primarySelector = this.#getRetryFallbackPrimarySelector(role);
-			if (primarySelector?.raw === currentSelector) return role;
+		const exactModelKeys: string[] = [];
+		const roleKeys: string[] = [];
+		for (const key in chains) {
+			if (!isRetryFallbackModelKey(key)) roleKeys.push(key);
+			else if (!isRetryFallbackWildcardKey(key)) exactModelKeys.push(key);
 		}
-		for (const role of Object.keys(this.#getRetryFallbackChains())) {
-			const primarySelector = this.#getRetryFallbackPrimarySelector(role);
-			if (!primarySelector) continue;
-			if (currentPlainSelector && primarySelector.raw === currentPlainSelector) return role;
-			const primaryBaseSelector = formatRetryFallbackBaseSelector(primarySelector);
-			if (primaryBaseSelector === currentBaseSelector) return role;
-			if (currentPlainBaseSelector && primaryBaseSelector === currentPlainBaseSelector) return role;
+		const matchesCurrent = (primary: RetryFallbackSelector | undefined): boolean => {
+			if (!primary) return false;
+			if (primary.raw === currentSelector || (currentPlainSelector && primary.raw === currentPlainSelector)) {
+				return true;
+			}
+			const base = formatRetryFallbackBaseSelector(primary);
+			return base === currentBaseSelector || (!!currentPlainBaseSelector && base === currentPlainBaseSelector);
+		};
+
+		// 1. Exact model-selector keys — most specific.
+		for (const key of exactModelKeys) {
+			if (matchesCurrent(this.#getRetryFallbackPrimarySelector(key))) return key;
+		}
+		// 2. Provider wildcards — an id-prefixed key (`openrouter/google/*`)
+		//    beats the plain `provider/*` key for ids under its prefix.
+		let wildcardMatch: string | undefined;
+		let wildcardPrefixLength = -1;
+		for (const key in chains) {
+			if (!isRetryFallbackWildcardKey(key) || !Array.isArray(chains[key])) continue;
+			const { provider, idPrefix } = parseRetryFallbackWildcard(key, p => this.#hasProviderModels(p));
+			if (provider !== parsedCurrent.provider) continue;
+			if (idPrefix !== undefined && !parsedCurrent.id.startsWith(`${idPrefix}/`)) continue;
+			const prefixLength = idPrefix === undefined ? 0 : idPrefix.length;
+			if (prefixLength > wildcardPrefixLength) {
+				wildcardMatch = key;
+				wildcardPrefixLength = prefixLength;
+			}
+		}
+		if (wildcardMatch) return wildcardMatch;
+		// 3. Role keys — matched by the role's currently-assigned model.
+		for (const key of roleKeys) {
+			if (matchesCurrent(this.#getRetryFallbackPrimarySelector(key))) return key;
+		}
+		// 4. The default chain, when default has no explicit role primary.
+		const defaultChain = chains.default;
+		if (
+			Array.isArray(defaultChain) &&
+			defaultChain.length > 0 &&
+			this.#getRetryFallbackPrimarySelector("default") === undefined
+		) {
+			return "default";
 		}
 		return undefined;
 	}
 
-	#getRetryFallbackEffectiveChain(role: string): RetryFallbackSelector[] {
-		const primarySelector = this.#getRetryFallbackPrimarySelector(role);
-		if (!primarySelector) return [];
-		const chain = [primarySelector];
-		const seen = new Set<string>([primarySelector.raw]);
+	/**
+	 * Parse one configured chain entry. A `provider/*` entry keeps the failing
+	 * model's id and swaps the provider (google-antigravity/x → google/x); an
+	 * id-prefixed `provider/prefix/*` entry re-prefixes the failing model's
+	 * bare id instead (openrouter/google/* : google-antigravity/x →
+	 * openrouter/google/x). Ids the target provider lacks are skipped by the
+	 * candidate loop's registry lookup.
+	 */
+	#parseRetryFallbackChainEntry(
+		entry: string,
+		current: RetryFallbackSelector | undefined,
+	): RetryFallbackSelector | undefined {
+		if (isRetryFallbackWildcardKey(entry)) {
+			if (!current) return undefined;
+			const { provider, idPrefix } = parseRetryFallbackWildcard(entry, p => this.#hasProviderModels(p));
+			const bareId = current.id.slice(current.id.lastIndexOf("/") + 1);
+			let id: string;
+			if (idPrefix !== undefined) {
+				id = `${idPrefix}/${bareId}`;
+			} else if (
+				bareId !== current.id &&
+				!this.#modelRegistry.find(provider, current.id) &&
+				this.#modelRegistry.find(provider, bareId)
+			) {
+				// Aggregator → direct: the failing id carries a vendor prefix the
+				// target provider does not use (openrouter/google/x → google-vertex/x).
+				id = bareId;
+			} else {
+				id = current.id;
+			}
+			return { raw: `${provider}/${id}`, provider, id, thinkingLevel: undefined };
+		}
+		return parseRetryFallbackSelector(entry, this.#modelRegistry);
+	}
+
+	#getRetryFallbackEffectiveChain(role: string, currentSelector?: string): RetryFallbackSelector[] {
+		const parsedCurrent = currentSelector
+			? parseRetryFallbackSelector(currentSelector, this.#modelRegistry)
+			: undefined;
+		const seen = new Set<string>();
+		const chain: RetryFallbackSelector[] = [];
+		if (isRetryFallbackWildcardKey(role)) {
+			// A wildcard key has no fixed primary: the active model is the
+			// primary, followed by the configured provider-level fallbacks.
+			if (parsedCurrent) {
+				chain.push(parsedCurrent);
+				seen.add(parsedCurrent.raw);
+			}
+		} else {
+			const primarySelector = this.#getRetryFallbackPrimarySelector(role);
+			if (!primarySelector) return [];
+			chain.push(primarySelector);
+			seen.add(primarySelector.raw);
+		}
 		for (const selector of this.#getRetryFallbackChains()[role] ?? []) {
-			const parsed = parseRetryFallbackSelector(selector, this.#modelRegistry);
+			const parsed = this.#parseRetryFallbackChainEntry(selector, parsedCurrent);
 			if (!parsed || seen.has(parsed.raw)) continue;
 			seen.add(parsed.raw);
 			chain.push(parsed);
@@ -13259,9 +14125,27 @@ export class AgentSession {
 	}
 
 	#findRetryFallbackCandidates(role: string, currentSelector: string): RetryFallbackSelector[] {
-		const chain = this.#getRetryFallbackEffectiveChain(role);
-		if (chain.length <= 1) return [];
+		let chain = this.#getRetryFallbackEffectiveChain(role, currentSelector);
 		const parsedCurrent = parseRetryFallbackSelector(currentSelector, this.#modelRegistry);
+		if (chain.length === 0 && role === "default" && parsedCurrent) {
+			const chains = this.#getRetryFallbackChains();
+			const defaultChain = chains.default;
+			if (
+				Array.isArray(defaultChain) &&
+				defaultChain.length > 0 &&
+				this.#getRetryFallbackPrimarySelector("default") === undefined
+			) {
+				const seen = new Set<string>([parsedCurrent.raw]);
+				chain = [parsedCurrent];
+				for (const selector of defaultChain) {
+					const parsed = this.#parseRetryFallbackChainEntry(selector, parsedCurrent);
+					if (!parsed || seen.has(parsed.raw)) continue;
+					seen.add(parsed.raw);
+					chain.push(parsed);
+				}
+			}
+		}
+		if (chain.length <= 1) return [];
 		const currentBaseSelector = parsedCurrent ? formatRetryFallbackBaseSelector(parsedCurrent) : undefined;
 		const currentPlainSelector =
 			this.model && parsedCurrent
@@ -13377,6 +14261,34 @@ export class AgentSession {
 		if (AIError.is(id, AIError.Flag.UsageLimit)) return false;
 		if (AIError.is(id, AIError.Flag.AuthFailed)) return false;
 		return this.#modelRegistry.find("fireworks", toFireworksBaseModelId(model.id)) !== undefined;
+	}
+
+	/**
+	 * True when a turn failed with a hard (non-retryable) provider error but a
+	 * configured `retry.fallbackChains` entry covers the active model: the same
+	 * model is not worth retrying, yet a DIFFERENT model is a fresh chance, so
+	 * the chain is consulted before the error becomes final. Skips failures a
+	 * model switch cannot fix or must not replay: cancellations (abort-flavored
+	 * errors are not model faults), context overflow (compaction's job),
+	 * classifier refusals (chain consult is handled on the retryable path with
+	 * `pinFallback`), and turns that already emitted a tool call (replaying
+	 * could duplicate work).
+	 */
+	#isHardErrorFallbackEligible(message: AssistantMessage): boolean {
+		if (message.stopReason !== "error") return false;
+		const model = this.model;
+		if (!model) return false;
+		const retrySettings = this.settings.getGroup("retry");
+		if (!retrySettings.enabled || !retrySettings.modelFallback) return false;
+		if (this.#isClassifierRefusal(message)) return false;
+		const id = this.#classifyRetryMessage(message);
+		if (AIError.is(id, AIError.Flag.Abort) || AIError.is(id, AIError.Flag.UserInterrupt)) return false;
+		if (AIError.isContextOverflow(message, model.contextWindow ?? 0)) return false;
+		if (this.#hasReplayUnsafeToolOutput(message)) return false;
+		const currentSelector = formatRetryFallbackSelector(model, this.thinkingLevel);
+		const role = this.#activeRetryFallback?.role ?? this.#resolveRetryFallbackRole(currentSelector);
+		if (!role) return false;
+		return this.#findRetryFallbackCandidates(role, currentSelector).length > 0;
 	}
 
 	/**
@@ -13502,12 +14414,16 @@ export class AgentSession {
 	}
 
 	/**
-	 * Handle retryable errors with exponential backoff.
+	 * Handle retryable errors with exponential backoff, credential rotation, and
+	 * model-fallback chains. Also entered for NON-retryable errors when a switch
+	 * is the recovery (`fireworksFastFallback`, `hardErrorFallback`): then a
+	 * successful model switch retries immediately, and a failed switch surfaces
+	 * the error without a same-model backoff retry.
 	 * @returns true if retry was initiated, false if max retries exceeded or disabled
 	 */
 	async #handleRetryableError(
 		message: AssistantMessage,
-		options?: { allowModelFallback?: boolean; fireworksFastFallback?: boolean },
+		options?: { allowModelFallback?: boolean; fireworksFastFallback?: boolean; hardErrorFallback?: boolean },
 	): Promise<boolean> {
 		const retrySettings = this.settings.getGroup("retry");
 		// The Fireworks Fast→base degrade is an intrinsic model-selection safety net,
@@ -13527,20 +14443,13 @@ export class AgentSession {
 			this.#retryResolve = resolve;
 		}
 
-		if (this.#retryAttempt > retrySettings.maxRetries) {
-			await this.#persistRetryLifecycleErrorMessage(message);
-			// Max retries exceeded, emit final failure and reset
-			await this.#emitSessionEvent({
-				type: "auto_retry_end",
-				success: false,
-				attempt: this.#retryAttempt - 1,
-				finalError: message.errorMessage,
-			});
-			this.#clearPendingRecoveredRetryErrors();
-			this.#retryAttempt = 0;
-			this.#resolveRetry(); // Resolve so waitForRetry() completes
-			return false;
-		}
+		// All attempts on the current model are spent. Don't fail yet: the
+		// fallback chain below gets one last consult. Credential rotation can
+		// consume the entire budget without the fallback branch ever running
+		// (every rotation sets switchedCredential and skips it), so without
+		// this last resort a provider-wide usage cap never fails over to the
+		// configured chain.
+		const retryBudgetExhausted = this.#retryAttempt > retrySettings.maxRetries;
 
 		const errorMessage = message.errorMessage || "Unknown error";
 		const id = this.#classifyRetryMessage(message);
@@ -13559,7 +14468,12 @@ export class AgentSession {
 			this.#resetCurrentResponsesProviderSession("stale replay error");
 		}
 
-		if (this.model && !staleOpenAIResponsesReplayError && AIError.is(id, AIError.Flag.UsageLimit)) {
+		if (
+			!retryBudgetExhausted &&
+			this.model &&
+			!staleOpenAIResponsesReplayError &&
+			AIError.is(id, AIError.Flag.UsageLimit)
+		) {
 			const retryAfterMs = parsedRetryAfterMs ?? calculateRateLimitBackoffMs(parseRateLimitReason(errorMessage));
 			const outcome = await this.#modelRegistry.authStorage.markUsageLimitReached(
 				this.model.provider,
@@ -13605,7 +14519,9 @@ export class AgentSession {
 		const allowModelFallback = options?.allowModelFallback !== false;
 		const currentSelector = this.model ? formatRetryFallbackSelector(this.model, this.thinkingLevel) : undefined;
 		if (!staleOpenAIResponsesReplayError && !switchedCredential && currentSelector) {
-			if (allowModelFallback && retrySettings.modelFallback) {
+			// A refusal chain stops at the retry budget: the exhausted-attempt
+			// last resort is for provider failures, not classifier decisions.
+			if (allowModelFallback && retrySettings.modelFallback && !(retryBudgetExhausted && classifierRefusal)) {
 				if (!classifierRefusal) {
 					this.#noteRetryFallbackCooldown(currentSelector, parsedRetryAfterMs, errorMessage);
 				}
@@ -13624,16 +14540,41 @@ export class AgentSession {
 				delayMs = parsedRetryAfterMs;
 			}
 		}
+		if (retryBudgetExhausted) {
+			if (!switchedModel) {
+				await this.#persistRetryLifecycleErrorMessage(message);
+				// Max retries exceeded and no fallback model to switch to: emit
+				// final failure and reset.
+				await this.#emitSessionEvent({
+					type: "auto_retry_end",
+					success: false,
+					attempt: this.#retryAttempt - 1,
+					finalError: message.errorMessage,
+				});
+				this.#clearPendingRecoveredRetryErrors();
+				this.#retryAttempt = 0;
+				this.#resolveRetry(); // Resolve so waitForRetry() completes
+				return false;
+			}
+			// The fallback model gets a fresh retry budget — leaving the spent
+			// counter in place would exhaust it again on its first error.
+			this.#retryAttempt = 1;
+		}
 		if (classifierRefusal && !switchedModel) {
 			this.#retryAttempt = 0;
 			this.#resolveRetry();
 			return false;
 		}
-		// Fast→base was requested but the base switch could not happen (e.g. the
-		// base model has no credential). Don't fall through to backing-off and
-		// retrying the failing fast model for a hard router error that the generic
-		// classifier wouldn't retry — surface it instead.
-		if (options?.fireworksFastFallback && !switchedModel && !this.#isRetryableError(message)) {
+		// A fallback switch was the whole reason we entered (Fast→base degrade or
+		// a hard-error chain consult) but it could not happen (e.g. no candidate
+		// has a credential). Don't fall through to backing-off and retrying the
+		// failing model for an error the generic classifier wouldn't retry —
+		// surface it instead.
+		if (
+			(options?.fireworksFastFallback || options?.hardErrorFallback) &&
+			!switchedModel &&
+			!this.#isRetryableError(message)
+		) {
 			this.#retryAttempt = 0;
 			this.#resolveRetry();
 			return false;
@@ -14351,10 +15292,13 @@ export class AgentSession {
 				// Side-channel turns must not share OpenAI/Codex append-only
 				// conversation state with the main agent turn: IRC and /btw can run
 				// while the main turn is mid-tool-call. Keep the prompt-cache key
-				// stable, but give provider routing a unique request lineage.
+				// stable, but give provider routing a unique request lineage. The
+				// shared provider state map is still required so Codex can allocate
+				// websocket state under that side-channel session id.
 				sessionId: `${cacheSessionId}:side:${Snowflake.next()}`,
 				promptCacheKey: cacheSessionId,
-				preferWebsockets: false,
+				preferWebsockets: this.#preferWebsockets,
+				providerSessionState: this.#providerSessionState,
 				reasoning: toReasoningEffort(this.thinkingLevel),
 				disableReasoning: shouldDisableReasoning(this.thinkingLevel),
 				hideThinkingSummary: this.agent.hideThinkingSummary,
@@ -14556,15 +15500,12 @@ export class AgentSession {
 		const previousAutoThinking = this.#autoThinking;
 		const previousAutoResolvedLevel = this.#autoResolvedLevel;
 		const previousServiceTierByFamily = this.#serviceTierByFamily;
-		const previousSelectedMCPToolNames = new Set(this.#selectedMCPToolNames);
 		const previousTools = [...this.agent.state.tools];
 		const previousBaseSystemPrompt = this.#baseSystemPrompt;
 		const previousSystemPrompt = this.agent.state.systemPrompt;
 		const previousBaseSystemPromptBeforeMemoryPromotion = this.#baseSystemPromptBeforeMemoryPromotion;
 		const previousFreshProviderSessionId = this.#freshProviderSessionId;
-		const previousFallbackSelectedMCPToolNames = previousSessionFile
-			? this.#getSessionDefaultSelectedMCPToolNames(previousSessionFile)
-			: undefined;
+		const previousInheritedProviderPromptCacheKey = this.#inheritedProviderPromptCacheKey;
 
 		// Snapshot the full checkpoint runtime state: the success path calls
 		// #rehydrateCheckpointRewindState(), which clears and rebuilds all four
@@ -14583,17 +15524,17 @@ export class AgentSession {
 			await this.sessionManager.setSessionFile(sessionPath);
 			if (switchingToDifferentSession) {
 				this.#freshProviderSessionId = undefined;
+				this.#clearInheritedProviderPromptCacheKey();
+				this.#adoptInheritedProviderPromptCacheKey();
 			}
 			this.#syncAgentSessionId();
 			this.#rekeyHindsightMemoryForCurrentSessionId();
 			this.#rekeyMnemopiMemoryForCurrentSessionId();
 
-			const sessionContext = this.buildDisplaySessionContext();
+			let sessionContext = this.buildDisplaySessionContext();
 			const didReloadConversationChange =
 				previousSessionContext !== undefined &&
 				this.#didSessionMessagesChange(previousSessionContext.messages, sessionContext.messages);
-			const fallbackSelectedMCPToolNames = this.#getSessionDefaultSelectedMCPToolNames(sessionPath);
-			await this.#restoreMCPSelectionsForSessionContext(sessionContext, { fallbackSelectedMCPToolNames });
 			this.#rehydrateCheckpointRewindState();
 
 			// Emit session_switch event to hooks
@@ -14643,6 +15584,20 @@ export class AgentSession {
 					} else {
 						this.agent.setModel(match);
 					}
+				}
+			}
+
+			const model = this.model;
+			if (model) {
+				const interruptedTurnAbort = createInterruptedTurnAbortMessage(this.sessionManager.getBranch(), {
+					api: model.api,
+					provider: model.provider,
+					model: model.id,
+				});
+				if (interruptedTurnAbort) {
+					this.sessionManager.appendMessage(interruptedTurnAbort);
+					sessionContext = this.buildDisplaySessionContext();
+					this.agent.replaceMessages(sessionContext.messages);
 				}
 			}
 
@@ -14707,28 +15662,7 @@ export class AgentSession {
 			this.#syncAgentSessionId(previousSessionState.sessionId);
 			this.#rekeyHindsightMemoryForCurrentSessionId();
 			this.#rekeyMnemopiMemoryForCurrentSessionId();
-			let restoreMcpError: unknown;
-			try {
-				// `previousSessionContext` was skipped on different-session switches to
-				// avoid materializing the previous session's heavy compaction payload
-				// in the success path; rebuild it here on demand from the restored
-				// state so MCP selection restoration still has its inputs.
-				const mcpRestoreContext = previousSessionContext ?? this.buildDisplaySessionContext();
-				await this.#restoreMCPSelectionsForSessionContext(mcpRestoreContext, {
-					fallbackSelectedMCPToolNames: previousFallbackSelectedMCPToolNames,
-				});
-			} catch (mcpError) {
-				restoreMcpError = mcpError;
-				logger.warn("Failed to restore MCP selections after switch error", {
-					previousSessionFile,
-					targetSessionFile: sessionPath,
-					error: String(mcpError),
-				});
-				this.#selectedMCPToolNames = new Set(previousSelectedMCPToolNames);
-				this.agent.setTools(previousTools);
-				this.#baseSystemPrompt = previousBaseSystemPrompt;
-				this.agent.setSystemPrompt(previousSystemPrompt);
-			}
+			this.agent.setTools(previousTools);
 			this.#baseSystemPrompt = previousBaseSystemPrompt;
 			this.#baseSystemPromptBeforeMemoryPromotion = previousBaseSystemPromptBeforeMemoryPromotion;
 			this.agent.setSystemPrompt(previousSystemPrompt);
@@ -14736,6 +15670,7 @@ export class AgentSession {
 			this.agent.replaceQueues(previousSteeringMessages, previousFollowUpMessages);
 			this.#pendingNextTurnMessages = previousPendingNextTurnMessages;
 			this.#scheduledHiddenNextTurnGeneration = previousScheduledHiddenNextTurnGeneration;
+			this.#inheritedProviderPromptCacheKey = previousInheritedProviderPromptCacheKey;
 			this.#checkpointState = previousCheckpointState;
 			this.#pendingRewindReport = previousPendingRewindReport;
 			this.#lastCompletedRewind = previousLastCompletedRewind;
@@ -14751,9 +15686,6 @@ export class AgentSession {
 			this.#syncTodoPhasesFromBranch();
 			this.#resetAllAdvisorRuntimes();
 			this.#reconnectToAgent();
-			if (restoreMcpError) {
-				throw restoreMcpError;
-			}
 			throw error;
 		}
 	}
@@ -14811,6 +15743,7 @@ export class AgentSession {
 		this.#rehydrateCheckpointRewindState();
 		this.#syncTodoPhasesFromBranch();
 		this.#freshProviderSessionId = undefined;
+		this.#clearInheritedProviderPromptCacheKey();
 		this.#syncAgentSessionId();
 		this.#rekeyHindsightMemoryForCurrentSessionId();
 		this.#rekeyMnemopiMemoryForCurrentSessionId();
@@ -14818,8 +15751,6 @@ export class AgentSession {
 
 		// Reload messages from entries (works for both file and in-memory mode)
 		const sessionContext = this.buildDisplaySessionContext();
-
-		await this.#restoreMCPSelectionsForSessionContext(sessionContext);
 
 		// Emit session_branch event to hooks (after branch completes)
 		if (this.#extensionRunner) {
@@ -14911,7 +15842,6 @@ export class AgentSession {
 		await this.#resetMemoryContextForNewTranscript();
 
 		const sessionContext = this.buildDisplaySessionContext();
-		await this.#restoreMCPSelectionsForSessionContext(sessionContext);
 
 		if (this.#extensionRunner) {
 			await this.#extensionRunner.emit({
@@ -15058,7 +15988,7 @@ export class AgentSession {
 			// User message: leaf = parent (null if root), text goes to editor
 			newLeafId = targetEntry.parentId;
 			editorText = this.#extractUserMessageText(targetEntry.message.content);
-		} else if (targetEntry.type === "custom_message") {
+		} else if (targetEntry.type === "custom_message" && targetEntry.customType !== SKILL_PROMPT_MESSAGE_TYPE) {
 			// Custom message: leaf = parent (null if root), text goes to editor
 			newLeafId = targetEntry.parentId;
 			editorText =
@@ -15069,7 +15999,10 @@ export class AgentSession {
 							.map(c => c.text)
 							.join("");
 		} else {
-			// Non-user message: leaf = selected node
+			// Non-user message (or a user-invoked skill-prompt injection): land the
+			// leaf on the selected node so it stays on the active branch. Skill
+			// prompts are custom_message entries but must not be re-editable — their
+			// content is a large expanded body, not a user turn (issue #5374).
 			newLeafId = targetId;
 		}
 
@@ -15092,7 +16025,6 @@ export class AgentSession {
 		// Update agent state — build display context to populate agent messages.
 		const stateContext = this.sessionManager.buildSessionContext();
 		const displayContext = deobfuscateSessionContext(stateContext, this.#obfuscator);
-		await this.#restoreMCPSelectionsForSessionContext(displayContext);
 		this.agent.replaceMessages(displayContext.messages);
 		this.#rehydrateCheckpointRewindState();
 		this.#resetAdvisorSessionState();
@@ -15399,11 +16331,35 @@ export class AgentSession {
 		this.#contextUsageRevision++;
 	}
 
+	/**
+	 * Rebase the in-flight pending context snapshot onto the current message
+	 * set after a compaction (or its dead-end rescue) rewrote history mid-run.
+	 * The snapshot captures the prompt as submitted at run start and lives for
+	 * the whole run; once a compaction entry lands, every earlier usage anchor
+	 * is hidden from {@link getContextBreakdown}, so the stale run-start figure
+	 * would be reported as live context until the next provider response. That
+	 * inflated residual is what the post-compaction headroom/retry-fit checks
+	 * measure — a run that started above the recovery band then trips the
+	 * "freed too little context" dead-end even when compaction genuinely
+	 * shrank the context. No-op while no prompt is in flight.
+	 */
+	#rebasePendingContextSnapshotAfterCompaction(): void {
+		if (!this.#pendingContextSnapshot) return;
+		const nonMessageTokens = computeNonMessageTokens(this);
+		this.#setPendingContextSnapshot({
+			promptTokens: nonMessageTokens + this.messages.reduce((sum, msg) => sum + estimateTokens(msg), 0),
+			nonMessageTokens,
+			cutoffCount: this.messages.length,
+		});
+	}
+
 	#ingestProviderUsageHeaders(response: ProviderResponseMetadata, model?: Model): void {
-		if (model?.provider !== "anthropic") return;
-		this.#modelRegistry.authStorage.ingestUsageHeaders("anthropic", response.headers, {
+		const provider = model?.provider;
+		if (!provider) return;
+		// No-op for providers whose usage strategy lacks a header parser.
+		this.#modelRegistry.authStorage.ingestUsageHeaders(provider, response.headers, {
 			sessionId: this.agent.sessionId,
-			baseUrl: this.#modelRegistry.getProviderBaseUrl?.("anthropic"),
+			baseUrl: this.#modelRegistry.getProviderBaseUrl?.(provider),
 		});
 	}
 
@@ -15535,7 +16491,7 @@ export class AgentSession {
 				lastAttemptAtByAccount: coordinator.lastAttemptAtByAccount,
 			});
 			if (!decision.redeem) {
-				logger.debug("codex-auto-reset: skipped", { reason: decision.reason });
+				logger.debug("codex-auto-reset: skipped", { reason: decision.reason, account: accountKey });
 				return false;
 			}
 			if (shouldPromptCodexAutoRedeem(cfg.autoRedeem) && !(await this.#confirmCodexAutoRedeem(decision))) {

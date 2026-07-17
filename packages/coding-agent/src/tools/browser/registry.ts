@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger, withTimeout } from "@oh-my-pi/pi-utils";
 import type { Subprocess } from "bun";
 import type { Browser, CDPSession } from "puppeteer-core";
 import { ToolAbortError, ToolError } from "../tool-errors";
@@ -16,6 +16,13 @@ export type PuppeteerBrowserKind =
 export type BrowserKind = PuppeteerBrowserKind | CmuxKind;
 
 export type BrowserKindTag = BrowserKind["kind"];
+
+/**
+ * Upper bound on `browser.close()` for headless Chromium. Puppeteer waits for
+ * the process to fully exit; a wedged Chromium would otherwise hang cleanup
+ * forever (issue #5260), so we cap the wait and force-kill on timeout.
+ */
+const HEADLESS_CLOSE_TIMEOUT_MS = 5_000;
 
 interface BrowserHandleCommon {
 	key: string;
@@ -39,6 +46,13 @@ export interface CmuxBrowserHandle extends BrowserHandleCommon {
 }
 
 export type BrowserHandle = PuppeteerBrowserHandle | CmuxBrowserHandle;
+
+/** Controls bounded browser-handle teardown and identifies the owning resource in timeout diagnostics. */
+export interface ReleaseBrowserOptions {
+	kill: boolean;
+	timeoutMs?: number;
+	resource?: string;
+}
 
 const browsers = new Map<string, BrowserHandle>();
 
@@ -214,7 +228,7 @@ export function holdBrowser(handle: BrowserHandle): void {
 	handle.refCount++;
 }
 
-export async function releaseBrowser(handle: BrowserHandle, opts: { kill: boolean }): Promise<void> {
+export async function releaseBrowser(handle: BrowserHandle, opts: ReleaseBrowserOptions): Promise<void> {
 	handle.refCount = Math.max(0, handle.refCount - 1);
 	if (handle.refCount === 0) {
 		// Only evict if the registry still points at THIS handle. After a disconnect,
@@ -225,17 +239,24 @@ export async function releaseBrowser(handle: BrowserHandle, opts: { kill: boolea
 	}
 }
 
-async function disposeBrowserHandle(handle: BrowserHandle, opts: { kill: boolean }): Promise<void> {
+async function disposeBrowserHandle(handle: BrowserHandle, opts: ReleaseBrowserOptions): Promise<void> {
 	if ("client" in handle) {
 		handle.client.close();
 		return;
 	}
 	if (handle.kind.kind === "headless") {
 		if (handle.browser.connected) {
+			// Puppeteer's `browser.close()` resolves only once the Chromium
+			// process fully exits. A wedged Chromium (a known Windows failure
+			// mode) leaves this await pending forever, freezing `releaseTab` in
+			// the "Closing tab" phase (issue #5260). Bound it, then SIGKILL the
+			// process tree so cleanup always completes.
+			const proc = handle.browser.process();
 			try {
-				await handle.browser.close();
+				await withTimeout(handle.browser.close(), HEADLESS_CLOSE_TIMEOUT_MS, "Timed out closing headless browser");
 			} catch (err) {
-				logger.debug("Failed to close headless browser", { error: (err as Error).message });
+				logger.debug("Failed to close headless browser; force-killing", { error: (err as Error).message });
+				if (proc?.pid !== undefined) await gracefulKillTreeOnce(proc.pid).catch(() => undefined);
 			}
 		}
 		return;

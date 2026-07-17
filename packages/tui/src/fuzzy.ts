@@ -280,12 +280,11 @@ function prepareQuery(query: string): PreparedQuery | null {
 	return { normalized, tokens: normalized.split(" "), compact: normalized.replaceAll(" ", "") };
 }
 
-function fuzzyMatchCore(pq: PreparedQuery | null, text: string): FuzzyMatch {
+function fuzzyMatchCore(pq: PreparedQuery | null, index: SearchIndex): FuzzyMatch {
 	if (pq === null) {
 		return { matches: true, score: 0 };
 	}
 
-	const index = buildSearchIndex(text);
 	if (index.words.length === 0) {
 		return { matches: false, score: 0 };
 	}
@@ -315,7 +314,32 @@ function fuzzyMatchCore(pq: PreparedQuery | null, text: string): FuzzyMatch {
 }
 
 export function fuzzyMatch(query: string, text: string): FuzzyMatch {
-	return fuzzyMatchCore(prepareQuery(query), text);
+	const pq = prepareQuery(query);
+	if (pq === null) return { matches: true, score: 0 };
+	return fuzzyMatchCore(pq, buildSearchIndex(text));
+}
+
+/**
+ * A text prepared once for repeated fuzzy matching.
+ *
+ * `fuzzyMatch` builds a search index per call; the module cache only admits
+ * texts up to {@link MAX_CACHED_TEXT_LEN}, so long corpora (session or
+ * transcript search) rebuild the index on every keystroke — the dominant cost
+ * when a selector re-filters a stable candidate list as the user types. Build
+ * one `FuzzyText` per candidate and call {@link match} per query instead; the
+ * index lives exactly as long as the caller's reference.
+ */
+export class FuzzyText {
+	readonly #index: SearchIndex;
+
+	constructor(text: string) {
+		this.#index = buildUncachedSearchIndex(text);
+	}
+
+	/** Match `query` (space-separated tokens; all must match) against the prepared text. */
+	match(query: string): FuzzyMatch {
+		return fuzzyMatchCore(prepareQuery(query), this.#index);
+	}
 }
 
 /**
@@ -327,10 +351,14 @@ export function fuzzyRank<T>(items: T[], query: string, getText: (item: T) => st
 		return items.map(item => ({ item, score: 0 }));
 	}
 
+	// A non-blank query that normalizes to empty (pure punctuation) matches
+	// everything with score 0, but still calls getText per item — consumers rely
+	// on its side effects (see fuzzy-cache.test.ts).
 	const pq = prepareQuery(query);
 	const results: FuzzyFilterResult<T>[] = [];
 	for (const item of items) {
-		const match = fuzzyMatchCore(pq, getText(item));
+		const text = getText(item);
+		const match = pq === null ? { matches: true, score: 0 } : fuzzyMatchCore(pq, buildSearchIndex(text));
 		if (match.matches) {
 			results.push({ item, score: match.score });
 		}

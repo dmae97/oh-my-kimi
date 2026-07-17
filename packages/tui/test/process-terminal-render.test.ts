@@ -71,4 +71,21 @@ describe("ProcessTerminal geometry reflow through the renderer", () => {
 		expect(harness.terminal.columns).toBe(160);
 		expect(harness.probe.last).toBe(160);
 	});
+
+	it("recovers the full height when the grow-back report carries colon subparameters (#4748)", async () => {
+		// iOS soft keyboard under tmux-over-SSH: an in-band shrink lands (keyboard
+		// up), then the keyboard is dismissed and the grow-back report arrives with
+		// a spec-permitted `:`-subparameter and no accompanying OS resize. The
+		// parser must ignore the subparameter — dropping the report leaves the
+		// viewport pinned at the keyboard-present height.
+		harness = createProcessTerminalRenderHarness(100, 30);
+		await harness.feed("\x1b[?2048;1$y");
+		await harness.inBand(15, 100, 300, 1000); // keyboard appears: 30 -> 15 rows
+		expect(harness.terminal.rows).toBe(15);
+
+		await harness.feed("\x1b[48;30;100;600;1000:0t"); // keyboard dismissed: grow back
+
+		expect(harness.terminal.rows).toBe(30);
+		expect(harness.terminal.columns).toBe(100);
+	});
 });

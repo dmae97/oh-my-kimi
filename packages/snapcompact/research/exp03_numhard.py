@@ -63,12 +63,16 @@ def number_mask(text: str) -> list[bool]:
         if ch.isdigit():
             mask[i] = True
         elif ch in _NUM_PUNCT:
-            if (i > 0 and text[i - 1].isdigit()) or (i + 1 < len(text) and text[i + 1].isdigit()):
+            if (i > 0 and text[i - 1].isdigit()) or (
+                i + 1 < len(text) and text[i + 1].isdigit()
+            ):
                 mask[i] = True
     return mask
 
 
-def render_hard(text: str, cfg, cache: Path, size: int, variant: str, hard: str) -> Image.Image:
+def render_hard(
+    text: str, cfg, cache: Path, size: int, variant: str, hard: str
+) -> Image.Image:
     """Copy of bdf.render() restricted to white-bg variants (sent/bw), with a
     digit-hardening pass: `numbold` double-strikes masked glyphs, `numred`
     recolors them pure red."""
@@ -132,7 +136,9 @@ def chunk_png(chunk_text: str, size: int, base: str, hard: str) -> Path:
 
 def run_chunk(model: str, cond: str, start: int, end: int, ctx: dict) -> list[dict]:
     args, flow = ctx["args"], ctx["flow"]
-    questions = squad.sample_chunk_questions(ctx["paras"], ctx["offsets"], start, end, args.qpc, args.seed)
+    questions = squad.sample_chunk_questions(
+        ctx["paras"], ctx["offsets"], start, end, args.qpc, args.seed
+    )
     if not questions:
         return []
     chunk_text = flow[start:end]
@@ -151,11 +157,19 @@ def run_chunk(model: str, cond: str, start: int, end: int, ctx: dict) -> list[di
         }
     ]
     qa = cached(
-        model, f"{EXP}-qa", {"messages": messages, "effort": args.effort},
+        model,
+        f"{EXP}-qa",
+        {"messages": messages, "effort": args.effort},
         lambda: dict(
             zip(
                 ("text", "usage", "stop"),
-                llm_complete(ctx["keys"], model, messages, max_tokens=args.max_tokens, effort=args.effort),
+                llm_complete(
+                    ctx["keys"],
+                    model,
+                    messages,
+                    max_tokens=args.max_tokens,
+                    effort=args.effort,
+                ),
             )
         ),
         args.fresh,
@@ -209,19 +223,29 @@ def load_baseline(model: str, lengths: list[int]) -> list[dict]:
     return out
 
 
-def numeric_subset_cells(records: list[dict], models: list[str], lengths: list[int], conditions: list[str]) -> list[dict]:
+def numeric_subset_cells(
+    records: list[dict], models: list[str], lengths: list[int], conditions: list[str]
+) -> list[dict]:
     """Per (model, length): baseline vs each condition, restricted to numeric-gold
     questions present in BOTH runs (matched by question text)."""
     cells = []
     for model in models:
         base = load_baseline(model, lengths)
         for length in lengths:
-            base_num = {r["q"]: r for r in base if r["length"] == length and is_numeric_gold(r["golds"])}
+            base_num = {
+                r["q"]: r
+                for r in base
+                if r["length"] == length and is_numeric_gold(r["golds"])
+            }
             for cond in conditions:
                 mine = [
-                    r for r in records
-                    if r["model"] == model and r["length"] == length and r["cond"] == cond
-                    and is_numeric_gold(r["golds"]) and r["q"] in base_num
+                    r
+                    for r in records
+                    if r["model"] == model
+                    and r["length"] == length
+                    and r["cond"] == cond
+                    and is_numeric_gold(r["golds"])
+                    and r["q"] in base_num
                 ]
                 if not mine:
                     continue
@@ -239,7 +263,9 @@ def numeric_subset_cells(records: list[dict], models: list[str], lengths: list[i
     return cells
 
 
-def save_sample(records_ctx_flow: str, size: int, base: str, hard: str, out_dir: Path) -> Path:
+def save_sample(
+    records_ctx_flow: str, size: int, base: str, hard: str, out_dir: Path
+) -> Path:
     """Crop a digit-dense region from the first chunk's PNG, 4x nearest upscale."""
     cols, rows, cap = capacity(FONT, size)
     text = records_ctx_flow[:cap]
@@ -257,7 +283,9 @@ def save_sample(records_ctx_flow: str, size: int, base: str, hard: str, out_dir:
     img = Image.open(png)
     x0 = max(0, min(col, cols - win) * FONT.adv)
     y0 = max(0, (row - 1) * FONT.pitch)
-    crop = img.crop((x0, y0, min(x0 + win * FONT.adv, size), min(y0 + 4 * FONT.pitch, size)))
+    crop = img.crop(
+        (x0, y0, min(x0 + win * FONT.adv, size), min(y0 + 4 * FONT.pitch, size))
+    )
     crop = crop.resize((crop.width * 4, crop.height * 4), Image.NEAREST)
     out = out_dir / f"sample-{base}-{hard}.png"
     crop.save(out)
@@ -302,12 +330,23 @@ def main() -> None:
         paras = all_paras[:length]
         flow, offsets = squad.build_flow(paras)
         flows[length] = flow
-        ctx = {"args": args, "flow": flow, "paras": paras, "offsets": offsets, "keys": keys, "length": length}
+        ctx = {
+            "args": args,
+            "flow": flow,
+            "paras": paras,
+            "offsets": offsets,
+            "keys": keys,
+            "length": length,
+        }
         for model in models:
             for cond in conditions:
                 for start in range(0, len(flow), budget):
-                    tasks.append((model, cond, start, min(start + budget, len(flow)), ctx))
-    print(f"{EXP}: {len(models)} models x {len(lengths)} lengths x {len(conditions)} conditions = {len(tasks)} chunk tasks")
+                    tasks.append(
+                        (model, cond, start, min(start + budget, len(flow)), ctx)
+                    )
+    print(
+        f"{EXP}: {len(models)} models x {len(lengths)} lengths x {len(conditions)} conditions = {len(tasks)} chunk tasks"
+    )
 
     records: list[dict] = []
     with ThreadPoolExecutor(args.workers) as pool:
@@ -325,9 +364,22 @@ def main() -> None:
     for model in models:
         for length in lengths:
             for cond in conditions:
-                sub = [r for r in records if r["model"] == model and r["length"] == length and r["cond"] == cond]
+                sub = [
+                    r
+                    for r in records
+                    if r["model"] == model
+                    and r["length"] == length
+                    and r["cond"] == cond
+                ]
                 if sub:
-                    cells.append({"model": model, "length": length, "condition": cond, **aggregate(sub, *MODELS[model])})
+                    cells.append(
+                        {
+                            "model": model,
+                            "length": length,
+                            "condition": cond,
+                            **aggregate(sub, *MODELS[model]),
+                        }
+                    )
     with (out_dir / "matrix.csv").open("w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=list(cells[0].keys()))
         writer.writeheader()
@@ -349,7 +401,9 @@ def main() -> None:
                 "args": vars(args),
                 "cells": cells,
                 "numeric_subset": num_cells,
-                "baseline_overall": {f"{m}|{l}": v for (m, l), v in base_overall.items()},
+                "baseline_overall": {
+                    f"{m}|{l}": v for (m, l), v in base_overall.items()
+                },
             },
             indent=1,
         )
@@ -358,10 +412,14 @@ def main() -> None:
     samples = []
     for cond in conditions:
         base, hard = parse_cond(cond)
-        samples.append(str(save_sample(flows[lengths[0]], args.size, base, hard, out_dir)))
+        samples.append(
+            str(save_sample(flows[lengths[0]], args.size, base, hard, out_dir))
+        )
 
     print("\n== overall ==")
-    print(f"{'model':<24}{'len':>5}{'condition':<28}{'n':>4}{'EM':>7}{'F1':>7}{'se':>7}{'cost$':>8}{'base F1':>9}{'d':>7}")
+    print(
+        f"{'model':<24}{'len':>5}{'condition':<28}{'n':>4}{'EM':>7}{'F1':>7}{'se':>7}{'cost$':>8}{'base F1':>9}{'d':>7}"
+    )
     for c in cells:
         b = base_overall[(c["model"], c["length"])]
         print(
@@ -369,7 +427,9 @@ def main() -> None:
             f"{c['f1_se']:>7.3f}{c['cost_usd']:>8.3f}{b['f1']:>9.3f}{c['f1'] - b['f1']:>+7.3f}"
         )
     print("\n== numeric-gold subset (matched questions vs img-6x10-sent baseline) ==")
-    print(f"{'model':<24}{'len':>5}{'condition':<28}{'n':>4}{'F1':>7}{'se':>7}{'base F1':>9}{'base se':>8}{'d':>7}")
+    print(
+        f"{'model':<24}{'len':>5}{'condition':<28}{'n':>4}{'F1':>7}{'se':>7}{'base F1':>9}{'base se':>8}{'d':>7}"
+    )
     for c in num_cells:
         print(
             f"{c['model']:<24}{c['length']:>5}{c['condition']:<28}{c['n']:>4}{c['f1']:>7.3f}{c['f1_se']:>7.3f}"

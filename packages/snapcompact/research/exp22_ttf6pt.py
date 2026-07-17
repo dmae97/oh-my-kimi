@@ -107,28 +107,60 @@ def cached(payload: object, fn, fresh: bool) -> dict:
     return out
 
 
-def qa_unit(cond: str, prompt: str, png: Path, questions: list[dict], length: int, start: int, ctx: dict) -> list[dict]:
+def qa_unit(
+    cond: str,
+    prompt: str,
+    png: Path,
+    questions: list[dict],
+    length: int,
+    start: int,
+    ctx: dict,
+) -> list[dict]:
     args, keys = ctx["args"], ctx["keys"]
     q_block = "\n".join(f"{k + 1}. {q['q']}" for k, q in enumerate(questions))
-    messages = [{"role": "user", "content": [{"text": prompt}, {"image_path": png}, {"text": q_block}]}]
+    messages = [
+        {
+            "role": "user",
+            "content": [{"text": prompt}, {"image_path": png}, {"text": q_block}],
+        }
+    ]
     payload = {"messages": messages}
     if args.effort:
         payload["effort"] = args.effort
     qa = cached(
         payload,
-        lambda: dict(zip(("text", "usage", "stop"),
-                         llm_complete(keys, MODEL, messages, max_tokens=args.max_tokens, effort=args.effort))),
+        lambda: dict(
+            zip(
+                ("text", "usage", "stop"),
+                llm_complete(
+                    keys,
+                    MODEL,
+                    messages,
+                    max_tokens=args.max_tokens,
+                    effort=args.effort,
+                ),
+            )
+        ),
         args.fresh,
     )
     answers = squad.parse_numbered(qa["text"], len(questions))
     records = []
     for q, a in zip(questions, answers):
-        records.append({
-            "model": MODEL, "length": length, "cond": cond, "chunk": start,
-            "pos_rel": q["pos_rel"], "q": q["q"], "answer": a, "golds": q["golds"],
-            "em": squad.exact_match(a, q["golds"]), "f1": squad.f1(a, q["golds"]),
-            "abstained": "unreadable" in a.lower(),
-        })
+        records.append(
+            {
+                "model": MODEL,
+                "length": length,
+                "cond": cond,
+                "chunk": start,
+                "pos_rel": q["pos_rel"],
+                "q": q["q"],
+                "answer": a,
+                "golds": q["golds"],
+                "em": squad.exact_match(a, q["golds"]),
+                "f1": squad.f1(a, q["golds"]),
+                "abstained": "unreadable" in a.lower(),
+            }
+        )
     records[0]["usage"] = [{"phase": "qa", **qa["usage"]}]
     return records
 
@@ -149,20 +181,32 @@ def aggregate(records: list[dict]) -> list[dict]:
         creads = sum(u.get("cache_r", 0) for u in usage)
         rsn = sum(u.get("reasoning", 0) for u in usage)
         cost = (tin + 0.1 * creads) * PRICE_IN / 1e6 + tout * PRICE_OUT / 1e6
-        out.append({
-            "model": MODEL, "length": length, "condition": cond, "n": n,
-            "em": round(sum(r["em"] for r in recs) / n, 4), "f1": round(mean, 4),
-            "f1_se": round((var / n) ** 0.5, 4), "abstained": sum(r["abstained"] for r in recs),
-            "tok_in": tin, "tok_out": tout, "tok_cache_r": creads, "tok_reasoning": rsn,
-            "cost_usd": round(cost, 4),
-        })
+        out.append(
+            {
+                "model": MODEL,
+                "length": length,
+                "condition": cond,
+                "n": n,
+                "em": round(sum(r["em"] for r in recs) / n, 4),
+                "f1": round(mean, 4),
+                "f1_se": round((var / n) ** 0.5, 4),
+                "abstained": sum(r["abstained"] for r in recs),
+                "tok_in": tin,
+                "tok_out": tout,
+                "tok_cache_r": creads,
+                "tok_reasoning": rsn,
+                "cost_usd": round(cost, 4),
+            }
+        )
     return out
 
 
 def main() -> None:
     global MODEL, PRICE_IN, PRICE_OUT
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", default="google/gemini-3.5-flash", choices=sorted(MODELS))
+    ap.add_argument(
+        "--model", default="google/gemini-3.5-flash", choices=sorted(MODELS)
+    )
     ap.add_argument("--ems", default="6,8")
     ap.add_argument("--lengths", default="50,150")
     ap.add_argument("--qpc", type=int, default=30)
@@ -191,7 +235,10 @@ def main() -> None:
         adv, pitch, cols, rows = metrics(em)
         cap = cols * rows
         cond = f"img-ttf{em}-bw" + (f"+eff-{args.effort}" if args.effort else "")
-        print(f"{cond}: adv {adv:.2f}px pitch {pitch}px -> {cols}x{rows} = {cap} chars/page", flush=True)
+        print(
+            f"{cond}: adv {adv:.2f}px pitch {pitch}px -> {cols}x{rows} = {cap} chars/page",
+            flush=True,
+        )
         for length in (int(x) for x in args.lengths.split(",")):
             paras = all_paras[:length]
             flow, offsets = squad.build_flow(paras)
@@ -200,10 +247,15 @@ def main() -> None:
             ctx = {"args": args, "keys": keys}
             for start in range(0, len(flow), cap):
                 end = min(start + cap, len(flow))
-                questions = squad.sample_chunk_questions(paras, offsets, start, end, args.qpc, args.seed)
+                questions = squad.sample_chunk_questions(
+                    paras, offsets, start, end, args.qpc, args.seed
+                )
                 if not questions:
                     continue
-                png = CACHE / f"{EXP}-ttf{em}-{sha8(flow[start:end], str(em), str(args.size))}.png"
+                png = (
+                    CACHE
+                    / f"{EXP}-ttf{em}-{sha8(flow[start:end], str(em), str(args.size))}.png"
+                )
                 if not png.exists() or png.stat().st_size == 0:
                     atomic_save(render_ttf(flow[start:end], em, args.size), png)
                 prompt = prompt_tpl.format(cols=cols, rows=rows)
@@ -231,11 +283,16 @@ def main() -> None:
         fh.write(hdr + "\n")
         for c in cells_out:
             fh.write(",".join(str(c[k]) for k in hdr.split(",")) + "\n")
-    (OUT_DIR / f"summary-{slug}.json").write_text(json.dumps({"args": vars(args), "cells": cells_out}, indent=1))
+    (OUT_DIR / f"summary-{slug}.json").write_text(
+        json.dumps({"args": vars(args), "cells": cells_out}, indent=1)
+    )
     for c in cells_out:
-        print(f"len {c['length']:<4} {c['condition']:<20} n={c['n']:<4} EM {c['em']:.3f}  "
-              f"F1 {c['f1']:.3f} ±{c['f1_se']:.3f}  ${c['cost_usd']:.3f}  "
-              f"out={c['tok_out']} rsn={c['tok_reasoning']}", flush=True)
+        print(
+            f"len {c['length']:<4} {c['condition']:<20} n={c['n']:<4} EM {c['em']:.3f}  "
+            f"F1 {c['f1']:.3f} ±{c['f1_se']:.3f}  ${c['cost_usd']:.3f}  "
+            f"out={c['tok_out']} rsn={c['tok_reasoning']}",
+            flush=True,
+        )
     print(f"-> {OUT_DIR}/matrix-{slug}.csv", flush=True)
 
 

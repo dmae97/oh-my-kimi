@@ -63,6 +63,19 @@ async function waitForSocketClose(socket: net.Socket): Promise<void> {
 
 const isProxyEnvKey = (k: string): boolean => k.startsWith("PI_PROXY") || k === "NO_PROXY" || k === "no_proxy";
 
+// NO_PROXY/no_proxy set at runtime are readable but hidden from Bun.env
+// enumeration (Bun's fetch proxy layer intercepts them), so the sweep must
+// name them explicitly instead of relying on for..in.
+const HIDDEN_PROXY_KEYS = ["NO_PROXY", "no_proxy"];
+
+function proxyEnvKeys(): Set<string> {
+	const keys = new Set(HIDDEN_PROXY_KEYS);
+	for (const key in Bun.env) {
+		if (isProxyEnvKey(key)) keys.add(key);
+	}
+	return keys;
+}
+
 // Snapshot + clear every proxy-related env var so each test starts clean and
 // leaves nothing behind for later files. Provider-specific tests use unique
 // provider ids so the module-level resolver cache can never cross-contaminate.
@@ -70,19 +83,14 @@ let saved: Record<string, string | undefined>;
 
 beforeEach(() => {
 	saved = {};
-	for (const key in Bun.env) {
-		if (!isProxyEnvKey(key)) continue;
+	for (const key of proxyEnvKeys()) {
 		saved[key] = Bun.env[key];
 		delete Bun.env[key];
 	}
 });
 
 afterEach(() => {
-	const toDelete: string[] = [];
-	for (const key in Bun.env) {
-		if (isProxyEnvKey(key)) toDelete.push(key);
-	}
-	for (const key of toDelete) delete Bun.env[key];
+	for (const key of proxyEnvKeys()) delete Bun.env[key];
 	for (const key in saved) {
 		const value = saved[key];
 		if (value !== undefined) Bun.env[key] = value;
@@ -189,6 +197,11 @@ describe("shouldBypassProxy NO_PROXY rules", () => {
 		// Target is https (port 443) → port mismatch → not bypassed.
 		expect(shouldBypassProxy(new URL("https://api.sakana.ai/v1"))).toBe(false);
 		expect(shouldBypassProxy(new URL("http://api.sakana.ai:8080/v1"))).toBe(true);
+	});
+
+	it("uses port 443 for secure websocket targets", () => {
+		Bun.env.NO_PROXY = "api.sakana.ai:443";
+		expect(shouldBypassProxy(new URL("wss://api.sakana.ai/v1"))).toBe(true);
 	});
 });
 

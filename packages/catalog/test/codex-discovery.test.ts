@@ -11,9 +11,11 @@ import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
 
 describe("Codex model discovery", () => {
 	it("marks discovered models for provider-native V2 compaction", async () => {
+		let capturedHeaders: Headers | undefined;
 		const fetchFn: typeof fetch = Object.assign(
-			async () =>
-				new Response(
+			async (_input: string | URL | Request, init?: RequestInit) => {
+				capturedHeaders = new Headers(init?.headers);
+				return new Response(
 					JSON.stringify({
 						models: [
 							{
@@ -28,7 +30,8 @@ describe("Codex model discovery", () => {
 						],
 					}),
 					{ headers: { etag: "models-v1" } },
-				),
+				);
+			},
 			{ preconnect() {} },
 		);
 		const result = await fetchCodexModels({
@@ -38,6 +41,7 @@ describe("Codex model discovery", () => {
 			fetchFn,
 		});
 
+		expect(capturedHeaders?.get("version")).toBe("0.99.0");
 		expect(result?.etag).toBe("models-v1");
 		expect(result?.models).toHaveLength(1);
 		expect(result?.models[0]).toMatchObject({
@@ -50,6 +54,50 @@ describe("Codex model discovery", () => {
 				v2StreamingEnabled: true,
 			},
 		});
+	});
+
+	it("carries use_responses_lite and prefer_websockets onto the model spec", async () => {
+		const fetchFn: typeof fetch = Object.assign(
+			async () =>
+				new Response(
+					JSON.stringify({
+						models: [
+							{
+								slug: "gpt-5.6-terra",
+								display_name: "GPT-5.6-Terra",
+								context_window: 372_000,
+								default_reasoning_level: "medium",
+								supported_reasoning_levels: ["low", "medium", "high"],
+								input_modalities: ["text", "image"],
+								supported_in_api: true,
+								prefer_websockets: true,
+								use_responses_lite: true,
+							},
+							{
+								slug: "gpt-5.5",
+								display_name: "GPT-5.5",
+								context_window: 272_000,
+								default_reasoning_level: "high",
+								supported_reasoning_levels: ["low", "high"],
+								input_modalities: ["text"],
+								supported_in_api: true,
+							},
+						],
+					}),
+				),
+			{ preconnect() {} },
+		);
+		const result = await fetchCodexModels({
+			accessToken: "test-token",
+			baseUrl: "https://codex.example/backend-api",
+			clientVersion: "0.99.0",
+			fetchFn,
+		});
+
+		const terra = result?.models.find(model => model.id === "gpt-5.6-terra");
+		expect(terra).toMatchObject({ preferWebsockets: true, useResponsesLite: true });
+		const legacy = result?.models.find(model => model.id === "gpt-5.5");
+		expect(legacy?.useResponsesLite).toBeUndefined();
 	});
 
 	it("ignores pre-V2 Codex discovery cache rows", async () => {

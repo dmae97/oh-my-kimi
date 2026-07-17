@@ -142,7 +142,7 @@ Also exposed:
 - `deliverAs: "nextTurn"` — stored and injected on the next user prompt
 - `triggerTurn: true` — starts a turn when idle (also honored with `deliverAs: "nextTurn"`: idle prompts immediately; while streaming the queued message schedules an internal continuation)
 
-`pi.sendUserMessage(content, { deliverAs })` always goes through prompt flow; while streaming it queues as steer/follow-up.
+`pi.sendUserMessage(content, { deliverAs })` always goes through prompt flow. Omit `deliverAs` to start a normal prompt when idle; while streaming, omitted `deliverAs` queues the message as a steer. Set `deliverAs: "followUp"` to wait until the current run finishes.
 
 ## 2) Handler context (`ExtensionContext`)
 
@@ -167,7 +167,7 @@ Handlers and tool `execute` receive `ctx` with:
 
 - `list()` — authenticated models available this session.
 - `current()` — the live session model (read lazily, so it reflects `/model` switches).
-- `resolve(spec)` — a model string (`provider/id`, bare id) or role alias (`pi/slow`, a configured role) → `Model`, honoring the same settings-backed aliases and match preferences as `--model`. Returns `undefined` when nothing matches.
+- `resolve(spec)` — a model string (`provider/id`, bare id) or role alias (`@slow`, a configured role) → `Model`, honoring the same settings-backed aliases and match preferences as `--model`. Returns `undefined` when nothing matches.
 - `family(model)` — an opaque lineage token for "same family?" checks (Claude point releases share a token; Claude and GPT differ). Compare it; don't persist it (the vocabulary tracks new releases).
 
 ```ts
@@ -311,6 +311,7 @@ Supported:
 
 - dialogs: `select`, `confirm`, `input`, `editor`
 - input editing: `setEditorText`, `getEditorText`, `pasteToEditor`, `editor`
+- autocomplete stacking: `addAutocompleteProvider(factory)` wraps the built-in editor provider (factories apply in registration order and re-apply on every slash-command refresh)
 - terminal title and working message (`setTitle`, `setWorkingMessage`)
 - notifications/status/editor text/terminal input/custom overlays
 - theme listing/loading by name (`setTheme` supports string names)
@@ -334,7 +335,7 @@ Unsupported/no-op in RPC implementation:
 
 - `onTerminalInput`
 - `custom`
-- `setFooter`, `setHeader`, `setEditorComponent`
+- `setFooter`, `setHeader`, `setEditorComponent`, `addAutocompleteProvider`
 - `setWorkingMessage`
 - theme switching/loading (`setTheme` returns failure)
 - tool expansion controls are inert
@@ -345,7 +346,7 @@ When no UI context is supplied to runner init, `ctx.hasUI` is `false` and method
 
 ### ACP mode
 
-ACP installs an elicitation-bridged UI context (`createAcpExtensionUiContext` in `acp-agent.ts`). `ctx.hasUI` is `true` while only `select`/`confirm`/`input` round-trip (as ACP elicitations; defaults are returned when the client lacks the `elicitation.form` capability). The non-elicitation surface (widgets, editor, theming, terminal input) is stubbed no-op.
+ACP installs an elicitation-bridged UI context (`createAcpExtensionUiContext` in `acp-agent.ts`). `ctx.hasUI` is `true` while only `select`/`confirm`/`input` round-trip (as ACP elicitations; defaults are returned when the client lacks the `elicitation.form` capability). The non-elicitation surface (widgets, editor, theming, terminal input, autocomplete stacking) is stubbed no-op.
 
 ## Session and state patterns
 

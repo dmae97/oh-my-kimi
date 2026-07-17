@@ -16,7 +16,14 @@ export function ohMyPiXAIUserAgent(): string {
 	return "oh-my-pi/xai";
 }
 
-type XAIProvider = "xai-oauth" | "xai";
+/** xAI provider ids supported by shared HTTP tool transport resolution. */
+export type XAIHttpProvider = "xai-oauth" | "xai";
+
+/** Resolved endpoint and configured headers for an xAI HTTP tool request. */
+export interface XAIHttpTransport {
+	baseURL: string;
+	headers?: Record<string, string>;
+}
 
 /**
  * Resolve the HTTP base URL for an xAI tool call.
@@ -48,7 +55,11 @@ type XAIProvider = "xai-oauth" | "xai";
  * let xai-oauth entries hijack a xai tool call (or vice versa) when the
  * same model id ships under both descriptors.
  */
-function resolveXAIBaseURL(modelRegistry: ModelRegistry, provider: XAIProvider, modelId: string | undefined): string {
+function resolveXAIBaseURL(
+	modelRegistry: ModelRegistry,
+	provider: XAIHttpProvider,
+	modelId: string | undefined,
+): string {
 	if (modelId) {
 		const merged = modelRegistry.getAll().find(m => m.id === modelId && m.provider === provider);
 		if (merged?.baseUrl) {
@@ -67,6 +78,21 @@ function resolveXAIBaseURL(modelRegistry: ModelRegistry, provider: XAIProvider, 
 		if (normalized !== DEFAULT_BASE_URL) return normalized;
 	}
 	return ($env.XAI_BASE_URL || DEFAULT_BASE_URL).replace(/\/$/, "");
+}
+/**
+ * Resolve an xAI tool endpoint and its provider/model header overrides.
+ */
+export function resolveXAIHttpTransport(
+	modelRegistry: ModelRegistry,
+	provider: XAIHttpProvider,
+	modelId?: string,
+): XAIHttpTransport {
+	return {
+		baseURL: resolveXAIBaseURL(modelRegistry, provider, modelId),
+		headers:
+			(modelId ? modelRegistry.find(provider, modelId)?.headers : undefined) ??
+			modelRegistry.getProviderHeaders(provider),
+	};
 }
 
 /**

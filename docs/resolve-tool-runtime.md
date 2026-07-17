@@ -1,145 +1,53 @@
-# Resolve tool runtime internals
+# Resolution devices runtime
 
-This document explains how preview/apply workflows are modeled in coding-agent and how built-in or custom tools can participate via the pending-invoker registry and `pushPendingAction`. (Pending previews live in a separate non-forcing registry inside `ToolChoiceQueue`; only genuine hard forces use the consuming directive queue.)
+Pending previews and plan approval no longer use a `resolve` tool. They finalize through three plain-text writes handled by `packages/coding-agent/src/tools/resolve.ts`:
 
-## Scope and key files
+- `/xdev/resolve` — apply the pending staged preview; body = reason text
+- `/xdev/reject` — discard the pending staged preview; body = reason text
+- `/xdev/propose` — submit the plan for approval while plan mode is active; body = the plan slug/title (`<slug>` for `local://<slug>-plan.md`)
 
-- [`src/tools/resolve.ts`](../packages/coding-agent/src/tools/resolve.ts)
-- [`src/tools/ast-edit.ts`](../packages/coding-agent/src/tools/ast-edit.ts)
-- [`src/extensibility/custom-tools/types.ts`](../packages/coding-agent/src/extensibility/custom-tools/types.ts)
-- [`src/extensibility/custom-tools/loader.ts`](../packages/coding-agent/src/extensibility/custom-tools/loader.ts)
-- [`src/sdk.ts`](../packages/coding-agent/src/sdk.ts)
+## Preview flows
 
-## What `resolve` does
+Preview producers call `queueResolveHandler(...)` with `apply(reason)` and optional `reject(reason)` callbacks. That registers a non-forcing pending invoker in `ToolChoiceQueue`.
 
-`resolve` is a hidden tool that finalizes a pending preview action.
+While a preview is pending, `AgentSession.nextToolChoiceDirective()` returns a soft requirement:
 
-- `action: "apply"` executes the queued action's `apply(reason, extra)` callback and returns that result with resolve metadata.
-- `action: "discard"` invokes `reject(reason, extra)` if provided; otherwise returns `Discarded: <label>. Reason: <reason>`.
-- `extra` is optional free-form metadata. Queue handlers receive it; producers decide whether it has meaning.
+- `toolName: "write"`
+- `satisfies: isPreviewResolutionToolCall`
+- reminder from `resolve-device-reminder.md`
 
-If no pending action exists, `resolve(action="apply")` fails with:
+So the model can comply by writing to `/xdev/resolve` or `/xdev/reject`; a write to any other path is still a detour and gets skipped/escalated.
 
-- `No pending action to resolve. Nothing to apply or discard.`
+Dispatch path:
 
-`resolve(action="discard")` with no pending action succeeds instead, returning `Nothing to discard; no pending action remains.` — the desired end-state (no staged change) already holds.
+- `dispatchResolutionDevice(session, "resolve" | "reject", text)`
+- `peekQueueInvoker() ?? peekPendingInvoker()`
+- `runResolveInvocation(...)`
 
-## Pending previews use a non-forcing soft tool requirement
+`reject` with no pending action succeeds (`Nothing to reject; no pending action remains.`). `resolve` with no pending action throws.
 
-Preview producers call `queueResolveHandler(...)`, which registers a non-forcing
-pending invoker on the session (a stack keyed by a unique
-`pending-action:<tool>:<seq>` id — never clobbered by label). It does NOT force
-`tool_choice` and does NOT inject a steering reminder.
+## Plan approval
 
-While a preview is pending, the session's `getToolChoice` callback
-(`nextToolChoiceDirective`) returns a `SoftToolRequirement` (`toolName: "resolve"`)
-carrying the resolve reminder, as a non-consuming peek. The agent runtime owns the
-lifecycle: it injects the reminder once, runs with `tool_choice` unchanged, and
-escalates to a one-turn forced `resolve` choice ONLY if the model fails to call
-`resolve` that turn (skipping any detour tool batch first). A model that resolves
-on the reminder pays no message-cache invalidation — the previous design forced
-`tool_choice` on every preview, busting the provider message cache twice per cycle.
+Plan mode installs a separate proposal handler through `setPlanProposalHandler(...)`.
 
-Runtime behavior:
+- `InteractiveMode` uses it to hand `PlanApprovalDetails` to the plan-review UI.
+- ACP mode uses it to run elicitation/approval and emit mode updates.
+- PlanYolo uses it to auto-approve and switch to the execution target.
 
-- the pending invoker owns the `apply`/`reject` callbacks,
-- `resolve` dispatches via `peekQueueInvoker() ?? peekPendingInvoker() ?? peekStandingResolveHandler()`,
-- a genuine hard forced tool choice (dequeued first by `nextToolChoiceDirective`) preempts the soft requirement,
-- if an apply callback throws, the helper re-registers the same pending invoker (same id) so the preview can still be discarded or retried.
+Dispatch path:
 
-`resolve` also checks a standing resolve handler after the invokers; this is used by long-lived approval flows that are not ordinary preview tool calls.
+- `dispatchResolutionDevice(session, "propose", title)`
+- `peekPlanProposalHandler()`
 
-Multiple pending previews stack as unique-keyed invokers and resolve independently (head-first), not through forced tool-choice ordering.
+`/xdev/propose` is only valid while plan mode is active.
 
-## Built-in producer example (`ast_edit`)
+## Why `write` is guaranteed
 
-`ast_edit` previews structural replacements first. When the preview has replacements and is not applied yet, it queues a resolve handler that contains:
+Because previews and plan approval now ride `write`, the harness keeps `write` available whenever it is needed:
 
-- label (human-readable summary)
-- `sourceToolName` (`ast_edit`)
-- `apply(reason: string, extra?: Record<string, unknown>)` callback that reruns AST edit with `dryRun: false`
+- `createTools(...)` auto-appends `write` when a `deferrable` tool is active (e.g. `ast_edit`)
+- `createAgentSession(...)` keeps `write` registered when a deferrable tool exists or plan mode is enabled
 
-`resolve(action="apply", reason="...")` passes both `reason` and `extra` into this callback, but `ast_edit`'s apply ignores both — its parameter is `_reason`, and the rerun is independent of `reason`/`extra`.
+## Custom tools
 
-## Custom tools: `pushPendingAction`
-
-Custom tools can register resolve-compatible pending actions through `CustomToolAPI.pushPendingAction(...)`. The custom tool loader forwards these actions to `queueResolveHandler(...)` when that hook is available.
-
-`CustomToolPendingAction`:
-
-- `label: string` (required)
-- `apply(reason: string): Promise<AgentToolResult<unknown>>` (required) — invoked on apply; `reason` is the string passed to `resolve`
-- `reject?(reason: string): Promise<AgentToolResult<unknown> | undefined>` (optional) — invoked on discard; return value replaces the default "Discarded" message if provided
-- `details?: unknown` exists on the public custom-tool type but is not currently forwarded by the loader into resolve metadata
-- `sourceToolName?: string` (optional, defaults to `"custom_tool"`)
-
-### Minimal usage example
-
-```ts
-import type { CustomToolFactory } from "@oh-my-pi/pi-coding-agent";
-
-const factory: CustomToolFactory = (pi) => ({
-  name: "batch_rename_preview",
-  label: "Batch Rename Preview",
-  description: "Previews renames and defers commit to resolve",
-  parameters: pi.zod.object({
-    files: pi.zod.array(pi.zod.string()),
-  }),
-
-  async execute(_toolCallId, params) {
-    const previewSummary = `Prepared rename plan for ${params.files.length} files`;
-
-    pi.pushPendingAction({
-      label: `Batch rename: ${params.files.length} files`,
-      sourceToolName: "batch_rename_preview",
-      apply: async (reason) => {
-        // apply writes here
-        return {
-          content: [
-            { type: "text", text: `Applied batch rename. Reason: ${reason}` },
-          ],
-        };
-      },
-      reject: async (reason) => {
-        // optional: cleanup or notify on discard
-        return {
-          content: [
-            { type: "text", text: `Discarded batch rename. Reason: ${reason}` },
-          ],
-        };
-      },
-    });
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: `${previewSummary}. Call resolve to apply or discard.`,
-        },
-      ],
-    };
-  },
-});
-
-export default factory;
-```
-
-## Runtime availability and failures
-
-`pushPendingAction` is wired by the custom tool loader through the active session's resolve queue hook.
-
-If the runtime did not provide the resolve queue hook, `pushPendingAction` throws:
-
-- `Pending action store unavailable for custom tools in this runtime.`
-
-## Tool-choice behavior
-
-When `queueResolveHandler(...)` registers a preview, the agent runtime forces a one-shot `resolve` tool choice so pending previews are explicitly finalized before normal tool flow continues.
-
-## Developer guidance
-
-- Use pending actions only for destructive or high-impact operations that should support explicit apply/discard.
-- Keep `label` concise and specific; it is shown in resolve renderer output.
-- Ensure `apply(reason)` is deterministic and idempotent enough for one-shot execution; `reason` is informational and should not change behavior.
-- Implement `reject(reason)` when the discard needs cleanup (temp state, locks, notifications); omit it for stateless previews where the default message suffices.
-- If your tool can stage multiple previews, remember they stack as unique-keyed pending invokers (resolved head-first), not a forced tool-choice sequence and not a separate `pushPendingAction` stack.
+Custom tools still stage previews through `pushPendingAction(...)`; the loader forwards them into `queueResolveHandler(...)`. Nothing about the custom-tool API changes except the model-facing finalization step: the follow-up is now a plain-text write to `/xdev/resolve` or `/xdev/reject`, not a `resolve` tool call.

@@ -49,6 +49,7 @@ These are consumed via `getEnvApiKey()` (`packages/ai/src/stream.ts`) unless not
 | `SYNTHETIC_API_KEY`             | Synthetic auth                                   | Using Synthetic models                                         |                                                                                                     |
 | `NVIDIA_API_KEY`                | NVIDIA auth                                      | Using `nvidia` provider                                        |                                                                                                     |
 | `NANO_GPT_API_KEY`              | NanoGPT auth                                     | Using `nanogpt` provider                                       |                                                                                                     |
+| `NOVITA_API_KEY`                | Novita auth                                      | Using `novita` provider                                        |                                                                                                     |
 | `VENICE_API_KEY`                | Venice auth                                      | Using `venice` provider                                        |                                                                                                     |
 | `LITELLM_API_KEY`               | LiteLLM auth                                     | Using `litellm` provider                                       | OpenAI-compatible LiteLLM proxy key                                                                 |
 | `LM_STUDIO_API_KEY`             | LM Studio auth (optional)                        | Using `lm-studio` provider with authenticated hosts            | Local LM Studio usually runs without auth; any non-empty token works when a key is required         |
@@ -406,7 +407,7 @@ These are read as runtime signals; they are usually set by the terminal/OS rathe
 | `PI_NO_DECCARA`           | If set (truthy), disables Kitty DECCARA rectangular-SGR background fills (forces padded-string rendering) |
 | `PI_DEBUG_REDRAW`         | If `1`, enables redraw debug logging                                                  |
 | `PI_FORCE_IMAGE_PROTOCOL` | Forces terminal image protocol detection (`kitty`, `iterm2`/`iterm`, `sixel`, `none`) |
-| `PI_TUI_RESIZE_IN_PLACE`  | `1`/`true` force in-place resize (no alt-screen borrow, no ED3 rewrap); `0`/`false` force the alt-screen fast path. Default-on for Warp, which re-reports its size on alt-screen toggles |
+| `PI_TUI_RESIZE_IN_PLACE`  | `1`/`true` preserves terminal-managed history and repaints after resize settle; `0`/`false` uses viewport-only drag paints followed by one ED3 history rewrap. Neither path switches terminal buffers. Default-on for Warp and multiplexers |
 
 ---
 

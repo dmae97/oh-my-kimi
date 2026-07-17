@@ -53,11 +53,17 @@ PALETTE = {
 }
 
 
-def ui_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+def ui_font(
+    size: int, bold: bool = False
+) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     candidates = [
-        "/System/Library/Fonts/Supplemental/Arial Bold.ttf" if bold else "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf"
+        if bold
+        else "/System/Library/Fonts/Supplemental/Arial.ttf",
         "/System/Library/Fonts/Monaco.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        if bold
+        else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     ]
     for path in candidates:
         if path and Path(path).exists():
@@ -99,7 +105,9 @@ def cosine(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return (a * b).sum(axis=-1) / np.maximum((a_norm * b_norm).squeeze(-1), 1e-6)
 
 
-def normalize_heat(arr: np.ndarray, lo: float | None = None, hi: float | None = None) -> tuple[np.ndarray, float, float]:
+def normalize_heat(
+    arr: np.ndarray, lo: float | None = None, hi: float | None = None
+) -> tuple[np.ndarray, float, float]:
     if lo is None:
         lo = float(np.quantile(arr, 0.03))
     if hi is None:
@@ -110,15 +118,23 @@ def normalize_heat(arr: np.ndarray, lo: float | None = None, hi: float | None = 
 
 
 def apply_template(processor: Any, content: list[dict[str, Any]]) -> str:
-    return processor.apply_chat_template([{"role": "user", "content": content}], tokenize=False, add_generation_prompt=True)
+    return processor.apply_chat_template(
+        [{"role": "user", "content": content}],
+        tokenize=False,
+        add_generation_prompt=True,
+    )
 
 
-def text_spans(processor: Any, templated: str, chunk: str, answer_start: int, answer_end: int) -> dict[str, int]:
+def text_spans(
+    processor: Any, templated: str, chunk: str, answer_start: int, answer_end: int
+) -> dict[str, int]:
     tokenizer = processor.tokenizer
     chunk_at = templated.index(chunk)
     prefix = templated[:chunk_at]
+
     def n_tokens(s: str) -> int:
         return len(tokenizer(s, add_special_tokens=False)["input_ids"])
+
     ref_start = n_tokens(prefix)
     ref_end = n_tokens(prefix + chunk)
     answer_tok_start = n_tokens(prefix + chunk[:answer_start])
@@ -135,7 +151,15 @@ def to_device(batch: dict[str, Any], device: Any) -> dict[str, Any]:
     return {k: (v.to(device) if hasattr(v, "to") else v) for k, v in batch.items()}
 
 
-def run_text(model: Any, processor: Any, text_prompt: str, chunk: str, answer_start: int, answer_end: int, device: Any) -> tuple[list[np.ndarray], dict[str, int], str]:
+def run_text(
+    model: Any,
+    processor: Any,
+    text_prompt: str,
+    chunk: str,
+    answer_start: int,
+    answer_end: int,
+    device: Any,
+) -> tuple[list[np.ndarray], dict[str, int], str]:
     import torch
 
     templated = apply_template(processor, [{"type": "text", "text": text_prompt}])
@@ -143,27 +167,59 @@ def run_text(model: Any, processor: Any, text_prompt: str, chunk: str, answer_st
     batch = processor(text=templated, return_tensors="pt")
     batch = to_device(batch, device)
     with torch.no_grad():
-        out = model(**batch, output_hidden_states=True, output_attentions=False, use_cache=False)
-    layers = [h[0].float().detach().cpu().numpy().astype(np.float32, copy=False) for h in out.hidden_states]
+        out = model(
+            **batch, output_hidden_states=True, output_attentions=False, use_cache=False
+        )
+    layers = [
+        h[0].float().detach().cpu().numpy().astype(np.float32, copy=False)
+        for h in out.hidden_states
+    ]
     return layers, spans, templated
 
 
-def run_image(model: Any, processor: Any, img: Image.Image, img_prompt: str, device: Any) -> tuple[list[np.ndarray], list[int], dict[str, Any], str]:
+def run_image(
+    model: Any, processor: Any, img: Image.Image, img_prompt: str, device: Any
+) -> tuple[list[np.ndarray], list[int], dict[str, Any], str]:
     import torch
 
-    templated = apply_template(processor, [{"type": "image", "image": img}, {"type": "text", "text": img_prompt}])
+    templated = apply_template(
+        processor,
+        [{"type": "image", "image": img}, {"type": "text", "text": img_prompt}],
+    )
     batch = processor(images=img, text=templated, return_tensors="pt")
     image_token_id = processor.tokenizer.convert_tokens_to_ids(processor.image_token)
-    image_positions = [i for i, token_id in enumerate(batch["input_ids"][0].tolist()) if token_id == image_token_id]
-    meta = {k: (v.tolist() if hasattr(v, "tolist") else v) for k, v in batch.items() if k in ("image_grid_thw",)}
+    image_positions = [
+        i
+        for i, token_id in enumerate(batch["input_ids"][0].tolist())
+        if token_id == image_token_id
+    ]
+    meta = {
+        k: (v.tolist() if hasattr(v, "tolist") else v)
+        for k, v in batch.items()
+        if k in ("image_grid_thw",)
+    }
     batch = to_device(batch, device)
     with torch.no_grad():
-        out = model(**batch, output_hidden_states=True, output_attentions=False, use_cache=False)
-    layers = [h[0].float().detach().cpu().numpy().astype(np.float32, copy=False) for h in out.hidden_states]
+        out = model(
+            **batch, output_hidden_states=True, output_attentions=False, use_cache=False
+        )
+    layers = [
+        h[0].float().detach().cpu().numpy().astype(np.float32, copy=False)
+        for h in out.hidden_states
+    ]
     return layers, image_positions, meta, templated
 
 
-def image_answer_token_indices(answer_start: int, answer_end: int, text_cols: int, adv: int, pitch: int, image_w: int, image_h: int, image_token_count: int) -> list[int]:
+def image_answer_token_indices(
+    answer_start: int,
+    answer_end: int,
+    text_cols: int,
+    adv: int,
+    pitch: int,
+    image_w: int,
+    image_h: int,
+    image_token_count: int,
+) -> list[int]:
     grid = round(math.sqrt(image_token_count))
     if grid * grid != image_token_count:
         return []
@@ -186,7 +242,15 @@ def image_answer_token_indices(answer_start: int, answer_end: int, text_cols: in
     return sorted(set(out))
 
 
-def crop_answer(img: Image.Image, start: int, end: int, cols: int, adv: int, pitch: int, pad_cells: int = 34) -> Image.Image:
+def crop_answer(
+    img: Image.Image,
+    start: int,
+    end: int,
+    cols: int,
+    adv: int,
+    pitch: int,
+    pad_cells: int = 34,
+) -> Image.Image:
     row0 = max(0, start // cols - 5)
     row1 = min(img.height // pitch, end // cols + 6)
     col0 = max(0, start % cols - pad_cells)
@@ -199,11 +263,21 @@ def crop_answer(img: Image.Image, start: int, end: int, cols: int, adv: int, pit
     bx1 = min(crop.width - 1, ((end - 1) % cols - col0 + 2) * adv)
     by0 = max(0, (start // cols - row0) * pitch - 1)
     by1 = min(crop.height - 1, ((end - 1) // cols - row0 + 1) * pitch + 1)
-    d.rounded_rectangle((bx0, by0, bx1, by1), radius=3, outline=PALETTE["orange"], width=3)
+    d.rounded_rectangle(
+        (bx0, by0, bx1, by1), radius=3, outline=PALETTE["orange"], width=3
+    )
     return crop
 
 
-def draw_wrapped(draw: ImageDraw.ImageDraw, xy: tuple[int, int], text: str, width_chars: int, line_height: int, fill: tuple[int, int, int], fnt: ImageFont.ImageFont) -> int:
+def draw_wrapped(
+    draw: ImageDraw.ImageDraw,
+    xy: tuple[int, int],
+    text: str,
+    width_chars: int,
+    line_height: int,
+    fill: tuple[int, int, int],
+    fnt: ImageFont.ImageFont,
+) -> int:
     words = text.split()
     lines: list[str] = []
     current = ""
@@ -224,11 +298,26 @@ def draw_wrapped(draw: ImageDraw.ImageDraw, xy: tuple[int, int], text: str, widt
     return y
 
 
-def render_heat_grid(draw: ImageDraw.ImageDraw, grid: np.ndarray, box: tuple[int, int, int, int], title: str, layer: int, answer_indices: list[int], color: tuple[int, int, int]) -> None:
+def render_heat_grid(
+    draw: ImageDraw.ImageDraw,
+    grid: np.ndarray,
+    box: tuple[int, int, int, int],
+    title: str,
+    layer: int,
+    answer_indices: list[int],
+    color: tuple[int, int, int],
+) -> None:
     x0, y0, x1, y1 = box
-    draw.rounded_rectangle(box, radius=18, fill=PALETTE["panel2"], outline=(35, 49, 59), width=1)
+    draw.rounded_rectangle(
+        box, radius=18, fill=PALETTE["panel2"], outline=(35, 49, 59), width=1
+    )
     draw.text((x0 + 18, y0 + 14), title, fill=color, font=ui_font(22, True))
-    draw.text((x0 + 18, y0 + 43), f"decoder layer {layer}", fill=PALETTE["muted"], font=ui_font(15))
+    draw.text(
+        (x0 + 18, y0 + 43),
+        f"decoder layer {layer}",
+        fill=PALETTE["muted"],
+        font=ui_font(15),
+    )
     gx0, gy0, gx1, gy1 = x0 + 26, y0 + 76, x1 - 26, y1 - 24
     rows, cols = grid.shape
     cw = (gx1 - gx0) / cols
@@ -246,10 +335,18 @@ def render_heat_grid(draw: ImageDraw.ImageDraw, grid: np.ndarray, box: tuple[int
         xb = round(gx0 + (c + 1) * cw)
         ya = round(gy0 + r * ch)
         yb = round(gy0 + (r + 1) * ch)
-        draw.rectangle((xa - 2, ya - 2, xb + 2, yb + 2), outline=PALETTE["orange"], width=2)
+        draw.rectangle(
+            (xa - 2, ya - 2, xb + 2, yb + 2), outline=PALETTE["orange"], width=2
+        )
 
 
-def render_visual(out_path: Path, summary: dict[str, Any], arrays: dict[str, np.ndarray], original_img: Image.Image, chunk: str) -> None:
+def render_visual(
+    out_path: Path,
+    summary: dict[str, Any],
+    arrays: dict[str, np.ndarray],
+    original_img: Image.Image,
+    chunk: str,
+) -> None:
     w, h = 2100, 1260
     canvas = Image.new("RGB", (w, h), PALETTE["bg"])
     draw = ImageDraw.Draw(canvas)
@@ -259,17 +356,42 @@ def render_visual(out_path: Path, summary: dict[str, Any], arrays: dict[str, np.
     gd = ImageDraw.Draw(glow)
     gd.ellipse((-240, -220, 860, 660), fill=(75, 220, 255, 28))
     gd.ellipse((1160, 80, 2420, 1320), fill=(255, 112, 72, 26))
-    canvas = Image.alpha_composite(canvas.convert("RGBA"), glow.filter(ImageFilter.GaussianBlur(80))).convert("RGB")
+    canvas = Image.alpha_composite(
+        canvas.convert("RGBA"), glow.filter(ImageFilter.GaussianBlur(80))
+    ).convert("RGB")
     draw = ImageDraw.Draw(canvas)
 
     q = summary["question"]
-    draw.text((62, 42), "SNAPCOMPACT CARRIER COMPARISON", fill=PALETTE["amber"], font=ui_font(24, True))
-    draw.text((62, 82), "Same input, two internal languages", fill=PALETTE["ink"], font=ui_font(68, True))
-    draw.text((64, 166), "Raw text tokens vs bitmap image tokens. Bright fields show where the text-carrier answer vector resonates with the image-carrier hidden state.", fill=PALETTE["muted"], font=ui_font(25))
+    draw.text(
+        (62, 42),
+        "SNAPCOMPACT CARRIER COMPARISON",
+        fill=PALETTE["amber"],
+        font=ui_font(24, True),
+    )
+    draw.text(
+        (62, 82),
+        "Same input, two internal languages",
+        fill=PALETTE["ink"],
+        font=ui_font(68, True),
+    )
+    draw.text(
+        (64, 166),
+        "Raw text tokens vs bitmap image tokens. Bright fields show where the text-carrier answer vector resonates with the image-carrier hidden state.",
+        fill=PALETTE["muted"],
+        font=ui_font(25),
+    )
 
     # Carrier cards.
-    draw.rounded_rectangle((62, 236, 620, 760), radius=28, fill=PALETTE["panel"], outline=(35, 49, 59), width=1)
-    draw.text((94, 270), "raw text carrier", fill=PALETTE["cyan"], font=ui_font(30, True))
+    draw.rounded_rectangle(
+        (62, 236, 620, 760),
+        radius=28,
+        fill=PALETTE["panel"],
+        outline=(35, 49, 59),
+        width=1,
+    )
+    draw.text(
+        (94, 270), "raw text carrier", fill=PALETTE["cyan"], font=ui_font(30, True)
+    )
     start = max(0, q["answer_start"] - 230)
     end = min(len(chunk), q["answer_end"] + 230)
     snippet = chunk[start:end].replace("\n", " ")
@@ -279,22 +401,69 @@ def render_visual(out_path: Path, summary: dict[str, Any], arrays: dict[str, np.
     answer = snippet[rel_a:rel_b]
     after = snippet[rel_b:]
     tx, ty = 94, 328
-    ty = draw_wrapped(draw, (tx, ty), before[-260:], 52, 22, PALETTE["ink"], mono_font(15))
-    draw.rounded_rectangle((tx, ty + 2, tx + 16 * max(3, len(answer)), ty + 27), radius=5, fill=(255, 196, 68))
+    ty = draw_wrapped(
+        draw, (tx, ty), before[-260:], 52, 22, PALETTE["ink"], mono_font(15)
+    )
+    draw.rounded_rectangle(
+        (tx, ty + 2, tx + 16 * max(3, len(answer)), ty + 27),
+        radius=5,
+        fill=(255, 196, 68),
+    )
     draw.text((tx + 4, ty + 5), answer, fill=(8, 10, 10), font=mono_font(16))
     ty += 36
     draw_wrapped(draw, (tx, ty), after[:260], 52, 22, PALETTE["ink"], mono_font(15))
-    draw.text((94, 694), f"answer tokens: {summary['text_answer_tokens']}", fill=PALETTE["muted"], font=ui_font(18))
-    draw.text((94, 724), f"reference tokens: {summary['text_reference_tokens']}", fill=PALETTE["muted"], font=ui_font(18))
+    draw.text(
+        (94, 694),
+        f"answer tokens: {summary['text_answer_tokens']}",
+        fill=PALETTE["muted"],
+        font=ui_font(18),
+    )
+    draw.text(
+        (94, 724),
+        f"reference tokens: {summary['text_reference_tokens']}",
+        fill=PALETTE["muted"],
+        font=ui_font(18),
+    )
 
-    draw.rounded_rectangle((62, 792, 620, 1192), radius=28, fill=PALETTE["panel"], outline=(35, 49, 59), width=1)
-    draw.text((94, 826), "image carrier", fill=PALETTE["orange"], font=ui_font(30, True))
-    crop = crop_answer(original_img, q["answer_start"], q["answer_end"], summary["geometry"]["cols"], 8, 13)
+    draw.rounded_rectangle(
+        (62, 792, 620, 1192),
+        radius=28,
+        fill=PALETTE["panel"],
+        outline=(35, 49, 59),
+        width=1,
+    )
+    draw.text(
+        (94, 826), "image carrier", fill=PALETTE["orange"], font=ui_font(30, True)
+    )
+    crop = crop_answer(
+        original_img,
+        q["answer_start"],
+        q["answer_end"],
+        summary["geometry"]["cols"],
+        8,
+        13,
+    )
     scale = min(478 / crop.width, 218 / crop.height)
-    crop_r = crop.resize((round(crop.width * scale), round(crop.height * scale)), Image.Resampling.NEAREST)
-    draw.rounded_rectangle((94, 888, 588, 1134), radius=16, fill=(244, 242, 230), outline=PALETTE["orange"], width=3)
-    canvas.paste(crop_r, (94 + (494 - crop_r.width) // 2, 888 + (246 - crop_r.height) // 2))
-    draw.text((94, 1150), f"image tokens: {summary['image_tokens']} ({summary['image_grid']}×{summary['image_grid']})", fill=PALETTE["muted"], font=ui_font(18))
+    crop_r = crop.resize(
+        (round(crop.width * scale), round(crop.height * scale)),
+        Image.Resampling.NEAREST,
+    )
+    draw.rounded_rectangle(
+        (94, 888, 588, 1134),
+        radius=16,
+        fill=(244, 242, 230),
+        outline=PALETTE["orange"],
+        width=3,
+    )
+    canvas.paste(
+        crop_r, (94 + (494 - crop_r.width) // 2, 888 + (246 - crop_r.height) // 2)
+    )
+    draw.text(
+        (94, 1150),
+        f"image tokens: {summary['image_tokens']} ({summary['image_grid']}×{summary['image_grid']})",
+        fill=PALETTE["muted"],
+        font=ui_font(18),
+    )
 
     # Layer grids.
     sim = arrays["text_answer_to_image_excess_norm"]
@@ -305,12 +474,36 @@ def render_visual(out_path: Path, summary: dict[str, Any], arrays: dict[str, np.
     names = ["input layer", "middle layer", "peak alignment"]
     colors = [PALETTE["cyan"], PALETTE["purple"], PALETTE["green"]]
     for layer, box, name, color in zip(layers, boxes, names, colors):
-        render_heat_grid(draw, sim[layer].reshape(grid, grid), box, name, layer, answer_indices, color)
+        render_heat_grid(
+            draw,
+            sim[layer].reshape(grid, grid),
+            box,
+            name,
+            layer,
+            answer_indices,
+            color,
+        )
 
     # Cosine bridge panel.
-    draw.rounded_rectangle((672, 672, 1980, 1192), radius=28, fill=PALETTE["panel"], outline=(35, 49, 59), width=1)
-    draw.text((704, 704), "cross-carrier convergence bridge", fill=PALETTE["ink"], font=ui_font(34, True))
-    draw.text((704, 744), "Cosine similarity between pooled raw-text answer states and pooled bitmap answer-region states by layer", fill=PALETTE["muted"], font=ui_font(19))
+    draw.rounded_rectangle(
+        (672, 672, 1980, 1192),
+        radius=28,
+        fill=PALETTE["panel"],
+        outline=(35, 49, 59),
+        width=1,
+    )
+    draw.text(
+        (704, 704),
+        "cross-carrier convergence bridge",
+        fill=PALETTE["ink"],
+        font=ui_font(34, True),
+    )
+    draw.text(
+        (704, 744),
+        "Cosine similarity between pooled raw-text answer states and pooled bitmap answer-region states by layer",
+        fill=PALETTE["muted"],
+        font=ui_font(19),
+    )
     x0, y0, x1, y1 = 730, 820, 1908, 1096
     for i in range(5):
         y = y0 + round((y1 - y0) * i / 4)
@@ -321,6 +514,7 @@ def render_visual(out_path: Path, summary: dict[str, Any], arrays: dict[str, np.
     hi = float(max(local.max(), global_mean.max()))
     if hi <= lo:
         hi = lo + 1e-6
+
     def pts(vals: np.ndarray) -> list[tuple[int, int]]:
         out = []
         for i, v in enumerate(vals):
@@ -328,6 +522,7 @@ def render_visual(out_path: Path, summary: dict[str, Any], arrays: dict[str, np.
             y = y1 - round((y1 - y0) * (float(v) - lo) / (hi - lo))
             out.append((x, y))
         return out
+
     p_local = pts(local)
     p_global = pts(global_mean)
     draw.line(p_global, fill=PALETTE["muted"], width=4)
@@ -335,17 +530,56 @@ def render_visual(out_path: Path, summary: dict[str, Any], arrays: dict[str, np.
     for x, y in p_local:
         draw.ellipse((x - 5, y - 5, x + 5, y + 5), fill=PALETTE["amber"])
     draw.text((x0, y1 + 22), "layer 0", fill=PALETTE["muted"], font=ui_font(16))
-    draw.text((x1 - 70, y1 + 22), f"layer {len(local) - 1}", fill=PALETTE["muted"], font=ui_font(16))
+    draw.text(
+        (x1 - 70, y1 + 22),
+        f"layer {len(local) - 1}",
+        fill=PALETTE["muted"],
+        font=ui_font(16),
+    )
     peak_layer = int(np.argmax(local))
-    draw.rounded_rectangle((1502, 790, 1938, 900), radius=18, fill=(9, 13, 18), outline=(38, 51, 60), width=1)
-    draw.text((1526, 812), f"answer cosine peaks: {local[peak_layer]:.3f} @L{peak_layer}", fill=PALETTE["amber"], font=ui_font(21, True))
-    draw.text((1526, 842), f"final answer cosine: {local[-1]:.3f}", fill=PALETTE["muted"], font=ui_font(18))
-    draw.text((1526, 868), f"final global carrier cosine: {global_mean[-1]:.3f}", fill=PALETTE["muted"], font=ui_font(18))
-    draw.rounded_rectangle((704, 1120, 1238, 1168), radius=13, fill=(9, 13, 18), outline=(38, 51, 60), width=1)
+    draw.rounded_rectangle(
+        (1502, 790, 1938, 900),
+        radius=18,
+        fill=(9, 13, 18),
+        outline=(38, 51, 60),
+        width=1,
+    )
+    draw.text(
+        (1526, 812),
+        f"answer cosine peaks: {local[peak_layer]:.3f} @L{peak_layer}",
+        fill=PALETTE["amber"],
+        font=ui_font(21, True),
+    )
+    draw.text(
+        (1526, 842),
+        f"final answer cosine: {local[-1]:.3f}",
+        fill=PALETTE["muted"],
+        font=ui_font(18),
+    )
+    draw.text(
+        (1526, 868),
+        f"final global carrier cosine: {global_mean[-1]:.3f}",
+        fill=PALETTE["muted"],
+        font=ui_font(18),
+    )
+    draw.rounded_rectangle(
+        (704, 1120, 1238, 1168),
+        radius=13,
+        fill=(9, 13, 18),
+        outline=(38, 51, 60),
+        width=1,
+    )
     draw.rectangle((724, 1138, 768, 1148), fill=PALETTE["amber"])
-    draw.text((784, 1129), "answer region: text vector ↔ image region", fill=PALETTE["muted"], font=ui_font(17))
+    draw.text(
+        (784, 1129),
+        "answer region: text vector ↔ image region",
+        fill=PALETTE["muted"],
+        font=ui_font(17),
+    )
     draw.rectangle((1260, 1138, 1304, 1148), fill=PALETTE["muted"])
-    draw.text((1320, 1129), "global carrier means", fill=PALETTE["muted"], font=ui_font(17))
+    draw.text(
+        (1320, 1129), "global carrier means", fill=PALETTE["muted"], font=ui_font(17)
+    )
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(out_path)
@@ -386,8 +620,12 @@ def main() -> None:
     img.save(img_dir / "image-carrier.png")
 
     print(f"loading {args.model_dir}", flush=True)
-    config = AutoConfig.from_pretrained(args.model_dir, local_files_only=True, trust_remote_code=True)
-    processor = AutoProcessor.from_pretrained(args.model_dir, local_files_only=True, trust_remote_code=True, use_fast=False)
+    config = AutoConfig.from_pretrained(
+        args.model_dir, local_files_only=True, trust_remote_code=True
+    )
+    processor = AutoProcessor.from_pretrained(
+        args.model_dir, local_files_only=True, trust_remote_code=True, use_fast=False
+    )
     target_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dtype = torch.bfloat16 if target_device.type == "cuda" else torch.float32
     if getattr(config, "model_type", "") == "qwen2_5_vl":
@@ -402,7 +640,16 @@ def main() -> None:
         ).eval()
         device = next(model.parameters()).device
     else:
-        model = AutoModel.from_pretrained(args.model_dir, local_files_only=True, trust_remote_code=True, dtype=dtype).to(target_device).eval()
+        model = (
+            AutoModel.from_pretrained(
+                args.model_dir,
+                local_files_only=True,
+                trust_remote_code=True,
+                dtype=dtype,
+            )
+            .to(target_device)
+            .eval()
+        )
         device = target_device
 
     text_prompt = (
@@ -410,13 +657,29 @@ def main() -> None:
         f"<reference>{chunk}</reference>\n\nQuestion: {q['q']}\n"
         "Answer with only the shortest extractive answer."
     )
-    img_prompt = load_prompt("qa-image.md").format(cols=cols, rows=rows) + f"\n\nQuestion: {q['q']}\nAnswer with only the shortest extractive answer."
+    img_prompt = (
+        load_prompt("qa-image.md").format(cols=cols, rows=rows)
+        + f"\n\nQuestion: {q['q']}\nAnswer with only the shortest extractive answer."
+    )
 
-    text_layers, text_pos, text_template = run_text(model, processor, text_prompt, chunk, q["answer_start"], q["answer_end"], device)
-    image_layers, image_positions, image_meta, image_template = run_image(model, processor, img, img_prompt, device)
+    text_layers, text_pos, text_template = run_text(
+        model, processor, text_prompt, chunk, q["answer_start"], q["answer_end"], device
+    )
+    image_layers, image_positions, image_meta, image_template = run_image(
+        model, processor, img, img_prompt, device
+    )
     image_token_count = len(image_positions)
     image_grid = round(math.sqrt(image_token_count))
-    answer_image_indices = image_answer_token_indices(q["answer_start"], q["answer_end"], cols, cfg.adv, cfg.pitch, img.width, img.height, image_token_count)
+    answer_image_indices = image_answer_token_indices(
+        q["answer_start"],
+        q["answer_end"],
+        cols,
+        cfg.adv,
+        cfg.pitch,
+        img.width,
+        img.height,
+        image_token_count,
+    )
 
     answer_cos = []
     global_cos = []
@@ -425,14 +688,21 @@ def main() -> None:
         text_ref = text_h[text_pos["ref_start"] : text_pos["ref_end"]]
         text_ans = text_h[text_pos["answer_start"] : text_pos["answer_end"]]
         image_tokens = image_h[image_positions]
-        image_ans = image_tokens[answer_image_indices] if answer_image_indices else image_tokens
+        image_ans = (
+            image_tokens[answer_image_indices] if answer_image_indices else image_tokens
+        )
         text_ans_mean = text_ans.mean(axis=0)
         image_ans_mean = image_ans.mean(axis=0)
         text_ref_mean = text_ref.mean(axis=0)
         image_mean = image_tokens.mean(axis=0)
-        answer_cos.append(float(cosine(text_ans_mean[None, :], image_ans_mean[None, :])[0]))
+        answer_cos.append(
+            float(cosine(text_ans_mean[None, :], image_ans_mean[None, :])[0])
+        )
         global_cos.append(float(cosine(text_ref_mean[None, :], image_mean[None, :])[0]))
-        sims = cosine(np.repeat(text_ans_mean[None, :], image_tokens.shape[0], axis=0), image_tokens)
+        sims = cosine(
+            np.repeat(text_ans_mean[None, :], image_tokens.shape[0], axis=0),
+            image_tokens,
+        )
         text_answer_to_image.append(sims.astype(np.float32, copy=False))
 
     text_answer_to_image_arr = np.stack(text_answer_to_image, axis=0)

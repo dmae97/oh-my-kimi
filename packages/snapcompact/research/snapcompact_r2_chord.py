@@ -143,8 +143,12 @@ def center_bezier(a_deg, b_deg, pull=0.18, steps=60):
     p0, p3 = pol(a_deg, R_IN), pol(b_deg, R_IN)
     p1, p2 = p0 * pull, p3 * pull
     t = np.linspace(0, 1, steps)[:, None]
-    return ((1 - t) ** 3 * p0 + 3 * (1 - t) ** 2 * t * p1
-            + 3 * (1 - t) * t ** 2 * p2 + t ** 3 * p3)
+    return (
+        (1 - t) ** 3 * p0
+        + 3 * (1 - t) ** 2 * t * p1
+        + 3 * (1 - t) * t**2 * p2
+        + t**3 * p3
+    )
 
 
 # ---------------------------------------------------------------- figure
@@ -159,8 +163,9 @@ ax.axis("off")
 w_max = w.max()
 
 # mismatched ribbons first (thin, dim), then matched (amber, glowing) on top
-order = sorted(((i, j) for i in range(n) for j in range(n)),
-               key=lambda ij: (ij[0] == ij[1], w[ij]))
+order = sorted(
+    ((i, j) for i in range(n) for j in range(n)), key=lambda ij: (ij[0] == ij[1], w[ij])
+)
 for i, j in order:
     ls, rs = left_spans[i][j], right_spans[j][i]
     if ls is None or rs is None:
@@ -175,57 +180,146 @@ for i, j in order:
         mid_r = 0.5 * (rs[0] + rs[1])
         spine = center_bezier(mid_l, mid_r)
         for lw, al in ((26, 0.045), (14, 0.075), (7, 0.12)):
-            ax.plot(spine[:, 0], spine[:, 1], color=AMBER, lw=lw, alpha=al,
-                    solid_capstyle="round", zorder=4)
-        ax.add_patch(PathPatch(path, facecolor=AMBER, edgecolor=AMBER,
-                               lw=0.7, alpha=0.78, zorder=5))
+            ax.plot(
+                spine[:, 0],
+                spine[:, 1],
+                color=AMBER,
+                lw=lw,
+                alpha=al,
+                solid_capstyle="round",
+                zorder=4,
+            )
+        ax.add_patch(
+            PathPatch(
+                path, facecolor=AMBER, edgecolor=AMBER, lw=0.7, alpha=0.78, zorder=5
+            )
+        )
     else:
         alpha = 0.10 + 0.45 * (val / w_max)
-        ax.add_patch(PathPatch(path, facecolor=MUTED, edgecolor="none",
-                               alpha=alpha * 0.55, zorder=2))
+        ax.add_patch(
+            PathPatch(
+                path, facecolor=MUTED, edgecolor="none", alpha=alpha * 0.55, zorder=2
+            )
+        )
 
 # ---------------------------------------------------------------- node bands
 for i in range(n):
-    for centers, color, side in ((left_centers, CYAN, "L"),
-                                 (right_centers, ORANGE, "R")):
+    for centers, color, side in (
+        (left_centers, CYAN, "L"),
+        (right_centers, ORANGE, "R"),
+    ):
         a0, a1 = seg_bounds(centers[i])
         band = arc_points(a0, a1, R_OUT, 16)
         band_in = arc_points(a1, a0, R_IN, 16)
         poly = np.vstack([band, band_in])
-        ax.add_patch(plt.Polygon(poly, closed=True, facecolor=color,
-                                 edgecolor="none", alpha=0.95, zorder=6))
+        ax.add_patch(
+            plt.Polygon(
+                poly,
+                closed=True,
+                facecolor=color,
+                edgecolor="none",
+                alpha=0.95,
+                zorder=6,
+            )
+        )
 
 # ---------------------------------------------------------------- labels
 for i in range(n):
     txt = labels[i]
-    for centers, color, ha in ((left_centers, CYAN, "right"),
-                               (right_centers, ORANGE, "left")):
+    for centers, color, ha in (
+        (left_centers, CYAN, "right"),
+        (right_centers, ORANGE, "left"),
+    ):
         c = centers[i]
         p = pol(c, 1.05)
-        ax.text(p[0], p[1], txt, color=INK, fontsize=15.5, ha=ha, va="center",
-                zorder=8, family="DejaVu Sans")
+        ax.text(
+            p[0],
+            p[1],
+            txt,
+            color=INK,
+            fontsize=15.5,
+            ha=ha,
+            va="center",
+            zorder=8,
+            family="DejaVu Sans",
+        )
         # small question index tick just inside the label
-        ax.text(p[0] + (0.018 if ha == "left" else -0.018),
-                p[1] - 0.052, f"Q{i + 1}", color=color, fontsize=10.5,
-                ha=ha, va="center", alpha=0.85, zorder=8)
+        ax.text(
+            p[0] + (0.018 if ha == "left" else -0.018),
+            p[1] - 0.052,
+            f"Q{i + 1}",
+            color=color,
+            fontsize=10.5,
+            ha=ha,
+            va="center",
+            alpha=0.85,
+            zorder=8,
+        )
 
 # arc side headers
-ax.text(*pol(180, 1.62), "TEXT CARRIER", color=CYAN, fontsize=21,
-        ha="center", va="center", rotation=90, weight="bold", alpha=0.95)
-ax.text(*pol(180, 1.69), "5,219 prose tokens", color=MUTED, fontsize=13,
-        ha="center", va="center", rotation=90)
-ax.text(*pol(0, 1.62), "IMAGE CARRIER", color=ORANGE, fontsize=21,
-        ha="center", va="center", rotation=-90, weight="bold", alpha=0.95)
-ax.text(*pol(0, 1.69), "same passage, rendered as pixels", color=MUTED,
-        fontsize=13, ha="center", va="center", rotation=-90)
+ax.text(
+    *pol(180, 1.62),
+    "TEXT CARRIER",
+    color=CYAN,
+    fontsize=21,
+    ha="center",
+    va="center",
+    rotation=90,
+    weight="bold",
+    alpha=0.95,
+)
+ax.text(
+    *pol(180, 1.69),
+    "5,219 prose tokens",
+    color=MUTED,
+    fontsize=13,
+    ha="center",
+    va="center",
+    rotation=90,
+)
+ax.text(
+    *pol(0, 1.62),
+    "IMAGE CARRIER",
+    color=ORANGE,
+    fontsize=21,
+    ha="center",
+    va="center",
+    rotation=-90,
+    weight="bold",
+    alpha=0.95,
+)
+ax.text(
+    *pol(0, 1.69),
+    "same passage, rendered as pixels",
+    color=MUTED,
+    fontsize=13,
+    ha="center",
+    va="center",
+    rotation=-90,
+)
 
 # ---------------------------------------------------------------- titles
-fig.text(0.5, 0.965, "ONE MEMORY, TWO CARRIERS", color=INK, fontsize=34,
-         ha="center", va="center", weight="bold", family="DejaVu Sans")
-fig.text(0.5, 0.932,
-         "Cross-carrier cosine of answer states at layer 19 -- every text"
-         " question finds its image twin (Qwen2.5-VL-7B)",
-         color=MUTED, fontsize=16.5, ha="center", va="center")
+fig.text(
+    0.5,
+    0.965,
+    "ONE MEMORY, TWO CARRIERS",
+    color=INK,
+    fontsize=34,
+    ha="center",
+    va="center",
+    weight="bold",
+    family="DejaVu Sans",
+)
+fig.text(
+    0.5,
+    0.932,
+    "Cross-carrier cosine of answer states at layer 19 -- every text"
+    " question finds its image twin (Qwen2.5-VL-7B)",
+    color=MUTED,
+    fontsize=16.5,
+    ha="center",
+    va="center",
+)
 
 # ---------------------------------------------------------------- stat plate
 plate = fig.add_axes([0.035, 0.05, 0.215, 0.135])
@@ -236,8 +330,15 @@ for s in plate.spines.values():
     s.set_color("#1c242e")
 plate.set_xticks([])
 plate.set_yticks([])
-plate.text(0.5, 0.84, f"LAYER {LAYER} -- BEST SEPARATION", color=MUTED,
-           fontsize=12.5, ha="center", va="center")
+plate.text(
+    0.5,
+    0.84,
+    f"LAYER {LAYER} -- BEST SEPARATION",
+    color=MUTED,
+    fontsize=12.5,
+    ha="center",
+    va="center",
+)
 stats = (
     (f"{matched_mean:+.2f}", "matched cosine", AMBER),
     (f"{mismatched_mean:+.2f}", "mismatched", MUTED),
@@ -245,21 +346,29 @@ stats = (
 )
 for k, (val, lab, color) in enumerate(stats):
     x = 0.18 + 0.32 * k
-    plate.text(x, 0.48, val, color=color, fontsize=24, ha="center",
-               va="center", weight="bold")
-    plate.text(x, 0.18, lab, color=MUTED, fontsize=12, ha="center",
-               va="center")
+    plate.text(
+        x, 0.48, val, color=color, fontsize=24, ha="center", va="center", weight="bold"
+    )
+    plate.text(x, 0.18, lab, color=MUTED, fontsize=12, ha="center", va="center")
 
 # footnote
-fig.text(0.5, 0.012,
-         "Ribbon width/opacity = cosine(text_state_i, image_state_j),"
-         " negatives clipped; amber = matched pair (i = j)."
-         f"  RSA r = {best['rsa_pearson']:.2f}.",
-         color=MUTED, fontsize=12.5, ha="center", va="center")
+fig.text(
+    0.5,
+    0.012,
+    "Ribbon width/opacity = cosine(text_state_i, image_state_j),"
+    " negatives clipped; amber = matched pair (i = j)."
+    f"  RSA r = {best['rsa_pearson']:.2f}.",
+    color=MUTED,
+    fontsize=12.5,
+    ha="center",
+    va="center",
+)
 
 os.makedirs(OUT_DIR, exist_ok=True)
 out_path = os.path.join(OUT_DIR, "chord.png")
 fig.savefig(out_path, dpi=100, facecolor=BG)
 print(f"wrote {out_path}")
-print(f"matched={matched_mean:.4f} mismatched={mismatched_mean:.4f} "
-      f"retrieval={retrieved}/{n}")
+print(
+    f"matched={matched_mean:.4f} mismatched={mismatched_mean:.4f} "
+    f"retrieval={retrieved}/{n}"
+)

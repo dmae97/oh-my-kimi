@@ -34,6 +34,18 @@ describe.skipIf(!SHOULD_RUN)("ruby runner subprocess", () => {
 		}
 	});
 
+	it.skipIf(process.platform === "win32")("runs in its own POSIX session", async () => {
+		using tempDir = TempDir.createSync("@ruby-runner-session-isolation-");
+		const kernel = await RubyKernel.start({ cwd: tempDir.path() });
+		try {
+			const result = await executeRubyWithKernel(kernel, 'puts "#{Process.getsid(0)} #{Process.pid}"', {});
+			const [sessionId, processId] = result.output.trim().split(/\s+/).map(Number);
+			expect(sessionId).toBe(processId);
+		} finally {
+			await kernel.shutdown();
+		}
+	});
+
 	it("keeps local variables across cells on one kernel", async () => {
 		using tempDir = TempDir.createSync("@ruby-runner-state-");
 		const kernel = await RubyKernel.start({ cwd: tempDir.path() });

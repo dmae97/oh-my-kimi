@@ -192,7 +192,7 @@ Local-only slash commands may emit `command_output` frames before completing via
 ```json
 {
   "model": { "provider": "...", "id": "..." },
-  "thinkingLevel": "off|minimal|low|medium|high|xhigh",
+  "thinkingLevel": "off|minimal|low|medium|high|xhigh|max",
   "isStreaming": false,
   "isCompacting": false,
   "steeringMode": "all|one-at-a-time",

@@ -11,7 +11,7 @@ import { logger } from "@oh-my-pi/pi-utils";
 import type { SourceMeta } from "../capability/types";
 import { resolveConfigValue } from "../config/resolve-config-value";
 import type { CustomTool } from "../extensibility/custom-tools/types";
-import type { AuthStorage } from "../session/auth-storage";
+import { type AuthStorage, REMOTE_REFRESH_SENTINEL } from "../session/auth-storage";
 import {
 	connectToServer,
 	disconnectServer,
@@ -1226,76 +1226,79 @@ export class MCPManager {
 			const { credentialId } = lookup;
 			try {
 				let credential: MCPStoredOAuthCredential | undefined = lookup.credential;
-				// Refresh material comes from ONE source: the credential's embedded
-				// fields (written atomically with the tokens they minted — tokenUrl
-				// always present) or, for legacy rows that predate embedding, the
-				// config auth block. Never mix the two: a shared file's auth block
-				// can belong to another profile, whose client the grant is NOT
-				// bound to.
-				const material = selectMcpOAuthRefreshMaterial(credential, auth);
-				const tokenUrl = material?.tokenUrl;
-				const clientId = material?.clientId;
-				const clientSecret = material?.clientSecret;
-				// `authorizationUrl` only lives on the embedded credential form;
-				// legacy `MCPAuthConfig` rows never carried it. Required to filter
-				// same-origin resource indicators on refresh when the authorize and
-				// token endpoints sit on different origins (issue #3502 review
-				// follow-up).
-				const authorizationUrl = material && "authorizationUrl" in material ? material.authorizationUrl : undefined;
-				const resourceIsFallback =
-					!material?.resource && (config.type === "http" || config.type === "sse") && Boolean(config.url);
-				const resource = material?.resource ?? (resourceIsFallback ? config.url : undefined);
-				// Proactive refresh: 5-minute buffer before expiry
-				// Force refresh: on 401/403 auth errors (revoked tokens, clock skew, missing expires)
 				const REFRESH_BUFFER_MS = 5 * 60_000;
-				const shouldRefresh =
-					opts?.forceRefresh || (credential.expires && Date.now() >= credential.expires - REFRESH_BUFFER_MS);
-				if (shouldRefresh && credential.refresh && tokenUrl) {
-					try {
-						const refreshed = await refreshMCPOAuthToken(
-							tokenUrl,
-							credential.refresh,
-							clientId,
-							clientSecret,
-							resource,
-							{ authorizationUrl, stripSameOriginResource: resourceIsFallback },
-						);
-						// Spread the old credential first so embedded refresh material survives rotation.
-						const refreshedCredential: MCPStoredOAuthCredential = {
-							...credential,
-							...refreshed,
-							tokenUrl,
-							clientId,
-							clientSecret,
-							resource: resourceIsFallback ? undefined : resource,
-							authorizationUrl,
-						};
-						await this.#authStorage.set(credentialId, refreshedCredential);
-						credential = refreshedCredential;
-					} catch (refreshError) {
-						const errorMsg = refreshError instanceof Error ? refreshError.message : String(refreshError);
-						if (isDefinitiveOAuthFailure(errorMsg)) {
-							// `invalid_grant` / `invalid_token` / 401 from the token endpoint means
-							// the server has retired this credential — keeping the stale access
-							// token would just re-fail with 401 on every MCP request and leave a
-							// poisoned row in agent.db that survives restarts. Drop it now so the
-							// next connect attempt surfaces a clean "needs reauth" failure and
-							// the user can recover with `/mcp reauth <server>` (or `/mcp unauth`
-							// to forget the server entirely).
-							logger.warn("MCP OAuth refresh failed definitively; cleared credential", {
-								credentialId,
-								error: errorMsg,
+				const refreshResult = await this.#authStorage.refreshStoredOAuthCredential<MCPStoredOAuthCredential>(
+					credentialId,
+					{
+						observedCredential: credential,
+						credentialFromRow: row => row,
+						forceRefresh: opts?.forceRefresh,
+						refreshSkewMs: REFRESH_BUFFER_MS,
+						canRefresh: current => {
+							const material = selectMcpOAuthRefreshMaterial(current, auth);
+							return Boolean(current.refresh && material?.tokenUrl);
+						},
+						refresh: (current, signal) => {
+							if (current.refresh === REMOTE_REFRESH_SENTINEL) {
+								throw new Error("MCP OAuth refresh token is broker-redacted; local refresh is unavailable");
+							}
+							const material = selectMcpOAuthRefreshMaterial(current, auth);
+							const tokenUrl = material?.tokenUrl;
+							if (!current.refresh || !tokenUrl) {
+								throw new Error("MCP OAuth credential is missing refresh material");
+							}
+							const clientId = material?.clientId;
+							const clientSecret = material?.clientSecret;
+							const authorizationUrl =
+								material && "authorizationUrl" in material ? material.authorizationUrl : undefined;
+							const resourceIsFallback =
+								!material?.resource && (config.type === "http" || config.type === "sse") && Boolean(config.url);
+							const resource = material?.resource ?? (resourceIsFallback ? config.url : undefined);
+							return refreshMCPOAuthToken(tokenUrl, current.refresh, clientId, clientSecret, resource, {
+								authorizationUrl,
+								stripSameOriginResource: resourceIsFallback,
+								signal,
 							});
-							await this.#authStorage.remove(credentialId);
-							credential = undefined;
-						} else {
+						},
+						mergeRefreshedCredential: (current, refreshed) => {
+							const material = selectMcpOAuthRefreshMaterial(current, auth);
+							const tokenUrl = material?.tokenUrl;
+							const clientId = material?.clientId;
+							const clientSecret = material?.clientSecret;
+							const authorizationUrl =
+								material && "authorizationUrl" in material ? material.authorizationUrl : undefined;
+							const resourceIsFallback =
+								!material?.resource && (config.type === "http" || config.type === "sse") && Boolean(config.url);
+							const resource = material?.resource ?? (resourceIsFallback ? config.url : undefined);
+							return {
+								...current,
+								...refreshed,
+								tokenUrl,
+								clientId,
+								clientSecret,
+								resource: resourceIsFallback ? undefined : resource,
+								authorizationUrl,
+							};
+						},
+						isDefinitiveFailure: error =>
+							isDefinitiveOAuthFailure(error instanceof Error ? error.message : String(error)),
+						disabledCause: error =>
+							`oauth refresh failed: ${error instanceof Error ? error.message : String(error)}`,
+						keepCredentialOnRefreshFailure: error =>
+							!(error instanceof Error && error.message.includes("broker-redacted")),
+						onRefreshFailure: refreshError => {
+							if (refreshError instanceof Error && refreshError.message.includes("broker-redacted")) return;
 							logger.warn("MCP OAuth refresh failed, using existing token", {
 								credentialId,
 								error: refreshError,
 							});
-						}
-					}
+						},
+					},
+				);
+				if (refreshResult.removed) {
+					logger.warn("MCP OAuth refresh failed definitively; cleared credential", { credentialId });
 				}
+				credential = refreshResult.credential;
 
 				if (credential) {
 					if (resolved.type === "http" || resolved.type === "sse") {

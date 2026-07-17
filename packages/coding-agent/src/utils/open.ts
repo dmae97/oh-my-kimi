@@ -32,22 +32,48 @@ function getExistingWslLocalPath(urlOrPath: string): string | undefined {
 }
 
 /**
- * Resolve the Windows `rundll32.exe` command used to hand a URL/path to the
- * user's registered protocol handler. Anchoring to `%SystemRoot%\System32`
- * (rather than relying on `rundll32` being on `PATH`) survives environments
- * where the machine `PATH` no longer references `System32` — a common
- * real-world misconfiguration where `System32\Wbem` / `WindowsPowerShell` /
- * `OpenSSH` survive but `System32` itself is dropped. Bare `rundll32` on
- * such boxes throws `Executable not found in $PATH: "rundll32"` from
- * `Bun.spawn` before ShellExecute ever sees the URL.
+ * Resolve the Windows opener used to hand a URL/path to the user's registered
+ * protocol handler. PowerShell's `Start-Process` goes through ShellExecute
+ * like the previous `rundll32 url.dll,FileProtocolHandler`, with two
+ * advantages that make the delayed-failure telemetry in {@link openPath}
+ * actually observable on Windows:
+ *
+ * - `rundll32` exits 0 unconditionally, so no launch failure ever reaches the
+ *   non-zero-exit logging below. `Start-Process` surfaces the failures
+ *   ShellExecute itself reports — missing target file, no handler executable,
+ *   access denied — as exit code 1 (verified live: a nonexistent file path
+ *   exits 1; `$ErrorActionPreference='Stop'` additionally promotes any
+ *   non-terminating error classes). Known limitation shared by every opener:
+ *   an unregistered URL scheme exits 0 because Windows "handles" it by
+ *   offering the app-picker.
+ * - `-EncodedCommand` carries the target as a UTF-16LE/base64 payload, so no
+ *   cmd/PowerShell metacharacter parsing ever sees it (OAuth authorize URLs
+ *   carry `&`); inside the decoded script the target is a single-quoted
+ *   literal (no `$` expansion) with embedded quotes doubled.
+ *
+ * PowerShell is anchored to `%SystemRoot%\System32` for the same reason the
+ * previous revision anchored `rundll32`: machine PATHs that dropped
+ * `System32` are a real-world occurrence, and bare names throw
+ * `Executable not found in $PATH` from `Bun.spawn`. A bare-name fallback
+ * remains for exotic SystemRoot layouts.
  */
 function windowsOpenerCommand(target: string): string[] {
 	const systemRoot = process.env.SystemRoot?.trim() || process.env.SYSTEMROOT?.trim() || "C:\\Windows";
 	// `path.win32` (not the platform-adaptive `path.join`) keeps Windows path
 	// separators when tests run under a POSIX host and matches Windows call
 	// conventions on the real target.
-	const rundll32 = path.win32.join(systemRoot, "System32", "rundll32.exe");
-	return [rundll32, "url.dll,FileProtocolHandler", target];
+	const absolute = path.win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+	const powershell = fs.existsSync(absolute) ? absolute : "powershell.exe";
+	const script = `$ErrorActionPreference='Stop';Start-Process '${target.replaceAll("'", "''")}'`;
+	return [
+		powershell,
+		"-NoProfile",
+		"-NonInteractive",
+		"-WindowStyle",
+		"Hidden",
+		"-EncodedCommand",
+		Buffer.from(script, "utf16le").toString("base64"),
+	];
 }
 /** Open a URL or file path in the default browser/application. Best-effort, never throws. */
 export function openPath(urlOrPath: string): void {

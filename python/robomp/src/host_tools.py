@@ -27,6 +27,7 @@ from robomp.db import Database, IssueState, issue_key
 from robomp.git_ops import GitCommandError, HeadDriftError
 from robomp.github_backend import GitHubBackend
 from robomp.github_client import GitHubError, IssueInfo, PullRequestFileInfo, RepoInfo
+from robomp.issue_index import parse_search_query
 from robomp.sandbox import (
     GitTransport,
     Workspace,
@@ -1256,7 +1257,215 @@ def _build_fetch_thread(bindings: ToolBindings) -> HostTool[Any, Any]:
     )
 
 
-_PRIMARY_TYPES = ("bug", "enhancement", "question", "proposal", "documentation", "invalid", "duplicate")
+# ---------- gh_search_issues ----------
+_REPO_QUALIFIER_RE = re.compile(r"(?i)\brepo:")
+
+
+def _render_search_matches(
+    query: str, repo: str, rows: list[tuple[bool, int, str, str, str, tuple[str, ...], str]]
+) -> str:
+    """Render (is_pr, number, state_display, title, author, labels, updated) rows."""
+    lines = [f"# {len(rows)} match(es) for {query!r} in {repo}"]
+    for is_pr, number, state, title, author, labels, updated in rows:
+        kind = "PR" if is_pr else "issue"
+        label_sfx = f" [{', '.join(labels)}]" if labels else ""
+        lines.append(f"- #{number} ({kind}, {state}) {title} — @{author}, updated {updated[:10]}{label_sfx}")
+    return "\n".join(lines)
+
+
+def _build_search_issues(bindings: ToolBindings) -> HostTool[Any, Any]:
+    """Issue/PR search scoped to the current repo, served from the local index.
+
+    Exists so triage can find duplicates and already-merged fixes instead of
+    classifying blind. Queries hit the webhook-fed SQLite FTS index (zero API
+    cost); the GitHub search API is only used before the repo's first
+    reconcile completes. The inbound issue is filtered out of results.
+    """
+
+    def execute(args: dict[str, Any], _ctx: HostToolContext[Any]) -> str:
+        query = args.get("query")
+        if not isinstance(query, str) or not query.strip():
+            msg = "gh_search_issues requires a non-empty 'query'."
+            _audit(bindings, "gh_search_issues", args, error=msg)
+            _raise_command(msg)
+        query = query.strip()
+        if _REPO_QUALIFIER_RE.search(query):
+            msg = "gh_search_issues scopes to the current repo automatically; drop the 'repo:' qualifier."
+            _audit(bindings, "gh_search_issues", args, error=msg)
+            _raise_command(msg)
+        limit_raw = args.get("limit")
+        limit = max(1, min(int(limit_raw), 20)) if isinstance(limit_raw, int) else 10
+        repo = bindings.repo.full_name
+
+        rows: list[tuple[bool, int, str, str, str, tuple[str, ...], str]]
+        if bindings.db.issue_index_watermark(repo) is not None:
+            parsed = parse_search_query(query)
+            entries = bindings.db.search_issue_index(
+                repo,
+                keywords=parsed.keywords,
+                is_pr=parsed.is_pr,
+                state=parsed.state,
+                merged=parsed.merged,
+                label=parsed.label,
+                author=parsed.author,
+                limit=limit + 1,  # headroom for the self-filter below
+            )
+            entries = [e for e in entries if e.is_pull_request or e.number != bindings.issue.number][:limit]
+            rows = []
+            for e in entries:
+                if e.is_pull_request and e.merged_at:
+                    state = "merged"
+                elif e.state_reason:
+                    state = f"{e.state} ({e.state_reason})"
+                else:
+                    state = e.state
+                rows.append((e.is_pull_request, e.number, state, e.title, e.author, e.labels, e.updated_at))
+            source = "local"
+        else:
+            # Index not backfilled yet — fall through to the GitHub search API.
+            try:
+                found = _run_coro(
+                    bindings.loop,
+                    bindings.github.search_issues(repo, query, limit=limit),
+                )
+            except GitHubError as exc:
+                _audit(bindings, "gh_search_issues", args, error=str(exc))
+                _raise_command(f"GitHub search failed: {exc.status} {exc.message}")
+            found = [s for s in found if s.is_pull_request or s.number != bindings.issue.number]
+            rows = [
+                (
+                    s.is_pull_request,
+                    s.number,
+                    f"{s.state} ({s.state_reason})" if s.state_reason else s.state,
+                    s.title,
+                    s.author,
+                    s.labels,
+                    s.updated_at,
+                )
+                for s in found
+            ]
+            source = "remote"
+        if not rows:
+            _audit(bindings, "gh_search_issues", args, result={"matches": 0, "source": source})
+            return f"No issues or PRs in {repo} match {query!r}."
+        _audit(bindings, "gh_search_issues", args, result={"matches": len(rows), "source": source})
+        return _render_search_matches(query, repo, rows)
+
+    return host_tool(
+        name="gh_search_issues",
+        description=persona.host_tool_description("gh_search_issues"),
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": persona.host_tool_parameter_description("gh_search_issues", "query"),
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": persona.host_tool_parameter_description("gh_search_issues", "limit"),
+                },
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+        execute=execute,
+    )
+
+
+# ---------- search_commits ----------
+_COMMIT_SEARCH_TIMEOUT_SECONDS = 120.0
+
+
+def _build_search_commits(bindings: ToolBindings) -> HostTool[Any, Any]:
+    """Local `git log` search over the default branch's history.
+
+    Two modes: `message` greps commit subjects/bodies (case-insensitive
+    regex), `patch` runs the pickaxe (`-S`) to find commits whose diff adds or
+    removes the literal string — the sharp tool for "was this already fixed".
+    The search interface (query in, ranked commits out) is deliberately opaque
+    about its backend so a semantic index can replace git plumbing later.
+    """
+
+    def execute(args: dict[str, Any], _ctx: HostToolContext[Any]) -> str:
+        query = args.get("query")
+        if not isinstance(query, str) or not query.strip():
+            msg = "search_commits requires a non-empty 'query'."
+            _audit(bindings, "search_commits", args, error=msg)
+            _raise_command(msg)
+        query = query.strip()
+        mode = args.get("mode") or "message"
+        if mode not in ("message", "patch"):
+            msg = "search_commits 'mode' must be 'message' or 'patch'."
+            _audit(bindings, "search_commits", args, error=msg)
+            _raise_command(msg)
+        limit_raw = args.get("limit")
+        limit = max(1, min(int(limit_raw), 30)) if isinstance(limit_raw, int) else 10
+        paths = [p for p in (args.get("paths") or ()) if isinstance(p, str) and p.strip()]
+
+        rev = f"origin/{bindings.repo.default_branch}"
+        probe = _run_repo_command(bindings, ["git", "rev-parse", "--verify", "--quiet", rev], timeout=30.0)
+        if probe.returncode != 0:
+            rev = "HEAD"
+        cmd = ["git", "log", rev, "-n", str(limit), "--date=short", "--pretty=format:%h %ad %an — %s"]
+        if mode == "message":
+            cmd += [f"--grep={query}", "--regexp-ignore-case"]
+        else:
+            cmd += ["-S", query]
+        if paths:
+            cmd += ["--", *paths]
+        try:
+            proc = _run_repo_command(bindings, cmd, timeout=_COMMIT_SEARCH_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            msg = f"search_commits timed out after {_COMMIT_SEARCH_TIMEOUT_SECONDS:.0f}s; narrow with 'paths' or a shorter history window."
+            _audit(bindings, "search_commits", args, error=msg)
+            _raise_command(msg)
+        if proc.returncode != 0:
+            msg = f"git log failed: {(proc.stderr or proc.stdout).strip()[:500]}"
+            _audit(bindings, "search_commits", args, error=msg)
+            _raise_command(msg)
+        out = proc.stdout.strip()
+        if not out:
+            _audit(bindings, "search_commits", args, result={"matches": 0})
+            return f"No commits on {rev} match {query!r} (mode={mode})."
+        matches = out.splitlines()
+        _audit(bindings, "search_commits", args, result={"matches": len(matches)})
+        header = f"# {len(matches)} commit(s) on {rev} matching {query!r} (mode={mode})"
+        return "\n".join([header, *matches])
+
+    return host_tool(
+        name="search_commits",
+        description=persona.host_tool_description("search_commits"),
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": persona.host_tool_parameter_description("search_commits", "query"),
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["message", "patch"],
+                    "description": persona.host_tool_parameter_description("search_commits", "mode"),
+                },
+                "paths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": persona.host_tool_parameter_description("search_commits", "paths"),
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": persona.host_tool_parameter_description("search_commits", "limit"),
+                },
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+        execute=execute,
+    )
+
+
+_PRIMARY_TYPES = ("bug", "enhancement", "question", "proposal", "documentation", "wontfix", "invalid", "duplicate")
 _AUTO_PR_CLASSIFICATIONS = frozenset({"bug", "documentation"})
 _PRIORITIES = ("prio:p0", "prio:p1", "prio:p2", "prio:p3")
 _FUNCTIONAL = ("agent", "tool", "tui", "cli", "prompting", "sdk", "auth", "setup", "ux", "providers")
@@ -1835,6 +2044,8 @@ def build(bindings: ToolBindings) -> tuple[HostTool[Any, Any], ...]:
         _build_mark_unable(bindings),
         _build_abort_task(bindings),
         _build_fetch_thread(bindings),
+        _build_search_issues(bindings),
+        _build_search_commits(bindings),
     )
 
 

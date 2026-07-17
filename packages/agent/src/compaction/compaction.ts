@@ -9,23 +9,26 @@ import {
 	type Api,
 	type ApiKey,
 	type AssistantMessage,
+	type CodexCompactionContext,
 	type Context,
 	Effort,
 	type FetchImpl,
 	type Message,
 	type MessageAttribution,
 	type Model,
+	type ProviderSessionState,
 	type SimpleStreamOptions,
 	type Tool,
 	type Usage,
 	withAuth,
 } from "@oh-my-pi/pi-ai";
 import { ProviderHttpError } from "@oh-my-pi/pi-ai/error";
+import { createOpenAICodexCompactionRequestContext } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { convertTools } from "@oh-my-pi/pi-ai/providers/openai-responses";
 import { buildResponsesInput, resolveOpenAICompatPolicy } from "@oh-my-pi/pi-ai/providers/openai-shared";
 import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
-import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { logger, prompt, stringifyJson } from "@oh-my-pi/pi-utils";
 import * as snapcompact from "@oh-my-pi/snapcompact";
 import { type AgentTelemetry, instrumentedCompleteSimple } from "../telemetry";
 import { ThinkingLevel } from "../thinking";
@@ -63,7 +66,7 @@ import {
 	extractFileOpsFromMessage,
 	type FileOperations,
 	SUMMARIZATION_SYSTEM_PROMPT,
-	serializeConversation,
+	serializeConversationForSummary,
 	stripReadSelector,
 	upsertFileOperations,
 } from "./utils";
@@ -403,7 +406,7 @@ export function estimateTokens(message: AgentMessage, options?: { excludeEncrypt
 					}
 				} else if (block.type === "toolCall") {
 					fragments.push(block.name);
-					fragments.push(JSON.stringify(block.arguments));
+					fragments.push(stringifyJson(block.arguments) ?? "null");
 				} else if (block.type === "redactedThinking") {
 					// Encrypted reasoning blob the provider still bills for on replay;
 					// excluded from the compaction floor for the same reason as above.
@@ -656,6 +659,8 @@ function effortFromThinkingLevel(level: ThinkingLevel): Effort {
 			return Effort.High;
 		case ThinkingLevel.XHigh:
 			return Effort.XHigh;
+		case ThinkingLevel.Max:
+			return Effort.Max;
 		case ThinkingLevel.Off:
 		case ThinkingLevel.Inherit:
 			throw new Error(`effortFromThinkingLevel: ${level} must be handled by caller`);
@@ -698,6 +703,12 @@ function createSummarizationError(prefix: string, response: AssistantMessage): E
 	return response.errorStatus === undefined ? new Error(text) : new ProviderHttpError(text, response.errorStatus);
 }
 
+function shouldRetryHandoffWithAutoToolChoice(response: AssistantMessage): boolean {
+	if (response.errorStatus !== 400) return false;
+	const message = response.errorMessage ?? "";
+	return /\btool_choice\b/i.test(message) && /\bauto\b/i.test(message) && /\bsupported\b/i.test(message);
+}
+
 /**
  * Generate a summary of the conversation using the LLM.
  * If previousSummary is provided, uses the update prompt to merge.
@@ -730,6 +741,10 @@ export interface SummaryOptions {
 	sessionId?: string;
 	/** Prompt-cache key for remote compaction transports that support provider prefix caching. */
 	promptCacheKey?: string;
+	/** Mutable provider state used to keep Codex compaction on the live session identity. */
+	providerSessionState?: Map<string, ProviderSessionState>;
+	/** Classification shared by every provider request in this logical compaction. */
+	codexCompaction?: CodexCompactionContext;
 	/** Provider-visible tools for remote compaction transports that replay native tool history. */
 	tools?: Tool[];
 	/** Optional fetch implementation threaded into remote compaction calls. */
@@ -747,6 +762,13 @@ export interface SummaryOptions {
 		ctx: Context,
 		options: SimpleStreamOptions,
 	) => Promise<AssistantMessage>;
+}
+
+function localCodexCompaction(options: SummaryOptions | undefined) {
+	return createOpenAICodexCompactionRequestContext({
+		context: options?.codexCompaction,
+		implementation: "responses",
+	});
 }
 
 function formatPreviousSnapcompactArchive(archiveText: string): string {
@@ -794,7 +816,7 @@ export async function generateSummary(
 	// Serialize conversation to text so model doesn't try to continue it
 	// Convert to LLM messages first (handles custom app messages when caller provides a transformer).
 	const llmMessages = (options?.convertToLlm ?? defaultConvertToLlm)(currentMessages);
-	const conversationText = serializeConversation(llmMessages, preferredDialect(model.id));
+	const conversationText = serializeConversationForSummary(llmMessages, preferredDialect(model.id));
 
 	// Build the prompt with conversation wrapped in tags
 	let promptText = `<conversation>\n${conversationText}\n</conversation>\n\n`;
@@ -813,14 +835,17 @@ export async function generateSummary(
 	];
 
 	if (options?.remoteEndpoint) {
-		const remote = await requestRemoteCompaction(
-			options.remoteEndpoint,
-			{
-				systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
-				prompt: promptText,
-			},
-			signal,
-			{ fetch: options.fetch },
+		const endpoint = options.remoteEndpoint;
+		const remote = await withAuth(
+			apiKey,
+			key =>
+				requestRemoteCompaction(
+					endpoint,
+					{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, prompt: promptText },
+					signal,
+					{ fetch: options.fetch, model, apiKey: key },
+				),
+			{ signal, missingKeyMessage: "Remote compaction credentials unavailable" },
 		);
 		return remote.summary;
 	}
@@ -835,6 +860,11 @@ export async function generateSummary(
 			reasoning: resolveCompactionEffort(model, options?.thinkingLevel),
 			initiatorOverride: options?.initiatorOverride,
 			metadata: options?.metadata,
+			fetch: options?.fetch,
+			sessionId: options?.sessionId,
+			promptCacheKey: options?.promptCacheKey,
+			providerSessionState: options?.providerSessionState,
+			codexCompaction: localCodexCompaction(options),
 		},
 		{ telemetry: options?.telemetry, oneshotKind: "compaction_summary", completeImpl: options?.completeImpl },
 	);
@@ -917,24 +947,33 @@ export interface HandoffFromContextOptions {
  * `streamOptions` that mirror the live turn's cache routing. That keeps the
  * cache-preserving context construction in the host (which owns the transform
  * pipeline) while this function centralizes the handoff request contract:
- * `toolChoice: "none"`, clamped reasoning effort, oneshot telemetry, text-only
- * extraction, and provider-error mapping.
+ * cache-first `toolChoice: "none"`, clamped reasoning effort, one retry for
+ * auto-only `tool_choice` providers, oneshot telemetry, text-only extraction,
+ * and provider-error mapping.
  */
 export async function generateHandoffFromContext(
 	context: Context,
 	model: Model,
 	options: HandoffFromContextOptions,
 ): Promise<string> {
-	const response = await instrumentedCompleteSimple(
-		model,
-		context,
-		{
-			...options.streamOptions,
-			reasoning: resolveCompactionEffort(model, options.thinkingLevel),
-			toolChoice: "none",
-		},
-		{ telemetry: options.telemetry, oneshotKind: "handoff", completeImpl: options.completeImpl },
-	);
+	const requestOptions = {
+		...options.streamOptions,
+		reasoning: resolveCompactionEffort(model, options.thinkingLevel),
+		toolChoice: "none" as const,
+	};
+	let response = await instrumentedCompleteSimple(model, context, requestOptions, {
+		telemetry: options.telemetry,
+		oneshotKind: "handoff",
+		completeImpl: options.completeImpl,
+	});
+	if (response.stopReason === "error" && shouldRetryHandoffWithAutoToolChoice(response)) {
+		response = await instrumentedCompleteSimple(
+			model,
+			context,
+			{ ...requestOptions, toolChoice: "auto" },
+			{ telemetry: options.telemetry, oneshotKind: "handoff", completeImpl: options.completeImpl },
+		);
+	}
 
 	if (response.stopReason === "error") {
 		throw createSummarizationError("Handoff generation failed", response);
@@ -991,7 +1030,7 @@ async function generateShortSummary(
 ): Promise<string> {
 	const maxTokens = Math.min(512, Math.floor(0.2 * reserveTokens));
 	const llmMessages = (options?.convertToLlm ?? defaultConvertToLlm)(recentMessages);
-	const conversationText = serializeConversation(llmMessages, preferredDialect(model.id));
+	const conversationText = serializeConversationForSummary(llmMessages, preferredDialect(model.id));
 
 	let promptText = `<conversation>\n${conversationText}\n</conversation>\n\n`;
 	if (historySummary) {
@@ -1001,14 +1040,17 @@ async function generateShortSummary(
 	promptText += SHORT_SUMMARY_PROMPT;
 
 	if (options?.remoteEndpoint) {
-		const remote = await requestRemoteCompaction(
-			options.remoteEndpoint,
-			{
-				systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
-				prompt: promptText,
-			},
-			signal,
-			{ fetch: options?.fetch },
+		const endpoint = options.remoteEndpoint;
+		const remote = await withAuth(
+			apiKey,
+			key =>
+				requestRemoteCompaction(
+					endpoint,
+					{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, prompt: promptText },
+					signal,
+					{ fetch: options?.fetch, model, apiKey: key },
+				),
+			{ signal, missingKeyMessage: "Remote compaction credentials unavailable" },
 		);
 		return remote.summary;
 	}
@@ -1026,6 +1068,11 @@ async function generateShortSummary(
 			reasoning: resolveCompactionEffort(model, options?.thinkingLevel),
 			initiatorOverride: options?.initiatorOverride,
 			metadata: options?.metadata,
+			fetch: options?.fetch,
+			sessionId: options?.sessionId,
+			promptCacheKey: options?.promptCacheKey,
+			providerSessionState: options?.providerSessionState,
+			codexCompaction: localCodexCompaction(options),
 		},
 		{ telemetry: options?.telemetry, oneshotKind: "compaction_short_summary", completeImpl: options?.completeImpl },
 	);
@@ -1296,6 +1343,8 @@ export async function compact(
 		thinkingLevel: options?.thinkingLevel,
 		sessionId: options?.sessionId,
 		promptCacheKey: options?.promptCacheKey,
+		providerSessionState: options?.providerSessionState,
+		codexCompaction: options?.codexCompaction,
 		tools: options?.tools,
 		fetch: options?.fetch,
 		completeImpl: options?.completeImpl,
@@ -1354,7 +1403,12 @@ export async function compact(
 				);
 				const remote = await withAuth(
 					apiKey,
-					key => requestCompactionV2Streaming(model, key, request, signal, { fetch: summaryOptions.fetch }),
+					key =>
+						requestCompactionV2Streaming(model, key, request, signal, {
+							fetch: summaryOptions.fetch,
+							providerSessionState: summaryOptions.providerSessionState,
+							codexCompaction: summaryOptions.codexCompaction,
+						}),
 					{ signal },
 				);
 				preserveData = { ...(preserveData ?? {}), ...storeCompactionV2PreserveData(remote, model) };
@@ -1398,7 +1452,12 @@ export async function compact(
 							remoteHistory,
 							summaryOptions.remoteInstructions ?? SUMMARIZATION_SYSTEM_PROMPT,
 							signal,
-							{ fetch: summaryOptions.fetch },
+							{
+								fetch: summaryOptions.fetch,
+								sessionId: summaryOptions.sessionId,
+								providerSessionState: summaryOptions.providerSessionState,
+								codexCompaction: summaryOptions.codexCompaction,
+							},
 						),
 					{ signal },
 				);
@@ -1474,16 +1533,9 @@ export async function compact(
 	const shortSummary = usedRemoteCompaction
 		? "Remote compaction"
 		: await generateShortSummary(recentMessages, summary, model, reserveTokens, apiKey, signal, {
+				...summaryOptions,
 				extraContext: options?.extraContext,
-				remoteEndpoint: summaryOptions.remoteEndpoint,
-				initiatorOverride: summaryOptions.initiatorOverride,
-				metadata: summaryOptions.metadata,
-				telemetry: summaryOptions.telemetry,
-				// Same propagation as summaryOptions above — generateShortSummary
-				// resolves its own reasoning via resolveCompactionEffort.
 				thinkingLevel: options?.thinkingLevel,
-				fetch: summaryOptions.fetch,
-				completeImpl: summaryOptions.completeImpl,
 			});
 
 	// Compute file lists and append to summary
@@ -1526,7 +1578,7 @@ async function generateTurnPrefixSummary(
 	const maxTokens = Math.floor(0.5 * reserveTokens); // Smaller budget for turn prefix
 
 	const llmMessages = (options?.convertToLlm ?? defaultConvertToLlm)(messages);
-	const conversationText = serializeConversation(llmMessages, preferredDialect(model.id));
+	const conversationText = serializeConversationForSummary(llmMessages, preferredDialect(model.id));
 	const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`;
 	const summarizationMessages = [
 		{
@@ -1546,6 +1598,11 @@ async function generateTurnPrefixSummary(
 			reasoning: resolveCompactionEffort(model, options?.thinkingLevel),
 			initiatorOverride: options?.initiatorOverride,
 			metadata: options?.metadata,
+			fetch: options?.fetch,
+			sessionId: options?.sessionId,
+			promptCacheKey: options?.promptCacheKey,
+			providerSessionState: options?.providerSessionState,
+			codexCompaction: localCodexCompaction(options),
 		},
 		{ telemetry: options?.telemetry, oneshotKind: "compaction_turn_prefix", completeImpl: options?.completeImpl },
 	);

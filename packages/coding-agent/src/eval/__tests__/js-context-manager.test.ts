@@ -1,8 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { Settings } from "../../config/settings";
 import type { ToolSession } from "../../tools";
-import { disposeAllVmContexts, setWorkerCloseTimeoutMsForTests } from "../js/context-manager";
+import {
+	disposeAllVmContexts,
+	setJsEvalWorkerThreadForTests,
+	setWorkerCloseTimeoutMsForTests,
+} from "../js/context-manager";
 import { executeJs } from "../js/executor";
 
 const originalWorker = globalThis.Worker;
@@ -181,7 +187,9 @@ function installFakeWorker(stats: FakeWorkerStats, behavior: FakeWorkerBehavior)
 
 describe("JavaScript eval worker lifecycle", () => {
 	let restoreCloseTimeoutMs = 0;
+	let restoreWorkerThread = false;
 	beforeEach(() => {
+		restoreWorkerThread = setJsEvalWorkerThreadForTests(true);
 		// Shrink the graceful-close grace period so the "close acked but the worker
 		// never exits -> force terminate" contract is proven without a real 1s wait.
 		restoreCloseTimeoutMs = setWorkerCloseTimeoutMsForTests(1);
@@ -197,6 +205,7 @@ describe("JavaScript eval worker lifecycle", () => {
 			writable: true,
 			value: originalWorker,
 		});
+		setJsEvalWorkerThreadForTests(restoreWorkerThread);
 	});
 
 	it("exits a real worker on graceful close even with ref'ed user handles", async () => {
@@ -271,6 +280,73 @@ describe("JavaScript eval worker lifecycle", () => {
 		expect(stats.terminateCalls).toBe(1);
 	});
 
+	it("falls back to a Bun Worker when the subprocess cannot spawn", async () => {
+		using tempDir = TempDir.createSync("@omp-js-spawn-fallback-");
+		// Exercise the production ladder (process -> worker -> inline), not the
+		// worker-thread test seam the surrounding describe enables.
+		setJsEvalWorkerThreadForTests(false);
+		const stats: FakeWorkerStats = { closeRequests: 0, terminateCalls: 0 };
+		installFakeWorker(stats, { exitOnClose: true, settleRuns: true });
+		const originalSpawn = Bun.spawn;
+		let spawnAttempts = 0;
+		Bun.spawn = ((): never => {
+			spawnAttempts++;
+			throw new Error("subprocess spawn unavailable");
+		}) as unknown as typeof Bun.spawn;
+
+		try {
+			const session = makeSession(tempDir.path());
+			const sessionId = `js-spawn-fallback:${crypto.randomUUID()}`;
+			// The fake Worker settles runs without executing the cell, so an empty
+			// output proves the middle rung handled it — the inline fallback would
+			// have actually evaluated the expression and printed 42.
+			const result = await executeJs("return String(6 * 7);", { cwd: tempDir.path(), sessionId, session });
+			expect(result.exitCode).toBe(0);
+			expect(result.output.trim()).toBe("");
+			expect(spawnAttempts).toBe(1);
+		} finally {
+			Bun.spawn = originalSpawn;
+		}
+	});
+
+	it("falls back to a Bun Worker when the subprocess fails during initialization", async () => {
+		using tempDir = TempDir.createSync("@omp-js-init-fallback-");
+		// Exercise the production ladder (process -> worker -> inline), not the
+		// worker-thread test seam the surrounding describe enables.
+		setJsEvalWorkerThreadForTests(false);
+		const stats: FakeWorkerStats = { closeRequests: 0, terminateCalls: 0 };
+		installFakeWorker(stats, { exitOnClose: true, settleRuns: true });
+		const originalSpawn = Bun.spawn;
+		let spawnAttempts = 0;
+		Bun.spawn = ((options: unknown) => {
+			spawnAttempts++;
+			const spawnOptions = options as {
+				onExit?: (proc: unknown, exitCode: number | null, signalCode: string | null) => void;
+			};
+			const fakeProcess = {
+				send: () => undefined,
+				kill: () => undefined,
+				unref: () => undefined,
+			};
+			queueMicrotask(() => spawnOptions.onExit?.(fakeProcess, 1, null));
+			return fakeProcess;
+		}) as unknown as typeof Bun.spawn;
+
+		try {
+			const session = makeSession(tempDir.path());
+			const sessionId = `js-init-fallback:${crypto.randomUUID()}`;
+			// The fake Worker settles runs without executing the cell, so empty
+			// output proves the middle rung handled the retry. Inline execution
+			// would evaluate the expression and print 42.
+			const result = await executeJs("return String(6 * 7);", { cwd: tempDir.path(), sessionId, session });
+			expect(result.exitCode).toBe(0);
+			expect(result.output.trim()).toBe("");
+			expect(spawnAttempts).toBe(1);
+		} finally {
+			Bun.spawn = originalSpawn;
+		}
+	});
+
 	it("falls back to the inline worker when the spawned worker errors during startup", async () => {
 		using tempDir = TempDir.createSync("@omp-js-worker-error-");
 		const stats: FakeWorkerStats = { closeRequests: 0, terminateCalls: 0 };
@@ -287,5 +363,86 @@ describe("JavaScript eval worker lifecycle", () => {
 		expect(result.output.trim()).toBe("42");
 		// The errored primary worker is torn down before the inline retry takes over.
 		expect(stats.terminateCalls).toBe(1);
+	});
+});
+
+describe.skipIf(process.platform === "win32")("JavaScript eval process isolation", () => {
+	afterEach(async () => {
+		await disposeAllVmContexts();
+	});
+
+	it("runs spawned commands in the isolated POSIX process group", async () => {
+		using tempDir = TempDir.createSync("@omp-js-process-isolation-");
+		const session = makeSession(tempDir.path());
+		const evalSessionId = `js-isolation:${crypto.randomUUID()}`;
+		const result = await executeJs(
+			[
+				`const child = Bun.spawn(["/bin/sh", "-c", 'pgid=$(ps -o pgid= -p $$); printf "%s %s\\n" "$pgid" "$PPID"'], { stdout: "pipe" });`,
+				"return await new Response(child.stdout).text();",
+			].join("\n"),
+			{ cwd: tempDir.path(), sessionId: evalSessionId, session },
+		);
+		const [processGroupId, parentProcessId] = result.output.trim().split(/\s+/).map(Number);
+		expect(parentProcessId).not.toBe(process.pid);
+		expect(processGroupId).toBe(parentProcessId);
+
+		await executeJs("var saved = 41; function increment(value) { return value + 1; }", {
+			cwd: tempDir.path(),
+			sessionId: evalSessionId,
+			session,
+		});
+		const reused = await executeJs("return increment(saved);", {
+			cwd: tempDir.path(),
+			sessionId: evalSessionId,
+			session,
+		});
+		expect(reused.output.trim()).toBe("42");
+	});
+
+	it("mirrors the session cwd onto the subprocess's real cwd", async () => {
+		using tempDir = TempDir.createSync("@omp-js-process-cwd-");
+		const session = makeSession(tempDir.path());
+		const evalSessionId = `js-cwd:${crypto.randomUUID()}`;
+		const result = await executeJs("return process.cwd();", {
+			cwd: tempDir.path(),
+			sessionId: evalSessionId,
+			session,
+		});
+		// process.chdir resolves symlinks (macOS tempdirs live under /var ->
+		// /private/var), so compare physical paths.
+		expect(result.output.trim()).toBe(fs.realpathSync(tempDir.path()));
+	});
+
+	it("still runs cells when the session cwd does not exist", async () => {
+		using tempDir = TempDir.createSync("@omp-js-process-cwd-missing-");
+		const missingCwd = path.join(tempDir.path(), "deleted");
+		const session = makeSession(missingCwd);
+		const result = await executeJs("return String(6 * 7);", {
+			cwd: missingCwd,
+			sessionId: `js-cwd-missing:${crypto.randomUUID()}`,
+			session,
+		});
+		expect(result.exitCode).toBe(0);
+		expect(result.output.trim()).toBe("42");
+	});
+
+	it("keeps the isolated process alive after a stackless floated rejection", async () => {
+		using tempDir = TempDir.createSync("@omp-js-process-rejection-");
+		const session = makeSession(tempDir.path());
+		const evalSessionId = `js-rejection:${crypto.randomUUID()}`;
+		const rejected = await executeJs(
+			'var savedAfterRejection = 41; Promise.reject("stackless rejection"); await Bun.sleep(10);',
+			{ cwd: tempDir.path(), sessionId: evalSessionId, session },
+		);
+		expect(rejected.exitCode).toBe(1);
+		expect(rejected.output).toContain("Unhandled rejection (missing await?): stackless rejection");
+
+		const reused = await executeJs("return savedAfterRejection + 1;", {
+			cwd: tempDir.path(),
+			sessionId: evalSessionId,
+			session,
+		});
+		expect(reused.exitCode).toBe(0);
+		expect(reused.output.trim()).toBe("42");
 	});
 });

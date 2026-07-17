@@ -129,7 +129,7 @@ From `types.ts` and `loader.ts`:
 - `typebox`: zod-backed compatibility shim for legacy TypeBox-style schemas
 - `zod`: injected `zod/v4` module (canonical for new schemas)
 - `pi`: injected `@oh-my-pi/pi-coding-agent` exports
-- `pushPendingAction(action)`: register a preview action for hidden `resolve` tool (`docs/resolve-tool-runtime.md`)
+- `pushPendingAction(action)`: register a preview action finalized via plain-text writes to `/xdev/resolve` or `/xdev/reject` (`docs/resolve-tool-runtime.md`)
   Loader starts with a no-op UI context and requires host code to call `setUIContext(...)` when real UI is ready.
 
 ## Execution contract and typing

@@ -15,6 +15,8 @@
  * forms. Protocol gating (`imageProtocol === Kitty`) lives in the caller.
  */
 
+import { wrapTmuxPassthroughIfNeeded } from "./tmux";
+
 /** Kitty Unicode placeholder base character (U+10EEEE, Plane 16 PUA). */
 export const KITTY_PLACEHOLDER = "\u{10eeee}";
 
@@ -60,18 +62,15 @@ export interface KittyGraphicsFeatures {
  * Whether the detected terminal renders Kitty Unicode placeholders (`U=1` +
  * U+10EEEE with row/column diacritics).
  *
- * Only `kitty` (the protocol's origin) and `ghostty` ship a working
- * implementation; WezTerm advertises Kitty graphics but treats placeholder
- * cells as literal PUA glyphs (see wezterm/wezterm#986, "placeholder support"
- * still unchecked), and the tmux/screen fallback can land on any outer
- * terminal. Enabling placeholders on those paths emits a `columns × rows`
- * grid of U+10EEEE per image per frame; the cells render as boxed fallback
- * glyphs and re-emit on every repaint, which is exactly the
- * "stuck/laggy scrolling + ASCII artifact" symptom reported in #1877.
+ * Kitty and Ghostty advertise placeholder support directly. A tmux session
+ * cannot use cursor-positioned placements because the outer terminal does not
+ * know pane scroll/reflow state, so an explicit `PI_FORCE_IMAGE_PROTOCOL=kitty`
+ * also opts into placeholders there — matching `timg -pk`. Automatic tmux
+ * fallback stays off because the unknown outer terminal may render U+10EEEE as
+ * literal PUA boxes (#1877).
  *
- * `PI_NO_KITTY_PLACEHOLDERS=1` forces off (e.g. for tmux passthrough to a
- * non-supporting outer terminal); `PI_KITTY_PLACEHOLDERS=1` forces on (e.g.
- * for a wezterm nightly that has merged placeholder support).
+ * `PI_NO_KITTY_PLACEHOLDERS=1` and `PI_KITTY_PLACEHOLDERS=0` remain hard
+ * opt-outs; `PI_KITTY_PLACEHOLDERS=1` explicitly opts in anywhere else.
  */
 export function detectKittyUnicodePlaceholdersSupport(terminalId: string, env: NodeJS.ProcessEnv = Bun.env): boolean {
 	const offRaw = env.PI_NO_KITTY_PLACEHOLDERS?.trim().toLowerCase();
@@ -79,6 +78,7 @@ export function detectKittyUnicodePlaceholdersSupport(terminalId: string, env: N
 	const force = env.PI_KITTY_PLACEHOLDERS?.trim().toLowerCase();
 	if (force === "1" || force === "true" || force === "on" || force === "yes" || force === "y") return true;
 	if (force === "0" || force === "false" || force === "off" || force === "no" || force === "n") return false;
+	if (env.TMUX && env.PI_FORCE_IMAGE_PROTOCOL?.trim().toLowerCase() === "kitty") return true;
 	return terminalId === "kitty" || terminalId === "ghostty";
 }
 
@@ -120,7 +120,7 @@ export function encodeKittyVirtualPlacement(opts: {
 	const params = ["a=p", "U=1", "q=2", `i=${opts.imageId}`];
 	if (opts.placementId) params.push(`p=${opts.placementId}`);
 	params.push(`c=${opts.columns}`, `r=${opts.rows}`);
-	return `\x1b_G${params.join(",")}\x1b\\`;
+	return wrapTmuxPassthroughIfNeeded(`\x1b_G${params.join(",")}\x1b\\`);
 }
 
 /**

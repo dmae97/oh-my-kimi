@@ -1,4 +1,5 @@
 import type { AuthStorage, FetchImpl } from "@oh-my-pi/pi-ai";
+import type { ModelRegistry } from "../../../config/model-registry";
 import type { SearchProviderId, SearchResponse } from "../types";
 
 /**
@@ -45,6 +46,8 @@ export interface SearchParams {
 	 * the per-credential single-flight refresh.
 	 */
 	authStorage: AuthStorage;
+	/** Provider/model transport settings used by native search endpoints. */
+	modelRegistry?: ModelRegistry;
 	/**
 	 * Optional session id used as the round-robin / sticky key when selecting
 	 * among multiple credentials for the same provider. Pass through from the

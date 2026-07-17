@@ -105,3 +105,23 @@ describe("eval js agent() handle", () => {
 		expect("branchName" in node).toBe(false);
 	});
 });
+
+describe("eval js read() URI delegation", () => {
+	it("appends line selectors to delegated URI paths", async () => {
+		const calls: Array<{ name: string; args: unknown }> = [];
+		const sandbox = loadPrelude(async (name, args) => {
+			calls.push({ name, args });
+			return { text: "resource contents" };
+		});
+
+		const result = await vm.runInContext(`read("mcp://server/resource", { offset: 10, limit: 5 })`, sandbox);
+
+		expect(result).toBe("resource contents");
+		expect(calls).toEqual([
+			{
+				name: "read",
+				args: { path: "mcp://server/resource:10-14" },
+			},
+		]);
+	});
+});

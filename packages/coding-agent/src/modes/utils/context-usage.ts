@@ -43,6 +43,7 @@ export interface ContextBreakdown {
 
 const EMPTY_STRING_PARTS: readonly string[] = [];
 const EMPTY_TOOLS: ReadonlyArray<Pick<Tool, "name" | "description" | "parameters">> = [];
+const EMPTY_SKILLS: readonly Skill[] = [];
 
 export function estimateSkillsTokens(skills: readonly Skill[]): number {
 	const fragments: string[] = [];
@@ -86,10 +87,58 @@ export function estimateToolSchemaTokens(
  * cadence — non-message recomputed only when the inputs identity changes,
  * messages walked incrementally as new entries append.
  */
+// Non-message inputs (system prompt, tools, skills) change rarely — at most
+// once per turn via setSystemPrompt/setTools — but the per-turn compaction and
+// threshold paths call these helpers several times: getContextBreakdown calls
+// both, and #estimateStoredContextTokens adds a third. Memoize on the identity
+// of the three input arrays so the expensive parts (system-prompt tokenization
+// and the per-tool JSON.stringify(toolWireSchema) inside estimateToolSchemaTokens)
+// run at most once per input change rather than per call. The identity keys are
+// the same stable references the StatusLineComponent cache already trusts
+// (setSystemPrompt/setTools replace the array reference rather than mutating it).
+interface NonMessageTokenCache {
+	systemPromptRef: readonly string[];
+	toolsRef: ReadonlyArray<Pick<Tool, "name" | "description" | "parameters">>;
+	skillsRef: readonly Skill[];
+	tokens: number | undefined;
+	breakdown:
+		| {
+				skillsTokens: number;
+				toolsTokens: number;
+				systemContextTokens: number;
+				systemPromptTokens: number;
+		  }
+		| undefined;
+}
+
+const nonMessageTokenCache = new WeakMap<AgentSession, NonMessageTokenCache>();
+
+function nonMessageTokenCacheEntry(session: AgentSession): NonMessageTokenCache {
+	const systemPromptRef = session.systemPrompt ?? EMPTY_STRING_PARTS;
+	const toolsRef = session.agent?.state?.tools ?? EMPTY_TOOLS;
+	const skillsRef = session.skills ?? EMPTY_SKILLS;
+	let entry = nonMessageTokenCache.get(session);
+	if (
+		entry &&
+		entry.systemPromptRef === systemPromptRef &&
+		entry.toolsRef === toolsRef &&
+		entry.skillsRef === skillsRef
+	) {
+		return entry;
+	}
+	entry = { systemPromptRef, toolsRef, skillsRef, tokens: undefined, breakdown: undefined };
+	nonMessageTokenCache.set(session, entry);
+	return entry;
+}
+
 export function computeNonMessageTokens(session: AgentSession): number {
+	const entry = nonMessageTokenCacheEntry(session);
+	if (entry.tokens !== undefined) return entry.tokens;
 	const systemPromptParts = session.systemPrompt ?? EMPTY_STRING_PARTS;
 	const tools = session.agent?.state?.tools ?? EMPTY_TOOLS;
-	return countTokens(systemPromptParts) + estimateToolSchemaTokens(tools);
+	const tokens = countTokens(systemPromptParts) + estimateToolSchemaTokens(tools);
+	entry.tokens = tokens;
+	return tokens;
 }
 
 /**
@@ -104,12 +153,16 @@ export function computeNonMessageBreakdown(session: AgentSession): {
 	systemContextTokens: number;
 	systemPromptTokens: number;
 } {
-	const skillsTokens = estimateSkillsTokens(session.skills ?? []);
-	const toolsTokens = estimateToolSchemaTokens(session.agent?.state?.tools ?? []);
-	const systemPromptParts = session.systemPrompt ?? [];
+	const entry = nonMessageTokenCacheEntry(session);
+	if (entry.breakdown) return entry.breakdown;
+	const skillsTokens = estimateSkillsTokens(session.skills ?? EMPTY_SKILLS);
+	const toolsTokens = estimateToolSchemaTokens(session.agent?.state?.tools ?? EMPTY_TOOLS);
+	const systemPromptParts = session.systemPrompt ?? EMPTY_STRING_PARTS;
 	const systemContextTokens = countTokens(systemPromptParts.slice(1));
 	const systemPromptTokens = Math.max(0, countTokens(systemPromptParts[0] ?? "") - skillsTokens);
-	return { skillsTokens, toolsTokens, systemContextTokens, systemPromptTokens };
+	const breakdown = { skillsTokens, toolsTokens, systemContextTokens, systemPromptTokens };
+	entry.breakdown = breakdown;
+	return breakdown;
 }
 
 /**

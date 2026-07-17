@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import type { Context, Model, ModelSpec, Tool } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { type } from "arktype";
 
@@ -27,7 +28,7 @@ function abortedSignal(): AbortSignal {
 async function capturePayload(
 	model: Model<"openai-completions">,
 	tools?: Tool[],
-	reasoning: "minimal" | "xhigh" = "minimal",
+	reasoning: "high" | "max" = "high",
 ): Promise<Record<string, unknown>> {
 	const { promise, resolve } = Promise.withResolvers<unknown>();
 	streamOpenAICompletions(model, contextWithTools(tools), {
@@ -65,25 +66,20 @@ describe("issue #1207 — DeepSeek V4 keeps reasoning with tools", () => {
 		expect(compat.supportsToolChoice).toBe(false);
 		expect(compat.maxTokensField).toBe("max_tokens");
 		expect(compat.extraBody).toEqual({ thinking: { type: "enabled" } });
-		expect(model.thinking?.effortMap).toMatchObject({
-			minimal: "high",
-			low: "high",
-			medium: "high",
-			high: "high",
-			xhigh: "max",
-		});
+		// DeepSeek's reasoning_effort is the honest wire-exact high/max pair;
+		// no synthetic lower tiers, no alias map.
+		expect(model.thinking?.efforts).toEqual([Effort.High, Effort.Max]);
+		expect(model.thinking?.effortMap).toBeUndefined();
 	});
 
-	it("merges partial user reasoning maps with DeepSeek defaults in thinking metadata", () => {
+	it("drops user reasoning map entries outside the honest DeepSeek ladder", () => {
 		const model = customDeepseekFlash();
 
 		expect(model.compat.supportsToolChoice).toBe(false);
-		expect(model.thinking?.effortMap).toMatchObject({
-			minimal: "high",
-			low: "high",
-			medium: "high",
-			xhigh: "max",
-		});
+		// The stale user `xhigh` alias targets a tier the wire-exact
+		// [high, max] ladder no longer exposes, so it is filtered out.
+		expect(model.thinking?.efforts).toEqual([Effort.High, Effort.Max]);
+		expect(model.thinking?.effortMap).toBeUndefined();
 	});
 
 	it("omits tool_choice but preserves documented reasoning when tools are present", async () => {

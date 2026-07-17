@@ -25,45 +25,59 @@ describe("task renderer: streaming call preview", () => {
 		return Bun.stripANSI(component.render(160).join("\n"));
 	}
 
-	// The preview must surface the agent id + ui description so the user can
-	// see what is being dispatched while args stream in.
-	it("shows the agent id, description, and assignment preview", () => {
+	// The preview must surface the dispatched agent type + name while args
+	// stream in: the flat header carries the agent type, and the agent row's
+	// secondary text is the FIRST line of the task brief only.
+	it("shows the agent type in the header and the first task line on the agent row", () => {
 		const args: TaskParams = {
 			agent: "reviewer",
-			id: "ReviewAuth",
-			description: "Audit the auth module",
-			assignment: "Review packages/server/src/auth for missing 401 handling.\nReport findings.",
+			name: "ReviewAuth",
+			task: "Review packages/server/src/auth for missing 401 handling.\nReport findings.",
 		};
 		const out = render(args);
+		const lines = out.split("\n");
 
-		expect(out).toContain("reviewer");
-		expect(out).toContain("ReviewAuth");
-		expect(out).toContain("Audit the auth module");
-		expect(out).toContain("Review packages/server/src/auth for missing 401 handling.");
+		expect(lines[0]).toContain("reviewer");
+		const row = lines.find(line => line.includes("ReviewAuth"));
+		expect(row).toBeDefined();
+		expect(row).toContain("Review packages/server/src/auth for missing 401 handling.");
+		expect(row).not.toContain("Report findings.");
+		// A non-default agent type also badges the row itself.
+		expect(row).toContain(`${theme.format.bracketLeft}reviewer${theme.format.bracketRight}`);
 	});
 
-	it("renders partially-streamed args without crashing", () => {
-		const args = {
+	it("caps the agent-row brief to a single preview line", () => {
+		const args: TaskParams = {
 			agent: "task",
-			id: "First",
-			// description/assignment not yet arrived.
-		} as unknown as TaskParams;
+			name: "CapCheck",
+			task: `${"x".repeat(80)} TAIL_MARKER\nsecond line`,
+		};
+		const row = render(args)
+			.split("\n")
+			.find(line => line.includes("CapCheck"));
+
+		expect(row).toBeDefined();
+		expect(row).toContain("…");
+		expect(row).not.toContain("TAIL_MARKER");
+	});
+
+	it("renders partially-streamed args (name only, no task yet) without crashing", () => {
+		const args: TaskParams = { name: "First" };
 
 		const out = render(args);
 
 		expect(out).toContain("First");
-		expect(out).toContain("task");
 	});
 
-	it("always renders the full assignment markdown, collapsed or expanded", () => {
-		const assignmentLines = Array.from({ length: 6 }, (_, i) => `Step ${i + 1}: do the thing.`);
+	it("always renders the full task markdown, collapsed or expanded", () => {
+		const taskLines = Array.from({ length: 6 }, (_, i) => `Step ${i + 1}: do the thing.`);
 		const args: TaskParams = {
 			agent: "task",
-			id: "Worker",
-			assignment: assignmentLines.join("\n"),
+			name: "Worker",
+			task: taskLines.join("\n"),
 		};
 
-		// The assignment is the brief handed to the subagent; it renders as
+		// The task text is the brief handed to the subagent; it renders as
 		// markdown in full regardless of the expanded toggle.
 		const collapsed = render(args, false);
 		expect(collapsed).toContain("Step 1");
@@ -78,9 +92,8 @@ describe("task renderer: streaming call preview", () => {
 		const args: TaskParams = {
 			agent: "task",
 			isolated: true,
-			id: "Only",
-			description: "Single task",
-			assignment: "...",
+			name: "Only",
+			task: "...",
 		};
 		const out = render(args);
 		const lines = out.split("\n");
@@ -96,15 +109,14 @@ describe("task renderer: streaming call preview", () => {
 	// the same order: agent rows above the context would shift the whole brief
 	// down on every streamed item, then visibly jump below it once the first
 	// progress snapshot replaces the call view.
-	it("renders the per-agent list below the context and assignment briefs", () => {
-		const args = {
-			agent: "task",
+	it("renders the per-agent list below the context brief, one row per item", () => {
+		const args: TaskParams = {
 			context: "# Goal\nFix the bench branches.",
 			tasks: [
-				{ id: "Fix01Foundation", description: "Fix bench/01-foundation-memory" },
-				{ id: "Fix02Setup", description: "Fix bench/02-setup" },
+				{ name: "Fix01Foundation", task: "Fix bench/01-foundation-memory" },
+				{ name: "Fix02Setup", task: "Fix bench/02-setup" },
 			],
-		} as unknown as TaskParams;
+		};
 		const out = render(args);
 
 		const contextAt = out.indexOf("Fix the bench branches.");
@@ -112,12 +124,31 @@ describe("task renderer: streaming call preview", () => {
 		expect(contextAt).toBeGreaterThanOrEqual(0);
 		expect(firstAgentAt).toBeGreaterThan(contextAt);
 		expect(out.indexOf("Fix02Setup")).toBeGreaterThan(firstAgentAt);
+		// Each item row carries its own first task line as secondary text.
+		const row = out.split("\n").find(line => line.includes("Fix01Foundation"));
+		expect(row).toContain("Fix bench/01-foundation-memory");
+	});
+
+	it("badges non-default agent types on item rows and keeps the generic worker bare", () => {
+		const args: TaskParams = {
+			context: "ctx",
+			tasks: [
+				{ name: "Scouty", agent: "scout", task: "map the code" },
+				{ name: "Worker", agent: "task", task: "do the work" },
+			],
+		};
+		const out = render(args);
+
+		expect(out).toContain(`${theme.format.bracketLeft}scout${theme.format.bracketRight}`);
+		expect(out).not.toContain(`${theme.format.bracketLeft}task${theme.format.bracketRight}`);
+		// Agent types live on the item rows; the batch header no longer joins them.
+		expect(out.split("\n")[0]).not.toContain("scout");
 	});
 
 	// Early in the stream only `context` has parsed; the (empty) agent-list
 	// section must not draw a stray trailing divider bar.
 	it("omits the agent-list divider while no agent rows exist yet", () => {
-		const args = { agent: "task", context: "# Goal\nShared brief." } as unknown as TaskParams;
+		const args: TaskParams = { context: "# Goal\nShared brief." };
 		const out = render(args);
 		const lines = out.split("\n");
 
@@ -135,9 +166,8 @@ describe("task renderer: streaming call preview", () => {
 	it("drops the preview once a result snapshot exists", () => {
 		const args: TaskParams = {
 			agent: "reviewer",
-			id: "ReviewAuth",
-			description: "Audit the auth module",
-			assignment: "Review the auth module.",
+			name: "ReviewAuth",
+			task: "Review the auth module.",
 		};
 		const component = taskToolRenderer.renderCall(
 			args,
@@ -146,7 +176,7 @@ describe("task renderer: streaming call preview", () => {
 		);
 		const out = Bun.stripANSI(component.render(160).join("\n"));
 
-		expect(out).not.toContain("Audit the auth module");
 		expect(out).not.toContain("Review the auth module.");
+		expect(out).not.toContain("ReviewAuth");
 	});
 });

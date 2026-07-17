@@ -15,6 +15,7 @@ import {
 	getSessionsDir,
 	isEnoent,
 	logger,
+	stringifyJson,
 	toError,
 } from "@oh-my-pi/pi-utils";
 import { ArtifactManager } from "./artifacts";
@@ -38,7 +39,6 @@ import {
 	type CustomMessageEntry,
 	type FileEntry,
 	type LabelEntry,
-	type MCPToolSelectionEntry,
 	type ModeChangeEntry,
 	type ModelChangeEntry,
 	type NewSessionOptions,
@@ -539,7 +539,7 @@ export class SessionManager {
 	}
 
 	#lineFor(entry: FileEntry): string {
-		return `${JSON.stringify(prepareEntryForPersistence(entry, this.#blobs))}\n`;
+		return `${stringifyJson(prepareEntryForPersistence(entry, this.#blobs)) ?? "null"}\n`;
 	}
 
 	#titleSlotLine(): string {
@@ -783,6 +783,7 @@ export class SessionManager {
 			timestamp,
 			cwd: this.#cwd,
 			parentSession: options?.parentSession,
+			providerPromptCacheKey: options?.providerPromptCacheKey,
 		};
 		this.#titleUpdatedAt = timestamp;
 
@@ -1050,6 +1051,7 @@ export class SessionManager {
 			timestamp,
 			cwd: this.#cwd,
 			parentSession: parentSessionId,
+			providerPromptCacheKey: this.#header.providerPromptCacheKey ?? parentSessionId,
 		};
 		this.#sessionName = this.#header.title;
 		this.#titleSource = this.#header.titleSource;
@@ -1589,19 +1591,6 @@ export class SessionManager {
 		return entry.id;
 	}
 
-	/**
-	 * Append an MCP tool selection entry recording the discovery-selected MCP tools.
-	 */
-	appendMCPToolSelection(selectedToolNames: string[]): string {
-		const entry: MCPToolSelectionEntry = {
-			type: "mcp_tool_selection",
-			...this.#freshEntryFields(),
-			selectedToolNames: [...selectedToolNames],
-		};
-		this.#recordEntry(entry);
-		return entry.id;
-	}
-
 	/** Append a TTSR injection entry recording which rules were injected. */
 	appendTtsrInjection(ruleNames: string[]): string {
 		const entry: TtsrInjectionEntry = {
@@ -1888,7 +1877,13 @@ export class SessionManager {
 
 		const sourceHeader = sourceEntries.find(entry => entry.type === "session") as SessionHeader | undefined;
 		const history = sourceEntries.filter(entry => entry.type !== "session") as SessionEntry[];
-		manager.#resetToNewSession({ parentSession: sourceHeader?.id }, options?.sessionFile);
+		manager.#resetToNewSession(
+			{
+				parentSession: sourceHeader?.id,
+				providerPromptCacheKey: sourceHeader?.providerPromptCacheKey ?? sourceHeader?.id,
+			},
+			options?.sessionFile,
+		);
 		manager.#header.title = sourceHeader?.title;
 		manager.#header.titleSource = sourceHeader?.titleSource;
 		manager.#sessionName = manager.#header.title;

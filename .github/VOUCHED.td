@@ -23,6 +23,7 @@
 0ttik
 a-glapinski
 ak4153
+any-victor
 apoc
 arg3t
 asafmah
@@ -65,6 +66,8 @@ infernix
 inprealpha
 insodimension
 itertea
+itzrnvr
+jaaneek
 jagravnaik
 jasonw22
 jchristman
@@ -78,6 +81,7 @@ kenmege
 korri123
 kukkerem
 lance0
+larkinwc
 ldx
 lederniermagicien
 loftiskg
@@ -105,6 +109,7 @@ parsifa1
 pgupta-git
 phanthh
 pidevxplay
+pppobear
 qfrtt
 ravshansbox
 rburketaylor
@@ -128,6 +133,7 @@ tdiant
 tjboudreaux
 tsagi2045
 turbomolli
+unravl
 usr-bin-roygbiv
 vmcall
 voidchecksum

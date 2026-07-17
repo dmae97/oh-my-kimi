@@ -166,6 +166,23 @@ describe("readImageFromClipboard dispatch", () => {
 		expect(calls[0]?.cmd).toContain("-Sta");
 	});
 
+	it("falls back to PowerShell when native Windows image conversion fails", async () => {
+		setPlatform("win32");
+		const calls: SpawnCall[] = [];
+		spyPowershell(calls, RED_1X1_PNG_BASE64);
+		vi.spyOn(native, "readImageFromClipboard").mockRejectedValue(
+			new Error("The clipboard image could not be converted to the appropriate format."),
+		);
+
+		const image = await readImageFromClipboard();
+
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.cmd[0]).toBe("powershell.exe");
+		expect(calls[0]?.cmd).toContain("-Sta");
+		expect(image?.mimeType).toBe("image/png");
+		expect(Array.from(image!.data.subarray(0, 8))).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+	});
+
 	it("delegates straight to the native bridge on non-WSL linux with a display", async () => {
 		setPlatform("linux");
 		process.env.DISPLAY = ":0";

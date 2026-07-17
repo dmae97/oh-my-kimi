@@ -698,8 +698,33 @@ describe("UiHelpers / InputController against derived queued custom display", ()
 		const uiHelpers = new UiHelpers(ctx);
 		uiHelpers.updatePendingMessagesDisplay();
 
-		const rendered = pendingMessagesContainer.render(120).join("\n");
-		expect(rendered).toMatch(/Steer: \/skill:test-skill arg1 arg2/);
+		const rendered = Bun.stripANSI(pendingMessagesContainer.render(120).join("\n"));
+		expect(rendered).toContain("Steering · 1");
+		expect(rendered).toContain("1. /skill:test-skill arg1 arg2");
+		expect(rendered).not.toContain("Steer:");
+	});
+
+	it("groups yield follow-ups under one heading", async () => {
+		fixture = await createRealSession();
+		const { session } = fixture;
+		for (const text of ["inspect types", "run tests", "summarize"]) {
+			session.agent.followUp({
+				role: "user",
+				content: text,
+				attribution: "user",
+				timestamp: Date.now(),
+			});
+		}
+
+		const { ctx, pendingMessagesContainer } = createStubInteractiveModeContextForUiHelpers(session);
+		new UiHelpers(ctx).updatePendingMessagesDisplay();
+
+		const rendered = Bun.stripANSI(pendingMessagesContainer.render(120).join("\n"));
+		expect(rendered).toContain("After yield · 3");
+		expect(rendered).toContain("1. inspect types");
+		expect(rendered).toContain("2. run tests");
+		expect(rendered).toContain("3. summarize");
+		expect(rendered).not.toContain("Follow-up:");
 	});
 
 	it("restores the compact slash form into the editor and clears the queue", async () => {

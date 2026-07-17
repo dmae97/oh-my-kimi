@@ -44,6 +44,27 @@ pub struct PtyStartOptions<'env> {
 	pub shell:      Option<String>,
 }
 
+/// Options for running an executable and argument vector in a PTY session.
+#[napi(object)]
+pub struct PtyArgvStartOptions<'env> {
+	/// Executable name or path.
+	pub application: String,
+	/// Arguments passed directly to the executable.
+	pub args:        Vec<String>,
+	/// Working directory for command execution.
+	pub cwd:         Option<String>,
+	/// Environment variables for this command.
+	pub env:         Option<HashMap<String, String>>,
+	/// Timeout in milliseconds before cancelling.
+	pub timeout_ms:  Option<u32>,
+	/// Abort signal for cancelling the operation.
+	pub signal:      Option<Unknown<'env>>,
+	/// PTY column count.
+	pub cols:        Option<u16>,
+	/// PTY row count.
+	pub rows:        Option<u16>,
+}
+
 /// Result of a PTY command run.
 #[napi(object)]
 pub struct PtyRunResult {
@@ -56,13 +77,18 @@ pub struct PtyRunResult {
 }
 
 #[derive(Clone)]
+enum PtyCommand {
+	Shell { command: String, shell: Option<String> },
+	Argv { application: String, args: Vec<String> },
+}
+
+#[derive(Clone)]
 struct PtyRunConfig {
-	command: String,
+	command: PtyCommand,
 	cwd:     Option<String>,
 	env:     Option<HashMap<String, String>>,
 	cols:    u16,
 	rows:    u16,
-	shell:   Option<String>,
 }
 
 enum ReaderEvent {
@@ -106,7 +132,7 @@ impl PtySession {
 		Self { core: Arc::new(Mutex::new(None)) }
 	}
 
-	/// Start a PTY command and stream output chunks via callback.
+	/// Start a shell command and stream output chunks via callback.
 	#[napi]
 	pub fn start<'env>(
 		&self,
@@ -116,40 +142,33 @@ impl PtySession {
 		on_chunk: Option<ThreadsafeFunction<String>>,
 	) -> Result<PromiseRaw<'env, PtyRunResult>> {
 		let run_config = PtyRunConfig {
-			command: options.command,
+			command: PtyCommand::Shell { command: options.command, shell: options.shell },
 			cwd:     options.cwd,
 			env:     options.env,
 			cols:    options.cols.unwrap_or(120).clamp(20, 400),
 			rows:    options.rows.unwrap_or(40).clamp(5, 200),
-			shell:   options.shell,
 		};
-		let ct = task::CancelToken::new(options.timeout_ms, options.signal);
-		let core = Arc::clone(&self.core);
+		self.start_config(env, run_config, options.timeout_ms, options.signal, on_chunk)
+	}
 
-		// Register control channel synchronously so write()/kill() work immediately.
-		let (control_tx, control_rx) = flume::unbounded::<ControlMessage>();
-		{
-			let mut guard = core.lock();
-			if guard.is_some() {
-				return Err(Error::from_reason("PTY session already running"));
-			}
-			*guard = Some(PtySessionCore { control_tx });
-		}
-		task::future(env, "pty.start", async move {
-			let run_result =
-				tokio::task::spawn_blocking(move || run_pty_sync(run_config, on_chunk, control_rx, ct))
-					.await;
-
-			// Always clear core regardless of result
-			let mut guard = core.lock();
-			*guard = None;
-			drop(guard);
-
-			match run_result {
-				Ok(inner) => inner,
-				Err(err) => Err(Error::from_reason(format!("PTY execution task failed: {err}"))),
-			}
-		})
+	/// Start an executable with separate arguments and stream output chunks via
+	/// callback.
+	#[napi]
+	pub fn start_argv<'env>(
+		&self,
+		env: &'env Env,
+		options: PtyArgvStartOptions<'env>,
+		#[napi(ts_arg_type = "((error: Error | null, chunk: string) => void) | undefined | null")]
+		on_chunk: Option<ThreadsafeFunction<String>>,
+	) -> Result<PromiseRaw<'env, PtyRunResult>> {
+		let run_config = PtyRunConfig {
+			command: PtyCommand::Argv { application: options.application, args: options.args },
+			cwd:     options.cwd,
+			env:     options.env,
+			cols:    options.cols.unwrap_or(120).clamp(20, 400),
+			rows:    options.rows.unwrap_or(40).clamp(5, 200),
+		};
+		self.start_config(env, run_config, options.timeout_ms, options.signal, on_chunk)
 	}
 
 	/// Write raw input bytes to PTY stdin.
@@ -175,6 +194,42 @@ impl PtySession {
 }
 
 impl PtySession {
+	fn start_config<'env>(
+		&self,
+		env: &'env Env,
+		run_config: PtyRunConfig,
+		timeout_ms: Option<u32>,
+		signal: Option<Unknown<'env>>,
+		on_chunk: Option<ThreadsafeFunction<String>>,
+	) -> Result<PromiseRaw<'env, PtyRunResult>> {
+		let ct = task::CancelToken::new(timeout_ms, signal);
+		let core = Arc::clone(&self.core);
+
+		// Register control channel synchronously so write()/kill() work immediately.
+		let (control_tx, control_rx) = flume::unbounded::<ControlMessage>();
+		{
+			let mut guard = core.lock();
+			if guard.is_some() {
+				return Err(Error::from_reason("PTY session already running"));
+			}
+			*guard = Some(PtySessionCore { control_tx });
+		}
+		task::future(env, "pty.start", async move {
+			let run_result =
+				tokio::task::spawn_blocking(move || run_pty_sync(run_config, on_chunk, control_rx, ct))
+					.await;
+
+			let mut guard = core.lock();
+			*guard = None;
+			drop(guard);
+
+			match run_result {
+				Ok(inner) => inner,
+				Err(err) => Err(Error::from_reason(format!("PTY execution task failed: {err}"))),
+			}
+		})
+	}
+
 	fn send_control(&self, message: ControlMessage) -> Result<()> {
 		let guard = self.core.lock();
 		let core = guard
@@ -249,19 +304,29 @@ fn run_pty_sync(
 			.map_err(|err| Error::from_reason(format!("Failed to open PTY: {err}")))?
 	};
 
-	let shell = config.shell.as_deref().unwrap_or("sh");
-	let mut cmd = CommandBuilder::new(shell);
-	// Use shell-appropriate command execution flags
-	let lower = shell.to_lowercase();
-	if lower.ends_with("cmd.exe") || lower.ends_with("cmd") {
-		cmd.arg("/c");
-	} else if lower.contains("powershell") || lower.contains("pwsh") {
-		cmd.arg("-Command");
-	} else {
-		// sh/bash/zsh/fish etc.
-		cmd.arg("-lc");
-	}
-	cmd.arg(&config.command);
+	let mut cmd = match config.command {
+		PtyCommand::Shell { command, shell } => {
+			let shell = shell.as_deref().unwrap_or("sh");
+			let mut cmd = CommandBuilder::new(shell);
+			let lower = shell.to_lowercase();
+			if lower.ends_with("cmd.exe") || lower.ends_with("cmd") {
+				cmd.arg("/c");
+			} else if lower.contains("powershell") || lower.contains("pwsh") {
+				cmd.arg("-Command");
+			} else {
+				cmd.arg("-lc");
+			}
+			cmd.arg(command);
+			cmd
+		},
+		PtyCommand::Argv { application, args } => {
+			let mut cmd = CommandBuilder::new(application);
+			for arg in args {
+				cmd.arg(arg);
+			}
+			cmd
+		},
+	};
 	if let Some(cwd) = config.cwd.as_ref() {
 		cmd.cwd(cwd);
 	}

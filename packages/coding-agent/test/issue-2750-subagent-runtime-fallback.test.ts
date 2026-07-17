@@ -30,6 +30,7 @@ function createYieldingSession(): AgentSession {
 		extensionRunner: undefined,
 		sessionManager: { appendSessionInit: () => {} },
 		getActiveToolNames: () => ["yield"],
+		getEnabledToolNames: () => ["yield"],
 		setActiveToolsByName: async () => {},
 		subscribe: (listener: (event: { type: string; [key: string]: unknown }) => void) => {
 			listeners.push(listener);

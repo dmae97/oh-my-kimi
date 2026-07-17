@@ -15,7 +15,7 @@ import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async";
 import type { Rule } from "@oh-my-pi/pi-coding-agent/capability/rule";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { type SettingPath, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { TtsrManager } from "@oh-my-pi/pi-coding-agent/export/ttsr";
 import type { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -68,7 +68,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		AsyncJobManager.resetForTests();
 	});
 
-	async function createSession() {
+	async function createSession(settingsOverrides?: Partial<Record<SettingPath, unknown>>) {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		let abortSignal: AbortSignal | undefined;
 
@@ -100,7 +100,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		});
 
 		const sessionManager = SessionManager.inMemory();
-		const settings = Settings.isolated();
+		const settings = Settings.isolated(settingsOverrides);
 		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
 		authStorages.push(authStorage);
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
@@ -174,6 +174,86 @@ describe("AgentSession concurrent prompt guard", () => {
 		session.agent.clearAllQueues();
 		await session.abort();
 		await firstPrompt.catch(() => {});
+	});
+
+	it("queues sendUserMessage as steer while streaming without AgentBusyError", async () => {
+		await createSession();
+
+		const firstPrompt = session.prompt("First message");
+		await waitFor(() => session.isStreaming);
+
+		// The first agent loop may dequeue a steer before the assertion runs, so
+		// observe agent.steer itself rather than the residual queue length.
+		const steered: AgentMessage[] = [];
+		const originalSteer = session.agent.steer.bind(session.agent);
+		session.agent.steer = (message: AgentMessage) => {
+			steered.push(message);
+			originalSteer(message);
+		};
+
+		// Extension path: no deliverAs while busy must queue, not throw.
+		await expect(session.sendUserMessage("hello from extension")).resolves.toBeUndefined();
+		expect(steered).toHaveLength(1);
+		const queued = steered[0];
+		expect(queued?.role).toBe("user");
+		if (queued?.role === "user") {
+			expect(queued.content).toEqual([{ type: "text", text: "hello from extension" }]);
+			expect(queued.steering).toBe(true);
+		}
+
+		session.agent.clearAllQueues();
+		await session.abort();
+		await firstPrompt.catch(() => {});
+	});
+
+	it("sendUserMessage without deliverAs preserves prompt-flow keyword notices while streaming", async () => {
+		await createSession({ "magicKeywords.enabled": true, "magicKeywords.ultrathink": true });
+
+		const firstPrompt = session.prompt("First message");
+		await waitFor(() => session.isStreaming);
+
+		try {
+			await session.sendUserMessage("ultrathink fix via extension");
+			const queuedShape = session.agent
+				.peekSteeringQueue()
+				.map(message => (message.role === "custom" ? message.customType : message.role));
+			expect(queuedShape).toEqual(["ultrathink-notice", "user"]);
+			expect(session.getQueuedMessages()).toEqual({
+				steering: ["ultrathink fix via extension"],
+				followUp: [],
+			});
+		} finally {
+			session.agent.clearAllQueues();
+			await session.abort();
+			await firstPrompt.catch(() => {});
+		}
+	});
+
+	it("sendUserMessage without deliverAs starts a normal prompt when idle", async () => {
+		await createSession();
+
+		let rejected: unknown;
+		let settled = false;
+		const turn = session
+			.sendUserMessage("Idle extension message")
+			.catch(error => {
+				rejected = error;
+			})
+			.finally(() => {
+				settled = true;
+			});
+
+		try {
+			await waitFor(() => session.isStreaming || settled);
+			if (rejected) throw rejected;
+
+			expect(session.isStreaming).toBe(true);
+			expect(settled).toBe(false);
+			expect(session.getQueuedMessages()).toEqual({ steering: [], followUp: [] });
+		} finally {
+			await session.abort();
+			await turn;
+		}
 	});
 
 	it("delivers hidden nextTurn stop reactions through the next LLM call without exposing them in the visible queue", async () => {
@@ -1233,6 +1313,126 @@ describe("AgentSession TTSR resume gate", () => {
 				: "";
 		expect(text).toContain("Tool execution was aborted: TTSR matched rule: no-unwrap");
 		expect(text).not.toContain("Request was aborted");
+	});
+
+	it("labels only the matching aborted tool placeholder with the TTSR rule reason", async () => {
+		collapseSchedulerSettleDelays();
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		let streamCallCount = 0;
+
+		const ttsrManager = new TtsrManager({
+			enabled: true,
+			contextMode: "discard",
+			interruptMode: "always",
+			repeatMode: "once",
+			repeatGap: 10,
+		});
+		ttsrManager.addRule(testRule);
+
+		const readToolCallContent: ToolCall = {
+			type: "toolCall",
+			id: "call_innocent_read",
+			name: "read",
+			arguments: { path: "history://Eval1WithSkill" },
+		};
+		const matchedToolCallContent: ToolCall = {
+			type: "toolCall",
+			id: "call_ttsr_abort_reason",
+			name: "mock_edit",
+			arguments: { snippet: "let val = result.unwrap(" },
+		};
+
+		const makeToolCallMsg = (stopReason: "toolUse" | "aborted" = "toolUse"): AssistantMessage => ({
+			role: "assistant",
+			content: [readToolCallContent, matchedToolCallContent],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "mock",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason,
+			timestamp: Date.now(),
+		});
+
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: (_model, _context, options) => {
+				streamCallCount++;
+				const stream = new AssistantMessageEventStream();
+				const signal = options?.signal;
+				if (streamCallCount === 1) {
+					queueMicrotask(() => {
+						const partial = makeToolCallMsg();
+						if (signal) {
+							signal.addEventListener(
+								"abort",
+								() => {
+									stream.push({
+										type: "error",
+										reason: "aborted",
+										error: makeToolCallMsg("aborted"),
+									});
+								},
+								{ once: true },
+							);
+						}
+						stream.push({ type: "start", partial });
+						stream.push({ type: "toolcall_start", contentIndex: 1, partial });
+						stream.push({
+							type: "toolcall_delta",
+							contentIndex: 1,
+							delta: 'let val = result.unwrap("oops")',
+							partial,
+						});
+						// The abort placeholder is only minted for tool calls that reached
+						// `toolcall_end`: the agent loop drops incomplete tool calls from an
+						// aborted turn (partial args are unsafe to replay). Complete the
+						// innocent read before the rule-driven abort fires so its placeholder
+						// survives and can carry the neutral sibling label.
+						stream.push({ type: "toolcall_end", contentIndex: 0, toolCall: readToolCallContent, partial });
+					});
+				} else {
+					pushContinuationStream(stream, () => {});
+				}
+				return stream;
+			},
+		});
+
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated();
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth-abort-reason.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry, ttsrManager });
+
+		await session.prompt("Write some Rust code");
+
+		const toolResults = sessionManager
+			.getEntries()
+			.filter(entry => entry.type === "message" && entry.message.role === "toolResult")
+			.map(entry => (entry.type === "message" && entry.message.role === "toolResult" ? entry.message : undefined))
+			.filter(message => message !== undefined);
+		const toolResultText = (toolCallId: string): string =>
+			toolResults
+				.find(message => message.toolCallId === toolCallId)
+				?.content.find((part): part is { type: "text"; text: string } => part.type === "text")?.text ?? "";
+
+		const readText = toolResultText(readToolCallContent.id);
+		expect(readText).toContain("Tool execution was aborted: TTSR interrupt on another tool call");
+		expect(readText).not.toContain("TTSR matched rule: no-unwrap");
+		// The matching call never reached `toolcall_end`, so the loop drops it from
+		// the aborted turn (partial args are unsafe to replay) and no placeholder is
+		// minted. The rule label for a completed matching call is covered by the
+		// single-call test above.
+		expect(toolResultText(matchedToolCallContent.id)).toBe("");
 	});
 
 	it("relativizes the rule file path in the TTSR interrupt injection (no absolute leak)", async () => {

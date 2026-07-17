@@ -31,7 +31,16 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import squad  # noqa: E402
-from bdf import _DARK, _DIMMED, _stopword_mask, FontCfg, capacity, parse_bdf, ensure_font, render  # noqa: E402
+from bdf import (
+    _DARK,
+    _DIMMED,
+    _stopword_mask,
+    FontCfg,
+    capacity,
+    parse_bdf,
+    ensure_font,
+    render,
+)  # noqa: E402
 from providers import llm_complete, load_env_key  # noqa: E402
 from run import CACHE, QA_CACHE, RESULTS, load_prompt, sha8  # noqa: E402
 
@@ -143,7 +152,9 @@ def _doc_colors(lines: list[dict], variant: str) -> list[list[tuple[int, int, in
         n = len(ln["text"])
         colors.append(
             [
-                _DIMMED if dim is not None and dim[pos + k] else _DARK[sidx[pos + k] % 6]
+                _DIMMED
+                if dim is not None and dim[pos + k]
+                else _DARK[sidx[pos + k] % 6]
                 for k in range(n)
             ]
         )
@@ -191,7 +202,14 @@ def render_doc(lines: list[dict], size: int, variant: str, cache: Path) -> Image
 # --- runners -----------------------------------------------------------------
 
 
-def _qa_call(model: str, messages: list[dict], questions: list[dict], ctx: dict, cond: str, start: int) -> list[dict]:
+def _qa_call(
+    model: str,
+    messages: list[dict],
+    questions: list[dict],
+    ctx: dict,
+    cond: str,
+    start: int,
+) -> list[dict]:
     args, keys = ctx["args"], ctx["keys"]
     qa = cached(
         model,
@@ -199,7 +217,13 @@ def _qa_call(model: str, messages: list[dict], questions: list[dict], ctx: dict,
         lambda: dict(
             zip(
                 ("text", "usage", "stop"),
-                llm_complete(keys, model, messages, max_tokens=args.max_tokens, effort=args.effort),
+                llm_complete(
+                    keys,
+                    model,
+                    messages,
+                    max_tokens=args.max_tokens,
+                    effort=args.effort,
+                ),
             )
         ),
         args.fresh,
@@ -231,12 +255,16 @@ def run_doc_page(model: str, cond: str, page: tuple[int, int], ctx: dict) -> lis
     i, j = page
     start = offsets[i]
     end = offsets[j - 1] + len(paras[j - 1]["ctx"])
-    questions = squad.sample_chunk_questions(paras, offsets, start, end, args.qpc, args.seed)
+    questions = squad.sample_chunk_questions(
+        paras, offsets, start, end, args.qpc, args.seed
+    )
     if not questions:
         return []
     variant = cond.removeprefix("img-doc-8on16-")
     lines = ctx["lines"][page]
-    page_key = sha8(cond, json.dumps([(p["title"], p["ctx"]) for p in paras[i:j]]), str(args.size))
+    page_key = sha8(
+        cond, json.dumps([(p["title"], p["ctx"]) for p in paras[i:j]]), str(args.size)
+    )
     png = CACHE / f"{EXP}-doc-8on16-{variant}-{page_key}.png"
     if not png.exists() or png.stat().st_size == 0:
         tmp = png.with_suffix(f".{os.getpid()}.tmp.png")
@@ -249,7 +277,11 @@ def run_doc_page(model: str, cond: str, page: tuple[int, int], ctx: dict) -> lis
         {
             "role": "user",
             "content": [
-                {"text": load_prompt("exp04-qa-image.md").format(col_w=col_w, rows=rows)},
+                {
+                    "text": load_prompt("exp04-qa-image.md").format(
+                        col_w=col_w, rows=rows
+                    )
+                },
                 {"image_path": png},
                 {"text": q_block},
             ],
@@ -258,9 +290,13 @@ def run_doc_page(model: str, cond: str, page: tuple[int, int], ctx: dict) -> lis
     return _qa_call(model, messages, questions, ctx, cond, start)
 
 
-def run_grid_chunk(model: str, cond: str, start: int, end: int, ctx: dict) -> list[dict]:
+def run_grid_chunk(
+    model: str, cond: str, start: int, end: int, ctx: dict
+) -> list[dict]:
     args, flow, paras, offsets = ctx["args"], ctx["flow"], ctx["paras"], ctx["offsets"]
-    questions = squad.sample_chunk_questions(paras, offsets, start, end, args.qpc, args.seed)
+    questions = squad.sample_chunk_questions(
+        paras, offsets, start, end, args.qpc, args.seed
+    )
     if not questions:
         return []
     chunk_text = flow[start:end]
@@ -291,8 +327,13 @@ def aggregate(records: list[dict], price_in: float, price_out: float) -> dict:
     mean_f1 = sum(f1s) / n
     se = (sum((x - mean_f1) ** 2 for x in f1s) / (n * (n - 1))) ** 0.5 if n > 1 else 0.0
     us = [u for r in records if "usage" in r for u in r["usage"]]
-    tok = {k: sum(u.get(k, 0) for u in us) for k in ("in", "out", "cache_w", "cache_r", "reasoning")}
-    cost_in = (tok["in"] + 1.25 * tok["cache_w"] + 0.1 * tok["cache_r"]) / 1e6 * price_in
+    tok = {
+        k: sum(u.get(k, 0) for u in us)
+        for k in ("in", "out", "cache_w", "cache_r", "reasoning")
+    }
+    cost_in = (
+        (tok["in"] + 1.25 * tok["cache_w"] + 0.1 * tok["cache_r"]) / 1e6 * price_in
+    )
     cost_out = tok["out"] / 1e6 * price_out
     return {
         "n": n,
@@ -326,7 +367,9 @@ class Runner:
             col_w = (cols - GUTTER) // 2
             pages = pack_pages(paras, col_w, 2 * rows)
             page_lines = {pg: layout_page(paras[pg[0] : pg[1]], col_w) for pg in pages}
-            page_chars = [offsets[j - 1] + len(paras[j - 1]["ctx"]) - offsets[i] for i, j in pages]
+            page_chars = [
+                offsets[j - 1] + len(paras[j - 1]["ctx"]) - offsets[i] for i, j in pages
+            ]
             self.capacity_stats[length] = {
                 "doc_pages": len(pages),
                 "doc_mean_chars_page": round(sum(page_chars) / len(pages)),
@@ -336,8 +379,14 @@ class Runner:
                 "grid_pages": -(-len(flow) // grid_cap),
             }
             self.ctxs[length] = {
-                "args": self.args, "flow": flow, "paras": paras, "offsets": offsets,
-                "keys": self.keys, "length": length, "pages": pages, "lines": page_lines,
+                "args": self.args,
+                "flow": flow,
+                "paras": paras,
+                "offsets": offsets,
+                "keys": self.keys,
+                "length": length,
+                "pages": pages,
+                "lines": page_lines,
             }
         return self.ctxs[length]
 
@@ -354,7 +403,12 @@ class Runner:
                 grid_cap = capacity(FONT, self.args.size)[2]
                 flow = ctx["flow"]
                 for start in range(0, len(flow), grid_cap):
-                    tasks.append((run_grid_chunk, (MODEL, cond, start, min(start + grid_cap, len(flow)), ctx)))
+                    tasks.append(
+                        (
+                            run_grid_chunk,
+                            (MODEL, cond, start, min(start + grid_cap, len(flow)), ctx),
+                        )
+                    )
         if not tasks:
             return
         print(f"[{label}] {len(cells)} cells -> {len(tasks)} page/chunk tasks")
@@ -366,7 +420,16 @@ class Runner:
 
     def cell(self, length: int, cond: str) -> dict | None:
         sub = [r for r in self.records if r["length"] == length and r["cond"] == cond]
-        return {"model": MODEL, "length": length, "condition": cond, **aggregate(sub, *PRICE)} if sub else None
+        return (
+            {
+                "model": MODEL,
+                "length": length,
+                "condition": cond,
+                **aggregate(sub, *PRICE),
+            }
+            if sub
+            else None
+        )
 
     def all_cells(self) -> list[dict]:
         keys = sorted({(r["length"], r["cond"]) for r in self.records})
@@ -400,8 +463,14 @@ def main() -> None:
     ap.add_argument("--effort", default=None)
     ap.add_argument("--fresh", action="store_true")
     ap.add_argument("--render-only", action="store_true")
-    ap.add_argument("--screen-only", action="store_true", help="skip the 50/250 confirmation phase")
-    ap.add_argument("--confirm-conds", default=None, help="comma list; default = screening F1 winner")
+    ap.add_argument(
+        "--screen-only", action="store_true", help="skip the 50/250 confirmation phase"
+    )
+    ap.add_argument(
+        "--confirm-conds",
+        default=None,
+        help="comma list; default = screening F1 winner",
+    )
     ap.add_argument("--env", default="~/.env")
     args = ap.parse_args()
 
@@ -415,7 +484,9 @@ def main() -> None:
 
     cols, rows, grid_cap = capacity(FONT, args.size)
     col_w = (cols - GUTTER) // 2
-    print(f"font 8on16: {cols} cols x {rows} rows; grid cap {grid_cap}; doc 2 x {col_w} + gutter {GUTTER}, {2 * rows} line slots")
+    print(
+        f"font 8on16: {cols} cols x {rows} rows; grid cap {grid_cap}; doc 2 x {col_w} + gutter {GUTTER}, {2 * rows} line slots"
+    )
 
     runner = Runner(args, keys)
 
@@ -425,21 +496,32 @@ def main() -> None:
         for cond in SCREEN_CONDS:
             if cond.startswith("img-doc-"):
                 variant = cond.removeprefix("img-doc-8on16-")
-                key = sha8(cond, json.dumps([(p["title"], p["ctx"]) for p in ctx["paras"][pg[0] : pg[1]]]), str(args.size))
+                key = sha8(
+                    cond,
+                    json.dumps(
+                        [(p["title"], p["ctx"]) for p in ctx["paras"][pg[0] : pg[1]]]
+                    ),
+                    str(args.size),
+                )
                 png = CACHE / f"{EXP}-doc-8on16-{variant}-{key}.png"
                 img = render_doc(ctx["lines"][pg], args.size, variant, CACHE)
             else:
                 variant = cond.removeprefix("img-8on16-")
                 chunk = ctx["flow"][:grid_cap]
-                png = CACHE / f"{EXP}-grid-8on16-{variant}-{sha8(chunk, str(args.size))}.png"
+                png = (
+                    CACHE
+                    / f"{EXP}-grid-8on16-{variant}-{sha8(chunk, str(args.size))}.png"
+                )
                 img = render(chunk, FONT, CACHE, args.size, variant)
             tmp = png.with_suffix(f".{os.getpid()}.tmp.png")
             img.save(tmp)
             tmp.replace(png)
             print(f"  sample: {png}")
         for length, st in runner.capacity_stats.items():
-            print(f"  len {length}: {st['doc_pages']} doc pages, mean {st['doc_mean_chars_page']} chars/page "
-                  f"(grid {st['grid_chars_page']} -> {st['grid_pages']} pages)")
+            print(
+                f"  len {length}: {st['doc_pages']} doc pages, mean {st['doc_mean_chars_page']} chars/page "
+                f"(grid {st['grid_chars_page']} -> {st['grid_pages']} pages)"
+            )
         return
 
     # Phase A: screen at 150
@@ -451,7 +533,11 @@ def main() -> None:
 
     # Phase B: confirm winner at 50 and 250
     if not args.screen_only:
-        confirm = [w.strip() for w in args.confirm_conds.split(",")] if args.confirm_conds else [winner]
+        confirm = (
+            [w.strip() for w in args.confirm_conds.split(",")]
+            if args.confirm_conds
+            else [winner]
+        )
         runner.run([(ln, c) for ln in (50, 250) for c in confirm], "confirm@50/250")
 
     cells = runner.all_cells()
@@ -460,13 +546,20 @@ def main() -> None:
             fh.write(json.dumps(r) + "\n")
     (OUT_DIR / "summary.json").write_text(
         json.dumps(
-            {"args": vars(args), "model": MODEL, "capacity": runner.capacity_stats,
-             "screen_winner": winner, "cells": cells},
+            {
+                "args": vars(args),
+                "model": MODEL,
+                "capacity": runner.capacity_stats,
+                "screen_winner": winner,
+                "cells": cells,
+            },
             indent=1,
         )
     )
     with (OUT_DIR / "matrix.csv").open("w", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=[k for k in cells[0].keys() if k != "doc_chars_page"])
+        writer = csv.DictWriter(
+            fh, fieldnames=[k for k in cells[0].keys() if k != "doc_chars_page"]
+        )
         writer.writeheader()
         writer.writerows(cells)
 

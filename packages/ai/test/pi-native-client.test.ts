@@ -48,12 +48,30 @@ function stalledBody(bytes: Uint8Array[] = []): ReadableStream<Uint8Array> {
 }
 
 function delayedBody(chunks: Array<{ atMs: number; bytes: Uint8Array }>): ReadableStream<Uint8Array> {
+	let active = true;
 	return new ReadableStream<Uint8Array>({
 		start(controller) {
 			for (const chunk of chunks) {
-				setTimeout(() => controller.enqueue(chunk.bytes), chunk.atMs);
+				setTimeout(() => {
+					if (!active) return;
+					try {
+						controller.enqueue(chunk.bytes);
+					} catch {}
+				}, chunk.atMs);
 			}
-			setTimeout(() => controller.close(), Math.max(...chunks.map(chunk => chunk.atMs)) + 1);
+			setTimeout(
+				() => {
+					if (!active) return;
+					active = false;
+					try {
+						controller.close();
+					} catch {}
+				},
+				Math.max(...chunks.map(chunk => chunk.atMs)) + 1,
+			);
+		},
+		cancel() {
+			active = false;
 		},
 	});
 }
@@ -348,8 +366,8 @@ describe("streamPiNative event flow", () => {
 		const stream = streamPiNative(fakeModel(), baseContext, {
 			apiKey: "k",
 			fetch: fetchImpl,
-			streamFirstEventTimeoutMs: 40,
-			streamIdleTimeoutMs: 30,
+			streamFirstEventTimeoutMs: 1000,
+			streamIdleTimeoutMs: 1000,
 		});
 
 		const result = await stream.result();

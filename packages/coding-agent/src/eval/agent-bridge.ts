@@ -449,130 +449,135 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 	// runtime is parked waiting for the result, and the cell timeout must
 	// not abort us mid-cherry-pick or mid-nested-commit. The clock restarts
 	// only after we hand control back to the runtime.
-	const { result, mergeSummary, changesApplied } = await withBridgeTimeoutPause(options.emitStatus, async () => {
-		let isolationContext: IsolationContext | null = null;
-		if (isIsolated) {
-			try {
-				isolationContext = await prepareIsolationContext(options.session.cwd);
-			} catch (err) {
-				const message = err instanceof Error ? err.message : String(err);
-				throw new ToolError(`Isolated agent() execution requires a git repository. ${message}`);
-			}
-		}
-		const preferredBackend = isIsolated ? parseIsolationMode(isolationMode) : undefined;
-
-		const result = await (async () => {
-			if (!isolationContext) {
-				return taskExecutor.runSubprocess(baseRunOptions);
-			}
-			const taskStart = Date.now();
-			return runIsolatedSubprocess({
-				baseOptions: baseRunOptions,
-				context: isolationContext,
-				preferredBackend,
-				agentId: id,
-				mergeMode,
-				artifactsDir,
-				description: trimToUndefined(parsed.label),
-				buildCommitMessage,
-				buildFailureResult: err => {
+	const { result, mergeSummary, changesApplied } = await withBridgeTimeoutPause(
+		options.emitStatus,
+		async () => {
+			let isolationContext: IsolationContext | null = null;
+			if (isIsolated) {
+				try {
+					isolationContext = await prepareIsolationContext(options.session.cwd);
+				} catch (err) {
 					const message = err instanceof Error ? err.message : String(err);
-					return {
-						index: 0,
-						id,
-						agent: effectiveAgent.name,
-						agentSource: effectiveAgent.source,
-						task: renderSubagentPrompt(assignment),
-						assignment,
-						description: trimToUndefined(parsed.label),
-						exitCode: 1,
-						output: "",
-						stderr: message,
-						truncated: false,
-						durationMs: Date.now() - taskStart,
-						tokens: 0,
-						requests: 0,
-						modelOverride,
-						error: message,
-					};
-				},
-			});
-		})();
-
-		if (result.exitCode !== 0 || result.error || result.aborted) {
-			const failureMessage = buildSubagentFailureMessage(agentName, result);
-			const recoveryHint = isIsolated ? await buildIsolationRecoveryHint(result, artifactsDir) : "";
-			throw new ToolError(`${failureMessage}${recoveryHint}`);
-		}
-
-		let mergeSummary = "";
-		let changesApplied: boolean | null = null;
-		if (isIsolated && isolationContext) {
-			if (applyChanges) {
-				const outcome = await mergeIsolatedChanges({
-					result,
-					repoRoot: isolationContext.repoRoot,
-					mergeMode,
-				});
-				mergeSummary = outcome.summary;
-				changesApplied = outcome.changesApplied;
-				if (outcome.changesApplied === false) {
-					const summaryText = outcome.summary.trim();
-					const recoveryHint = await buildIsolationRecoveryHint(result, artifactsDir);
-					throw new ToolError(
-						`agent() isolated apply failed for ${result.id}${summaryText ? `: ${summaryText}` : ""}${recoveryHint}`,
-					);
-				}
-
-				const nestedSummary = await applyEligibleNestedPatches({
-					result,
-					repoRoot: isolationContext.repoRoot,
-					mergeMode,
-					changesApplied: outcome.changesApplied,
-					mergedBranchForNestedPatches: outcome.mergedBranchForNestedPatches,
-					commitMessage: buildCommitMessage(),
-				});
-				mergeSummary += nestedSummary;
-				if (structured && nestedSummary.trim()) {
-					const recoveryHint = await buildIsolationRecoveryHint(
-						{ ...result, patchPath: undefined, branchName: undefined },
-						artifactsDir,
-					);
-					throw new ToolError(
-						`agent() isolated nested patch apply failed for ${result.id}: ${plainIsolationSummary(nestedSummary)}${recoveryHint}`,
-					);
-				}
-			} else if (result.branchName) {
-				mergeSummary = `\n\nIsolation: changes captured on branch \`${result.branchName}\` (apply=false). Not merged.`;
-			} else if (result.patchPath) {
-				mergeSummary = `\n\nIsolation: changes captured at \`${result.patchPath}\` (apply=false). Not applied.`;
-			} else {
-				const nestedPatches = result.nestedPatches ?? [];
-				if (nestedPatches.length > 0) {
-					mergeSummary = `\n\nIsolation: changes captured for ${nestedPatches.length} nested repositor${nestedPatches.length === 1 ? "y" : "ies"} (apply=false). Not applied.`;
-				} else {
-					mergeSummary = "\n\nIsolation: no changes captured.";
+					throw new ToolError(`Isolated agent() execution requires a git repository. ${message}`);
 				}
 			}
-		}
+			const preferredBackend = isIsolated ? parseIsolationMode(isolationMode) : undefined;
 
-		// Clean up the temp artifacts dir we created for this call only when the
-		// caller will not need files from it later. Keep it when the runtime helper
-		// will return an `agent://` handle (the `.md`/`.jsonl` backing files live
-		// here) and on `apply=false` (`changesApplied === null`) where the caller
-		// consumes `details.patchPath` / `details.branchName` /
-		// `details.nestedPatches` out of band. Failed isolated applies throw
-		// earlier with a recovery hint, so they never reach this gate.
-		const shouldCleanupTempArtifacts = tempArtifactsDir && !parsed.handle && (!isIsolated || changesApplied === true);
-		if (shouldCleanupTempArtifacts) {
-			await fs.rm(artifactsDir, { recursive: true, force: true });
-			unregisterArtifactsDir?.();
-		}
+			const result = await (async () => {
+				if (!isolationContext) {
+					return taskExecutor.runSubprocess(baseRunOptions);
+				}
+				const taskStart = Date.now();
+				return runIsolatedSubprocess({
+					baseOptions: baseRunOptions,
+					context: isolationContext,
+					preferredBackend,
+					agentId: id,
+					mergeMode,
+					artifactsDir,
+					description: trimToUndefined(parsed.label),
+					buildCommitMessage,
+					buildFailureResult: err => {
+						const message = err instanceof Error ? err.message : String(err);
+						return {
+							index: 0,
+							id,
+							agent: effectiveAgent.name,
+							agentSource: effectiveAgent.source,
+							task: renderSubagentPrompt(assignment),
+							assignment,
+							description: trimToUndefined(parsed.label),
+							exitCode: 1,
+							output: "",
+							stderr: message,
+							truncated: false,
+							durationMs: Date.now() - taskStart,
+							tokens: 0,
+							requests: 0,
+							modelOverride,
+							error: message,
+						};
+					},
+				});
+			})();
 
-		options.session.recordEvalSubagentUsage?.(result.usage?.output ?? 0);
+			if (result.exitCode !== 0 || result.error || result.aborted) {
+				const failureMessage = buildSubagentFailureMessage(agentName, result);
+				const recoveryHint = isIsolated ? await buildIsolationRecoveryHint(result, artifactsDir) : "";
+				throw new ToolError(`${failureMessage}${recoveryHint}`);
+			}
 
-		return { result, mergeSummary, changesApplied };
-	});
+			let mergeSummary = "";
+			let changesApplied: boolean | null = null;
+			if (isIsolated && isolationContext) {
+				if (applyChanges) {
+					const outcome = await mergeIsolatedChanges({
+						result,
+						repoRoot: isolationContext.repoRoot,
+						mergeMode,
+					});
+					mergeSummary = outcome.summary;
+					changesApplied = outcome.changesApplied;
+					if (outcome.changesApplied === false) {
+						const summaryText = outcome.summary.trim();
+						const recoveryHint = await buildIsolationRecoveryHint(result, artifactsDir);
+						throw new ToolError(
+							`agent() isolated apply failed for ${result.id}${summaryText ? `: ${summaryText}` : ""}${recoveryHint}`,
+						);
+					}
+
+					const nestedSummary = await applyEligibleNestedPatches({
+						result,
+						repoRoot: isolationContext.repoRoot,
+						mergeMode,
+						changesApplied: outcome.changesApplied,
+						mergedBranchForNestedPatches: outcome.mergedBranchForNestedPatches,
+						commitMessage: buildCommitMessage(),
+					});
+					mergeSummary += nestedSummary;
+					if (structured && nestedSummary.trim()) {
+						const recoveryHint = await buildIsolationRecoveryHint(
+							{ ...result, patchPath: undefined, branchName: undefined },
+							artifactsDir,
+						);
+						throw new ToolError(
+							`agent() isolated nested patch apply failed for ${result.id}: ${plainIsolationSummary(nestedSummary)}${recoveryHint}`,
+						);
+					}
+				} else if (result.branchName) {
+					mergeSummary = `\n\nIsolation: changes captured on branch \`${result.branchName}\` (apply=false). Not merged.`;
+				} else if (result.patchPath) {
+					mergeSummary = `\n\nIsolation: changes captured at \`${result.patchPath}\` (apply=false). Not applied.`;
+				} else {
+					const nestedPatches = result.nestedPatches ?? [];
+					if (nestedPatches.length > 0) {
+						mergeSummary = `\n\nIsolation: changes captured for ${nestedPatches.length} nested repositor${nestedPatches.length === 1 ? "y" : "ies"} (apply=false). Not applied.`;
+					} else {
+						mergeSummary = "\n\nIsolation: no changes captured.";
+					}
+				}
+			}
+
+			// Clean up the temp artifacts dir we created for this call only when the
+			// caller will not need files from it later. Keep it when the runtime helper
+			// will return an `agent://` handle (the `.md`/`.jsonl` backing files live
+			// here) and on `apply=false` (`changesApplied === null`) where the caller
+			// consumes `details.patchPath` / `details.branchName` /
+			// `details.nestedPatches` out of band. Failed isolated applies throw
+			// earlier with a recovery hint, so they never reach this gate.
+			const shouldCleanupTempArtifacts =
+				tempArtifactsDir && !parsed.handle && (!isIsolated || changesApplied === true);
+			if (shouldCleanupTempArtifacts) {
+				await fs.rm(artifactsDir, { recursive: true, force: true });
+				unregisterArtifactsDir?.();
+			}
+
+			options.session.recordEvalSubagentUsage?.(result.usage?.output ?? 0);
+
+			return { result, mergeSummary, changesApplied };
+		},
+		{ deferExternalAbort: true },
+	);
 
 	return {
 		text: structured ? result.output : result.output + mergeSummary,

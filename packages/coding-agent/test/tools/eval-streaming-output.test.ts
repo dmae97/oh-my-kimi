@@ -4,14 +4,15 @@ import * as evalIndex from "@oh-my-pi/pi-coding-agent/eval";
 import type { EvalToolDetails } from "@oh-my-pi/pi-coding-agent/eval/types";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { EvalTool } from "@oh-my-pi/pi-coding-agent/tools/eval";
+import { formatOutputNotice } from "@oh-my-pi/pi-coding-agent/tools/output-meta";
 
-function makeSession(): ToolSession {
+function makeSession(settings = Settings.isolated()): ToolSession {
 	return {
 		cwd: "/tmp/eval-test",
 		hasUI: false,
 		getSessionFile: () => null,
 		getSessionSpawns: () => null,
-		settings: Settings.isolated(),
+		settings,
 	};
 }
 
@@ -83,5 +84,28 @@ describe("EvalTool live stdout streaming", () => {
 		expect(text).toContain("tick 2");
 		expect(result.details?.cells?.[0]?.status).toBe("complete");
 		expect(result.details?.cells?.[0]?.output).toContain("tick 2");
+	});
+
+	it("preserves the column-cap notice after rebuilding the final eval summary", async () => {
+		const settings = Settings.isolated();
+		settings.set("tools.outputMaxColumns", 8);
+		vi.spyOn(evalIndex.jsBackend, "execute").mockImplementation((async (
+			_code: string,
+			options: { onChunk?: (chunk: string) => void },
+		) => {
+			const output = "x".repeat(50);
+			options.onChunk?.(output);
+			return baseResult({ output });
+		}) as never);
+
+		const result = await new EvalTool(makeSession(settings)).execute(
+			"call-column-cap",
+			{ language: "js", code: "print('x'.repeat(50))" },
+			undefined,
+			undefined,
+		);
+
+		expect(result.details?.meta?.truncation).toBeUndefined();
+		expect(formatOutputNotice(result.details?.meta)).toContain("Some lines truncated to 8 chars");
 	});
 });

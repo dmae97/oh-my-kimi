@@ -25,5 +25,6 @@ pi-walker = { path = "../../pi-walker" }
 
 [dev-dependencies]
 tempfile = "3"
+parking_lot = "0.12"
 filetime = "0.2"
 

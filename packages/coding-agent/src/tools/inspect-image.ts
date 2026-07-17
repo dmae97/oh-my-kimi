@@ -157,8 +157,8 @@ export class InspectImageTool implements AgentTool<typeof inspectImageSchema, In
 
 		const activeModelPattern = this.session.getActiveModelString?.() ?? this.session.getModelString?.();
 		const model =
-			resolvePattern("pi/vision") ??
-			resolvePattern("pi/default") ??
+			resolvePattern("@vision") ??
+			resolvePattern("@default") ??
 			resolvePattern(activeModelPattern) ??
 			availableModels[0];
 		if (!model) {

@@ -25,14 +25,26 @@ function formatUsageAmount(limit: UsageLimit): string {
 }
 
 function formatUsageReportAccount(report: UsageReport, limit: UsageLimit, index: number): string {
+	const metaOrgName = report.metadata?.orgName;
+	const metaOrgId = report.metadata?.orgId;
+	const org =
+		typeof metaOrgName === "string" && metaOrgName
+			? metaOrgName
+			: typeof metaOrgId === "string" && metaOrgId
+				? metaOrgId
+				: undefined;
+	// Two subscriptions (orgs) can share one email — suffix the org so the rows
+	// are tellable apart.
 	const email = report.metadata?.email;
-	if (typeof email === "string" && email) return email;
+	if (typeof email === "string" && email) return org ? `${email} (${org})` : email;
 	// Guard metadata values for truthiness before using, then fall back to scope.
 	// ?? won't help here: empty string is not null/undefined, so it would suppress
 	// a valid scoped fallback (e.g. metadata.accountId="" hides limit.scope.accountId).
 	const metaAccountId = report.metadata?.accountId;
 	const accountId = typeof metaAccountId === "string" && metaAccountId ? metaAccountId : limit.scope.accountId;
-	if (typeof accountId === "string" && accountId) return accountId;
+	if (typeof accountId === "string" && accountId) {
+		return org && org !== accountId ? `${accountId} (${org})` : accountId;
+	}
 	const metaProjectId = report.metadata?.projectId;
 	const projectId = typeof metaProjectId === "string" && metaProjectId ? metaProjectId : limit.scope.projectId;
 	if (typeof projectId === "string" && projectId) return projectId;

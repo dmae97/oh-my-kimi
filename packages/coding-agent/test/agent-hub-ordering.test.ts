@@ -53,15 +53,14 @@ function makeHub(agents: AgentRegistry) {
 }
 
 function renderedAgentIds(hub: AgentHubOverlayComponent): string[] {
-	return hub
-		.render(120)
-		.map(line => Bun.stripANSI(line))
-		.map(line => line.split(" · "))
-		.filter(
-			parts =>
-				parts.length >= 4 && ["running", "idle", "parked", "aborted"].some(status => parts[0].endsWith(status)),
-		)
-		.map(parts => parts[1]!);
+	// Entry first lines are ` <cursor> <status-glyph> <id> …`; task lines are
+	// indented deeper and chrome lines never carry the cursor slot.
+	const ids: string[] = [];
+	for (const raw of hub.render(120)) {
+		const match = /^ (?:❯| ) (\S+) (\S+)/u.exec(Bun.stripANSI(raw));
+		if (match) ids.push(match[2]!);
+	}
+	return ids;
 }
 
 describe("Agent hub row ordering", () => {

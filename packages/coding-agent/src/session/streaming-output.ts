@@ -43,6 +43,8 @@ export interface OutputSummary {
 	columnDroppedBytes?: number;
 	/** Number of distinct lines that hit the per-line column cap. */
 	columnTruncatedLines?: number;
+	/** Configured per-line column cap in effect (chars), when > 0. */
+	columnMax?: number;
 	/** Artifact ID for internal URL access (artifact://<id>) when truncated */
 	artifactId?: string;
 }
@@ -735,6 +737,7 @@ export class OutputSink {
 	#truncated = false;
 	#lastChunkTime = 0;
 	#pendingChunk = "";
+	#pendingChunkTimer: Timer | undefined;
 
 	// Per-line column cap streaming state (persists across `push` calls so a
 	// long line split across chunks still trips the same trigger).
@@ -806,20 +809,18 @@ export class OutputSink {
 	push(chunk: string): void {
 		chunk = sanitizeWithOptionalSixelPassthrough(chunk, sanitizeText);
 
-		// Throttled onChunk: coalesce chunks arriving inside the throttle window
-		// and flush the buffered concatenation on the next eligible tick (plus a
-		// final flush in dump()) so the preview never has silent gaps.
+		// Throttled onChunk: coalesce chunks arriving inside the throttle window.
+		// A timer flushes quiet tails at the throttle boundary; dump() catches a
+		// final pending chunk when the process exits before that timer fires.
 		// Live preview gets the raw (pre-cap) chunk so the TUI never lags behind
 		// what reached the sink — the column cap is for the persisted LLM view.
 		if (this.#onChunk) {
 			const now = Date.now();
 			if (now - this.#lastChunkTime >= this.#chunkThrottleMs) {
-				this.#lastChunkTime = now;
-				const merged = this.#pendingChunk + chunk;
-				this.#pendingChunk = "";
-				this.#onChunk(merged);
+				this.#emitPendingChunkWith(chunk, now);
 			} else {
 				this.#pendingChunk += chunk;
+				this.#schedulePendingChunkFlush();
 			}
 		}
 
@@ -837,7 +838,6 @@ export class OutputSink {
 		const capped = this.#maxColumns > 0 ? this.#applyColumnCap(chunk) : chunk;
 		const cappedBytes = capped === chunk ? rawBytes : Buffer.byteLength(capped, "utf-8");
 		const cappedThisChunk = cappedBytes < rawBytes;
-		if (cappedThisChunk) this.#truncated = true;
 
 		// Mirror RAW chunk to the artifact file so the on-disk record is the full
 		// uncapped stream. Mirror triggers on: in-memory overflow OR this chunk's
@@ -1121,6 +1121,7 @@ export class OutputSink {
 	 * branch in `dump()` against stale totals.
 	 */
 	replace(text: string): void {
+		this.#clearPendingChunkTimer();
 		this.#buffer = text;
 		this.#bufferBytes = Buffer.byteLength(text, "utf-8");
 		this.#head = "";
@@ -1136,6 +1137,38 @@ export class OutputSink {
 		this.#columnDroppedBytes = 0;
 		this.#columnTruncatedLines = 0;
 		this.#pendingChunk = "";
+	}
+
+	#clearPendingChunkTimer(): void {
+		if (!this.#pendingChunkTimer) return;
+		clearTimeout(this.#pendingChunkTimer);
+		this.#pendingChunkTimer = undefined;
+	}
+
+	#emitPendingChunkWith(chunk: string, now: number): void {
+		this.#clearPendingChunkTimer();
+		this.#lastChunkTime = now;
+		const merged = this.#pendingChunk + chunk;
+		this.#pendingChunk = "";
+		this.#onChunk?.(merged);
+	}
+
+	#flushPendingChunk(): void {
+		if (this.#pendingChunk.length === 0) {
+			this.#clearPendingChunkTimer();
+			return;
+		}
+		this.#emitPendingChunkWith("", Date.now());
+	}
+
+	#schedulePendingChunkFlush(): void {
+		if (this.#chunkThrottleMs <= 0 || this.#pendingChunkTimer) return;
+		const elapsed = Date.now() - this.#lastChunkTime;
+		const delay = Math.max(0, this.#chunkThrottleMs - elapsed);
+		this.#pendingChunkTimer = setTimeout(() => {
+			this.#pendingChunkTimer = undefined;
+			this.#flushPendingChunk();
+		}, delay);
 	}
 
 	/**
@@ -1179,11 +1212,7 @@ export class OutputSink {
 
 		// Flush any chunk still held back by the throttle so the live preview
 		// ends with the complete stream.
-		if (this.#onChunk && this.#pendingChunk.length > 0) {
-			const pending = this.#pendingChunk;
-			this.#pendingChunk = "";
-			this.#onChunk(pending);
-		}
+		this.#flushPendingChunk();
 		const totalLines = this.#sawData ? this.#totalLines + 1 : 0;
 
 		if (this.#file) {
@@ -1248,6 +1277,7 @@ export class OutputSink {
 			elidedLines,
 			columnDroppedBytes: this.#columnDroppedBytes > 0 ? this.#columnDroppedBytes : undefined,
 			columnTruncatedLines: this.#columnTruncatedLines > 0 ? this.#columnTruncatedLines : undefined,
+			columnMax: this.#columnTruncatedLines > 0 ? this.#maxColumns : undefined,
 			artifactId: this.#file?.artifactId,
 		};
 	}

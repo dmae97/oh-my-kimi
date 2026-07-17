@@ -76,13 +76,10 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 		const registry = new ModelRegistry(authStorage, path.join(tempDir.path(), `models-${Bun.nanoseconds()}.yml`));
 		const initialModel = modelOrThrow(registry, "claude-sonnet-4-5");
 		const readTool = makeTool("read");
-		const resolveTool = makeTool("resolve");
-		// AgentSession requires a Map-typed tool registry; the harness needs both
-		// `read` (the initial active tool) and `resolve` (added on plan-mode entry).
-		const toolRegistry = new Map<string, AgentTool>([
-			[readTool.name, readTool],
-			[resolveTool.name, resolveTool],
-		]);
+		// AgentSession requires a Map-typed tool registry; `read` is the initial
+		// active tool. Plan approval is a `write` to xd://propose, so plan-mode
+		// entry only augments the built-in `write` tool when present.
+		const toolRegistry = new Map<string, AgentTool>([[readTool.name, readTool]]);
 		for (const tool of options.extraRegistryTools ?? []) {
 			toolRegistry.set(tool.name, tool);
 		}
@@ -101,7 +98,7 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 			settings,
 			modelRegistry: registry,
 			toolRegistry,
-			builtInToolNames: options.builtInToolNames ?? ["read", "resolve"],
+			builtInToolNames: options.builtInToolNames ?? ["read"],
 		});
 		session = createdSession;
 		mode = new InteractiveMode(createdSession, "test");
@@ -115,7 +112,7 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 
 		expect(created.planModeEnabled).toBe(true);
 		expect(session?.getPlanModeState()).toMatchObject({ enabled: true, planFilePath: "local://PLAN.md" });
-		expect(session?.getActiveToolNames()).toContain("resolve");
+		expect(session?.getActiveToolNames()).toContain("read");
 	});
 
 	it("activates write when entering plan mode even if it was hidden by discoveryMode (issue #3165)", async () => {
@@ -127,7 +124,7 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 		const writeTool = makeTool("write");
 		const created = createHarness(Settings.isolated({ "plan.defaultOnStartup": true, "compaction.enabled": false }), {
 			extraRegistryTools: [writeTool],
-			builtInToolNames: ["read", "resolve", "write"],
+			builtInToolNames: ["read", "write"],
 		});
 
 		expect(session?.getActiveToolNames()).not.toContain("write");
@@ -136,7 +133,6 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 
 		expect(created.planModeEnabled).toBe(true);
 		expect(session?.getActiveToolNames()).toContain("write");
-		expect(session?.getActiveToolNames()).toContain("resolve");
 	});
 
 	it("does not activate an extension-shadowed write tool in plan mode", async () => {
@@ -148,7 +144,6 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 		await created.init({ suppressWelcomeIntro: true });
 
 		expect(created.planModeEnabled).toBe(true);
-		expect(session?.getActiveToolNames()).toContain("resolve");
 		expect(session?.getActiveToolNames()).not.toContain("write");
 	});
 

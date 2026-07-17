@@ -20,12 +20,7 @@ import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import "@oh-my-pi/pi-coding-agent/tools/yield";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 
-const TEST_TASK: TaskParams = {
-	agent: "task",
-	id: "CheckLsp",
-	description: "Check LSP availability",
-	assignment: "Inspect LSP tools.",
-};
+const TEST_TASK: TaskParams = { agent: "task", name: "CheckLsp", task: "Inspect LSP tools." };
 
 function createAssistantStopMessage(text: string): AssistantMessage {
 	return {
@@ -64,6 +59,7 @@ function createYieldingSession(): AgentSession {
 			appendSessionInit: () => {},
 		},
 		getActiveToolNames: () => ["yield"],
+		getEnabledToolNames: () => ["yield"],
 		setActiveToolsByName: async () => {},
 		subscribe: (listener: (event: AgentSessionEvent) => void) => {
 			listeners.push(listener);
@@ -273,7 +269,7 @@ describe("subagent LSP availability", () => {
 			description: "Reviewer-like task agent",
 			systemPrompt: "Review with read-only specialty tools.",
 			source: "bundled",
-			tools: ["bash", "ast_grep", "report_finding", "memory_edit", "retain", "todo"],
+			tools: ["bash", "ast_grep", "memory_edit", "retain", "todo"],
 		});
 		const { getOptions } = mockCreateAgentSession();
 		const planMode = { enabled: true, planFilePath: "local://PLAN.md" };
@@ -283,7 +279,7 @@ describe("subagent LSP availability", () => {
 
 		const toolNames = getOptions()?.toolNames;
 		expect(getOptions()?.enableLsp).toBe(true);
-		expect(toolNames).toEqual(["read", "grep", "glob", "lsp", "web_search", "ast_grep", "report_finding", "irc"]);
+		expect(toolNames).toEqual(["read", "grep", "glob", "lsp", "web_search", "ast_grep", "hub"]);
 		expect(toolNames).not.toContain("bash");
 		expect(toolNames).not.toContain("memory_edit");
 		expect(toolNames).not.toContain("retain");

@@ -513,6 +513,43 @@ export function stripImagesFromMessage(message: AgentMessage): number {
 }
 
 /**
+ * Replace every `ImageContent` block in already-converted LLM {@link Message}s
+ * with a text placeholder, returning a new array only when something changed.
+ *
+ * Unlike {@link stripImagesFromMessage} (which mutates persisted `AgentMessage`s
+ * in place), this operates on the ephemeral provider-request view produced by
+ * {@link convertToLlm}, so history on disk keeps its images while the outbound
+ * request is scrubbed. Used to keep image blocks off the wire when the active
+ * model has no vision support (or `images.blockImages` is set) — e.g. after
+ * switching from a vision model to a text-only one mid-session (#5400).
+ *
+ * Consecutive placeholder texts collapse into one so a message that was nothing
+ * but images does not balloon into a run of identical notes.
+ */
+export function replaceLlmImagesWithText(messages: Message[], placeholder: string): Message[] {
+	let out: Message[] | undefined;
+	for (let i = 0; i < messages.length; i++) {
+		const msg = messages[i];
+		if (msg.role !== "user" && msg.role !== "developer" && msg.role !== "toolResult") continue;
+		const content = msg.content;
+		if (!Array.isArray(content) || !content.some(part => part.type === "image")) continue;
+		const replaced: (TextContent | ImageContent)[] = [];
+		for (const part of content) {
+			if (part.type !== "image") {
+				replaced.push(part);
+				continue;
+			}
+			const prev = replaced[replaced.length - 1];
+			if (prev?.type === "text" && prev.text === placeholder) continue;
+			replaced.push({ type: "text", text: placeholder });
+		}
+		if (out === undefined) out = messages.slice();
+		out[i] = { ...msg, content: replaced } as Message;
+	}
+	return out ?? messages;
+}
+
+/**
  * Message type for bash executions via the ! command.
  */
 export interface BashExecutionMessage {

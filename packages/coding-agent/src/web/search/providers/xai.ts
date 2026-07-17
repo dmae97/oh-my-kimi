@@ -1,5 +1,6 @@
 import { type ApiKey, type ApiKeyResolver, type AuthStorage, withAuth } from "@oh-my-pi/pi-ai";
 import { $env } from "@oh-my-pi/pi-utils";
+import { resolveXAIHttpTransport, type XAIHttpProvider, type XAIHttpTransport } from "../../../lib/xai-http";
 import type { SearchCitation, SearchResponse, SearchSource, SearchUsage } from "../../../web/search/types";
 import { SearchProviderError } from "../../../web/search/types";
 import { clampNumResults } from "../utils";
@@ -7,7 +8,7 @@ import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
 import { classifyProviderHttpError, withHardTimeout } from "./utils";
 
-const XAI_RESPONSES_URL = "https://api.x.ai/v1/responses";
+const XAI_DEFAULT_BASE_URL = "https://api.x.ai/v1";
 const XAI_WEB_SEARCH_MODEL = "grok-4.3";
 const DEFAULT_NUM_RESULTS = 10;
 const MAX_NUM_RESULTS = 30;
@@ -75,10 +76,12 @@ async function postXAIResponses(
 	apiKey: string,
 	params: SearchParams,
 	body: Record<string, unknown>,
+	transport: XAIHttpTransport,
 ): Promise<Response> {
-	return (params.fetch ?? fetch)(XAI_RESPONSES_URL, {
+	return (params.fetch ?? fetch)(`${transport.baseURL.replace(/\/+$/, "")}/responses`, {
 		method: "POST",
 		headers: {
+			...transport.headers,
 			"Content-Type": "application/json",
 			Authorization: `Bearer ${apiKey}`,
 		},
@@ -93,9 +96,13 @@ function throwXAIResponsesError(status: number, errorText: string): never {
 	throw new SearchProviderError("xai", `xAI Responses API error (${status}): ${errorText}`, status);
 }
 
-async function callXAIResponses(apiKey: string, params: SearchParams): Promise<XAIResponsesResponse> {
+async function callXAIResponses(
+	apiKey: string,
+	params: SearchParams,
+	transport: XAIHttpTransport,
+): Promise<XAIResponsesResponse> {
 	const requestBody = buildRequestBody(params);
-	const response = await postXAIResponses(apiKey, params, requestBody);
+	const response = await postXAIResponses(apiKey, params, requestBody, transport);
 
 	if (!response.ok) {
 		throwXAIResponsesError(response.status, await response.text());
@@ -235,19 +242,24 @@ function shouldPreferXAIOAuth(authStorage: AuthStorage): boolean {
 	return true;
 }
 
-function resolveXAIWebSearchApiKey(params: SearchParams): ApiKeyResolver {
+interface XAIWebSearchAuth {
+	provider: XAIHttpProvider;
+	keyOrResolver: ApiKey;
+}
+
+function resolveXAIWebSearchAuth(params: SearchParams): XAIWebSearchAuth {
 	const xaiResolver = params.authStorage.resolver("xai", {
 		sessionId: params.sessionId,
 	});
 	const xaiOAuthOrigin = params.authStorage.getCredentialOrigin("xai-oauth");
 	if (!shouldPreferXAIOAuth(params.authStorage)) {
-		return xaiResolver;
+		return { provider: "xai", keyOrResolver: xaiResolver };
 	}
 
 	const xaiOAuthResolver = params.authStorage.resolver("xai-oauth", {
 		sessionId: params.sessionId,
 	});
-	return async ctx => {
+	const keyOrResolver: ApiKeyResolver = async ctx => {
 		const xaiOAuthKey = await xaiOAuthResolver(ctx);
 		if (xaiOAuthKey) {
 			const borrowedSharedEnvKey =
@@ -259,14 +271,33 @@ function resolveXAIWebSearchApiKey(params: SearchParams): ApiKeyResolver {
 		}
 		return xaiResolver(ctx);
 	};
+	return { provider: "xai-oauth", keyOrResolver };
 }
 
 /** Execute xAI Responses API web search. */
 export async function searchXAI(params: SearchParams): Promise<SearchResponse> {
-	const keyOrResolver: ApiKey = resolveXAIWebSearchApiKey(params);
+	const auth = resolveXAIWebSearchAuth(params);
+	const transport = params.modelRegistry
+		? resolveXAIHttpTransport(params.modelRegistry, auth.provider, XAI_WEB_SEARCH_MODEL)
+		: { baseURL: XAI_DEFAULT_BASE_URL };
+	const customEndpoint = transport.baseURL.replace(/\/+$/, "") !== XAI_DEFAULT_BASE_URL;
+	const credentialOrigin = params.authStorage.getCredentialOrigin(auth.provider);
+	if (
+		customEndpoint &&
+		auth.provider === "xai-oauth" &&
+		(credentialOrigin?.kind === "oauth" || credentialOrigin?.kind === "env")
+	) {
+		throw new SearchProviderError(
+			"xai",
+			`Refusing to send official xAI OAuth credentials to custom endpoint ${transport.baseURL}. Configure an API key for provider "xai-oauth".`,
+		);
+	}
+	const keyOrResolver: ApiKey = customEndpoint
+		? params.authStorage.resolver(auth.provider, { sessionId: params.sessionId })
+		: auth.keyOrResolver;
 
 	const resultCap = clampNumResults(params.numSearchResults ?? params.limit, DEFAULT_NUM_RESULTS, MAX_NUM_RESULTS);
-	const response = await withAuth(keyOrResolver, (key: string) => callXAIResponses(key, params), {
+	const response = await withAuth(keyOrResolver, (key: string) => callXAIResponses(key, params, transport), {
 		signal: params.signal,
 		missingKeyMessage: 'xAI credentials not found. Set XAI_API_KEY or configure an API key for provider "xai".',
 	});

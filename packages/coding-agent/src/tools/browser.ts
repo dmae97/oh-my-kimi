@@ -199,7 +199,7 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 				case "open":
 					return await this.#open(name, params, details, timeoutMs, signal);
 				case "close":
-					return await this.#close(name, params, details, signal);
+					return await this.#close(name, params, details, timeoutMs, signal);
 				case "run":
 					return await this.#run(name, params, details, timeoutMs, signal);
 				default:
@@ -284,15 +284,16 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 		name: string,
 		params: BrowserParams,
 		details: BrowserToolDetails,
+		timeoutMs: number,
 		signal?: AbortSignal,
 	): Promise<AgentToolResult<BrowserToolDetails>> {
 		const kill = !!params.kill;
 		if (params.all) {
-			const count = await untilAborted(signal, () => releaseAllTabs({ kill }));
+			const count = await untilAborted(signal, () => releaseAllTabs({ kill, timeoutMs }));
 			details.result = `Closed ${count} tab(s)`;
 			return toolResult(details).text(details.result).done();
 		}
-		const closed = await untilAborted(signal, () => releaseTab(name, { kill }));
+		const closed = await untilAborted(signal, () => releaseTab(name, { kill, timeoutMs }));
 		details.result = closed ? `Closed tab ${JSON.stringify(name)}` : `No tab named ${JSON.stringify(name)}`;
 		return toolResult(details).text(details.result).done();
 	}

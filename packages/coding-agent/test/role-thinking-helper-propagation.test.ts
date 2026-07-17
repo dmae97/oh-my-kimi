@@ -39,7 +39,7 @@ describe("role thinking helper propagation", () => {
 		const model = getModelOrThrow("claude-sonnet-4-5");
 		const settings = createSettings({
 			default: `${model.provider}/${model.id}:high`,
-			smol: "pi/default:minimal",
+			smol: "@default:minimal",
 		});
 		const registry = {
 			getAvailable: () => [model],
@@ -85,7 +85,7 @@ describe("role thinking helper propagation", () => {
 		const model = getModelOrThrow("claude-sonnet-4-5");
 		const settings = createSettings({
 			default: `${model.provider}/${model.id}:high`,
-			smol: "pi/default:low",
+			smol: "@default:low",
 		});
 		const registry = {
 			getAvailable: () => [model],

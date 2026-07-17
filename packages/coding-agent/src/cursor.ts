@@ -93,6 +93,7 @@ async function executeTool(
 		result = buildToolErrorResult(message);
 		isError = true;
 	}
+	isError ||= result.isError === true;
 
 	const sanitizedFinalResult: AgentToolResult<unknown> = {
 		content: result.content.map(c => (c.type === "text" ? { ...c, text: sanitizeText(c.text) } : c)),
@@ -283,6 +284,7 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 			result = buildToolErrorResult(message);
 			isError = true;
 		}
+		isError ||= result.isError === true;
 
 		// onUpdate may not fire for every chunk — flush any remaining output
 		// from the final result that wasn't already streamed.

@@ -122,7 +122,9 @@ def locate_phrase(chunk: str, phrase: str) -> tuple[int, int] | None:
     return None
 
 
-def merge_bands(bands: list[tuple[int, int]], max_row: int, pad: int) -> list[tuple[int, int]]:
+def merge_bands(
+    bands: list[tuple[int, int]], max_row: int, pad: int
+) -> list[tuple[int, int]]:
     """Pad by `pad`, clamp to [1, max_row], merge overlapping/adjacent bands."""
     padded = sorted((max(1, a - pad), min(max_row, b + pad)) for a, b in bands)
     merged: list[tuple[int, int]] = []
@@ -134,10 +136,14 @@ def merge_bands(bands: list[tuple[int, int]], max_row: int, pad: int) -> list[tu
     return merged
 
 
-def zoom_renders(chunk_text: str, bands: list[tuple[int, int]], arch_cols: int) -> list[tuple[tuple[int, int], Path]]:
+def zoom_renders(
+    chunk_text: str, bands: list[tuple[int, int]], arch_cols: int
+) -> list[tuple[tuple[int, int], Path]]:
     """Slice each band's rows from the chunk and render at ZOOM_FONT; oversized bands split."""
     zcfg = FONTS[ZOOM_FONT]
-    max_rows = capacity(zcfg, ZOOM_SIZES[-1])[2] // arch_cols  # archive rows per zoom page
+    max_rows = (
+        capacity(zcfg, ZOOM_SIZES[-1])[2] // arch_cols
+    )  # archive rows per zoom page
     out = []
     for a, b in bands:
         pieces = [(s, min(s + max_rows - 1, b)) for s in range(a, b + 1, max_rows)]
@@ -145,7 +151,10 @@ def zoom_renders(chunk_text: str, bands: list[tuple[int, int]], arch_cols: int) 
             txt = chunk_text[(pa - 1) * arch_cols : pb * arch_cols]
             if not txt.strip():
                 continue
-            size = next((s for s in ZOOM_SIZES if capacity(zcfg, s)[2] >= len(txt)), ZOOM_SIZES[-1])
+            size = next(
+                (s for s in ZOOM_SIZES if capacity(zcfg, s)[2] >= len(txt)),
+                ZOOM_SIZES[-1],
+            )
             png = CACHE / f"exp08-zoom-{ZOOM_FONT}-{size}-{sha8(txt)}.png"
             if not png.exists() or png.stat().st_size == 0:
                 atomic_png(render(txt, zcfg, CACHE, size, "bw"), png)
@@ -153,10 +162,20 @@ def zoom_renders(chunk_text: str, bands: list[tuple[int, int]], arch_cols: int) 
     return out
 
 
-def run_cell_chunk(model: str, cond: str, start: int, end: int, ctx: dict) -> list[dict]:
+def run_cell_chunk(
+    model: str, cond: str, start: int, end: int, ctx: dict
+) -> list[dict]:
     """One (model, condition, chunk): archive QA turn, optional zoom turn, merge, score."""
-    args, flow, paras, offsets, keys = ctx["args"], ctx["flow"], ctx["paras"], ctx["offsets"], ctx["keys"]
-    questions = squad.sample_chunk_questions(paras, offsets, start, end, args.qpc, args.seed)
+    args, flow, paras, offsets, keys = (
+        ctx["args"],
+        ctx["flow"],
+        ctx["paras"],
+        ctx["offsets"],
+        ctx["keys"],
+    )
+    questions = squad.sample_chunk_questions(
+        paras, offsets, start, end, args.qpc, args.seed
+    )
     if not questions:
         return []
     chunk_text = flow[start:end]
@@ -165,7 +184,10 @@ def run_cell_chunk(model: str, cond: str, start: int, end: int, ctx: dict) -> li
     cfg = FONTS[ARCHIVE_FONT]
     cols, rows, _ = capacity(cfg, args.size)
 
-    png = CACHE / f"exp08-arch-{ARCHIVE_FONT}-{variant}-{sha8(chunk_text, str(args.size))}.png"
+    png = (
+        CACHE
+        / f"exp08-arch-{ARCHIVE_FONT}-{variant}-{sha8(chunk_text, str(args.size))}.png"
+    )
     if not png.exists() or png.stat().st_size == 0:
         atomic_png(render(chunk_text, cfg, CACHE, args.size, variant), png)
 
@@ -181,9 +203,21 @@ def run_cell_chunk(model: str, cond: str, start: int, end: int, ctx: dict) -> li
         }
     ]
     qa1 = cached(
-        model, "exp08-qa1", {"messages": messages, "effort": args.effort},
-        lambda: dict(zip(("text", "usage", "stop"),
-                         llm_complete(keys, model, messages, max_tokens=args.max_tokens, effort=args.effort))),
+        model,
+        "exp08-qa1",
+        {"messages": messages, "effort": args.effort},
+        lambda: dict(
+            zip(
+                ("text", "usage", "stop"),
+                llm_complete(
+                    keys,
+                    model,
+                    messages,
+                    max_tokens=args.max_tokens,
+                    effort=args.effort,
+                ),
+            )
+        ),
         args.fresh,
     )
     usage_rows = [("qa1", qa1["usage"])]
@@ -196,11 +230,15 @@ def run_cell_chunk(model: str, cond: str, start: int, end: int, ctx: dict) -> li
             m = _ZOOM_PHRASE.search(a)
             text = m.group(1) if m else None
             if text is None and re.search(r"(?i)\bzoom\b", a) and not parse_zoom(a):
-                text = re.sub(r"(?i)^.*?\bzoom\b[:\s]*", "", a).strip("\"'\u201c\u201d ")
+                text = re.sub(r"(?i)^.*?\bzoom\b[:\s]*", "", a).strip(
+                    "\"'\u201c\u201d "
+                )
             if text and len(text.split()) >= 2:
                 anchor = text
                 span = locate_phrase(chunk_text, anchor)
-                zoom_req.append((span[0] // cols + 1, span[1] // cols + 1) if span else None)
+                zoom_req.append(
+                    (span[0] // cols + 1, span[1] // cols + 1) if span else None
+                )
             elif re.search(r"(?i)\bzoom\b", a):
                 zoom_req.append(parse_zoom(a))  # rows fallback
             else:
@@ -222,15 +260,29 @@ def run_cell_chunk(model: str, cond: str, start: int, end: int, ctx: dict) -> li
         for (a, b), zpng in zooms:
             z_content.append({"text": f"Zoom of archive rows {a}-{b}:"})
             z_content.append({"image_path": zpng})
-        z_content.append({"text": "\n".join(f"{i + 1}. {questions[i]['q']}" for i in pending)})
+        z_content.append(
+            {"text": "\n".join(f"{i + 1}. {questions[i]['q']}" for i in pending)}
+        )
         messages2 = messages + [
             {"role": "assistant", "content": [{"text": qa1["text"]}]},
             {"role": "user", "content": z_content},
         ]
         qa2 = cached(
-            model, "exp08-qa2", {"messages": messages2, "effort": args.effort},
-            lambda: dict(zip(("text", "usage", "stop"),
-                             llm_complete(keys, model, messages2, max_tokens=args.max_tokens, effort=args.effort))),
+            model,
+            "exp08-qa2",
+            {"messages": messages2, "effort": args.effort},
+            lambda: dict(
+                zip(
+                    ("text", "usage", "stop"),
+                    llm_complete(
+                        keys,
+                        model,
+                        messages2,
+                        max_tokens=args.max_tokens,
+                        effort=args.effort,
+                    ),
+                )
+            ),
             args.fresh,
         )
         usage_rows.append(("qa2", qa2["usage"]))
@@ -265,7 +317,9 @@ def run_cell_chunk(model: str, cond: str, start: int, end: int, ctx: dict) -> li
 
 def _phase_cost(us: list[dict], price_in: float, price_out: float) -> float:
     tok = {k: sum(u.get(k, 0) for u in us) for k in ("in", "out", "cache_w", "cache_r")}
-    return (tok["in"] + 1.25 * tok["cache_w"] + 0.1 * tok["cache_r"]) / 1e6 * price_in + tok["out"] / 1e6 * price_out
+    return (
+        tok["in"] + 1.25 * tok["cache_w"] + 0.1 * tok["cache_r"]
+    ) / 1e6 * price_in + tok["out"] / 1e6 * price_out
 
 
 def aggregate(records: list[dict], price_in: float, price_out: float) -> dict:
@@ -274,11 +328,20 @@ def aggregate(records: list[dict], price_in: float, price_out: float) -> dict:
     mean_f1 = sum(f1s) / n
     se = (sum((x - mean_f1) ** 2 for x in f1s) / (n * (n - 1))) ** 0.5 if n > 1 else 0.0
     us = [u for r in records if "usage" in r for u in r["usage"]]
-    tok = {k: sum(u.get(k, 0) for u in us) for k in ("in", "out", "cache_w", "cache_r", "reasoning")}
-    cost_in = (tok["in"] + 1.25 * tok["cache_w"] + 0.1 * tok["cache_r"]) / 1e6 * price_in
+    tok = {
+        k: sum(u.get(k, 0) for u in us)
+        for k in ("in", "out", "cache_w", "cache_r", "reasoning")
+    }
+    cost_in = (
+        (tok["in"] + 1.25 * tok["cache_w"] + 0.1 * tok["cache_r"]) / 1e6 * price_in
+    )
     cost_out = tok["out"] / 1e6 * price_out
     zoomed = sum(r["zoomed"] for r in records)
-    zoom_chunks = sum(1 for r in records if "usage" in r and any(u["phase"] == "qa2" for u in r["usage"]))
+    zoom_chunks = sum(
+        1
+        for r in records
+        if "usage" in r and any(u["phase"] == "qa2" for u in r["usage"])
+    )
     return {
         "n": n,
         "em": sum(r["em"] for r in records) / n,
@@ -293,7 +356,9 @@ def aggregate(records: list[dict], price_in: float, price_out: float) -> dict:
         "cost_in_usd": round(cost_in, 4),
         "cost_out_usd": round(cost_out, 4),
         "cost_usd": round(cost_in + cost_out, 4),
-        "cost_zoom_usd": round(_phase_cost([u for u in us if u["phase"] == "qa2"], price_in, price_out), 4),
+        "cost_zoom_usd": round(
+            _phase_cost([u for u in us if u["phase"] == "qa2"], price_in, price_out), 4
+        ),
     }
 
 
@@ -332,17 +397,30 @@ def main() -> None:
     for length in lengths:
         paras = all_paras[:length]
         flow, offsets = squad.build_flow(paras)
-        ctx = {"args": args, "flow": flow, "paras": paras, "offsets": offsets, "keys": keys, "length": length}
+        ctx = {
+            "args": args,
+            "flow": flow,
+            "paras": paras,
+            "offsets": offsets,
+            "keys": keys,
+            "length": length,
+        }
         for model in models:
             for cond in conditions:
                 for start in range(0, len(flow), budget):
-                    tasks.append((model, cond, start, min(start + budget, len(flow)), ctx))
-    print(f"grid: {len(models)} models x {len(lengths)} lengths x {len(conditions)} conditions = {len(tasks)} chunk tasks")
+                    tasks.append(
+                        (model, cond, start, min(start + budget, len(flow)), ctx)
+                    )
+    print(
+        f"grid: {len(models)} models x {len(lengths)} lengths x {len(conditions)} conditions = {len(tasks)} chunk tasks"
+    )
 
     records: list[dict] = []
     done = 0
     with ThreadPoolExecutor(args.workers) as pool:
-        futures = [pool.submit(run_cell_chunk, m, c, s, e, ctx) for m, c, s, e, ctx in tasks]
+        futures = [
+            pool.submit(run_cell_chunk, m, c, s, e, ctx) for m, c, s, e, ctx in tasks
+        ]
         for fut in futures:
             records.extend(fut.result())
             done += 1
@@ -356,10 +434,21 @@ def main() -> None:
     for model in models:
         for length in lengths:
             for cond in conditions:
-                sub = [r for r in records if r["model"] == model and r["length"] == length and r["cond"] == cond]
+                sub = [
+                    r
+                    for r in records
+                    if r["model"] == model
+                    and r["length"] == length
+                    and r["cond"] == cond
+                ]
                 if not sub:
                     continue
-                cell = {"model": model, "length": length, "condition": cond, **aggregate(sub, *MODELS[model])}
+                cell = {
+                    "model": model,
+                    "length": length,
+                    "condition": cond,
+                    **aggregate(sub, *MODELS[model]),
+                }
                 base = BASELINE.get((model, length))
                 if base:
                     cell["base_f1"] = base[0]
@@ -367,7 +456,9 @@ def main() -> None:
                     cell["d_f1"] = round(cell["f1"] - base[0], 4)
                     cell["d_cost_usd"] = round(cell["cost_usd"] - base[2], 4)
                 cells.append(cell)
-    (out_dir / "summary.json").write_text(json.dumps({"args": vars(args), "cells": cells}, indent=1))
+    (out_dir / "summary.json").write_text(
+        json.dumps({"args": vars(args), "cells": cells}, indent=1)
+    )
     with (out_dir / "matrix.csv").open("w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=list(cells[0].keys()))
         writer.writeheader()
@@ -384,5 +475,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-

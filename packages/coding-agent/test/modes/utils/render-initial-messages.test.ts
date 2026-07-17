@@ -11,7 +11,7 @@
  * scrollback-clearing repaint (`clearTerminalHistory`).
  */
 
-import { afterEach, beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Usage } from "@oh-my-pi/pi-ai";
 import { kStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
@@ -26,6 +26,13 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 
 beforeAll(() => {
 	initTheme();
+});
+
+beforeEach(async () => {
+	// afterEach resets Settings, but renderInitialMessages reads the global
+	// Settings (display.collapseCompacted) — re-init before every test.
+	resetSettingsForTest();
+	await Settings.init({ inMemory: true });
 });
 
 const originalImageProtocol = TERMINAL.imageProtocol;
@@ -43,8 +50,6 @@ function makeEmptyContext(): SessionContext {
 		serviceTier: undefined,
 		models: {},
 		injectedTtsrRules: [],
-		selectedMCPToolNames: [],
-		hasPersistedMCPToolSelection: false,
 		mode: "none",
 	};
 }
@@ -62,7 +67,7 @@ function makeCtx(): {
 
 	const ctx = {
 		chatContainer: { clear: vi.fn(), addChild: vi.fn() },
-		pendingMessagesContainer: { clear: vi.fn() },
+		pendingMessagesContainer: { clear: vi.fn(), disposeChildren: vi.fn() },
 		pendingBashComponents: [],
 		pendingPythonComponents: [],
 		session: { buildTranscriptSessionContext: transcriptSpy },
@@ -145,7 +150,9 @@ function makeRenderCtx(transcript: SessionContext): { ctx: InteractiveModeContex
 		updateEditorTopBorder: vi.fn(),
 		ui: { requestRender: vi.fn(), imageBudget: undefined },
 		resetTranscript: () => chatContainer.clear(),
-		settings: { get: () => false },
+		// Rebuild paths honor terminal.showImages since the native-image work;
+		// keep it on so the image-replay contracts below stay meaningful.
+		settings: { get: (key: string) => key === "terminal.showImages" },
 		toolOutputExpanded: false,
 		hideThinkingBlock: false,
 		focusedAgentId: undefined,

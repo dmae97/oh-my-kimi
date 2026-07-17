@@ -35,7 +35,7 @@ export interface ModelManagerOptions<TApi extends Api = Api, TModelsDevPayload =
 	cacheDbPath?: string;
 	/** Optional provider id override for cache namespacing. Defaults to providerId. */
 	cacheProviderId?: string;
-	/** Maximum cache age in milliseconds before considered stale. Default: 24h. */
+	/** Maximum cache age in milliseconds before considered stale. Default: 2h (`DEFAULT_CACHE_TTL_MS`). */
 	cacheTtlMs?: number;
 	/** When true, a successful dynamic fetch is the complete provider catalog and prunes static-only models. */
 	dynamicModelsAuthoritative?: boolean;
@@ -152,8 +152,9 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 	const dynamicFetchSucceeded = fetchedDynamicModels !== null;
 	const cacheModels = dynamicFetchSucceeded
 		? []
-		: dropCachedModelIdsOnStaticMismatch(
+		: prepareCacheModelsForStaticMismatch(
 				normalizeModelList<TApi>(cache?.models ?? []),
+				staticModels,
 				cacheFingerprintMatches,
 				options.dropCachedModelIdsOnStaticMismatch,
 			);
@@ -188,8 +189,9 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 				collapseBuiltModelVariants(
 					mergeDynamicModels(
 						mergeModelSources(staticModels, modelsDevModels),
-						dropCachedModelIdsOnStaticMismatch(
+						prepareCacheModelsForStaticMismatch(
 							normalizeModelList<TApi>(latestCache?.models ?? cache?.models ?? []),
+							staticModels,
 							cacheFingerprintMatches,
 							options.dropCachedModelIdsOnStaticMismatch,
 						),
@@ -260,16 +262,29 @@ function shouldFetchRemoteSources(
 	return false;
 }
 
-function dropCachedModelIdsOnStaticMismatch<TApi extends Api>(
+function prepareCacheModelsForStaticMismatch<TApi extends Api>(
 	models: readonly Model<TApi>[],
+	staticModels: readonly Model<TApi>[],
 	cacheFingerprintMatches: boolean,
 	ids: readonly string[] | undefined,
 ): Model<TApi>[] {
-	if (cacheFingerprintMatches || ids === undefined || ids.length === 0 || models.length === 0) {
-		return models.length === 0 ? [] : [...models];
+	if (models.length === 0) {
+		return [];
 	}
-	const droppedIds = new Set(ids);
-	return models.filter(model => !droppedIds.has(model.id));
+	if (cacheFingerprintMatches) {
+		return [...models];
+	}
+
+	const droppedIds = ids && ids.length > 0 ? new Set(ids) : undefined;
+	const staticIds = staticModels.length > 0 ? new Set(staticModels.map(model => model.id)) : undefined;
+	const sanitizedModels: Model<TApi>[] = [];
+	for (const model of models) {
+		if (droppedIds?.has(model.id)) {
+			continue;
+		}
+		sanitizedModels.push(staticIds?.has(model.id) ? { ...model, contextWindow: null, maxTokens: null } : model);
+	}
+	return sanitizedModels;
 }
 
 function mergeModelSources<TApi extends Api>(...sources: readonly (readonly Model<TApi>[])[]): Model<TApi>[] {
@@ -351,11 +366,14 @@ function fingerprintStatic<TApi extends Api>(
 function mergeDynamicModel<TApi extends Api>(existingModel: Model<TApi>, dynamicModel: Model<TApi>): Model<TApi> {
 	// When discovery resolves the same model id to a different endpoint (e.g.
 	// a GitHub Copilot business/enterprise host), the bundled reference's
-	// capabilities are pinned to the canonical host and no longer apply —
-	// honour the dynamic value alone. Same-endpoint merges still OR-upgrade so
-	// a discovery that omits the capability flag doesn't drop bundled vision.
+	// capabilities are pinned to another endpoint and no longer apply. Copilot
+	// dynamic discovery also pre-applies the correct image fallback for omitted
+	// `supports.vision`, so its explicit `false` must not be OR-upgraded by the
+	// canonical bundled model.
 	const endpointChanged = existingModel.baseUrl !== dynamicModel.baseUrl;
-	const supportsImage = endpointChanged
+	const dynamicInputAuthoritative =
+		endpointChanged || (existingModel.provider === "github-copilot" && dynamicModel.provider === "github-copilot");
+	const supportsImage = dynamicInputAuthoritative
 		? dynamicModel.input.includes("image")
 		: existingModel.input.includes("image") || dynamicModel.input.includes("image");
 	// Re-build from spec stage: sparse compat comes from `compatConfig` (the

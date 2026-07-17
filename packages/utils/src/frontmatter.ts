@@ -149,12 +149,25 @@ export function parseFrontmatter(
 			throw err;
 		}
 
-		// Simple YAML parsing - just key: value pairs
+		// Simple key: value fallback. Reparse each value on its own so one
+		// malformed line (e.g. `scope: "text","thinking"`) can't leave sibling
+		// values wrapped in literal quotes; values that don't parse as YAML fall
+		// back to the raw trimmed string (issue #4796).
 		for (const line of metadata.split("\n")) {
 			const match = line.match(/^([\w-]+):\s*(.*)$/);
-			if (match) {
-				frontmatter[match[1]] = match[2].trim();
+			if (!match) continue;
+			const raw = match[2].trim();
+			let value: unknown = raw;
+			if (raw.length > 0) {
+				try {
+					const parsed = YAML.parse(raw);
+					if (parsed !== null && typeof parsed !== "object") value = parsed;
+					else if (Array.isArray(parsed)) value = parsed;
+				} catch {
+					// keep the raw string
+				}
 			}
+			frontmatter[match[1]] = value;
 		}
 
 		return { frontmatter: normalizeKeys(frontmatter) as Record<string, unknown>, body };
