@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a structured log sink API to the centralized logger (`registerLogSink`, `LogEvent`, `LogLevel`) so out-of-band consumers (e.g. OpenTelemetry log export) receive every `error`/`warn`/`info`/`debug` event after the local transport path runs, without disturbing existing file/console logging ([#4604](https://github.com/can1357/oh-my-pi/issues/4604)).
 ### Fixed
 
 - Fixed fatal cleanup failing to reach `process.exit()` when terminal stderr is revoked, and isolated rotating log files/audit state per process to prevent concurrent OMP instances from racing compression and rotation ([#5716](https://github.com/can1357/oh-my-pi/issues/5716)).
