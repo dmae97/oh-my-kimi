@@ -5,6 +5,7 @@
 ### Fixed
 
 - Automatically invalidate and rotate OAuth credentials when an "invalidated oauth token" error occurs
+- Fixed Anthropic usage reports treating the organization response header as the account identity, which caused the 5h/7d status-line segment to disappear for OAuth credentials without stored organization metadata. ([#5698](https://github.com/can1357/oh-my-pi/issues/5698))
 
 ## [17.0.1] - 2026-07-16
 
