@@ -385,17 +385,17 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 	async generateAuthUrl(state: string, redirectUri: string): Promise<{ url: string; instructions?: string }> {
 		if (!this.#resolvedClientId) {
 			await this.#tryRegisterClient(redirectUri);
-			// A definitive DCR rejection — the endpoint returned a 4xx client
-			// error such as 403 unapproved_client — proves the provider requires a
-			// registered client_id and none could be obtained, so block before
-			// probing or launching a clientless authorization URL (issue #5852).
-			// Transport failures (status 0) and 5xx responses are non-definitive:
-			// the DCR endpoint may be temporarily unavailable while a clientless
-			// authorization flow still works, so fall through to
-			// #assertClientIdNotRequired, which permits providers that accept an
-			// authorization request without a client_id.
-			const failure = this.#registrationFailure;
-			if (!this.#resolvedClientId && failure && failure.status >= 400 && failure.status < 500) {
+			// A definitive DCR rejection — the endpoint returned a non-retryable
+			// 4xx client error such as 403 unapproved_client — proves the provider
+			// requires a registered client_id and none could be obtained, so block
+			// before probing or launching a clientless authorization URL (issue
+			// #5852). Transport failures (status 0), 5xx responses, and retryable
+			// 4xx statuses (408/425/429) are non-definitive: the DCR endpoint may
+			// be temporarily unavailable while a clientless authorization flow
+			// still works, so fall through to #assertClientIdNotRequired, which
+			// permits providers that accept an authorization request without a
+			// client_id.
+			if (!this.#resolvedClientId && this.#isDefinitiveRegistrationRejection()) {
 				throw this.#missingClientIdError();
 			}
 		}
@@ -702,6 +702,22 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 			}
 			// Ignore network/probe failures to avoid blocking flows that still work.
 		}
+	}
+
+	/**
+	 * Whether the recorded DCR failure definitively proves the provider requires
+	 * a registered `client_id`. True only for non-retryable 4xx client errors
+	 * (e.g. 403 unapproved_client). Transport failures (status 0), 5xx server
+	 * errors, and retryable 4xx statuses (408 Request Timeout, 425 Too Early,
+	 * 429 Too Many Requests) are transient — the caller should fall back to the
+	 * clientless authorization probe rather than fail the login. See issue #5852.
+	 */
+	#isDefinitiveRegistrationRejection(): boolean {
+		const failure = this.#registrationFailure;
+		if (!failure) return false;
+		const { status } = failure;
+		if (status < 400 || status >= 500) return false;
+		return status !== 408 && status !== 425 && status !== 429;
 	}
 
 	/**

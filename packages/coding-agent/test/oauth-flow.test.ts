@@ -731,6 +731,38 @@ describe("mcp oauth flow", () => {
 		expect(authorizationProbes).toBe(1);
 	});
 
+	// Issue #5852 review: a retryable 4xx DCR response (429 rate limit) is
+	// transient, not proof that a client_id is required. It must fall through to
+	// the clientless authorization probe instead of failing the login.
+	it("keeps the clientless authorization fallback when DCR is rate limited", async () => {
+		let authorizationProbes = 0;
+		const fetchImpl: FetchImpl = async input => {
+			const url = String(input);
+			if (url === "https://provider.example/oauth/register") {
+				return new Response("slow down", { status: 429 });
+			}
+			if (url.startsWith("https://provider.example/authorize?")) {
+				authorizationProbes += 1;
+				return new Response("ok", { status: 200 });
+			}
+			throw new Error(`Unexpected fetch: ${url}`);
+		};
+		const flow = new MCPOAuthFlow(
+			{
+				authorizationUrl: "https://provider.example/authorize",
+				tokenUrl: "https://provider.example/token",
+				registrationUrl: "https://provider.example/oauth/register",
+				fetch: fetchImpl,
+			},
+			{},
+		);
+
+		const { url } = await flow.generateAuthUrl("state", "http://127.0.0.1:53193/callback");
+
+		expect(new URL(url).searchParams.has("client_id")).toBe(false);
+		expect(authorizationProbes).toBe(1);
+	});
+
 	it("names the missing-DCR case when no registration endpoint is advertised", async () => {
 		const fetchImpl: FetchImpl = async input => {
 			const url = String(input);
