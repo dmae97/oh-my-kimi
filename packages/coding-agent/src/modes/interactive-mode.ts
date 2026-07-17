@@ -2345,10 +2345,15 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 
+		const planModeState = this.session.getPlanModeState();
 		this.session.setPlanModeState(undefined);
-		const previousTools = this.#planModePreviousTools;
-		if (previousTools && previousTools.length > 0) {
-			await this.session.setActiveToolsByName(previousTools);
+		try {
+			if (this.#planModePreviousTools !== undefined) {
+				await this.session.setActiveToolsByName(this.#planModePreviousTools);
+			}
+		} catch (error) {
+			this.session.setPlanModeState(planModeState);
+			throw error;
 		}
 		if (this.#planModePreviousModelState) {
 			if (!options?.deferModelRestore) {

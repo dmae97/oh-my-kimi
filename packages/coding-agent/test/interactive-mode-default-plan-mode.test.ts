@@ -27,6 +27,7 @@ function makeTool(name: string): AgentTool {
 interface HarnessOptions {
 	extraRegistryTools?: readonly AgentTool[];
 	builtInToolNames?: Iterable<string>;
+	rebuildGate?: { fail: boolean };
 }
 
 describe("InteractiveMode plan.defaultOnStartup", () => {
@@ -99,6 +100,12 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 			modelRegistry: registry,
 			toolRegistry,
 			builtInToolNames: options.builtInToolNames ?? ["read"],
+			rebuildSystemPrompt: options.rebuildGate
+				? async () => {
+						if (options.rebuildGate?.fail) throw new Error("rebuild failed");
+						return { systemPrompt: ["Test"] };
+					}
+				: undefined,
 		});
 		session = createdSession;
 		mode = new InteractiveMode(createdSession, "test");
@@ -158,6 +165,30 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 
 		await created.handlePlanModeCommand();
 
+		expect(created.planModeEnabled).toBe(false);
+		expect(session?.getPlanModeState()).toBeUndefined();
+		expect(session?.getActiveToolNames()).toEqual(["read"]);
+	});
+
+	it("keeps plan mode retryable when prior-tool restoration fails", async () => {
+		const writeTool = makeTool("write");
+		const rebuildGate = { fail: false };
+		const created = createHarness(Settings.isolated({ "plan.defaultOnStartup": true, "compaction.enabled": false }), {
+			extraRegistryTools: [writeTool],
+			builtInToolNames: ["read", "write"],
+			rebuildGate,
+		});
+		await created.init({ suppressWelcomeIntro: true });
+		const activeBefore = session?.getActiveToolNames();
+		rebuildGate.fail = true;
+
+		await expect(created.handlePlanModeCommand()).rejects.toThrow("rebuild failed");
+		expect(created.planModeEnabled).toBe(true);
+		expect(session?.getPlanModeState()?.enabled).toBe(true);
+		expect(session?.getActiveToolNames()).toEqual(activeBefore);
+
+		rebuildGate.fail = false;
+		await created.handlePlanModeCommand();
 		expect(created.planModeEnabled).toBe(false);
 		expect(session?.getPlanModeState()).toBeUndefined();
 		expect(session?.getActiveToolNames()).toEqual(["read"]);
