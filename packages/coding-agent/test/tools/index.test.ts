@@ -278,6 +278,20 @@ describe("createTools", () => {
 		expect(names).toEqual(["read", "goal"]);
 	});
 
+	it("does not widen a restricted explicit tool list for an active goal", async () => {
+		const session = createTestSession({
+			restrictToolNames: true,
+			settings: createSettingsWithOverrides({
+				"goal.enabled": true,
+			}),
+			getGoalModeState: () => createActiveGoalState(),
+		});
+
+		const tools = await createTools(session, ["read", "write"]);
+
+		expect(tools.map(tool => tool.name)).toEqual(["read", "write"]);
+	});
+
 	it("records active tools on the original session object", async () => {
 		const session = createTestSession();
 
