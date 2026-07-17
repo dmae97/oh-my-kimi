@@ -419,6 +419,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 			let currentTextBlock: (TextContent & { [kStreamingBlockIndex]: number }) | null = null;
 			let currentThinkingBlock: (ThinkingContent & { [kStreamingBlockIndex]: number }) | null = null;
 			let currentToolCall: ToolCallState | null = null;
+			const resolvedMcpToolCallIds = new Set<string>();
 			const usageState: UsageState = { sawTokenDelta: false };
 
 			const state: BlockState = {
@@ -431,6 +432,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 				get currentToolCall() {
 					return currentToolCall;
 				},
+				resolvedMcpToolCallIds,
 				get firstTokenTime() {
 					return firstTokenTime;
 				},
@@ -640,6 +642,8 @@ export interface BlockState {
 	currentTextBlock: (TextContent & { [kStreamingBlockIndex]: number }) | null;
 	currentThinkingBlock: (ThinkingContent & { [kStreamingBlockIndex]: number }) | null;
 	currentToolCall: ToolCallState | null;
+	/** MCP call IDs executed through Cursor's exec channel before their stream block arrives. */
+	resolvedMcpToolCallIds: Set<string>;
 	firstTokenTime: number | undefined;
 	setTextBlock: (b: (TextContent & { [kStreamingBlockIndex]: number }) | null) => void;
 	setThinkingBlock: (b: (ThinkingContent & { [kStreamingBlockIndex]: number }) | null) => void;
@@ -1292,6 +1296,13 @@ async function handleExecServerMessage(
 		case "mcpArgs": {
 			const args = execMsg.message.value;
 			const mcpCall = decodeMcpCall(args);
+			if (execHandlers?.mcp) {
+				if (state.currentToolCall?.id === mcpCall.toolCallId) {
+					state.currentToolCall[kCursorExecResolved] = true;
+				} else {
+					state.resolvedMcpToolCallIds.add(mcpCall.toolCallId);
+				}
+			}
 			const { execResult } = await resolveExecHandler(
 				mcpCall,
 				execHandlers?.mcp?.bind(execHandlers),
@@ -2217,15 +2228,19 @@ export function processInteractionUpdate(
 			const mcpCall = toolCall.mcpToolCall;
 			if (mcpCall) {
 				const args = mcpCall.args || {};
+				const id = args.toolCallId || crypto.randomUUID();
 				const block: ToolCallState = {
 					type: "toolCall",
-					id: args.toolCallId || crypto.randomUUID(),
+					id,
 					name: args.name || args.toolName || "",
 					arguments: {},
 					[kStreamingBlockIndex]: output.content.length,
 					[kStreamingPartialJson]: "",
 					[kStreamingBlockKind]: "mcp",
 				};
+				if (state.resolvedMcpToolCallIds.delete(id)) {
+					block[kCursorExecResolved] = true;
+				}
 				output.content.push(block);
 				state.setToolCall(block);
 				stream.push({ type: "toolcall_start", contentIndex: output.content.length - 1, partial: output });
