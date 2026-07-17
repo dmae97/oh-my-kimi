@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Added viewport-pinned live regions so replacing dashboard frames can stay out of immutable native scrollback until they finalize ([#5777](https://github.com/can1357/oh-my-pi/issues/5777)).
+
 ## [17.0.1] - 2026-07-16
 
 ### Added

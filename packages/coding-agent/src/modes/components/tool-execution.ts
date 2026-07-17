@@ -782,6 +782,11 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		return this.isTranscriptBlockFinalized() ? undefined : 0;
 	}
 
+	/** Keeps the in-flight `vibe_wait` TV wall out of immutable native scrollback. */
+	isNativeScrollbackLiveRegionPinned(): boolean {
+		return this.#toolName === "vibe_wait" && !this.isTranscriptBlockFinalized();
+	}
+
 	/**
 	 * Whether this block has reached a terminal state for transcript freezing.
 	 * Reports `false` while it can still visually change so the
