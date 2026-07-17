@@ -4,14 +4,14 @@
 
 ### Added
 
-- Added a fullscreen overlay mouse-tracking opt-out so selection-first dialogs can preserve native terminal text selection ([#5711](https://github.com/can1357/oh-my-pi/issues/5711)).
-- Added an optional `Terminal.refreshAppearance()` that issues a single bounded OSC 11 background re-query through the existing query/DA1 pipeline, letting consumers refresh the detected dark/light appearance on an explicit user gesture without reintroducing periodic polling ([#5352](https://github.com/can1357/oh-my-pi/issues/5352))
+- Added a fullscreen overlay mouse-tracking opt-out to allow selection-first dialogs to preserve native terminal text selection.
+- Added `Terminal.refreshAppearance()` to allow consumers to manually trigger a refresh of the detected dark/light terminal appearance without periodic polling.
 
 ### Fixed
 
-- Fixed Enter accepting a mid-prompt `/skill:<name>` autocomplete from submitting and clearing the draft; acceptance now inserts the skill token and leaves the prompt open ([#4773](https://github.com/can1357/oh-my-pi/issues/4773)).
-- Fixed Markdown rendering turning local file paths into HTTP links when a `www.` or `http(s)://`/`ftp://` sequence was glued to a preceding character (e.g. `~/meta/www.share/blog/index.dj`); extended autolinks now require a valid GFM left boundary (start of line, whitespace, or one of `*_~(`) ([#5652](https://github.com/can1357/oh-my-pi/issues/5652)).
-- Restored the alternate-screen borrow for non-multiplexer resize drag frames: v17.0.1 rewrote the normal buffer in place per SIGWINCH, letting the terminal's own width reflow push wrapped fragments into native scrollback mid-drag. Throwaway drag frames paint on the alt buffer again and the settled authoritative replay fuses the buffer exit into its destructive paint, keeping the [#5319](https://github.com/can1357/oh-my-pi/issues/5319) overlay-exit flicker fix intact.
+- Fixed an issue where pressing Enter to accept a mid-prompt `/skill:<name>` autocomplete would submit and clear the draft; it now correctly inserts the skill token and leaves the prompt open.
+- Fixed Markdown rendering incorrectly turning local file paths containing `www.` or protocol sequences into HTTP links by requiring a valid GFM left boundary for autolinks.
+- Fixed terminal resize behavior by restoring alternate-screen rendering during drag frames, preventing wrapped fragments from polluting native scrollback while preserving the overlay-exit flicker fix.
 
 ## [17.0.1] - 2026-07-16
 

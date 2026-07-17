@@ -4,13 +4,13 @@
 
 ### Changed
 
-- Increased maxTokens from 32,768 to 65,536 for Kimi K2.7-Code models on Fireworks
+- Increased the maximum output tokens (maxTokens) from 32,768 to 65,536 for Kimi K2.7-Code models on Fireworks.
 
 ### Fixed
 
-- Fixed `openai-codex` GPT-5.6 Luna/Sol/Terra `contextWindow` regressing from 372000 to 272000: when upstream omits `context_window`, Codex discovery fell back to the generic `DEFAULT_CONTEXT_WINDOW` (272000), which both overwrote the bundled hard capacity on regen and — for logged-in Codex users — re-overwrote it on every live discovery refresh. Codex discovery now falls back to the upstream-declared 372000 for GPT-5.6 SKUs, and `applyOpenAICatalogPolicy` pins the same value at generation time ([#5705](https://github.com/can1357/oh-my-pi/issues/5705)).
-- Fixed Umans PAYG models showing as "Free" in `/models` by sourcing the provider's published per-token rates instead of the all-zero coding-plan catalog ([#5733](https://github.com/can1357/oh-my-pi/issues/5733)).
-- Fixed native `moonshot/kimi-k3` being labeled "Free" with no capabilities: the discovered id has no bundled/models.dev reference, so it fell through to zero cost, null limits, text-only input, and no reasoning. It now carries Moonshot's official K3 pricing (`$3` input / `$0.30` cache-hit / `$15` output), a 1,048,576-token context window, image input, and reasoning that routes through OpenAI-style `reasoning_effort: "max"` (K3 does not use the K2.x `thinking` block). Native K3 is also exempt from the Kimi forced-tool-choice reasoning suppression (a K2.x-only Moonshot conflict), so plan-mode forced tool turns keep the mandatory `max` effort; its documented 131,072-token output cap is allowed through the Chat Completions request clamp instead of being reduced to the generic 64,000-token ceiling ([#5756](https://github.com/can1357/oh-my-pi/issues/5756)).
+- Fixed a regression where the context window for openai-codex GPT-5.6 models (Luna, Sol, Terra) incorrectly fell back to 272,000 instead of preserving its 372,000 capacity.
+- Fixed Umans PAYG models incorrectly displaying as "Free" in /models by correctly sourcing their published per-token rates.
+- Fixed native moonshot/kimi-k3 capabilities and pricing, ensuring it correctly reflects its official pricing, 1M context window, image input support, reasoning capabilities, and 128k output token limit.
 
 ## [17.0.1] - 2026-07-16
 
