@@ -4386,11 +4386,20 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#selectorController.showSessionSelector();
 	}
 
-	handleResumeSession(sessionPath: string): Promise<void> {
+	async handleResumeSession(sessionPath: string): Promise<void> {
+		// Flush pending settings writes *before* disposing controllers or resetting
+		// observers: a save failure must leave the session, process project dir,
+		// and Settings in the source scope with all UI intact.
+		try {
+			await this.settings.flush();
+		} catch (err) {
+			this.showError(`Failed to save pending settings: ${err instanceof Error ? err.message : String(err)}`);
+			return;
+		}
 		this.#btwController.dispose();
 		this.#omfgController.dispose();
 		this.resetObserverRegistry();
-		return this.#selectorController.handleResumeSession(sessionPath);
+		await this.#selectorController.handleResumeSession(sessionPath, { settingsFlushed: true });
 	}
 
 	handleSessionDeleteCommand(): Promise<void> {

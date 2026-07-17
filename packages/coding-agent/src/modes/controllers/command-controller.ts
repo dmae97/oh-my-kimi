@@ -993,6 +993,12 @@ export class CommandController {
 				return;
 			}
 		}
+		try {
+			await this.ctx.settings.flush();
+		} catch (err) {
+			this.ctx.showError(`Failed to save pending settings: ${err instanceof Error ? err.message : String(err)}`);
+			return;
+		}
 
 		try {
 			await this.ctx.sessionManager.moveTo(resolvedPath);
@@ -1000,7 +1006,6 @@ export class CommandController {
 			this.ctx.showError(`Move failed: ${err instanceof Error ? err.message : String(err)}`);
 			return;
 		}
-
 		await this.ctx.applyCwdChange(resolvedPath);
 
 		this.ctx.updateEditorBorderColor();

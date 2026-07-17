@@ -131,12 +131,11 @@ describe("SelectorController session replacement overlay", () => {
 		} as unknown as InteractiveModeContext;
 		const controller = new SelectorController(ctx);
 		const resumeStarted = Promise.withResolvers<void>();
-		const resumed = Promise.withResolvers<void>();
+		const resumed = Promise.withResolvers<boolean>();
 		const handleResume = vi.spyOn(controller, "handleResumeSession").mockImplementation(() => {
 			resumeStarted.resolve();
 			return resumed.promise;
 		});
-
 		await controller.showSessionSelector();
 		expect(selector).toBeDefined();
 		selector!.handleInput("\n");
@@ -152,7 +151,7 @@ describe("SelectorController session replacement overlay", () => {
 		expect(handleResume).toHaveBeenCalledTimes(1);
 		expect(hide).not.toHaveBeenCalled();
 
-		resumed.resolve();
+		resumed.resolve(true);
 		await overlayHidden.promise;
 		expect(hide).toHaveBeenCalledTimes(1);
 	});

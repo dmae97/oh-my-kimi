@@ -1135,3 +1135,43 @@ describe("wave 5 — adapters and polish", () => {
 		}
 	});
 });
+
+describe("/move preflight flush", () => {
+	it("aborts text-mode /move when pending settings flush fails", async () => {
+		const targetDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-acp-move-"));
+		try {
+			const { output, fakeSessionManager, runtime } = createRuntime();
+			spyOn(runtime.settings, "flush").mockRejectedValue(new Error("disk full"));
+
+			const result = await executeAcpBuiltinSlashCommand(`/move ${targetDir}`, runtime);
+
+			expect(result).toEqual({ consumed: true });
+			expect(output[0]).toContain("disk full");
+			expect(fakeSessionManager!._movedTo).toBeUndefined();
+		} finally {
+			await fs.rm(targetDir, { recursive: true, force: true });
+		}
+	});
+
+	it("completes text-mode /move when flush succeeds", async () => {
+		const targetDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-acp-move-ok-"));
+		const originalProjectDir = process.cwd();
+		try {
+			const { output, fakeSessionManager, runtime } = createRuntime();
+			let flushed = false;
+			spyOn(runtime.settings, "flush").mockImplementation(async () => {
+				flushed = true;
+			});
+
+			const result = await executeAcpBuiltinSlashCommand(`/move ${targetDir}`, runtime);
+
+			expect(result).toEqual({ consumed: true });
+			expect(flushed).toBe(true);
+			expect(fakeSessionManager!._movedTo).toBe(targetDir);
+			expect(output[0]).toContain("Moved to");
+		} finally {
+			setProjectDir(originalProjectDir);
+			await fs.rm(targetDir, { recursive: true, force: true });
+		}
+	});
+});

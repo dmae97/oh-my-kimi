@@ -67,6 +67,8 @@ import {
 // Schema Definition Types
 // ═══════════════════════════════════════════════════════════════════════════
 
+export type ModelRoleStorage = "global" | "project";
+
 export type SettingTab =
 	| "appearance"
 	| "model"
@@ -508,6 +510,30 @@ export const SETTINGS_SCHEMA = {
 	},
 
 	disabledExtensions: { type: "array", default: EMPTY_STRING_ARRAY },
+
+	modelRoleStorage: {
+		type: "enum",
+		values: ["global", "project"] as const,
+		default: "global",
+		ui: {
+			tab: "model",
+			group: "Prompt",
+			label: "Model Role Storage",
+			description: "Where model selector role assignments are saved",
+			options: [
+				{
+					value: "global",
+					label: "Global",
+					description: "Save role models in the active profile config (current behavior)",
+				},
+				{
+					value: "project",
+					label: "Per-project",
+					description: "Save project role models in .omp/config.yml; missing project roles use global defaults",
+				},
+			],
+		},
+	},
 
 	modelRoles: { type: "record", default: EMPTY_STRING_RECORD },
 
