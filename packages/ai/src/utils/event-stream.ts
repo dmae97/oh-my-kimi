@@ -195,3 +195,8 @@ export class AssistantMessageEventStream extends EventStream<AssistantMessageEve
 		this.endWaiting();
 	}
 }
+
+/** Create an assistant-message event stream for legacy extension providers. */
+export function createAssistantMessageEventStream(): AssistantMessageEventStream {
+	return new AssistantMessageEventStream();
+}
