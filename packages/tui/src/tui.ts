@@ -1571,7 +1571,9 @@ export class TUI extends Container {
 				}
 				this.#armMultiplexerResizeTimer(false);
 			},
+			() => this.stop(),
 		);
+		if (this.#stopped) return;
 		for (const listener of this.#startListeners) {
 			try {
 				listener();

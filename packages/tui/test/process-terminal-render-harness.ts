@@ -43,6 +43,8 @@ export interface ProcessTerminalRenderHarness {
 	readonly probe: WidthProbe;
 	/** Raw bytes the TUI wrote to stdout, in order. */
 	readonly writes: string[];
+	/** Signals the terminal requested from the host process, in order. */
+	readonly signals: Array<{ pid: number; signal: string | number | undefined }>;
 	/** Wait for the render scheduler to flush any pending paint. */
 	settle(): Promise<void>;
 	/** Simulate an OS resize (SIGWINCH / ConPTY): refresh stdout dims, fire `resize`. */
@@ -51,6 +53,10 @@ export interface ProcessTerminalRenderHarness {
 	inBand(rows: number, columns: number, yPixels?: number, xPixels?: number): Promise<void>;
 	/** Feed raw byte chunks through the real stdin pipeline (StdinBuffer reassembly included). */
 	feed(...chunks: string[]): Promise<void>;
+	/** End stdin as a terminal host does when its pane disappears. */
+	endInput(): Promise<void>;
+	/** Fail stdout as a revoked terminal descriptor does on write. */
+	failOutput(): Promise<void>;
 	dispose(): void;
 }
 
@@ -82,8 +88,12 @@ export function createProcessTerminalRenderHarness(
 	Object.defineProperty(process.stdout, "rows", { value: initialRows, configurable: true });
 
 	const writes: string[] = [];
+	const signals: Array<{ pid: number; signal: string | number | undefined }> = [];
 	const spies = [
-		vi.spyOn(process, "kill").mockReturnValue(true),
+		vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+			signals.push({ pid, signal });
+			return true;
+		}),
 		vi.spyOn(process.stdin, "resume").mockImplementation(() => process.stdin),
 		vi.spyOn(process.stdin, "pause").mockImplementation(() => process.stdin),
 		vi.spyOn(process.stdin, "setEncoding").mockImplementation(() => process.stdin),
@@ -112,6 +122,7 @@ export function createProcessTerminalRenderHarness(
 		tui,
 		probe,
 		writes,
+		signals,
 		settle,
 		async osResize(columns, rows) {
 			Object.defineProperty(process.stdout, "columns", { value: columns, configurable: true });
@@ -125,6 +136,14 @@ export function createProcessTerminalRenderHarness(
 		},
 		async feed(...chunks) {
 			for (const chunk of chunks) process.stdin.emit("data", chunk);
+			await settle();
+		},
+		async endInput() {
+			process.stdin.emit("end");
+			await settle();
+		},
+		async failOutput() {
+			process.stdout.emit("error", new Error("terminal revoked"));
 			await settle();
 		},
 		dispose() {
