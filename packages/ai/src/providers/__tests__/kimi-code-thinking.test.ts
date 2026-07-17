@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { getBundledModel } from "@oh-my-pi/pi-catalog";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
+import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
 import * as kimiOauth from "../../registry/oauth/kimi";
-import type { Context } from "../../types";
+import { streamSimple } from "../../stream";
+import type { Context, Model } from "../../types";
 import type { MessageCreateParamsStreaming } from "../anthropic-wire";
-import { streamKimi } from "../kimi";
+import { type KimiApiFormat, streamKimi } from "../kimi";
 import { streamOpenAIAnthropicShim } from "../openai-anthropic-shim";
 import {
 	applyChatCompletionsCompatPolicy,
@@ -38,8 +42,121 @@ const TITLE_CONTEXT: Context = {
 	],
 };
 
+const K3_MODEL = buildModel({
+	id: "k3",
+	name: "K3",
+	api: "openai-completions",
+	provider: "kimi-code",
+	baseUrl: "https://api.kimi.com/coding/v1",
+	reasoning: true,
+	input: ["text"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 1_048_576,
+	maxTokens: 32_000,
+	thinking: {
+		mode: "effort",
+		efforts: [Effort.Low, Effort.High, Effort.Max],
+		defaultLevel: Effort.Max,
+		requiresEffort: true,
+	},
+	compat: {
+		thinkingFormat: "kimi",
+		kimiApiFormat: "openai",
+		reasoningContentField: "reasoning_content",
+		supportsDeveloperRole: false,
+	},
+} satisfies ModelSpec<"openai-completions">);
+
+async function captureKimiPayload(
+	model: Model<"openai-completions">,
+	reasoning: Effort,
+	format?: KimiApiFormat,
+): Promise<unknown> {
+	let payload: unknown;
+	const stream = streamKimi(
+		model,
+		{
+			systemPrompt: [],
+			messages: [{ role: "user", content: "Reply OK", timestamp: 0 }],
+			tools: [],
+		},
+		{
+			...(format ? { format } : {}),
+			apiKey: "test-key",
+			reasoning,
+			onPayload: body => {
+				payload = body;
+				throw new Error("stop after payload capture");
+			},
+		},
+	);
+	await stream.result();
+	if (payload === undefined) throw new Error("Kimi request payload was not captured");
+	return payload;
+}
+
 afterEach(() => {
 	vi.restoreAllMocks();
+});
+
+describe("Kimi K3 thinking transport", () => {
+	it("sends every live named effort through Kimi's native thinking object by default", async () => {
+		vi.spyOn(kimiOauth, "getKimiCommonHeaders").mockReturnValue(KIMI_HEADERS);
+
+		for (const effort of [Effort.Low, Effort.High, Effort.Max]) {
+			const payload = await captureKimiPayload(K3_MODEL, effort);
+			expect(payload).toMatchObject({ thinking: { type: "enabled", effort } });
+			expect(payload).not.toHaveProperty("reasoning_effort");
+		}
+	});
+
+	it("uses adaptive named effort rather than a token budget for an explicit Anthropic override", async () => {
+		vi.spyOn(kimiOauth, "getKimiCommonHeaders").mockReturnValue(KIMI_HEADERS);
+
+		const payload = await captureKimiPayload(K3_MODEL, Effort.Max, "anthropic");
+
+		expect(payload).toMatchObject({
+			thinking: { type: "adaptive" },
+			output_config: { effort: Effort.Max },
+		});
+		expect(payload).not.toHaveProperty("thinking.budget_tokens");
+	});
+
+	it("keeps the legacy K2 default on the Anthropic transport", async () => {
+		vi.spyOn(kimiOauth, "getKimiCommonHeaders").mockReturnValue(KIMI_HEADERS);
+		const model = getBundledModel<"openai-completions">("kimi-code", "kimi-for-coding");
+
+		const payload = await captureKimiPayload(model, Effort.High);
+
+		expect(payload).toMatchObject({ thinking: { type: "enabled" } });
+		expect(payload).toHaveProperty("thinking.budget_tokens");
+	});
+
+	it("clamps disabled thinking to the lowest effort for a mandatory-thinking K3", async () => {
+		vi.spyOn(kimiOauth, "getKimiCommonHeaders").mockReturnValue(KIMI_HEADERS);
+
+		let payload: unknown;
+		const stream = streamSimple(
+			K3_MODEL,
+			{
+				systemPrompt: [],
+				messages: [{ role: "user", content: "Reply OK", timestamp: 0 }],
+				tools: [],
+			},
+			{
+				apiKey: "test-key",
+				disableReasoning: true,
+				onPayload: body => {
+					payload = body;
+					throw new Error("stop after payload capture");
+				},
+			},
+		);
+		await stream.result();
+
+		expect(payload).toMatchObject({ thinking: { type: "enabled", effort: Effort.Low } });
+		expect(payload).not.toMatchObject({ thinking: { type: "disabled" } });
+	});
 });
 
 describe("Kimi K2.7 Code thinking policy", () => {

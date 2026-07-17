@@ -88,4 +88,30 @@ describe("ProcessTerminal geometry reflow through the renderer", () => {
 		expect(harness.terminal.rows).toBe(30);
 		expect(harness.terminal.columns).toBe(100);
 	});
+
+	it("stops rendering and raises SIGHUP when terminal input ends", async () => {
+		harness = createProcessTerminalRenderHarness(100, 30);
+		await harness.settle();
+		const rendersBeforeDisconnect = harness.probe.widths.length;
+
+		await harness.endInput();
+		harness.tui.requestRender(true);
+		await harness.settle();
+
+		expect(harness.probe.widths).toHaveLength(rendersBeforeDisconnect);
+		expect(harness.signals.at(-1)).toEqual({ pid: process.pid, signal: "SIGHUP" });
+	});
+
+	it("stops rendering and raises SIGHUP when terminal output fails", async () => {
+		harness = createProcessTerminalRenderHarness(100, 30);
+		await harness.settle();
+		const rendersBeforeDisconnect = harness.probe.widths.length;
+
+		await harness.failOutput();
+		harness.tui.requestRender(true);
+		await harness.settle();
+
+		expect(harness.probe.widths).toHaveLength(rendersBeforeDisconnect);
+		expect(harness.signals.at(-1)).toEqual({ pid: process.pid, signal: "SIGHUP" });
+	});
 });

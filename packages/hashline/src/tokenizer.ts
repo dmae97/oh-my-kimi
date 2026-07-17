@@ -40,6 +40,7 @@ const CHAR_HASH = 35;
 const CHAR_TAB = 9;
 const CHAR_SPACE = 32;
 const CHAR_DOT = 46;
+const CHAR_COMMA = 44;
 const CHAR_HYPHEN = 45;
 const CHAR_ELLIPSIS = 0x2026;
 const CHAR_EQUALS = 61;
@@ -165,7 +166,7 @@ function scanRangeSeparator(line: string, index: number, end: number): number | 
 			consumedSeparator = true;
 			continue;
 		}
-		if (code === CHAR_HYPHEN || code === CHAR_ELLIPSIS) {
+		if (code === CHAR_COMMA || code === CHAR_HYPHEN || code === CHAR_ELLIPSIS) {
 			cursor++;
 			consumedSeparator = true;
 			continue;
@@ -251,6 +252,17 @@ function consumeOptionalColon(line: string, index: number, end: number): number 
 	let cursor = skipWhitespace(line, index, end);
 	cursor = skipStrayDot(line, cursor, end);
 	return cursor < end && line.charCodeAt(cursor) === CHAR_COLON ? skipWhitespace(line, cursor + 1, end) : cursor;
+}
+/**
+ * Recover local-model replace trailers that permute `:` and `=` as `:=:` or
+ * `=:`. The range has already been parsed, so these suffixes are unambiguous.
+ */
+function consumeReplaceColon(line: string, index: number, end: number): number {
+	const canonical = consumeOptionalColon(line, index, end);
+	if (canonical >= end || line.charCodeAt(canonical) !== CHAR_EQUALS) return canonical;
+	const afterEquals = skipWhitespace(line, canonical + 1, end);
+	if (afterEquals >= end || line.charCodeAt(afterEquals) !== CHAR_COLON) return canonical;
+	return skipWhitespace(line, afterEquals + 1, end);
 }
 
 function scanInsertTarget(line: string, index: number, end: number): TargetScan | null {
@@ -341,7 +353,7 @@ function scanHunkAnchor(line: string, start: number, end: number): TargetScan | 
 		if (range === null) return null;
 		return {
 			target: { kind: "replace", range: range.range },
-			nextIndex: consumeOptionalColon(line, range.nextIndex, end),
+			nextIndex: consumeReplaceColon(line, range.nextIndex, end),
 		};
 	}
 	// `delete_block N` — resolve N to a tree-sitter block range at apply time
@@ -356,12 +368,13 @@ function scanHunkAnchor(line: string, start: number, end: number): TargetScan | 
 		if (next < end && line.charCodeAt(next) === CHAR_COLON) return null;
 		return { target: { kind: "delete_block", anchor: { line: anchor.line } }, nextIndex: next };
 	}
+	// `delete N.=M` — like `delete_block N`, takes no body and no trailing
+	// colon; a colon here falls through to contamination detection.
 	const deleteEnd = scanKeyword(line, cursor, end, HL_DELETE_KEYWORD);
 	if (deleteEnd !== null) {
 		const range = scanHeaderRange(line, deleteEnd, end, true);
 		if (range === null) return null;
-		let next = skipWhitespace(line, range.nextIndex, end);
-		next = skipStrayDot(line, next, end);
+		const next = skipStrayDot(line, range.nextIndex, end);
 		if (next < end && line.charCodeAt(next) === CHAR_COLON) return null;
 		return { target: { kind: "delete", range: range.range }, nextIndex: next };
 	}

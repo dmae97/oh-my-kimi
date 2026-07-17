@@ -86,6 +86,7 @@ function resolveReasoningDisableMode(
 		case "openrouter":
 			return "openrouter-enabled-false";
 		case "zai":
+		case "kimi":
 			return "zai-thinking-disabled";
 		case "qwen":
 			return "qwen-enable-thinking-false";
@@ -460,6 +461,7 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 		// is rejected by NIM's `additionalProperties: false` request schema
 		// (issue #2299).
 		thinkingFormat,
+		kimiApiFormat: undefined,
 		reasoningDisableMode: resolveReasoningDisableMode(thinkingFormat),
 		omitReasoningEffort: false,
 		includeEncryptedReasoning: true,

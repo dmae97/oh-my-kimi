@@ -1,9 +1,10 @@
+import * as logger from "@oh-my-pi/pi-utils/logger";
 import {
 	fetchOpenAICompatibleModels,
 	type OpenAICompatibleModelMapperContext,
 	type OpenAICompatibleModelRecord,
 } from "../discovery/openai-compatible";
-import { Effort } from "../effort";
+import { Effort, THINKING_EFFORTS } from "../effort";
 import { FIREWORKS_FAST_SUFFIX, toFireworksPublicModelId } from "../fireworks-model-id";
 import {
 	isGlmVisionModelId,
@@ -2504,6 +2505,45 @@ export interface KimiCodeModelManagerConfig {
 	fetch?: FetchImpl;
 }
 
+function mapKimiThinking(entry: OpenAICompatibleModelRecord): ThinkingConfig | undefined {
+	const raw = entry.think_efforts;
+	if (!isRecord(raw) || raw.support !== true) return undefined;
+	const validEfforts = raw.valid_efforts;
+	if (!Array.isArray(validEfforts)) return undefined;
+	const efforts = THINKING_EFFORTS.filter(effort => validEfforts.includes(effort));
+	if (efforts.length === 0) return undefined;
+
+	const thinking: ThinkingConfig = { mode: "effort", efforts };
+	if (entry.supports_thinking_type === "only") {
+		thinking.requiresEffort = true;
+	}
+	if (typeof raw.default_effort === "string") {
+		const defaultLevel = THINKING_EFFORTS.find(effort => effort === raw.default_effort);
+		if (defaultLevel !== undefined && efforts.includes(defaultLevel)) {
+			thinking.defaultLevel = defaultLevel;
+		}
+	}
+	return thinking;
+}
+
+function kimiSupportsReasoning(entry: OpenAICompatibleModelRecord, modelId: string): boolean {
+	switch (entry.supports_thinking_type) {
+		case "only":
+		case "both":
+			return true;
+		case "no":
+			return false;
+		default:
+			return entry.supports_reasoning === true || modelId.includes("thinking");
+	}
+}
+
+function mapKimiApiFormat(protocol: unknown): OpenAICompat["kimiApiFormat"] {
+	if (protocol === "anthropic") return "anthropic";
+	if (protocol === null) return "openai";
+	return undefined;
+}
+
 export function kimiCodeModelManagerOptions(
 	config?: KimiCodeModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
@@ -2528,15 +2568,19 @@ export function kimiCodeModelManagerOptions(
 						_context: OpenAICompatibleModelMapperContext<"openai-completions">,
 					): ModelSpec<"openai-completions"> => {
 						const id = defaults.id;
+						const reasoning = kimiSupportsReasoning(entry, id);
+						const thinking = reasoning ? mapKimiThinking(entry) : undefined;
 						return {
 							...defaults,
 							name: typeof entry.display_name === "string" ? entry.display_name : defaults.name,
-							reasoning: entry.supports_reasoning === true || id.includes("thinking"),
+							reasoning,
 							input: entry.supports_image_in === true || id.includes("k2.5") ? ["text", "image"] : ["text"],
 							contextWindow: typeof entry.context_length === "number" ? entry.context_length : 262144,
 							maxTokens: 32000,
+							thinking,
 							compat: {
-								thinkingFormat: "zai",
+								thinkingFormat: thinking ? "kimi" : "zai",
+								kimiApiFormat: mapKimiApiFormat(entry.protocol),
 								reasoningContentField: "reasoning_content",
 								supportsDeveloperRole: false,
 							},
@@ -3266,17 +3310,43 @@ type LiteLLMRichEndpointModel<TApi extends Api> = {
 	hasMaxTokens: boolean;
 	hasToolMetadata: boolean;
 	hasSupportedOpenAIParams: boolean;
+	hasCost: boolean;
 };
+type LiteLLMRichEndpointFailure = {
+	endpoint: string;
+	reason: "http-status" | "invalid-json" | "network-error";
+	status?: number;
+	error?: unknown;
+};
+type LiteLLMRichEndpointResult<TApi extends Api> =
+	| { models: LiteLLMRichEndpointModel<TApi>[]; incompleteVisionMetadata: boolean }
+	| { failure: LiteLLMRichEndpointFailure };
 
 const LITELLM_RICH_ENDPOINTS = ["/model_group/info", "/v2/model/info", "/model/info", "/v1/model/info"] as const;
 export const OPENAI_COMPAT_DISCOVERY_DEFAULT_CONTEXT_WINDOW = 128_000;
 export const OPENAI_COMPAT_DISCOVERY_DEFAULT_MAX_TOKENS = 32_768;
 const UNKNOWN_PROXY_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as const;
+const warnedLiteLLMMetadataBases = new Set<string>();
 const LITELLM_UNUSABLE_SENTINEL_IDS: Record<string, true> = {
 	"all-team-models": true,
 	"all-proxy-models": true,
 	"no-default-models": true,
 };
+function warnLiteLLMMetadataFallback(managementBaseUrl: string, failure: LiteLLMRichEndpointFailure): void {
+	if (warnedLiteLLMMetadataBases.has(managementBaseUrl)) {
+		return;
+	}
+	warnedLiteLLMMetadataBases.add(managementBaseUrl);
+	logger.warn("LiteLLM rich model metadata unavailable; falling back to /v1/models", {
+		endpoint: `${managementBaseUrl}${failure.endpoint}`,
+		status: failure.status ?? "unavailable",
+		reason: failure.reason,
+		...(failure.status === 403
+			? { requiredPermission: "Grant this LiteLLM key access to the model metadata endpoints" }
+			: {}),
+		...(failure.error !== undefined ? { error: failure.error } : {}),
+	});
+}
 
 export function normalizeLiteLLMManagementBaseUrl(baseUrl: string): string {
 	const trimmed = baseUrl.trim().replace(/\/+$/g, "");
@@ -3363,6 +3433,32 @@ function getLiteLLMParams(entry: LiteLLMRichModelEntry): LiteLLMRichModelEntry |
 
 function getLiteLLMMetadataValue(entry: LiteLLMRichModelEntry, key: string): unknown {
 	return entry[key] ?? getLiteLLMModelInfo(entry)?.[key];
+}
+
+/** Per-million USD cost from a `*_per_token` LiteLLM field, or `undefined` when absent/non-positive. */
+function getLiteLLMPerMillionCost(entry: LiteLLMRichModelEntry, key: string): number | undefined {
+	const perToken = toNumber(getLiteLLMMetadataValue(entry, key));
+	return perToken !== undefined && perToken > 0 ? perToken * 1_000_000 : undefined;
+}
+
+/**
+ * Map LiteLLM's per-token pricing (`input_cost_per_token`, `output_cost_per_token`,
+ * cache costs) onto {@link ModelSpec.cost} in $/million tokens. Returns `undefined`
+ * when LiteLLM reports neither an input nor an output price so callers keep the
+ * bundled reference cost.
+ */
+function getLiteLLMCost(entry: LiteLLMRichModelEntry): ModelSpec<Api>["cost"] | undefined {
+	const input = getLiteLLMPerMillionCost(entry, "input_cost_per_token");
+	const output = getLiteLLMPerMillionCost(entry, "output_cost_per_token");
+	if (input === undefined && output === undefined) {
+		return undefined;
+	}
+	return {
+		input: input ?? 0,
+		output: output ?? 0,
+		cacheRead: getLiteLLMPerMillionCost(entry, "cache_read_input_token_cost") ?? 0,
+		cacheWrite: getLiteLLMPerMillionCost(entry, "cache_creation_input_token_cost") ?? 0,
+	};
 }
 
 function getLiteLLMRichModelId(entry: LiteLLMRichModelEntry): string | undefined {
@@ -3487,7 +3583,7 @@ function mapLiteLLMRichEntry<TApi extends Api>(
 					: (reference?.input ?? ["text"]),
 		reasoning: typeof supportsReasoning === "boolean" ? supportsReasoning : (reference?.reasoning ?? false),
 		thinking: reference?.thinking,
-		cost: reference?.cost ?? UNKNOWN_PROXY_COST,
+		cost: getLiteLLMCost(entry) ?? reference?.cost ?? UNKNOWN_PROXY_COST,
 		...(supportsTools !== undefined ? { supportsTools } : {}),
 		compat: compat as ModelSpec<TApi>["compat"],
 	};
@@ -3499,7 +3595,7 @@ async function fetchLiteLLMRichEndpoint<TApi extends Api>(
 	managementBaseUrl: string,
 	runtimeBaseUrl: string,
 	signal?: AbortSignal,
-): Promise<{ models: LiteLLMRichEndpointModel<TApi>[]; incompleteVisionMetadata: boolean } | null> {
+): Promise<LiteLLMRichEndpointResult<TApi> | null> {
 	const fetchImpl = discoveryFetch(options.fetch);
 	const requestHeaders: Record<string, string> = {
 		Accept: "application/json",
@@ -3515,17 +3611,17 @@ async function fetchLiteLLMRichEndpoint<TApi extends Api>(
 			headers: requestHeaders,
 			signal,
 		});
-	} catch {
-		return null;
+	} catch (error) {
+		return { failure: { endpoint, reason: "network-error", error } };
 	}
 	if (!response.ok) {
-		return null;
+		return response.status === 404 ? null : { failure: { endpoint, reason: "http-status", status: response.status } };
 	}
 	let payload: unknown;
 	try {
 		payload = await response.json();
-	} catch {
-		return null;
+	} catch (error) {
+		return { failure: { endpoint, reason: "invalid-json", status: response.status, error } };
 	}
 	const entries = extractLiteLLMRichEntries(payload);
 	if (!entries || entries.length === 0) {
@@ -3554,6 +3650,7 @@ async function fetchLiteLLMRichEndpoint<TApi extends Api>(
 					supportsFunctionCalling === false ||
 					supportedOpenAIParams !== undefined,
 				hasSupportedOpenAIParams: supportedOpenAIParams !== undefined,
+				hasCost: getLiteLLMCost(entry) !== undefined,
 			});
 		}
 	}
@@ -3576,9 +3673,25 @@ export async function fetchLiteLLMRichModels<TApi extends Api>(
 	}
 	const fetchModels = async (signal?: AbortSignal): Promise<ModelSpec<TApi>[] | null> => {
 		const deduped = new Map<string, LiteLLMRichEndpointModel<TApi>>();
+		let metadataFailure: LiteLLMRichEndpointFailure | undefined;
 		for (const endpoint of LITELLM_RICH_ENDPOINTS) {
 			const result = await fetchLiteLLMRichEndpoint(endpoint, options, managementBaseUrl, runtimeBaseUrl, signal);
 			if (!result) {
+				continue;
+			}
+			if ("failure" in result) {
+				// A 401 is a retryable auth failure owned by the caller's auth-retry
+				// path (withAuth refresh/sibling rotation in discoverLiteLLMModels);
+				// recording it here would log a fallback warning on a stale first
+				// credential before the refreshed retry ultimately serves rich
+				// metadata. Forbidden (403) and other failures are never retried, so
+				// they remain warn-worthy and keep priority.
+				if (
+					result.failure.status !== 401 &&
+					(!metadataFailure || (metadataFailure.status !== 403 && result.failure.status === 403))
+				) {
+					metadataFailure = result.failure;
+				}
 				continue;
 			}
 			const hadPriorModels = deduped.size > 0;
@@ -3600,6 +3713,7 @@ export async function fetchLiteLLMRichModels<TApi extends Api>(
 							? next.model.input
 							: existing.model.input,
 					reasoning: typeof next.supportsReasoning === "boolean" ? next.model.reasoning : existing.model.reasoning,
+					cost: next.hasCost ? next.model.cost : existing.model.cost,
 					compat: next.hasSupportedOpenAIParams ? next.model.compat : existing.model.compat,
 				};
 				if (next.hasToolMetadata) {
@@ -3619,6 +3733,9 @@ export async function fetchLiteLLMRichModels<TApi extends Api>(
 			}
 		}
 		if (deduped.size === 0) {
+			if (metadataFailure) {
+				warnLiteLLMMetadataFallback(managementBaseUrl, metadataFailure);
+			}
 			return null;
 		}
 		return Array.from(deduped.values())
@@ -3638,13 +3755,13 @@ export function litellmModelManagerOptions(
 	const baseUrl = config?.baseUrl ?? Bun.env.LITELLM_BASE_URL ?? "http://localhost:4000/v1";
 	return {
 		providerId: "litellm",
-		// rich-v4 invalidates rows cached before LiteLLM ids gained bundled
-		// reference fallback and before discovery continued past `/model_group/info`
-		// when that endpoint omitted vision metadata. Earlier versions handled
-		// reseller usage-suffix stripping and placeholder-only `all-team-models`
-		// filtering; bump the version whenever the mappers below change, or warm
-		// authoritative caches keep serving pre-change rows for the full TTL.
-		cacheProviderId: `litellm:rich-v4:${Bun.hash(baseUrl).toString(36)}`,
+		// rich-v5 invalidates rows cached before rich metadata pricing was mapped.
+		// Earlier versions added bundled reference fallback, continued discovery
+		// past incomplete `/model_group/info`, stripped reseller usage suffixes,
+		// and filtered placeholder-only `all-team-models` rows. Bump the version
+		// whenever the mappers below change, or warm authoritative caches keep
+		// serving pre-change rows for the full TTL.
+		cacheProviderId: `litellm:rich-v5:${Bun.hash(baseUrl).toString(36)}`,
 		// litellm is a local-only proxy and is never bundled in models.json (that
 		// would leak the machine's localhost catalog). Prefer the proxy's richer
 		// management metadata, then enrich ids against models.dev with the bundled

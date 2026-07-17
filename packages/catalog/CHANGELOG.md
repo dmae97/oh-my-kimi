@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [17.0.3] - 2026-07-17
+
+### Fixed
+
+- Logged LiteLLM rich-metadata endpoint failures once with their endpoint and status before falling back to incomplete `/v1/models` data ([#5801](https://github.com/can1357/oh-my-pi/issues/5801)).
+- Fixed authenticated Kimi Code discovery to preserve live effort levels, default effort, mandatory-thinking state, and per-model protocol metadata ([#5893](https://github.com/can1357/oh-my-pi/issues/5893)).
+- Fixed LiteLLM provider ignoring per-model pricing: `mapLiteLLMRichEntry` now reads `input_cost_per_token` / `output_cost_per_token` (plus cache costs) from LiteLLM rich metadata and maps them to `cost.input` / `cost.output`, falling back to the bundled reference only when LiteLLM omits cost, so proxied models no longer display as free ([#5818](https://github.com/can1357/oh-my-pi/issues/5818)).
+
 ## [17.0.2] - 2026-07-17
 
 ### Changed

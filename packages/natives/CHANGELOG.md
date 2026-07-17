@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [17.0.3] - 2026-07-17
+
+### Fixed
+
+- Fixed `~` (tilde) not expanding for every element of a brace expansion in the bash tool, so `mkdir -p ~/project/{a,b}` now creates both `a` and `b` under `$HOME/project` instead of leaving a literal `~/project/b` in the working directory ([#5819](https://github.com/can1357/oh-my-pi/issues/5819)).
+- Fixed ANSI text wrapping to close and restore OSC 8 hyperlinks at physical line boundaries, preventing link targets from leaking into appended content ([#5885](https://github.com/can1357/oh-my-pi/issues/5885)).
+
 ## [17.0.2] - 2026-07-17
 
 ### Fixed

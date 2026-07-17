@@ -62,7 +62,7 @@ import {
 	MAX_IMAGE_INPUT_BYTES,
 	webpExclusionForModel,
 } from "../utils/image-loading";
-import { convertFileWithMarkit } from "../utils/markit";
+import { CONVERTIBLE_EXTENSIONS, convertFileWithMarkit } from "../utils/markit";
 import { type ArchiveReader, formatArchiveEntryLines, openArchive, parseArchivePathCandidates } from "../utils/zip";
 import { buildDirectoryTree, type DirectoryTree } from "../workspace-tree";
 import {
@@ -78,7 +78,7 @@ import {
 } from "./conflict-detect";
 import {
 	executeReadUrl,
-	loadReadUrlCacheEntry,
+	fetchReadUrl,
 	parseReadUrlTarget,
 	type ReadUrlToolDetails,
 	renderReadUrlCall,
@@ -150,9 +150,6 @@ function getSummaryParseCache(session: object): LRUCache<string, SummaryResult |
 	}
 	return cache;
 }
-
-// Document types converted to markdown via markit.
-const CONVERTIBLE_EXTENSIONS = new Set([".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".rtf", ".epub"]);
 
 const MAX_SUMMARY_BYTES = 2 * 1024 * 1024;
 const MAX_SUMMARY_LINES = 20_000;
@@ -2167,15 +2164,12 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			const urlRaw = parsedUrlTarget.raw;
 			const urlRanges = parsedUrlTarget.ranges;
 			if (urlRanges !== undefined && urlRanges.length > 1) {
-				const cached = await loadReadUrlCacheEntry(
-					this.session,
-					{ path: parsedUrlTarget.path, raw: urlRaw },
-					signal,
-					{ ensureArtifact: true, preferCached: true },
-				);
-				return this.#buildInMemoryMultiRangeResult(cached.output, urlRanges, {
-					details: { ...cached.details },
-					sourceUrl: cached.details.finalUrl,
+				const entry = await fetchReadUrl(this.session, { path: parsedUrlTarget.path, raw: urlRaw }, signal, {
+					ensureArtifact: true,
+				});
+				return this.#buildInMemoryMultiRangeResult(entry.output, urlRanges, {
+					details: { ...entry.details },
+					sourceUrl: entry.details.finalUrl,
 					entityLabel: "URL output",
 					raw: urlRaw,
 					immutable: true,
@@ -2184,18 +2178,12 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			const urlOffset = parsedUrlTarget.offset;
 			const urlLimit = parsedUrlTarget.limit;
 			if (urlOffset !== undefined || urlLimit !== undefined) {
-				const cached = await loadReadUrlCacheEntry(
-					this.session,
-					{ path: parsedUrlTarget.path, raw: urlRaw },
-					signal,
-					{
-						ensureArtifact: true,
-						preferCached: true,
-					},
-				);
-				return this.#buildInMemoryTextResult(cached.output, urlOffset, urlLimit, {
-					details: { ...cached.details },
-					sourceUrl: cached.details.finalUrl,
+				const entry = await fetchReadUrl(this.session, { path: parsedUrlTarget.path, raw: urlRaw }, signal, {
+					ensureArtifact: true,
+				});
+				return this.#buildInMemoryTextResult(entry.output, urlOffset, urlLimit, {
+					details: { ...entry.details },
+					sourceUrl: entry.details.finalUrl,
 					entityLabel: "URL output",
 					raw: urlRaw,
 					immutable: true,

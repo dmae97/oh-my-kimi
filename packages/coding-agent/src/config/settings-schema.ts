@@ -4748,14 +4748,15 @@ export const SETTINGS_SCHEMA = {
 
 	"providers.kimiApiFormat": {
 		type: "enum",
-		values: ["openai", "anthropic"] as const,
-		default: "anthropic",
+		values: ["auto", "openai", "anthropic"] as const,
+		default: "auto",
 		ui: {
 			tab: "providers",
 			group: "Protocol",
 			label: "Kimi API Format",
-			description: "API format for Kimi Code provider",
+			description: "API format for Kimi Code provider (auto follows live model metadata)",
 			options: [
+				{ value: "auto", label: "Auto", description: "Use the model's server-declared protocol" },
 				{ value: "openai", label: "OpenAI", description: "api.kimi.com" },
 				{ value: "anthropic", label: "Anthropic", description: "api.moonshot.ai" },
 			],

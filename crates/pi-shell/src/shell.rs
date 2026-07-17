@@ -2210,6 +2210,50 @@ mod tests {
 		let _ = std::fs::remove_dir_all(&tmp);
 	}
 
+	/// Regression test for issue #5819: `mkdir -p ~/proj/{a,b}` must create both
+	/// `a` and `b` under `$HOME/proj`. Brace expansion runs before tilde
+	/// expansion and previously left every element after the first with a
+	/// literal `~`, so `b` was created as `./~/proj/b` in the shell cwd instead.
+	#[tokio::test(flavor = "multi_thread")]
+	async fn uutils_mkdir_expands_tilde_for_every_brace_element() {
+		let base = std::env::temp_dir().join(format!("pi-mkdir-brace-{}", std::process::id()));
+		let home = base.join("home");
+		let cwd = base.join("cwd");
+		let _ = std::fs::remove_dir_all(&base);
+		std::fs::create_dir_all(&home).expect("home dir");
+		std::fs::create_dir_all(&cwd).expect("cwd dir");
+		let cwd_str = cwd.to_str().expect("utf8 cwd path");
+
+		let mut env = HashMap::new();
+		env.insert("HOME".to_string(), home.to_string_lossy().to_string());
+		let config =
+			ShellConfig { session_env: Some(env), snapshot_path: None, minimizer: None };
+		let mut session = create_session(&config).await.expect("create_session");
+		session.shell.set_working_dir(cwd_str).expect("set cwd");
+
+		let mut params = session.shell.default_exec_params();
+		params.set_fd(OpenFiles::STDIN_FD, null_file().expect("null"));
+		params.set_fd(OpenFiles::STDOUT_FD, null_file().expect("null"));
+		params.set_fd(OpenFiles::STDERR_FD, null_file().expect("null"));
+
+		let source_info = SourceInfo::from("pi-natives:test");
+		let exec = session
+			.shell
+			.run_string("mkdir -p ~/proj/{a,b}", &source_info, &params)
+			.await
+			.expect("run_string");
+		assert!(matches!(exec.exit_code, ExecutionExitCode::Success), "exit {}", exit_code(&exec));
+
+		// Both elements' tildes expanded: dirs land under $HOME/proj.
+		assert!(home.join("proj/a").is_dir(), "~/proj/a not created under HOME");
+		assert!(home.join("proj/b").is_dir(), "~/proj/b not created under HOME");
+		// The buggy path created a literal `~` tree in the shell cwd.
+		assert!(!cwd.join("~").exists(), "literal ~ tree leaked into cwd");
+		assert!(!cwd.join("a").exists(), "unexpanded element leaked into cwd");
+
+		let _ = std::fs::remove_dir_all(&base);
+	}
+
 	/// `mkdir --help` and an invalid flag must be handled in-process: rendered
 	/// to the command streams and returned as an exit code. The upstream
 	/// `uumain` parser calls `std::process::exit`, which would terminate the

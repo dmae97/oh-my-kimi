@@ -99,6 +99,30 @@ describe("read URL with :raw selector (regression: JSON/feed parsers ignored raw
 		expect(textBlock?.text).toContain('"alpha": 1');
 	});
 
+	it("refetches the same URL on subsequent reads", async () => {
+		const session = makeSession(testDir);
+		const tool = new ReadTool(session);
+		let body = "v1";
+		const loadPage = vi.spyOn(scrapers, "loadPage").mockImplementation(async (requestedUrl: string) => ({
+			ok: true,
+			status: 200,
+			finalUrl: requestedUrl,
+			contentType: "text/plain",
+			content: body,
+		}));
+
+		const first = await tool.execute("first", { path: "https://example.com/live.txt:raw" });
+		body = "v2";
+		const second = await tool.execute("second", { path: "https://example.com/live.txt:raw" });
+		const firstText = first.content.find(entry => entry.type === "text");
+		const secondText = second.content.find(entry => entry.type === "text");
+
+		expect(firstText?.text).toContain("v1");
+		expect(secondText?.text).toContain("v2");
+		expect(secondText?.text).not.toContain("v1");
+		expect(loadPage).toHaveBeenCalledTimes(2);
+	});
+
 	it("returns slices of raw content when :raw is combined with a range", async () => {
 		const session = makeSession(testDir);
 		const tool = new ReadTool(session);

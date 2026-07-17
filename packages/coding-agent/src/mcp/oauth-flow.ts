@@ -385,6 +385,13 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 	async generateAuthUrl(state: string, redirectUri: string): Promise<{ url: string; instructions?: string }> {
 		if (!this.#resolvedClientId) {
 			await this.#tryRegisterClient(redirectUri);
+			// `unapproved_client` explicitly establishes that registration cannot
+			// produce the required client id. Other DCR failures stay on the
+			// clientless probe path because they may be transient or caused by
+			// unrelated registration metadata.
+			if (!this.#resolvedClientId && this.#isDefinitiveRegistrationRejection()) {
+				throw this.#missingClientIdError();
+			}
 		}
 
 		const authUrl = new URL(this.config.authorizationUrl);
@@ -689,6 +696,19 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 			}
 			// Ignore network/probe failures to avoid blocking flows that still work.
 		}
+	}
+
+	/**
+	 * Whether the provider explicitly rejected this client as unapproved.
+	 *
+	 * HTTP status alone is insufficient: payload errors such as
+	 * `invalid_client_metadata` and `invalid_redirect_uri` do not establish that
+	 * the authorization endpoint requires a client id. Keep those on the
+	 * clientless probe path.
+	 */
+	#isDefinitiveRegistrationRejection(): boolean {
+		const failure = this.#registrationFailure;
+		return failure?.status === 403 && /\bunapproved_client\b/i.test(failure.detail ?? "");
 	}
 
 	/**

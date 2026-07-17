@@ -62,6 +62,39 @@ const MAX_STRING_SEQ_BYTES = 16 * 1024 * 1024;
 // runs at most once per resolved report — never inside the growth loop.
 const SGR_MOUSE_COMPLETE = /^<\d+;\d+;\d+[Mm]$/;
 
+// Raw-paste classification holds CR/LF-bearing, ESC-free input briefly so
+// adjacent stdin reads from one unmarked paste can be considered together.
+// Fixed from the first break-bearing read (not an inactivity debounce): normal
+// Enter latency and candidate memory remain bounded even under a continuous
+// stream. Ten milliseconds spans adjacent PTY reads without becoming perceptible.
+const RAW_PASTE_CLASSIFICATION_TIMEOUT_MS = 10;
+
+/**
+ * Whether `text` has two completed logical line breaks (three line segments).
+ *
+ * A single Enter may be batched with surrounding keystrokes in one stdin read,
+ * so one break is ambiguous and must stay on the key path. CRLF counts as one
+ * logical break. Content after the second break completes the third segment;
+ * until then the classification window keeps buffering.
+ */
+function isRawMultilineBurst(text: string): boolean {
+	let breaks = 0;
+	for (let i = 0; i < text.length; i++) {
+		const code = text.charCodeAt(i);
+		if (code === 0x0d) {
+			breaks++;
+			if (text.charCodeAt(i + 1) === 0x0a) i++;
+			continue;
+		}
+		if (code === 0x0a) {
+			breaks++;
+			continue;
+		}
+		if (breaks >= 2) return true;
+	}
+	return false;
+}
+
 /**
  * Resolve the exclusive-end index of the escape sequence starting at `pos`
  * (`buffer.charCodeAt(pos)` must be ESC). `resumeSearchFrom` is honored only
@@ -364,6 +397,8 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 	#pendingKittyPrintableCodepoint: number | undefined;
 	#pendingKittyPrintableAtMs = 0;
 	#escapeSearchOffset = 0;
+	#rawPasteCandidate = "";
+	#rawPasteTimer?: NodeJS.Timeout;
 
 	constructor(options: StdinBufferOptions = {}) {
 		super();
@@ -398,19 +433,48 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 			this.#clearFlushTimer();
 		}
 
-		if (str.length === 0 && this.#buffer.length === 0) {
+		if (str.length === 0 && this.#buffer.length === 0 && this.#rawPasteCandidate.length === 0) {
 			this.#emitDataSequence("");
 			return;
 		}
 
-		this.#buffer += str;
-
 		if (this.#pasteMode) {
-			const chunk = this.#buffer;
-			this.#buffer = "";
-			this.#consumePasteChunk(chunk);
+			this.#consumePasteChunk(str);
 			return;
 		}
+
+		if (this.#rawPasteCandidate.length > 0) {
+			if (str.indexOf(ESC) !== -1) {
+				// Escape-bearing input cannot belong to an unmarked raw paste.
+				// Replay the ambiguous prefix as keys before parsing the escape.
+				this.#flushRawPasteCandidate();
+			} else {
+				this.#rawPasteCandidate += str;
+				if (isRawMultilineBurst(this.#rawPasteCandidate)) {
+					this.#emitRawPasteCandidate();
+				}
+				return;
+			}
+		}
+
+		if (
+			this.#buffer.length === 0 &&
+			str.indexOf(ESC) === -1 &&
+			(str.indexOf("\r") !== -1 || str.indexOf("\n") !== -1)
+		) {
+			// Hold the first break-bearing read briefly. A split raw paste can
+			// then accumulate enough logical lines to classify; an ordinary
+			// Enter is replayed unchanged when the fixed window expires.
+			this.#rawPasteCandidate = str;
+			if (isRawMultilineBurst(str)) {
+				this.#emitRawPasteCandidate();
+			} else {
+				this.#armRawPasteTimer();
+			}
+			return;
+		}
+
+		this.#buffer += str;
 
 		const startIndex = this.#buffer.indexOf(BRACKETED_PASTE_START);
 		if (startIndex !== -1) {
@@ -526,6 +590,46 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		this.emit("paste", content);
 	}
 
+	/** Start one fixed window from the first break-bearing raw read. */
+	#armRawPasteTimer(): void {
+		if (this.#rawPasteTimer) return;
+		this.#rawPasteTimer = setTimeout(() => {
+			this.#rawPasteTimer = undefined;
+			this.#flushRawPasteCandidate();
+		}, RAW_PASTE_CLASSIFICATION_TIMEOUT_MS);
+	}
+
+	#clearRawPasteTimer(): void {
+		if (this.#rawPasteTimer) {
+			clearTimeout(this.#rawPasteTimer);
+			this.#rawPasteTimer = undefined;
+		}
+	}
+
+	#takeRawPasteCandidate(): string {
+		this.#clearRawPasteTimer();
+		const content = this.#rawPasteCandidate;
+		this.#rawPasteCandidate = "";
+		return content;
+	}
+
+	/** Emit a classified raw multiline burst through the paste channel. */
+	#emitRawPasteCandidate(): void {
+		const content = this.#takeRawPasteCandidate();
+		this.#pendingKittyPrintableCodepoint = undefined;
+		this.emit("paste", content);
+	}
+
+	/** Replay an ambiguous raw candidate as the original per-key data events. */
+	#flushRawPasteCandidate(): void {
+		const content = this.#takeRawPasteCandidate();
+		if (content.length === 0) return;
+		const result = extractCompleteSequences(content, 0);
+		for (const sequence of result.sequences) {
+			this.#emitDataSequence(sequence);
+		}
+	}
+
 	#emitDataSequence(sequence: string): void {
 		const rawCodepoint = sequence.length === 1 ? sequence.codePointAt(0) : undefined;
 		if (
@@ -627,8 +731,12 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 	flush(): string[] {
 		this.#clearFlushTimer();
 
+		const rawCandidate = this.#takeRawPasteCandidate();
+		const sequences = rawCandidate.length > 0 ? extractCompleteSequences(rawCandidate, 0).sequences : [];
+
 		if (this.#buffer.length === 0) {
-			return [];
+			this.#pendingKittyPrintableCodepoint = undefined;
+			return sequences;
 		}
 
 		const buffered = this.#buffer;
@@ -641,15 +749,19 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		// emission swallows the double-escape gesture (#3857). Mirror the inline
 		// split in `extractCompleteSequences` and deliver two ESC events.
 		if (buffered === `${ESC}${ESC}`) {
-			return [ESC, ESC];
+			sequences.push(ESC, ESC);
+		} else {
+			sequences.push(buffered);
 		}
-		return [buffered];
+		return sequences;
 	}
 
 	clear(): void {
 		this.#clearFlushTimer();
 		this.#clearPasteWatchdog();
+		this.#clearRawPasteTimer();
 		this.#buffer = "";
+		this.#rawPasteCandidate = "";
 		this.#pasteMode = false;
 		this.#pasteChunks = [];
 		this.#pasteOverlap = "";
@@ -660,7 +772,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 	}
 
 	getBuffer(): string {
-		return this.#buffer;
+		return `${this.#rawPasteCandidate}${this.#buffer}`;
 	}
 
 	destroy(): void {

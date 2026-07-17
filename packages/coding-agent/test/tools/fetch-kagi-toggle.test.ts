@@ -558,35 +558,11 @@ describe("read tool URL handling", () => {
 		expect(htmlToMarkdownSpy).not.toHaveBeenCalled();
 	});
 
-	it("reuses cached output for repeated plain URL reads", async () => {
-		const session = createSession();
-		const tool = new ReadTool(session);
-		const pageUrl = "https://example.com/repeated-read-cache";
-		const loadPageSpy = vi.spyOn(scrapers, "loadPage").mockResolvedValue({
-			ok: true,
-			status: 200,
-			contentType: "text/plain",
-			finalUrl: pageUrl,
-			content: "Cached line 1\nCached line 2",
-		});
-
-		const firstResult = await tool.execute("fetch-cache-first", { path: pageUrl });
-		const secondResult = await tool.execute("fetch-cache-second", { path: pageUrl });
-		const firstText = firstResult.content.find(content => content.type === "text");
-		const secondText = secondResult.content.find(content => content.type === "text");
-
-		expect(firstText?.type).toBe("text");
-		expect(firstText?.text).toContain("Cached line 1");
-		expect(secondText?.type).toBe("text");
-		expect(secondText?.text).toContain("Cached line 1");
-		expect(loadPageSpy).toHaveBeenCalledTimes(1);
-	});
-
-	it("supports offset and limit for URL reads using cached output", async () => {
+	it("supports offset and limit selectors on URL reads", async () => {
 		const session = createSession();
 		const tool = new ReadTool(session);
 		const pageUrl = "https://example.com/offset-test";
-		const loadPageSpy = vi.spyOn(scrapers, "loadPage").mockResolvedValue({
+		vi.spyOn(scrapers, "loadPage").mockResolvedValue({
 			ok: true,
 			status: 200,
 			contentType: "text/plain",
@@ -594,27 +570,17 @@ describe("read tool URL handling", () => {
 			content: "Line 1\nLine 2\nLine 3\nLine 4",
 		});
 
-		const firstResult = await tool.execute("fetch-offset-prime", { path: pageUrl });
-		const firstText = firstResult.content.find(content => content.type === "text");
-		expect(firstText?.type).toBe("text");
-		expect(firstText?.text).toContain("Line 1");
-		expect(loadPageSpy).toHaveBeenCalledTimes(1);
-
-		loadPageSpy.mockClear();
-		loadPageSpy.mockRejectedValue(new Error("network should not be hit"));
-
 		const pagedResult = await tool.execute("fetch-offset-page", {
 			path: `${pageUrl}:7-8`,
 		});
 		const pagedText = pagedResult.content.find(content => content.type === "text");
 		expect(pagedText?.type).toBe("text");
-		// `:7-8` selects 2 lines starting at offset 7 of the wrapped cached
+		// `:7-8` selects 2 lines starting at offset 7 of the wrapped URL
 		// output. Read tool widens the window by ±3 unanchored context lines
 		// so anchors at the boundary stay fresh, so adjacent content lines are
 		// also visible.
 		expect(pagedText?.text).toContain("Line 1");
 		expect(pagedText?.text).toContain("Line 2");
-		expect(loadPageSpy).not.toHaveBeenCalled();
 		expect(fs.readdirSync(path.join(testDir, "session")).some(file => file.endsWith(".read.log"))).toBe(true);
 	});
 });

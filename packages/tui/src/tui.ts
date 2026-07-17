@@ -1571,7 +1571,9 @@ export class TUI extends Container {
 				}
 				this.#armMultiplexerResizeTimer(false);
 			},
+			() => this.stop(),
 		);
+		if (this.#stopped) return;
 		for (const listener of this.#startListeners) {
 			try {
 				listener();
@@ -3725,15 +3727,23 @@ export class TUI extends Container {
 	}
 
 	/**
-	 * Emit a throwaway viewport repaint for the resize fast path as an alternate-
-	 * screen per-row overwrite. The normal buffer may reflow full-width rows on a
-	 * width change before the app can repaint; keeping the drag on the alternate
-	 * screen makes those transient resizes truncate instead of pushing wrapped
-	 * fragments into native scrollback. Normal-screen history is rebuilt once at
-	 * settle via `#emitFullPaint`.
+	 * Emit a throwaway viewport repaint for the resize fast path as a per-row
+	 * overwrite. A width change can make the terminal's normal buffer reflow
+	 * full-width rows before the app repaints, so a width drag borrows the
+	 * alternate screen: transient resizes truncate the viewport instead of
+	 * pushing wrapped fragments into native scrollback. A height-only resize
+	 * reflows nothing, so it repaints the normal screen in place — borrowing the
+	 * alt buffer there is pure flicker, and on terminals that re-report their
+	 * size when the alt buffer toggles it is self-sustaining: leaving a
+	 * fullscreen overlay's alt screen fires a height-only SIGWINCH echo, which
+	 * would otherwise re-borrow the alt buffer for one frame (the settings-exit
+	 * flash, #5854). Normal-screen history is rebuilt once at settle via
+	 * `#emitFullPaint`.
 	 */
 	#emitResizeViewport(window: readonly string[], height: number, contentRows: number, width: number): void {
-		let buffer = `${this.#paintBeginSequence + this.#enterResizeAltSequence()}\x1b[H`;
+		const widthChanged = this.#previousWidth > 0 && this.#previousWidth !== width;
+		const altEnter = widthChanged ? this.#enterResizeAltSequence() : "";
+		let buffer = `${this.#paintBeginSequence + altEnter}\x1b[H`;
 		for (let r = 0; r < height; r++) {
 			if (r > 0) buffer += "\r\n";
 			buffer += this.#lineRewriteSequence(window[r] ?? "", width);

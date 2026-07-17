@@ -148,7 +148,7 @@ export interface Usage {
 	};
 }
 
-export type OpenAIReasoningFormat = "openai" | "openrouter" | "zai" | "qwen" | "qwen-chat-template";
+export type OpenAIReasoningFormat = "openai" | "openrouter" | "zai" | "kimi" | "qwen" | "qwen-chat-template";
 
 export type OpenAIReasoningDisableMode =
 	| "omit"
@@ -205,8 +205,10 @@ export interface OpenAICompat {
 	requiresThinkingAsText?: boolean;
 	/** Whether tool call IDs must be normalized to Mistral format (exactly 9 alphanumeric chars). Default: auto-detected from URL. */
 	requiresMistralToolIds?: boolean;
-	/** Format for reasoning/thinking parameter. "openai" uses reasoning_effort, "openrouter" uses reasoning: { effort }, "zai" uses thinking: { type: "enabled" | "disabled" } (also used by Moonshot Kimi), "qwen" uses top-level enable_thinking, and "qwen-chat-template" uses chat_template_kwargs.enable_thinking. Default: "openai". */
+	/** Format for reasoning/thinking parameter. `"kimi"` uses `thinking: { type, effort }`; other values select their provider-native reasoning fields. Default: `"openai"`. */
 	thinkingFormat?: OpenAIReasoningFormat;
+	/** Kimi Code transport selected by live per-model protocol metadata. User settings take precedence. */
+	kimiApiFormat?: "openai" | "anthropic";
 	/** Request-time disable encoding for the selected reasoning/thinking format. Default: derived from `thinkingFormat`. */
 	reasoningDisableMode?: OpenAIReasoningDisableMode;
 	/** Whether the provider rejects `reasoning.effort`/`reasoning_effort` even when the model reasons natively. Default: false unless reasoning effort is unsupported. */
@@ -475,6 +477,8 @@ export interface ResolvedOpenAISharedCompat {
 	supportsReasoningParams: boolean;
 	supportsSamplingParams: boolean;
 	thinkingFormat: OpenAIReasoningFormat;
+	/** Kimi Code transport selected by live per-model protocol metadata. */
+	kimiApiFormat?: OpenAICompat["kimiApiFormat"];
 	reasoningDisableMode: OpenAIReasoningDisableMode;
 	omitReasoningEffort: boolean;
 	includeEncryptedReasoning: boolean;
@@ -528,6 +532,7 @@ export type ResolvedOpenAICompat = ResolvedOpenAISharedCompat &
 			| "supportsReasoningParams"
 			| "supportsSamplingParams"
 			| "thinkingFormat"
+			| "kimiApiFormat"
 			| "reasoningDisableMode"
 			| "omitReasoningEffort"
 			| "includeEncryptedReasoning"
