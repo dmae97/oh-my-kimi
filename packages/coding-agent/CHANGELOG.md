@@ -362,6 +362,7 @@
 
 - Removed the `--prewalk-boomerang` feature and its associated configuration setting.
 - Removed the unreliable Bing and Yahoo HTML-scraping web search providers.
+- Fixed Ctrl+L (`app.display.reset`) not refreshing the dark/light theme on terminals without an end-to-end DEC Mode 2031 notification path (e.g. iTerm2 under tmux): the explicit reset gesture now issues one bounded OSC 11 background re-query before repainting, so a mid-session appearance switch is picked up without restarting. No timers or periodic polling are reintroduced ([#5352](https://github.com/can1357/oh-my-pi/issues/5352))
 
 ## [16.4.8] - 2026-07-12
 

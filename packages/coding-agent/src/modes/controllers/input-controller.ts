@@ -391,7 +391,16 @@ export class InputController {
 		this.ctx.editor.onClear = () => this.handleCtrlC();
 		this.ctx.editor.setActionKeys("app.exit", this.ctx.keybindings.getKeys("app.exit"));
 		this.ctx.editor.setActionKeys("app.display.reset", this.ctx.keybindings.getKeys("app.display.reset"));
-		this.ctx.editor.onDisplayReset = () => this.ctx.ui.resetDisplay();
+		this.ctx.editor.onDisplayReset = () => {
+			// Explicit user gesture (Ctrl+L): re-query the terminal background once
+			// so a mid-session light/dark switch is picked up even on terminals
+			// without an end-to-end Mode 2031 notification path (#5352). The
+			// appearance callback re-evaluates the auto theme; the repaint below
+			// then renders the resolved palette. Bounded to one OSC 11 probe per
+			// gesture — no timers, no periodic polling.
+			this.ctx.ui.terminal.refreshAppearance?.();
+			this.ctx.ui.resetDisplay();
+		};
 		this.ctx.editor.onExit = () => this.handleCtrlD();
 		this.ctx.editor.setActionKeys("app.suspend", this.ctx.keybindings.getKeys("app.suspend"));
 		this.ctx.editor.onSuspend = () => this.handleCtrlZ();

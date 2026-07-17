@@ -402,6 +402,16 @@ export interface Terminal {
 	 * already-detected appearance so late subscribers never miss it.
 	 */
 	onAppearanceChange(callback: (appearance: TerminalAppearance) => void): void;
+	/**
+	 * Issue a single OSC 11 background-color re-query, driving the appearance
+	 * callbacks through the same parse/dedup pipeline used at startup and on Mode
+	 * 2031 notifications. Bounded: one probe per call, no timers. Invoked on the
+	 * user's explicit display-reset gesture (Ctrl+L) so terminals that cannot
+	 * deliver end-to-end Mode 2031 notifications still pick up a light/dark switch
+	 * without a restart. Optional so custom Terminals built against older pi-tui
+	 * versions keep working.
+	 */
+	refreshAppearance?(): void;
 	/** The last detected terminal appearance, or undefined if not yet known. */
 	get appearance(): TerminalAppearance | undefined;
 	/**
@@ -548,6 +558,19 @@ export class ProcessTerminal implements Terminal {
 				/* ignore callback errors */
 			}
 		}
+	}
+
+/**
+	 * Re-query the terminal background via a single OSC 11 probe. Reuses the
+	 * startup query path — same DA1-sentinel FIFO, pending/queued gating, parsing,
+	 * dedup, and appearance callbacks — so a light/dark switch is picked up
+	 * without a restart on terminals lacking end-to-end Mode 2031 notifications.
+	 * Bounded to one probe per call; no timers are armed. Suppressed while headless
+	 * or after the terminal is torn down.
+	 */
+	refreshAppearance(): void {
+		if (this.#headless || this.#dead) return;
+		this.#queryBackgroundColor();
 	}
 
 	onPrivateModeReport(callback: (mode: number, supported: boolean, confirmed?: boolean) => void): void {

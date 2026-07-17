@@ -259,6 +259,70 @@ describe("ProcessTerminal OSC 11 appearance detection", () => {
 		terminal.stop();
 	});
 
+	it("refreshAppearance() issues exactly one OSC 11 re-query per call (#5352)", () => {
+		const { terminal, queryCount } = setupTerminal();
+
+		// Drain the OSC 11 reply and all seven startup DA1 sentinels (keyboard,
+		// OSC 11, and the DECRQM probes for 2026/2048/2031/1010/1011) so the
+		// probe FIFO is empty before the refresh gesture.
+		process.stdin.emit("data", "\x1b]11;rgb:ffff/ffff/ffff\x07");
+		for (let i = 0; i < 7; i++) process.stdin.emit("data", "\x1b[?1;2c");
+		const afterInitial = queryCount();
+
+		// An explicit refresh gesture (Ctrl+L) issues one bounded probe.
+		terminal.refreshAppearance?.();
+		expect(queryCount()).toBe(afterInitial + 1);
+
+		// Complete that query's cycle, then refresh again: still one probe each.
+		process.stdin.emit("data", "\x1b]11;rgb:0000/0000/0000\x07");
+		process.stdin.emit("data", "\x1b[?1;2c");
+		terminal.refreshAppearance?.();
+		expect(queryCount()).toBe(afterInitial + 2);
+
+		terminal.stop();
+	});
+
+	it("refreshAppearance() re-evaluates a changed background through the callback pipeline", () => {
+		const { terminal } = setupTerminal();
+		const appearances: string[] = [];
+		terminal.onAppearanceChange(a => appearances.push(a));
+
+		// Startup classifies the terminal as light.
+		process.stdin.emit("data", "\x1b]11;rgb:ffff/ffff/ffff\x07");
+		for (let i = 0; i < 7; i++) process.stdin.emit("data", "\x1b[?1;2c");
+		expect(terminal.appearance).toBe("light");
+		expect(appearances).toEqual(["light"]);
+
+		// User switches the OS/terminal to dark and presses Ctrl+L. The bounded
+		// re-query picks up the new background and fires the appearance callback.
+		terminal.refreshAppearance?.();
+		process.stdin.emit("data", "\x1b]11;rgb:0000/0000/0000\x07");
+		process.stdin.emit("data", "\x1b[?1;2c");
+
+		expect(terminal.appearance).toBe("dark");
+		expect(appearances).toEqual(["light", "dark"]);
+
+		terminal.stop();
+	});
+
+	it("refreshAppearance() still probes through a Mode 2031-capable bridge (#5352)", () => {
+		const { terminal, queryCount } = setupTerminal();
+
+		// Drain startup, then have the bridge (e.g. tmux) advertise Mode 2031
+		// support via DECRQM — CSI ? 2031 ; 2 $ y (reset/supported). The outer
+		// terminal may still never emit an appearance notification, so an explicit
+		// refresh must not be gated on advertised 2031 support.
+		process.stdin.emit("data", "\x1b]11;rgb:ffff/ffff/ffff\x07");
+		for (let i = 0; i < 7; i++) process.stdin.emit("data", "\x1b[?1;2c");
+		process.stdin.emit("data", "\x1b[?2031;2$y");
+		const afterInitial = queryCount();
+
+		terminal.refreshAppearance?.();
+		expect(queryCount()).toBe(afterInitial + 1);
+
+		terminal.stop();
+	});
+
 	it("does not periodically re-query OSC 11 under WSL either (#3297)", () => {
 		vi.useFakeTimers();
 		Object.defineProperty(process, "platform", { value: "linux", configurable: true });

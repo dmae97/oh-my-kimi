@@ -79,6 +79,7 @@ async function createContext() {
 	});
 	const addStartListener = vi.fn();
 	const terminalWrite = vi.fn();
+	const refreshAppearance = vi.fn();
 	const prompt = vi.fn(async () => {});
 	const retry = vi.fn(async () => true);
 	const abort = vi.fn(async () => {});
@@ -135,7 +136,7 @@ async function createContext() {
 			addInputListener,
 			addStartListener,
 			getFocused: vi.fn(() => focused),
-			terminal: { write: terminalWrite },
+			terminal: { write: terminalWrite, refreshAppearance },
 		} as unknown as InteractiveModeContext["ui"],
 		loadingAnimation: undefined,
 		autoCompactionLoader: undefined,
@@ -217,6 +218,7 @@ async function createContext() {
 			retry,
 			abort,
 			resetDisplay,
+			refreshAppearance,
 			handleBtwBranchKey,
 			addInputListener,
 			canBranchBtw,
@@ -249,6 +251,12 @@ describe("InputController keybinding setup", () => {
 		expect(spies.showModelSelector).toHaveBeenNthCalledWith(1, { temporaryOnly: true });
 		expect(spies.showModelSelector).toHaveBeenNthCalledWith(2);
 		expect(spies.resetDisplay).toHaveBeenCalledTimes(1);
+		expect(spies.refreshAppearance).toHaveBeenCalledTimes(1);
+		// The background re-query must run before the repaint so the appearance
+		// callback re-evaluates the auto theme against the fresh classification.
+		expect(spies.refreshAppearance.mock.invocationCallOrder[0]!).toBeLessThan(
+			spies.resetDisplay.mock.invocationCallOrder[0]!,
+		);
 	});
 
 	it("does not mark pasted shell prompts as Python mode while editing", async () => {
