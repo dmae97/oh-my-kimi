@@ -594,7 +594,11 @@ const streamOpenAIResponsesOnce = (
 						error instanceof Error &&
 						/previous[ _]?response/i.test(error.message) &&
 						/zero[ _-]?data[ _-]?retention/i.test(error.message);
-					if (!zdrRejection && !isOpenAIResponsesStalePreviousResponseError(error)) {
+					const isPromptBlocked =
+						error instanceof Error &&
+						((error as { code?: string }).code === "invalid_prompt" ||
+							/invalid_prompt|Request blocked/i.test(error.message));
+					if (!zdrRejection && !isPromptBlocked && !isOpenAIResponsesStalePreviousResponseError(error)) {
 						throw error;
 					}
 					// Server rejected the chain baseline: reset, count the failure (or

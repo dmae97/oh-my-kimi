@@ -1205,3 +1205,34 @@ describe("openai-codex concurrent reasoning summaries", () => {
 		expect(text?.text).toBe("Hello");
 	});
 });
+
+describe("openai-codex native history redaction", () => {
+	it("redacts credentials from user provider history before replaying it", () => {
+		const model = createCodexModel("gpt-5.1-codex");
+		const credential = "sk-ABCdef1234567890ABCdef1234567890ABCdef1234567890ABCdef123456";
+		const context: Context = {
+			messages: [
+				{
+					role: "user",
+					content: "fallback",
+					timestamp: Date.now(),
+					providerPayload: {
+						type: "openaiResponsesHistory",
+						provider: model.provider,
+						items: [{ type: "message", role: "user", content: [{ type: "input_text", text: credential }] }],
+					},
+				} as Context["messages"][number],
+			],
+		};
+
+		const messages = convertCodexResponsesMessages(model, context);
+
+		expect(messages).toEqual([
+			{
+				type: "message",
+				role: "user",
+				content: [{ type: "input_text", text: "[openai_token_redacted]" }],
+			},
+		]);
+	});
+});
