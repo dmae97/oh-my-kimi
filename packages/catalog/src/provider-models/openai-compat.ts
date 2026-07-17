@@ -3609,7 +3609,16 @@ export async function fetchLiteLLMRichModels<TApi extends Api>(
 				continue;
 			}
 			if ("failure" in result) {
-				if (!metadataFailure || (metadataFailure.status !== 403 && result.failure.status === 403)) {
+				// A 401 is a retryable auth failure owned by the caller's auth-retry
+				// path (withAuth refresh/sibling rotation in discoverLiteLLMModels);
+				// recording it here would log a fallback warning on a stale first
+				// credential before the refreshed retry ultimately serves rich
+				// metadata. Forbidden (403) and other failures are never retried, so
+				// they remain warn-worthy and keep priority.
+				if (
+					result.failure.status !== 401 &&
+					(!metadataFailure || (metadataFailure.status !== 403 && result.failure.status === 403))
+				) {
 					metadataFailure = result.failure;
 				}
 				continue;

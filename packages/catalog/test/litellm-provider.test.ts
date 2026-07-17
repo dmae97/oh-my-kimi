@@ -291,6 +291,21 @@ describe("LiteLLM provider discovery", () => {
 		expect(warnSpy).not.toHaveBeenCalled();
 	});
 
+	test("stays silent on retryable 401 rich failures so the caller's auth retry owns them", async () => {
+		const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+
+		const models = await fetchLiteLLMRichModels({
+			api: "openai-completions",
+			provider: "litellm",
+			apiKey: "sk-stale",
+			baseUrl: "http://unauthorized:4000/v1",
+			fetch: async () => new Response("Unauthorized", { status: 401 }),
+		});
+
+		expect(models).toBeNull();
+		expect(warnSpy).not.toHaveBeenCalled();
+	});
+
 	test("enriches LiteLLM rich models missing from models.dev with bundled reasoning metadata", async () => {
 		const fetchMock = vi.fn(async (input: string | URL | Request) => {
 			const url = inputUrl(input);
