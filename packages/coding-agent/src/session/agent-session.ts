@@ -7086,6 +7086,12 @@ export class AgentSession {
 	 */
 	async refreshMCPTools(mcpTools: CustomTool[]): Promise<void> {
 		const existingNames = Array.from(this.#toolRegistry.keys());
+		const previousMcpTools = new Map(
+			existingNames.flatMap(name => {
+				const tool = this.#toolRegistry.get(name);
+				return isMCPToolName(name) && tool ? [[name, tool] as const] : [];
+			}),
+		);
 		for (const name of existingNames) {
 			if (isMCPToolName(name)) {
 				this.#toolRegistry.delete(name);
@@ -7116,7 +7122,15 @@ export class AgentSession {
 		// Every connected MCP tool is selected; centralized repartitioning owns
 		// presentation pins and write-transport activation/removal.
 		const nextActive = [...new Set([...this.#getActiveNonMCPToolNames(), ...mcpTools.map(tool => tool.name)])];
-		await this.#applyActiveToolsByName(nextActive);
+		try {
+			await this.#applyActiveToolsByName(nextActive);
+		} catch (error) {
+			for (const name of this.#toolRegistry.keys()) {
+				if (isMCPToolName(name)) this.#toolRegistry.delete(name);
+			}
+			for (const [name, tool] of previousMcpTools) this.#toolRegistry.set(name, tool);
+			throw error;
+		}
 	}
 
 	/**
@@ -7137,6 +7151,12 @@ export class AgentSession {
 
 		const previousRpcHostToolNames = new Set(this.#rpcHostToolNames);
 		const previousActiveToolNames = this.getEnabledToolNames();
+		const previousRpcHostTools = new Map(
+			[...previousRpcHostToolNames].flatMap(name => {
+				const tool = this.#toolRegistry.get(name);
+				return tool ? [[name, tool] as const] : [];
+			}),
+		);
 		for (const name of previousRpcHostToolNames) {
 			this.#toolRegistry.delete(name);
 		}
@@ -7158,9 +7178,16 @@ export class AgentSession {
 		const autoActivatedRpcToolNames = rpcTools
 			.filter(tool => !tool.hidden && !previousRpcHostToolNames.has(tool.name))
 			.map(tool => tool.name);
-		await this.#applyActiveToolsByName(
-			Array.from(new Set([...activeNonRpcToolNames, ...preservedRpcToolNames, ...autoActivatedRpcToolNames])),
-		);
+		try {
+			await this.#applyActiveToolsByName(
+				Array.from(new Set([...activeNonRpcToolNames, ...preservedRpcToolNames, ...autoActivatedRpcToolNames])),
+			);
+		} catch (error) {
+			for (const name of this.#rpcHostToolNames) this.#toolRegistry.delete(name);
+			this.#rpcHostToolNames = previousRpcHostToolNames;
+			for (const [name, tool] of previousRpcHostTools) this.#toolRegistry.set(name, tool);
+			throw error;
+		}
 	}
 
 	/** Whether auto-compaction is currently running */

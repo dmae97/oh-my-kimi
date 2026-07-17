@@ -2121,18 +2121,21 @@ export class InteractiveMode implements InteractiveModeContext {
 	async #clearTransientModeState(): Promise<void> {
 		if (this.planModeEnabled || this.planModePaused) {
 			this.session.setPlanModeState(undefined);
-			if (this.#planModePreviousTools !== undefined) {
-				await this.session.setActiveToolsByName(this.#planModePreviousTools);
+			try {
+				if (this.#planModePreviousTools !== undefined) {
+					await this.session.setActiveToolsByName(this.#planModePreviousTools);
+				}
+			} finally {
+				this.session.setPlanProposalHandler?.(null);
+				this.planModeEnabled = false;
+				this.planModePaused = false;
+				this.planModePlanFilePath = undefined;
+				this.#planModePreviousTools = undefined;
+				this.#planModePreviousModelState = undefined;
+				this.#pendingModelSwitch = undefined;
+				this.#planModeHasEntered = false;
+				this.#updatePlanModeStatus();
 			}
-			this.session.setPlanProposalHandler?.(null);
-			this.planModeEnabled = false;
-			this.planModePaused = false;
-			this.planModePlanFilePath = undefined;
-			this.#planModePreviousTools = undefined;
-			this.#planModePreviousModelState = undefined;
-			this.#pendingModelSwitch = undefined;
-			this.#planModeHasEntered = false;
-			this.#updatePlanModeStatus();
 		}
 
 		if (this.goalModeEnabled || this.goalModePaused) {

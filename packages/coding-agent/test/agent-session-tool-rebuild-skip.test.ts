@@ -589,4 +589,62 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 		expect(session.getActiveToolNames()).toContain("write");
 		expect(session.getMountedXdevToolNames()).toContain(search.name);
 	});
+
+	it("rolls back MCP catalog replacement when prompt rebuild fails", async () => {
+		let failRebuild = false;
+		let date = "2026-07-16";
+		const xdevRegistry = new XdevRegistry([]);
+		const { session } = newSession(
+			async toolNames => {
+				if (failRebuild) throw new Error("rebuild failed");
+				return `tools:${toolNames.join(",")}`;
+			},
+			{ xdevRegistry, getLocalCalendarDate: () => date },
+		);
+		const oldTool = createMcpCustomTool("mcp__nucleus_old", "nucleus", "old", "Old tool");
+		const newTool = createMcpCustomTool("mcp__nucleus_new", "nucleus", "new", "New tool");
+		await session.refreshMCPTools([oldTool]);
+		date = "2026-07-17";
+		failRebuild = true;
+
+		await expect(session.refreshMCPTools([newTool])).rejects.toThrow("rebuild failed");
+		expect(session.getToolByName(oldTool.name)).toBeDefined();
+		expect(session.getToolByName(newTool.name)).toBeUndefined();
+		expect(session.getMountedXdevToolNames()).toContain(oldTool.name);
+
+		failRebuild = false;
+		await session.refreshMCPTools([newTool]);
+		expect(session.getToolByName(oldTool.name)).toBeUndefined();
+		expect(session.getToolByName(newTool.name)).toBeDefined();
+		expect(session.getMountedXdevToolNames()).toContain(newTool.name);
+	});
+
+	it("rolls back RPC catalog replacement when prompt rebuild fails", async () => {
+		let failRebuild = false;
+		let date = "2026-07-16";
+		const xdevRegistry = new XdevRegistry([]);
+		const { session } = newSession(
+			async toolNames => {
+				if (failRebuild) throw new Error("rebuild failed");
+				return `tools:${toolNames.join(",")}`;
+			},
+			{ xdevRegistry, getLocalCalendarDate: () => date },
+		);
+		const oldTool = { ...createBasicTool("rpc_old", "RPC Old"), loadMode: "discoverable" as const };
+		const newTool = { ...createBasicTool("rpc_new", "RPC New"), loadMode: "discoverable" as const };
+		await session.refreshRpcHostTools([oldTool]);
+		date = "2026-07-17";
+		failRebuild = true;
+
+		await expect(session.refreshRpcHostTools([newTool])).rejects.toThrow("rebuild failed");
+		expect(session.getToolByName(oldTool.name)).toBeDefined();
+		expect(session.getToolByName(newTool.name)).toBeUndefined();
+		expect(session.getMountedXdevToolNames()).toContain(oldTool.name);
+
+		failRebuild = false;
+		await session.refreshRpcHostTools([newTool]);
+		expect(session.getToolByName(oldTool.name)).toBeUndefined();
+		expect(session.getToolByName(newTool.name)).toBeDefined();
+		expect(session.getMountedXdevToolNames()).toContain(newTool.name);
+	});
 });

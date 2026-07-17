@@ -27,7 +27,7 @@ function makeTool(name: string): AgentTool {
 interface HarnessOptions {
 	extraRegistryTools?: readonly AgentTool[];
 	builtInToolNames?: Iterable<string>;
-	rebuildGate?: { fail: boolean };
+	rebuildGate?: { fail: boolean; calls?: number };
 }
 
 describe("InteractiveMode plan.defaultOnStartup", () => {
@@ -102,6 +102,7 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 			builtInToolNames: options.builtInToolNames ?? ["read"],
 			rebuildSystemPrompt: options.rebuildGate
 				? async () => {
+						if (options.rebuildGate) options.rebuildGate.calls = (options.rebuildGate.calls ?? 0) + 1;
 						if (options.rebuildGate?.fail) throw new Error("rebuild failed");
 						return { systemPrompt: ["Test"] };
 					}
@@ -192,6 +193,35 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 		expect(created.planModeEnabled).toBe(false);
 		expect(session?.getPlanModeState()).toBeUndefined();
 		expect(session?.getActiveToolNames()).toEqual(["read"]);
+	});
+
+	it("clears old plan UI state when target-session reconciliation restore fails", async () => {
+		const writeTool = makeTool("write");
+		const rebuildGate = { fail: false, calls: 0 };
+		const created = createHarness(Settings.isolated({ "plan.defaultOnStartup": true, "compaction.enabled": false }), {
+			extraRegistryTools: [writeTool],
+			builtInToolNames: ["read", "write"],
+			rebuildGate,
+		});
+		await created.init({ suppressWelcomeIntro: true });
+		expect(created.planModeEnabled).toBe(true);
+		expect(session?.peekPlanProposalHandler()).toBeDefined();
+
+		const targetManager = SessionManager.create(tempDir.path(), path.join(tempDir.path(), "target-sessions"));
+		await targetManager.flush();
+		const targetSessionFile = targetManager.getSessionFile();
+		expect(targetSessionFile).toBeString();
+		await targetManager.close();
+		const callsBeforeSwitch = rebuildGate.calls;
+		rebuildGate.fail = true;
+
+		await expect(session!.switchSession(targetSessionFile!)).resolves.toBe(true);
+		expect(session?.sessionFile).toBe(targetSessionFile);
+		expect(created.planModeEnabled).toBe(false);
+		expect(rebuildGate.calls).toBeGreaterThan(callsBeforeSwitch);
+		expect(created.planModePaused).toBe(false);
+		expect(session?.getPlanModeState()).toBeUndefined();
+		expect(session?.peekPlanProposalHandler()).toBeUndefined();
 	});
 
 	it("does not enter plan mode at startup by default", async () => {
