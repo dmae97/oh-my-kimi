@@ -283,6 +283,34 @@ describe("Editor Enter handler sync slash completion", () => {
 		expect(submitted).toBeUndefined();
 	});
 
+	it("does not replace a live skill prefix with a stale different skill on Enter", async () => {
+		const editor = new Editor(defaultEditorTheme);
+		editor.setAutocompleteProvider(
+			new CombinedAutocompleteProvider(
+				[
+					{ name: "skill:alpha", description: "Alpha" },
+					{ name: "skill:security-scan", description: "Security scan" },
+				],
+				"/tmp",
+			),
+		);
+		const submissions: string[] = [];
+		editor.onSubmit = text => {
+			submissions.push(text);
+		};
+
+		editor.setText("fix ");
+		editor.handleInput("/");
+		await Promise.resolve();
+		expect(editor.isShowingAutocomplete()).toBe(true);
+
+		editor.handleInput("sec");
+		editor.handleInput("\r");
+
+		expect(submissions).toEqual(["fix /sec"]);
+		expect(editor.getText()).toBe("");
+	});
+
 	it("submits the raw draft when Enter sees a relocated non-skill popup", async () => {
 		const { editor, submissions } = await createRelocatedModelPopup();
 
