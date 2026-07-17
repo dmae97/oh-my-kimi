@@ -139,6 +139,14 @@ function createStrictGrammarTooLargeError(): Error {
 	return error;
 }
 
+// Azure Foundry-style rejection: no invalid_request_error wrapper, the gateway
+// just names the missing feature for the hosted model deployment.
+function createStructuredOutputsUnsupportedError(): Error {
+	const error = new Error('400 {"error":{"code":"BadRequest","message":"structured_outputs not supported"}}');
+	(error as Error & { status: number }).status = 400;
+	return error;
+}
+
 function createOtherInvalidRequestError(): Error {
 	const error = new Error(
 		'400 {"type":"error","error":{"type":"invalid_request_error","message":"Some other validation error."},"request_id":"req_test"}',
@@ -641,10 +649,15 @@ describe("anthropic stream envelope handling", () => {
 			model,
 			false,
 		);
+		// The unwrapped thinking block carries no signature. On same-model replay to
+		// signature-enforcing Anthropic an unsigned thinking block is dropped entirely — it cannot
+		// replay natively (a "" signature 400s) and must not be demoted to text (demotion trips the
+		// reasoning_extraction classifier). It was this turn's only content, so the whole assistant
+		// message falls away, leaving just the two surrounding user turns with no leaked reasoning.
 		const replayAssistant = replayParams.find(param => param.role === "assistant");
-		expect(replayAssistant?.content).toEqual([
-			{ type: "text", text: "<thinking>\nCheck logs before accepting container health.\n</thinking>" },
-		]);
+		expect(replayAssistant).toBeUndefined();
+		expect(replayParams.map(param => param.role)).toEqual(["user", "user"]);
+		expect(replayParams.every(param => !JSON.stringify(param.content).includes("Check logs"))).toBe(true);
 	});
 	it("preserves signed thinking bytes when no literal thinking envelope is present", async () => {
 		const signedThinking = "\nCheck logs before accepting container health.\n";
@@ -1008,6 +1021,45 @@ describe("anthropic stream envelope handling", () => {
 		expect(countEvents(nextEvents, "done")).toBe(1);
 		expect(countEvents(nextEvents, "error")).toBe(0);
 		expect(strictFlags).toEqual([[true], [false], [false]]);
+	});
+
+	it("retries without strict tools when the endpoint rejects structured outputs for the model", async () => {
+		const toolContext: Context = {
+			...context,
+			tools: [
+				{
+					name: "edit",
+					description: "Edit a value",
+					strict: true,
+					parameters: queryObjectSchema,
+				},
+			],
+		};
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const strictFlags: boolean[][] = [];
+		let attempt = 0;
+		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation((params: unknown) => {
+			attempt += 1;
+			strictFlags.push(getStrictFlags(params));
+			if (attempt === 1) {
+				return createRejectedMockRequest(createStructuredOutputsUnsupportedError()) as never;
+			}
+			return createMockRequest(createTextSuccessEvents("recovered")) as never;
+		});
+
+		const stream = streamAnthropic(model, toolContext, { apiKey: "sk-ant-test", providerSessionState });
+		const events: AssistantMessageEvent[] = [];
+		for await (const event of stream) {
+			events.push(event);
+		}
+		const result = await stream.result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(result.errorMessage).toBeUndefined();
+		expect(JSON.parse(JSON.stringify(result.content))).toEqual([{ type: "text", text: "recovered" }]);
+		expect(countEvents(events, "error")).toBe(0);
+		expect(strictFlags).toEqual([[true], [false]]);
+		expect(anthropicStrictToolsDisabled(providerSessionState)).toBe(true);
 	});
 
 	it("does not disable strict tools for unrelated Anthropic invalid request errors", async () => {

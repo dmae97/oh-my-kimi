@@ -1,8 +1,9 @@
-import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type { AgentTool, AgentToolResult, AgentToolUpdateCallback, ToolLoadMode } from "@oh-my-pi/pi-agent-core";
 import type { Static, TSchema } from "@oh-my-pi/pi-ai";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 import { applyToolProxy } from "../../extensibility/tool-proxy";
 import type { Theme } from "../../modes/theme/theme";
+import { defaultLoadModeForToolName } from "../../tools/essential-tools";
 import type {
 	RpcHostToolCallRequest,
 	RpcHostToolCancelRequest,
@@ -46,6 +47,7 @@ class RpcHostToolAdapter<TParams extends TSchema = TSchema, TTheme extends Theme
 	declare parameters: TParams;
 	readonly strict = true;
 	concurrency: "shared" | "exclusive" = "shared";
+	readonly loadMode: ToolLoadMode;
 	#bridge: RpcHostToolBridge;
 	#definition: RpcHostToolDefinition;
 
@@ -53,6 +55,7 @@ class RpcHostToolAdapter<TParams extends TSchema = TSchema, TTheme extends Theme
 		this.#definition = definition;
 		this.#bridge = bridge;
 		applyToolProxy(definition, this);
+		this.loadMode = defaultLoadModeForToolName(definition.name, definition.loadMode);
 	}
 
 	execute(
@@ -75,6 +78,7 @@ export class RpcHostToolBridge {
 	#output: RpcHostToolOutput;
 	#definitions = new Map<string, RpcHostToolDefinition>();
 	#pendingCalls = new Map<string, PendingHostToolCall>();
+	#closedError: Error | undefined;
 
 	constructor(output: RpcHostToolOutput) {
 		this.#output = output;
@@ -124,6 +128,10 @@ export class RpcHostToolBridge {
 	): Promise<AgentToolResult<unknown>> {
 		if (signal?.aborted) {
 			return Promise.reject(new Error(`Host tool "${definition.name}" was aborted`));
+		}
+
+		if (this.#closedError) {
+			return Promise.reject(this.#closedError);
 		}
 
 		const id = Snowflake.next() as string;
@@ -181,6 +189,16 @@ export class RpcHostToolBridge {
 		this.#pendingCalls.clear();
 		for (const pending of pendingCalls) {
 			pending.reject(error);
+		}
+	}
+
+	/** Reject active and future host tool requests after the RPC client disconnects. */
+	close(message: string): void {
+		if (!this.#closedError) this.#closedError = new Error(message);
+		const pendingCalls = Array.from(this.#pendingCalls.values());
+		this.#pendingCalls.clear();
+		for (const pending of pendingCalls) {
+			pending.reject(this.#closedError);
 		}
 	}
 }

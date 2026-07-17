@@ -34,7 +34,16 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import squad  # noqa: E402
-from bdf import _DARK, _DIMMED, FontCfg, _stopword_mask, capacity, ensure_font, parse_bdf, render  # noqa: E402
+from bdf import (
+    _DARK,
+    _DIMMED,
+    FontCfg,
+    _stopword_mask,
+    capacity,
+    ensure_font,
+    parse_bdf,
+    render,
+)  # noqa: E402
 from providers import llm_complete, load_env_key  # noqa: E402
 from run import CACHE, QA_CACHE, RESULTS, load_prompt, sha8  # noqa: E402
 
@@ -199,7 +208,9 @@ def render_doc(lines: list[dict], cfg: FontCfg, size: int, cache: Path) -> Image
 # --- runner -----------------------------------------------------------------
 
 
-def doc_png(cond: str, paras: list[dict], lines: list[dict], cfg: FontCfg, size: int) -> Path:
+def doc_png(
+    cond: str, paras: list[dict], lines: list[dict], cfg: FontCfg, size: int
+) -> Path:
     key = sha8(cond, json.dumps([(p["title"], p["ctx"]) for p in paras]), str(size))
     png = CACHE / f"exp18-{cond}-{key}.png"
     if not png.exists() or png.stat().st_size == 0:
@@ -213,7 +224,9 @@ def run_unit(cond: str, unit: dict, ctx: dict) -> list[dict]:
     """One (condition, page/chunk) unit: render carrier, QA, score."""
     args, paras, offsets, keys = ctx["args"], ctx["paras"], ctx["offsets"], ctx["keys"]
     start, end = unit["start"], unit["end"]
-    questions = squad.sample_chunk_questions(paras, offsets, start, end, args.qpc, args.seed)
+    questions = squad.sample_chunk_questions(
+        paras, offsets, start, end, args.qpc, args.seed
+    )
     if not questions:
         return []
     kind, font, variant = CONDITIONS[cond]
@@ -240,11 +253,19 @@ def run_unit(cond: str, unit: dict, ctx: dict) -> list[dict]:
         }
     ]
     qa = cached(
-        MODEL, "exp18-qa", {"messages": messages, "size": args.size, "effort": args.effort},
+        MODEL,
+        "exp18-qa",
+        {"messages": messages, "size": args.size, "effort": args.effort},
         lambda: dict(
             zip(
                 ("text", "usage", "stop"),
-                llm_complete(keys, MODEL, messages, max_tokens=args.max_tokens, effort=args.effort),
+                llm_complete(
+                    keys,
+                    MODEL,
+                    messages,
+                    max_tokens=args.max_tokens,
+                    effort=args.effort,
+                ),
             )
         ),
         args.fresh,
@@ -277,8 +298,13 @@ def aggregate(records: list[dict]) -> dict:
     mean_f1 = sum(f1s) / n
     se = (sum((x - mean_f1) ** 2 for x in f1s) / (n * (n - 1))) ** 0.5 if n > 1 else 0.0
     us = [u for r in records if "usage" in r for u in r["usage"]]
-    tok = {k: sum(u.get(k, 0) for u in us) for k in ("in", "out", "cache_w", "cache_r", "reasoning")}
-    cost_in = (tok["in"] + 1.25 * tok["cache_w"] + 0.1 * tok["cache_r"]) / 1e6 * PRICE_IN
+    tok = {
+        k: sum(u.get(k, 0) for u in us)
+        for k in ("in", "out", "cache_w", "cache_r", "reasoning")
+    }
+    cost_in = (
+        (tok["in"] + 1.25 * tok["cache_w"] + 0.1 * tok["cache_r"]) / 1e6 * PRICE_IN
+    )
     cost_out = tok["out"] / 1e6 * PRICE_OUT
     return {
         "n": n,
@@ -304,8 +330,16 @@ def main() -> None:
     ap.add_argument("--max-tokens", type=int, default=32768)
     ap.add_argument("--effort", default=None)
     ap.add_argument("--fresh", action="store_true")
-    ap.add_argument("--render-only", action="store_true", help="render first page per cond + capacity stats, no API")
-    ap.add_argument("--report", action="store_true", help="re-aggregate (all units should hit cache)")
+    ap.add_argument(
+        "--render-only",
+        action="store_true",
+        help="render first page per cond + capacity stats, no API",
+    )
+    ap.add_argument(
+        "--report",
+        action="store_true",
+        help="re-aggregate (all units should hit cache)",
+    )
     ap.add_argument("--env", default="~/.env")
     args = ap.parse_args()
 
@@ -330,7 +364,14 @@ def main() -> None:
     for length in lengths:
         paras = all_paras[:length]
         flow, offsets = squad.build_flow(paras)
-        ctx = {"args": args, "flow": flow, "paras": paras, "offsets": offsets, "keys": keys, "length": length}
+        ctx = {
+            "args": args,
+            "flow": flow,
+            "paras": paras,
+            "offsets": offsets,
+            "keys": keys,
+            "length": length,
+        }
         capacity_stats[length] = {"corpus_chars": len(flow), "conds": {}}
         for cond in conditions:
             kind, font, _ = CONDITIONS[cond]
@@ -338,7 +379,8 @@ def main() -> None:
             cols, rows, grid_cap = capacity(cfg, args.size)
             if kind == "grid":
                 units = [
-                    {"start": s, "end": min(s + grid_cap, len(flow))} for s in range(0, len(flow), grid_cap)
+                    {"start": s, "end": min(s + grid_cap, len(flow))}
+                    for s in range(0, len(flow), grid_cap)
                 ]
                 chars = [u["end"] - u["start"] for u in units]
             else:
@@ -366,7 +408,9 @@ def main() -> None:
     for length, st in capacity_stats.items():
         print(f"len {length}: corpus {st['corpus_chars']} chars")
         for cond, cs in st["conds"].items():
-            print(f"  {cond:<24} {cs['pages']} pages, mean {cs['mean_chars_page']} chars/page (grid cap {cs['grid_chars_page']})")
+            print(
+                f"  {cond:<24} {cs['pages']} pages, mean {cs['mean_chars_page']} chars/page (grid cap {cs['grid_chars_page']})"
+            )
 
     if args.render_only:
         for cond, u, ctx in tasks:
@@ -418,9 +462,13 @@ def main() -> None:
             sub = [r for r in records if r["length"] == length and r["cond"] == cond]
             if not sub:
                 continue
-            cells.append({"model": MODEL, "length": length, "condition": cond, **aggregate(sub)})
+            cells.append(
+                {"model": MODEL, "length": length, "condition": cond, **aggregate(sub)}
+            )
     (out_dir / "summary.json").write_text(
-        json.dumps({"args": vars(args), "capacity": capacity_stats, "cells": cells}, indent=1)
+        json.dumps(
+            {"args": vars(args), "capacity": capacity_stats, "cells": cells}, indent=1
+        )
     )
     with (out_dir / "matrix.csv").open("w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=list(cells[0].keys()))

@@ -60,7 +60,7 @@ describe("behavior backfill", () => {
 		const database = new Database(getStatsDbPath());
 		database
 			.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)")
-			.run("user_messages_v6", "1778589361860");
+			.run("user_messages_v8", "1778589361860");
 		database
 			.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)")
 			.run("user_message_links_v1", "1778589361862");
@@ -85,7 +85,7 @@ describe("behavior backfill", () => {
 		closeDb();
 
 		const database = new Database(getStatsDbPath());
-		database.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").run("user_messages_v6", "pending");
+		database.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").run("user_messages_v8", "pending");
 		database
 			.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)")
 			.run("user_message_links_v1", "pending");

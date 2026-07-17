@@ -33,10 +33,10 @@ function questionLine(question: string, uiTheme: Theme): string {
 
 export const inspectImageToolRenderer = {
 	renderCall(args: InspectImageRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
-		const rawPath = args.path ?? "";
+		const rawPath = typeof args.path === "string" ? args.path : "";
 		const pathDisplay = rawPath ? shortenPath(rawPath) : "…";
 		const header = renderStatusLine({ icon: "pending", title: "Inspect", description: pathDisplay }, uiTheme);
-		const question = args.question?.trim();
+		const question = typeof args.question === "string" ? args.question.trim() : "";
 		// Call is at most a status line plus a one-line question — too small to box.
 		// The container renders a lone Text cleanly with no chrome.
 		if (!question) return new Text(header, 0, 0);
@@ -51,7 +51,8 @@ export const inspectImageToolRenderer = {
 		args?: InspectImageRenderArgs,
 	): Component {
 		const details = result.details;
-		const rawPath = details?.imagePath ?? args?.path ?? "";
+		const rawPath =
+			typeof details?.imagePath === "string" ? details.imagePath : typeof args?.path === "string" ? args.path : "";
 		const pathDisplay = rawPath ? shortenPath(rawPath) : "image";
 		const success = !result.isError;
 		const header = renderStatusLine(
@@ -69,7 +70,7 @@ export const inspectImageToolRenderer = {
 			uiTheme,
 		);
 
-		const question = args?.question?.trim();
+		const question = typeof args?.question === "string" ? args.question.trim() : "";
 		const outputText = result.content.find(content => content.type === "text")?.text?.trimEnd() ?? "";
 
 		if (result.isError) {

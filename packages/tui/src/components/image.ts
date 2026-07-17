@@ -1,13 +1,16 @@
+import { randomBytes } from "node:crypto";
 import { getKittyGraphics } from "../kitty-graphics";
 import {
 	getCellDimensions,
 	getImageDimensions,
 	type ImageDimensions,
+	ImageProtocol,
 	imageFallback,
 	renderImage,
 	TERMINAL,
 } from "../terminal-capabilities";
 import type { Component } from "../tui";
+import { visibleWidth } from "../utils";
 
 export interface ImageTheme {
 	fallbackColor: (str: string) => string;
@@ -31,9 +34,155 @@ const EMPTY_IDS: readonly number[] = [];
 const EMPTY_TRANSMITS: readonly string[] = [];
 const SAVE_CURSOR = "\x1b7";
 const RESTORE_CURSOR = "\x1b8";
-// Direct placements reserve height with leading zero-width rows. Keep them
-// non-plain so transcript blank-edge trimming does not collapse image-only blocks.
+const ERASE_LINE = "\x1b[2K";
+// Internal line markers consumed by TUI before terminal output. A per-process
+// capability prevents marker-shaped tool/user text from entering this raw
+// control-sequence path. Direct Kitty placements must render on their first
+// logical row so WezTerm can carry the full placement into scrollback;
+// continuation rows then advance without EL, which would detach the image.
+const DIRECT_KITTY_ROW_CAPABILITY = randomBytes(16).toString("hex");
+const DIRECT_KITTY_PLACEMENT_PREFIX = `\x1b]pi:img:${DIRECT_KITTY_ROW_CAPABILITY}:p:`;
+const DIRECT_KITTY_PLACEMENT_SUFFIX = `\x1b]pi:img:${DIRECT_KITTY_ROW_CAPABILITY}:e\x07`;
+const DIRECT_KITTY_PLACEMENT_ANCHOR = `\x1b]pi:img:${DIRECT_KITTY_ROW_CAPABILITY}:a\x07`;
+const DIRECT_KITTY_CONTINUATION_PREFIX = `\x1b]pi:img:${DIRECT_KITTY_ROW_CAPABILITY}:c:`;
+// Direct placements for non-Kitty protocols still reserve height with leading
+// zero-width rows. Keep them non-plain so transcript blank-edge trimming does
+// not collapse image-only blocks.
 const RESERVED_IMAGE_ROW = "\x1b[0m";
+
+interface SizedDirectKittyMarker {
+	markerStart: number;
+	payloadStart: number;
+	columns: number;
+	rows: number;
+}
+
+interface DirectKittyPlacementFrame extends SizedDirectKittyMarker {
+	placementStart: number;
+	placementEnd: number;
+	markerEnd: number;
+}
+
+function findSizedDirectKittyMarker(line: string, prefix: string): SizedDirectKittyMarker | null {
+	const markerStart = line.indexOf(prefix);
+	if (markerStart < 0) return null;
+	const sizeStart = markerStart + prefix.length;
+	const payloadStart = line.indexOf("\x07", sizeStart);
+	if (payloadStart < 0) return null;
+	const match = line.slice(sizeStart, payloadStart).match(/^(\d+)x(\d+)$/);
+	if (match === null) return null;
+	const columns = Number(match[1]);
+	const rows = Number(match[2]);
+	if (!Number.isSafeInteger(columns) || columns <= 0 || !Number.isSafeInteger(rows) || rows <= 0) return null;
+	return { markerStart, payloadStart: payloadStart + 1, columns, rows };
+}
+
+function findDirectKittyPlacementFrame(line: string): DirectKittyPlacementFrame | null {
+	const marker = findSizedDirectKittyMarker(line, DIRECT_KITTY_PLACEMENT_PREFIX);
+	if (marker === null) return null;
+	const placementStart = line.indexOf(DIRECT_KITTY_PLACEMENT_ANCHOR, marker.payloadStart);
+	if (placementStart < 0) return null;
+	const placementEnd = placementStart + DIRECT_KITTY_PLACEMENT_ANCHOR.length;
+	const markerEnd = line.indexOf(DIRECT_KITTY_PLACEMENT_SUFFIX, placementEnd);
+	if (markerEnd < 0) return null;
+	return { ...marker, placementStart, placementEnd, markerEnd };
+}
+
+/** Whether this row contains a capability-framed direct Kitty placement. */
+export function isDirectKittyPlacement(line: string): boolean {
+	return findDirectKittyPlacementFrame(line) !== null;
+}
+/** Expected logical row count for a capability-framed direct Kitty placement. */
+export function getDirectKittyPlacementRows(line: string): number | null {
+	return findDirectKittyPlacementFrame(line)?.rows ?? null;
+}
+
+/** Visible cell width of a marked image row, including any surrounding wrapper. */
+export function getDirectKittyRowWidth(line: string): number | null {
+	const placement = findDirectKittyPlacementFrame(line);
+	if (placement !== null) {
+		return (
+			visibleWidth(line.slice(0, placement.markerStart)) +
+			placement.columns +
+			visibleWidth(line.slice(placement.markerEnd + DIRECT_KITTY_PLACEMENT_SUFFIX.length))
+		);
+	}
+	const continuation = findSizedDirectKittyMarker(line, DIRECT_KITTY_CONTINUATION_PREFIX);
+	if (continuation === null) return null;
+	return (
+		visibleWidth(line.slice(0, continuation.markerStart)) +
+		continuation.columns +
+		visibleWidth(line.slice(continuation.payloadStart))
+	);
+}
+
+/** Remove a framed direct-Kitty placement marker while preserving wrappers. */
+export function unwrapDirectKittyPlacement(line: string): string | null {
+	const frame = findDirectKittyPlacementFrame(line);
+	if (frame === null) return null;
+	const prefix = line.slice(0, frame.markerStart);
+	const sequence = line.slice(frame.placementEnd, frame.markerEnd);
+	const implicitPosition =
+		visibleWidth(prefix) > 0 && !/^\x1b\[\d+G/.test(sequence) ? `\x1b[${visibleWidth(prefix) + 1}G` : "";
+	const suffix = line.slice(frame.markerEnd + DIRECT_KITTY_PLACEMENT_SUFFIX.length);
+	const suffixAdvance = visibleWidth(suffix) > 0 ? `\x1b[${frame.columns}C` : "";
+	// Clear under the default background before emitting wrapper SGR/padding;
+	// BCE terminals otherwise extend a narrow Box background across full rows.
+	return (
+		RESERVED_IMAGE_ROW +
+		line.slice(frame.payloadStart, frame.placementStart) +
+		prefix +
+		implicitPosition +
+		sequence +
+		suffixAdvance +
+		suffix
+	);
+}
+
+/** Position a marked placement without hiding its internal dispatch prefix. */
+export function positionDirectKittyPlacement(line: string, columns: number): string | null {
+	const frame = findDirectKittyPlacementFrame(line);
+	if (frame === null) return null;
+	const offset = Number.isFinite(columns) ? Math.max(0, Math.trunc(columns)) : 0;
+	if (offset === 0) return line;
+	const wrapperPrefix = line.slice(0, frame.markerStart);
+	const wrapperSuffix = line.slice(frame.markerEnd + DIRECT_KITTY_PLACEMENT_SUFFIX.length);
+	const wrapperPosition = wrapperPrefix.length > 0 || wrapperSuffix.length > 0 ? `\x1b[${offset + 1}G` : "";
+	const placementColumn = offset + visibleWidth(wrapperPrefix) + 1;
+	return `${wrapperPosition}${line.slice(0, frame.placementEnd)}\x1b[${placementColumn}G${line.slice(frame.placementEnd)}`;
+}
+
+/** Whether this logical row must advance without erasing its Kitty image cells. */
+export function isDirectKittyContinuation(line: string): boolean {
+	return findSizedDirectKittyMarker(line, DIRECT_KITTY_CONTINUATION_PREFIX) !== null;
+}
+
+/** Remove a continuation marker while retaining wrapper padding and borders. */
+export function unwrapDirectKittyContinuation(line: string): string | null {
+	const frame = findSizedDirectKittyMarker(line, DIRECT_KITTY_CONTINUATION_PREFIX);
+	if (frame === null) return null;
+	const prefix = line.slice(0, frame.markerStart);
+	const suffix = line.slice(frame.payloadStart);
+	const suffixAdvance = visibleWidth(suffix) > 0 ? `\x1b[${frame.columns}C` : "";
+	return prefix + suffixAdvance + suffix;
+}
+
+/** Position a wrapped continuation row within an overlay. */
+export function positionDirectKittyContinuation(line: string, columns: number): string | null {
+	const frame = findSizedDirectKittyMarker(line, DIRECT_KITTY_CONTINUATION_PREFIX);
+	if (frame === null) return null;
+	const offset = Number.isFinite(columns) ? Math.max(0, Math.trunc(columns)) : 0;
+	const hasWrapper = frame.markerStart > 0 || frame.payloadStart < line.length;
+	return offset > 0 && hasWrapper ? `\x1b[${offset + 1}G${line}` : line;
+}
+
+function reserveDirectKittyRows(rows: number): string {
+	let sequence = ERASE_LINE;
+	for (let row = 1; row < rows; row++) {
+		sequence += `\r\n${ERASE_LINE}`;
+	}
+	return `${sequence}\x1b[${rows - 1}A`;
+}
 
 /** Default count of inline images kept as live graphics before older ones fall back to text. */
 export const DEFAULT_MAX_INLINE_IMAGES = 8;
@@ -65,6 +214,7 @@ export class ImageBudget {
 	#requestRender: () => void;
 	#nextId = nextImageIdSeed();
 	#keyToId = new Map<string, number>();
+	#idToKey = new Map<number, string>();
 	/** Display-order image ids observed during the in-flight pass. */
 	#passIds: number[] = [];
 	/**
@@ -132,6 +282,7 @@ export class ImageBudget {
 			const id = this.#nextId;
 			this.#nextId = (this.#nextId + 1) & 0xffffff || 1;
 			this.#keyToId.set(key, id);
+			this.#idToKey.set(id, key);
 			return id;
 		}
 		const id = this.#nextId;
@@ -163,11 +314,15 @@ export class ImageBudget {
 	 */
 	observe(imageId: number): boolean {
 		if (this.#stablePass) {
-			return this.#cap > 0 && this.#suppressedIds.has(imageId);
+			const suppressed = this.#cap > 0 && this.#suppressedIds.has(imageId);
+			if (suppressed) this.#forgetKeyForId(imageId);
+			return suppressed;
 		}
 		const index = this.#passIds.length;
 		this.#passIds.push(imageId);
-		return this.#cap > 0 && index < this.#planned;
+		const suppressed = this.#cap > 0 && index < this.#planned;
+		if (suppressed) this.#forgetKeyForId(imageId);
+		return suppressed;
 	}
 
 	/**
@@ -185,6 +340,7 @@ export class ImageBudget {
 				this.#purgeIds.push(id);
 				// d=I frees the data too, so the image must re-transmit if it returns.
 				this.#transmitted.delete(id);
+				this.#forgetKeyForId(id);
 			}
 			this.#onTerminal = this.#planned;
 			this.#applyingReset = false;
@@ -214,6 +370,8 @@ export class ImageBudget {
 		this.#transmitted.clear();
 		this.#purgeIds = [];
 		this.#pendingTransmits = [];
+		this.#keyToId.clear();
+		this.#idToKey.clear();
 		return ids;
 	}
 
@@ -272,6 +430,13 @@ export class ImageBudget {
 		if (this.#transmitted.size === 0 && this.#pendingTransmits.length === 0) return;
 		this.#transmitted.clear();
 		this.#pendingTransmits = [];
+	}
+
+	#forgetKeyForId(id: number): void {
+		const key = this.#idToKey.get(id);
+		if (key === undefined) return;
+		this.#idToKey.delete(id);
+		if (this.#keyToId.get(key) === id) this.#keyToId.delete(key);
 	}
 
 	#reconcile(total: number): void {
@@ -387,13 +552,26 @@ export class Image implements Component {
 				// Unicode placeholders: the image is already a block of real text-cell
 				// lines (line 0 carries the virtual-placement APC). No cursor moves.
 				lines = result.lines;
+			} else if (result && imageProtocol === ImageProtocol.Kitty && result.rows > 1) {
+				// Place first, then advance across protected continuation rows. A
+				// last-row placement is clipped when its logical origin has already
+				// scrolled above WezTerm's viewport; repainting continuation rows
+				// with EL also detaches the image from those cells. Reserve and
+				// clear the whole block before moving back to its first row, so C=1
+				// always has enough physical rows even when the block starts at the
+				// viewport bottom.
+				lines = [
+					`${DIRECT_KITTY_PLACEMENT_PREFIX}${result.columns}x${result.rows}\x07` +
+						reserveDirectKittyRows(result.rows) +
+						DIRECT_KITTY_PLACEMENT_ANCHOR +
+						(result.sequence ?? "") +
+						DIRECT_KITTY_PLACEMENT_SUFFIX,
+				];
+				for (let i = 1; i < result.rows; i++) {
+					lines.push(`${DIRECT_KITTY_CONTINUATION_PREFIX}${result.columns}x${result.rows}\x07`);
+				}
 			} else if (result) {
-				// Direct placement: return `rows` lines so TUI accounts for image
-				// height. First (rows-1) lines are empty (TUI clears them); the last
-				// saves the final-row cursor, moves up to the image origin, emits the
-				// image sequence, then restores the final-row cursor. Save/restore is
-				// required because CUU clamps at the viewport top when leading rows are
-				// clipped away.
+				// Other direct protocols retain the final-row cursor anchor.
 				lines = [];
 				for (let i = 0; i < result.rows - 1; i++) {
 					lines.push(RESERVED_IMAGE_ROW);

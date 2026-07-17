@@ -107,8 +107,9 @@ describe("issue #2115: ConPTY large-session resume truncates at logical lines", 
 			tui.start({ clearScrollback: true });
 			await term.waitForRender();
 
-			const fullPaint = writes.find(write => write.includes("\x1b[2J"));
+			const fullPaint = writes.find(write => write.includes("\x1b[3J"));
 			expect(fullPaint).toBeDefined();
+			expect(fullPaint).not.toContain("\x1b[2J");
 			expect(Buffer.byteLength(fullPaint ?? "", "utf8")).toBeLessThan(128 * 1024);
 			expect(fullPaint).toContain("older lines hidden");
 			expect(fullPaint).not.toContain("第00000行");

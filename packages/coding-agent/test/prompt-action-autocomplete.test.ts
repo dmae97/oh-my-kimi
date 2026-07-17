@@ -111,6 +111,131 @@ describe("prompt action autocomplete", () => {
 		expect(suggestions).toBeNull();
 	});
 
+	it("treats # prompt-action tokens as literal text inside slash command arguments without completions", async () => {
+		const provider = createPromptActionAutocompleteProvider({
+			commands: [{ name: "rename", description: "Rename current session", allowArgs: true }],
+			basePath: "/tmp",
+			keybindings: AppKeybindingsManager.inMemory(),
+			copyCurrentLine: () => {},
+			copyPrompt: () => {},
+			undo: () => {},
+			moveCursorToMessageEnd: () => {},
+			moveCursorToMessageStart: () => {},
+			moveCursorToLineStart: () => {},
+			moveCursorToLineEnd: () => {},
+		});
+
+		const line = "/rename repro #copy";
+		const suggestions = await provider.getSuggestions([line], 0, line.length);
+
+		expect(suggestions).toBeNull();
+	});
+
+	it("returns # prompt-action completions for matched slash commands that reject arguments", async () => {
+		const provider = createPromptActionAutocompleteProvider({
+			commands: [{ name: "settings", description: "Open settings", allowArgs: false }],
+			basePath: "/tmp",
+			keybindings: AppKeybindingsManager.inMemory(),
+			copyCurrentLine: () => {},
+			copyPrompt: () => {},
+			undo: () => {},
+			moveCursorToMessageEnd: () => {},
+			moveCursorToMessageStart: () => {},
+			moveCursorToLineStart: () => {},
+			moveCursorToLineEnd: () => {},
+		});
+
+		const line = "/settings #copy";
+		const suggestions = await provider.getSuggestions([line], 0, line.length);
+
+		expect(suggestions?.prefix).toBe("#copy");
+		expect(suggestions?.items.map(item => item.label)).toEqual(["Copy current line", "Copy whole prompt"]);
+	});
+
+	it("returns slash command argument completions instead of # prompt actions when the command defines them", async () => {
+		const provider = createPromptActionAutocompleteProvider({
+			commands: [
+				{
+					name: "rename",
+					description: "Rename current session",
+					allowArgs: true,
+					getArgumentCompletions: argumentPrefix =>
+						argumentPrefix === "repro #copy"
+							? [{ value: "repro #copy-title", label: "Keep #copy in the title" }]
+							: null,
+				},
+			],
+			basePath: "/tmp",
+			keybindings: AppKeybindingsManager.inMemory(),
+			copyCurrentLine: () => {},
+			copyPrompt: () => {},
+			undo: () => {},
+			moveCursorToMessageEnd: () => {},
+			moveCursorToMessageStart: () => {},
+			moveCursorToLineStart: () => {},
+			moveCursorToLineEnd: () => {},
+		});
+
+		const line = "/rename repro #copy";
+		const suggestions = await provider.getSuggestions([line], 0, line.length);
+
+		expect(suggestions).toEqual({
+			prefix: "repro #copy",
+			items: [{ value: "repro #copy-title", label: "Keep #copy in the title" }],
+		});
+	});
+
+	it("falls through to internal-url completion for allowArgs commands without argument completions", async () => {
+		const provider = createPromptActionAutocompleteProvider({
+			commands: [{ name: "btw", description: "By the way", allowArgs: true }],
+			basePath: process.cwd(),
+			keybindings: AppKeybindingsManager.inMemory(),
+			copyCurrentLine: () => {},
+			copyPrompt: () => {},
+			undo: () => {},
+			moveCursorToMessageEnd: () => {},
+			moveCursorToMessageStart: () => {},
+			moveCursorToLineStart: () => {},
+			moveCursorToLineEnd: () => {},
+		});
+
+		const line = "/btw omp://";
+		const suggestions = await provider.getSuggestions([line], 0, line.length);
+
+		expect(suggestions).not.toBeNull();
+		expect(suggestions?.prefix).toBe("omp://");
+		expect(suggestions?.items.length).toBeGreaterThan(0);
+	});
+
+	it("falls through to internal-url completion when getArgumentCompletions yields no match", async () => {
+		const provider = createPromptActionAutocompleteProvider({
+			commands: [
+				{
+					name: "mcp",
+					description: "MCP",
+					allowArgs: true,
+					getArgumentCompletions: () => null,
+				},
+			],
+			basePath: process.cwd(),
+			keybindings: AppKeybindingsManager.inMemory(),
+			copyCurrentLine: () => {},
+			copyPrompt: () => {},
+			undo: () => {},
+			moveCursorToMessageEnd: () => {},
+			moveCursorToMessageStart: () => {},
+			moveCursorToLineStart: () => {},
+			moveCursorToLineEnd: () => {},
+		});
+
+		const line = "/mcp omp://";
+		const suggestions = await provider.getSuggestions([line], 0, line.length);
+
+		expect(suggestions).not.toBeNull();
+		expect(suggestions?.prefix).toBe("omp://");
+		expect(suggestions?.items.length).toBeGreaterThan(0);
+	});
+
 	it("delegates trySyncSlashCompletion to CombinedAutocompleteProvider", () => {
 		const provider = createPromptActionAutocompleteProvider({
 			commands: [{ name: "model", description: "Switch AI model" }],

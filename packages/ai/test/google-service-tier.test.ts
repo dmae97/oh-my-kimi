@@ -75,12 +75,27 @@ const vertexModel: Model<"google-vertex"> = buildModel({
 describe("Google service tier wire encoding", () => {
 	it("Gemini API sends the tier in the request body, not a header", async () => {
 		const { fetch, captured } = capturingFetch();
-		await drain(
-			streamGoogle(geminiModel, context, { apiKey: "k", serviceTier: "priority", fetch, useInteractionsApi: false }),
-		);
+		await drain(streamGoogle(geminiModel, context, { apiKey: "k", serviceTier: "priority", fetch }));
 		const { headers, body } = captured();
 		expect(body.serviceTier).toBe("priority");
 		expect(headers.get("X-Vertex-AI-LLM-Shared-Request-Type")).toBeNull();
+	});
+
+	it("Gemini API omits human-readable thought summaries when requested", async () => {
+		const { fetch, captured } = capturingFetch();
+		await drain(
+			streamGoogle(geminiModel, context, {
+				apiKey: "k",
+				fetch,
+				thinking: { enabled: true, level: "HIGH" },
+				hideThinkingSummary: true,
+			}),
+		);
+
+		expect((captured().body.generationConfig as { thinkingConfig?: unknown } | undefined)?.thinkingConfig).toEqual({
+			includeThoughts: false,
+			thinkingLevel: "HIGH",
+		});
 	});
 
 	it("Vertex sends priority via header and omits the body tier field", async () => {
@@ -101,7 +116,7 @@ describe("Google service tier wire encoding", () => {
 
 	it("omits the tier entirely when unset", async () => {
 		const { fetch, captured } = capturingFetch();
-		await drain(streamGoogle(geminiModel, context, { apiKey: "k", fetch, useInteractionsApi: false }));
+		await drain(streamGoogle(geminiModel, context, { apiKey: "k", fetch }));
 		expect(captured().body.serviceTier).toBeUndefined();
 	});
 });

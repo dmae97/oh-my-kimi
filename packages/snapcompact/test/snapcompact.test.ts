@@ -372,15 +372,45 @@ describe("shape resolution", () => {
 		expect(snapcompact.isShape({ ...snapcompact.SHAPES.openai, imageDetail: "original" })).toBe(true);
 	});
 
-	it("keeps selected shapes while Silver fallback covers non-Latin glyphs", () => {
-		const text = "こんにちは 你好 안녕";
+	it("keeps bitmap shapes render-safe via Silver fallback while CJK-heavy auto archives use Silver", () => {
+		const cjkHeavyText = "こんにちは 你好 안녕 世界 한국어";
+		const silver = snapcompact.resolveShape({ api: "anthropic-messages" }, "silver16-bw");
+
+		expect(snapcompact.scanRenderability(cjkHeavyText).isSafe).toBe(true);
+		expect(snapcompact.scanRenderability(cjkHeavyText, { shape: silver }).isSafe).toBe(true);
+		expect(snapcompact.normalize(cjkHeavyText)).toBe(cjkHeavyText);
+		expect(snapcompact.normalize(cjkHeavyText, { shape: silver })).toBe(cjkHeavyText);
+		expect(snapcompact.resolveShapeForText(cjkHeavyText, { api: "anthropic-messages" }, "auto")).toEqual(silver);
+	});
+
+	it("keeps ASCII-heavy auto archives on the provider/model shape", () => {
+		const model = { api: "openai-responses" as const, id: "gpt-5.5" };
+		const expected = snapcompact.resolveShape(model, "auto");
+		const actual = snapcompact.resolveShapeForText(
+			"function render(value: string) { return value.trim().toLowerCase(); }",
+			model,
+			"auto",
+		);
+
+		expect(actual).toEqual(expected);
+		expect(actual.font).not.toBe("silver");
+	});
+
+	it("respects explicit non-auto variants even for CJK-heavy text", () => {
+		const model = { api: "anthropic-messages" as const };
+		const expected = snapcompact.resolveShape(model, "8on16-bw");
+		const actual = snapcompact.resolveShapeForText("こんにちは 你好 안녕 世界 한국어", model, "8on16-bw");
+
+		expect(actual).toEqual(expected);
+		expect(actual.font).not.toBe("silver");
+	});
+
+	it("reports unsupported CJK ideographs unsafe even with the Silver shape selected", () => {
 		const silver = snapcompact.resolveShape(undefined, "silver16-bw");
-		expect(snapcompact.scanRenderability(text).isSafe).toBe(true);
-		expect(snapcompact.scanRenderability(text, { shape: silver }).isSafe).toBe(true);
-		expect(snapcompact.normalize(text)).toBe(text);
-		expect(snapcompact.normalize(text, { shape: silver })).toBe(text);
-		expect(snapcompact.resolveShapeForText(text).font).not.toBe("silver");
-		expect(snapcompact.resolveShapeForText("plain ascii").font).not.toBe("silver");
+		const res = snapcompact.scanRenderability("\u{31350}".repeat(12), { shape: silver });
+
+		expect(res.isSafe).toBe(false);
+		expect(res.unrenderableRatio).toBe(1);
 	});
 
 	it("images forwards the per-frame detail hint", () => {
@@ -634,12 +664,12 @@ describe("serializeConversation", () => {
 		expect(out.length).toBeLessThan(2200);
 	});
 
-	it("renders roles as markdown headings", () => {
+	it("renders roles with compact inline headings", () => {
 		const out = snapcompact.serializeConversation([
 			createUserMessage("do the thing"),
 			createAssistantMessage([{ type: "text", text: "done" }]),
 		]);
-		expect(out).toBe("# User ¶\ndo the thing\n\n# Assistant ¶\ndone");
+		expect(out).toBe("¶user:do the thing\n\n¶ai:done");
 	});
 
 	it("merges a tool call with its paired result into one block, intent as a // comment", () => {
@@ -657,7 +687,7 @@ describe("serializeConversation", () => {
 			],
 			{ dimToolResults: false },
 		);
-		expect(out).toBe('# Tool call ¶\n//Running tests\nbash(command="bun test")\n<out>\n3 pass\n</out>');
+		expect(out).toBe('¶call:bash(command="bun test")//Running tests\n<out>\n3 pass\n</out>');
 	});
 
 	it("prefers the harness-derived intent over the raw intent arg and squashes newlines", () => {
@@ -677,29 +707,29 @@ describe("serializeConversation", () => {
 		expect(out).not.toContain(`${INTENT_FIELD}=`);
 	});
 
-	it("folds thinking into the assistant block as italics above the text", () => {
+	it("folds thinking into separate sections above the text", () => {
 		const out = snapcompact.serializeConversation([
 			createAssistantMessage([
 				{ type: "thinking", thinking: "weigh options" },
 				{ type: "text", text: "the answer" },
 			]),
 		]);
-		expect(out).toBe("# Assistant ¶\n_weigh options_\n\nthe answer");
+		expect(out).toBe("¶think:weigh options\n\n¶ai:the answer");
 	});
 
-	it("gives a thinking-only turn its own assistant heading before the tool calls", () => {
+	it("gives a thinking-only turn its own heading before the tool calls", () => {
 		const out = snapcompact.serializeConversation([
 			createAssistantMessage([
 				{ type: "thinking", thinking: "plan first" },
 				{ type: "toolCall", id: "c1", name: "read", arguments: { path: "a.ts" } },
 			]),
 		]);
-		expect(out).toBe('# Assistant ¶\n_plan first_\n\n# Tool call ¶\nread(path="a.ts")');
+		expect(out).toBe('¶think:plan first\n\n¶call:read(path="a.ts")');
 	});
 
 	it("renders an orphan tool result (call outside the window) standalone", () => {
 		const out = snapcompact.serializeConversation([createToolResultMessage("ok")], { dimToolResults: false });
-		expect(out).toBe("# Tool call ¶\n<out>\nok\n</out>");
+		expect(out).toBe("¶call:\n<out>\nok\n</out>");
 	});
 
 	it("preserves content order: text before and after a tool call stay split around it", () => {
@@ -714,9 +744,7 @@ describe("serializeConversation", () => {
 			],
 			{ dimToolResults: false },
 		);
-		expect(out).toBe(
-			'# Assistant ¶\nbefore\n\n# Tool call ¶\nread(path="a.ts")\n<out>\nfile body\n</out>\n\n# Assistant ¶\nafter',
-		);
+		expect(out).toBe('¶ai:before\n\n¶call:read(path="a.ts")\n<out>\nfile body\n</out>\n\n¶ai:after');
 	});
 
 	it("does not split assistant prose around a useless tool call", () => {
@@ -729,7 +757,7 @@ describe("serializeConversation", () => {
 			{ ...createToolResultMessage("No matches found"), toolCallId: "c-drop", useless: true } as Message,
 		]);
 		// The useless call vanishes and its surrounding prose stays in one block.
-		expect(out).toBe("# Assistant ¶\nbefore\nafter");
+		expect(out).toBe("¶ai:before\nafter");
 	});
 
 	it("drops blank text/thinking blocks instead of emitting an empty assistant heading", () => {
@@ -744,8 +772,8 @@ describe("serializeConversation", () => {
 			],
 			{ dimToolResults: false },
 		);
-		expect(out).toBe('# Tool call ¶\nread(path="a.ts")\n<out>\nbody\n</out>');
-		expect(out).not.toContain("# Assistant ¶");
+		expect(out).toBe('¶call:read(path="a.ts")\n<out>\nbody\n</out>');
+		expect(out).not.toContain("¶ai:");
 	});
 
 	it("wraps tool-result bodies in dim toggles by default and strips stray toggles from content", () => {
@@ -755,7 +783,7 @@ describe("serializeConversation", () => {
 		]);
 		expect(out).toContain(`<out>\n${snapcompact.DIM_ON}ok${snapcompact.DIM_OFF}\n</out>`);
 		// A stray toggle in user content cannot forge a dim span.
-		expect(out).toContain("# User ¶\nhello world");
+		expect(out).toContain("¶user:hello world");
 	});
 
 	it("skips tool call/result pairs flagged useless", () => {
@@ -772,6 +800,26 @@ describe("serializeConversation", () => {
 		expect(out).not.toContain("zzz_nothing");
 		expect(out).not.toContain("No matches found");
 	});
+
+	it("merges consecutive blocks of the same role", () => {
+		const out = snapcompact.serializeConversation([
+			createUserMessage("hello"),
+			createUserMessage("world"),
+			createAssistantMessage([{ type: "text", text: "hi" }]),
+			createAssistantMessage([{ type: "text", text: "there" }]),
+		]);
+		expect(out).toBe("¶user:hello\nworld\n\n¶ai:hi\nthere");
+	});
+
+	it("merges consecutive tool calls under a single prefix", () => {
+		const out = snapcompact.serializeConversation([
+			createAssistantMessage([
+				{ type: "toolCall", id: "c1", name: "read", arguments: { path: "a.ts" } },
+				{ type: "toolCall", id: "c2", name: "read", arguments: { path: "b.ts" } },
+			]),
+		]);
+		expect(out).toBe('¶call:read(path="a.ts")\nread(path="b.ts")');
+	});
 });
 
 describe("compact", () => {
@@ -785,6 +833,9 @@ describe("compact", () => {
 		expect(result.tokensBefore).toBe(99000);
 		expect(result.summary).toContain("You are resuming a prior conversation.");
 		expect(result.summary).toContain("HISTORY");
+		expect(result.summary).toContain("`¶user:`, `¶think:`, `¶ai:`, and `¶call:`");
+		expect(result.summary).toContain("Following lines without a `¶…:` prefix remain in the current scope.");
+		expect(result.summary).toContain("`¶call:name(args)//intent`");
 		expect(result.summary).toContain("FILES\n===================\n# src/\nauth.ts (Read)\nlogin.ts (Write)");
 
 		const archive = snapcompact.getPreservedArchive(result.preserveData);

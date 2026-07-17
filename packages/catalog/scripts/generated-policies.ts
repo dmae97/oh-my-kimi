@@ -18,6 +18,7 @@ import { isMimoModelIdOrName } from "../src/identity/family";
 import { getLongestModelLikeIdSegment } from "../src/identity/id";
 import { buildModelReferenceIndex, resolveModelReference } from "../src/identity/reference";
 import { resolveModelThinking } from "../src/model-thinking";
+import { resolveWaferServerlessThinkingFormat } from "../src/provider-models/openai-compat";
 import type { Api, Model, ModelSpec } from "../src/types";
 import { isVariantCollapsedSpec } from "../src/variant-collapse";
 import { buildCanonicalModelIndex, buildCanonicalReferenceData } from "./equivalence";
@@ -246,6 +247,17 @@ function applyGeneratedModelPolicy(model: ModelSpec<Api>): void {
 		};
 		delete model.compat.thinkingFormat;
 	}
+	if (model.api === "openai-completions" && model.provider === "wafer-serverless" && model.reasoning) {
+		const thinkingFormat = resolveWaferServerlessThinkingFormat(model.id, undefined);
+		if (thinkingFormat === "zai") {
+			model.compat = {
+				...(model.compat ?? {}),
+				thinkingFormat,
+				reasoningContentField: "reasoning_content",
+				supportsDeveloperRole: false,
+			};
+		}
+	}
 	if (model.api === "openai-completions" && model.provider === "opencode-go" && isMimoModelIdOrName(model.id)) {
 		model.compat = {
 			...(model.compat ?? {}),
@@ -266,6 +278,7 @@ function applyGeneratedModelPolicy(model: ModelSpec<Api>): void {
 		model.compat = {
 			...(model.compat ?? {}),
 			supportsToolChoice: false,
+			maxTokensField: "max_tokens",
 			reasoningContentField: "reasoning_content",
 			requiresReasoningContentForToolCalls: true,
 		};
@@ -348,5 +361,13 @@ function applyOpenAICatalogPolicy(model: ModelSpec<Api>, parsedModel: OpenAIMode
 		if (parsedModel.variant === "mini" || parsedModel.variant === "nano") {
 			model.contextWindow = 272000;
 		}
+	}
+	// GPT-5.6 luna/sol/terra on the Codex transport: OpenAI's Codex model
+	// registry declares context_window = max_context_window = 372000, but Codex
+	// discovery omits `context_window` for these SKUs and falls back to
+	// DEFAULT_CONTEXT_WINDOW (272000, src/discovery/codex.ts), which regressed
+	// the bundled hard capacity (#5705). Pin the true 372K input window.
+	if (model.api === "openai-codex-responses" && semverEqual(parsedModel.version, "5.6")) {
+		model.contextWindow = 372000;
 	}
 }

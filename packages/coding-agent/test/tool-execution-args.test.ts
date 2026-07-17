@@ -16,7 +16,7 @@ describe("ToolExecutionComponent.updateArgs (F8 — no clone, ref-eq fast path)"
 			await initTheme();
 			initialized = true;
 		}
-		const uiStub = { requestRender() {} } as unknown as TUI;
+		const uiStub = { requestRender() {}, requestComponentRender() {} } as unknown as TUI;
 		return new ToolExecutionComponent("bash", args, {}, undefined, uiStub);
 	}
 

@@ -53,18 +53,35 @@ MAX_STEPS = 4
 PROBE_TAIL = "Reply with exactly the word OK and nothing else."
 
 
-def call(keys: dict, model: str, messages: list[dict], system: str | None = None, max_tokens: int = 32768) -> dict:
+def call(
+    keys: dict,
+    model: str,
+    messages: list[dict],
+    system: str | None = None,
+    max_tokens: int = 32768,
+) -> dict:
     t0 = time.monotonic()
-    text, usage, stop = llm_complete(keys, model, messages, system=system, max_tokens=max_tokens)
-    return {"text": text, "usage": usage, "stop": stop, "secs": round(time.monotonic() - t0, 2)}
+    text, usage, stop = llm_complete(
+        keys, model, messages, system=system, max_tokens=max_tokens
+    )
+    return {
+        "text": text,
+        "usage": usage,
+        "stop": stop,
+        "secs": round(time.monotonic() - t0, 2),
+    }
 
 
 def usd(u: dict, p_in: float, p_out: float) -> float:
-    return (u.get("in", 0) + 0.1 * u.get("cache_r", 0)) / 1e6 * p_in + u.get("out", 0) / 1e6 * p_out
+    return (u.get("in", 0) + 0.1 * u.get("cache_r", 0)) / 1e6 * p_in + u.get(
+        "out", 0
+    ) / 1e6 * p_out
 
 
 def usd_nocache(u: dict, p_in: float, p_out: float) -> float:
-    return (u.get("in", 0) + u.get("cache_r", 0)) / 1e6 * p_in + u.get("out", 0) / 1e6 * p_out
+    return (u.get("in", 0) + u.get("cache_r", 0)) / 1e6 * p_in + u.get(
+        "out", 0
+    ) / 1e6 * p_out
 
 
 def render_pages(flow: str, size: int) -> tuple[list[tuple[int, int, Path]], dict]:
@@ -93,21 +110,39 @@ def render_pages(flow: str, size: int) -> tuple[list[tuple[int, int, Path]], dic
 def prefix_messages(k: int, pages: list, cols: int, rows: int) -> list[dict]:
     """Append-only prefix: frame + pages 1..k, each ACKed. Byte-stable across steps."""
     msgs = [
-        {"role": "user", "content": [{"text": load_prompt("exp09-frame.md").format(cols=cols, rows=rows)}, {"image_path": pages[0][2]}]},
+        {
+            "role": "user",
+            "content": [
+                {"text": load_prompt("exp09-frame.md").format(cols=cols, rows=rows)},
+                {"image_path": pages[0][2]},
+            ],
+        },
         {"role": "assistant", "content": [{"text": ACK}]},
     ]
     for i in range(1, k):
-        msgs.append({"role": "user", "content": [{"text": load_prompt("exp09-page.md").format(page=i + 1)}, {"image_path": pages[i][2]}]})
+        msgs.append(
+            {
+                "role": "user",
+                "content": [
+                    {"text": load_prompt("exp09-page.md").format(page=i + 1)},
+                    {"image_path": pages[i][2]},
+                ],
+            }
+        )
         msgs.append({"role": "assistant", "content": [{"text": ACK}]})
     return msgs
 
 
-def step_questions(paras: list, offsets: list, end: int, qpc: int, seed: int) -> tuple[list[dict], str]:
+def step_questions(
+    paras: list, offsets: list, end: int, qpc: int, seed: int
+) -> tuple[list[dict], str]:
     qs = squad.sample_chunk_questions(paras, offsets, 0, end, qpc, seed)
     return qs, "\n".join(f"{i + 1}. {q['q']}" for i, q in enumerate(qs))
 
 
-def score_records(model: str, regime: str, step: int, questions: list[dict], text: str) -> list[dict]:
+def score_records(
+    model: str, regime: str, step: int, questions: list[dict], text: str
+) -> list[dict]:
     answers = squad.parse_numbered(text, len(questions))
     return [
         {
@@ -137,7 +172,14 @@ def common_prefix_len(a: str, b: str) -> int:
 
 
 def run_model(model: str, ctx: dict) -> dict:
-    args, keys, flow, paras, offsets, pages = ctx["args"], ctx["keys"], ctx["flow"], ctx["paras"], ctx["offsets"], ctx["pages"]
+    args, keys, flow, paras, offsets, pages = (
+        ctx["args"],
+        ctx["keys"],
+        ctx["flow"],
+        ctx["paras"],
+        ctx["offsets"],
+        ctx["pages"],
+    )
     p_in, p_out = MODELS[model]
     cols, rows, _ = capacity(FONTS[FONT], args.size)
     K = len(pages)
@@ -150,11 +192,19 @@ def run_model(model: str, ctx: dict) -> dict:
         end = pages[k - 1][1]
         questions, q_block = step_questions(paras, offsets, end, args.qpc, args.seed)
         msgs = prefix_messages(k, pages, cols, rows) + [
-            {"role": "user", "content": [{"text": load_prompt("exp09-qa.md").format(questions=q_block)}]}
+            {
+                "role": "user",
+                "content": [
+                    {"text": load_prompt("exp09-qa.md").format(questions=q_block)}
+                ],
+            }
         ]
         qa = cached(
-            model, "exp09-A-qa", {"step": k, "messages": msgs},
-            lambda: call(keys, model, msgs, max_tokens=args.max_tokens), args.fresh,
+            model,
+            "exp09-A-qa",
+            {"step": k, "messages": msgs},
+            lambda: call(keys, model, msgs, max_tokens=args.max_tokens),
+            args.fresh,
         )
         recs = score_records(model, "append-optical", k, questions, qa["text"])
         recs[0]["usage"] = [{"phase": "qa", **qa["usage"]}]
@@ -164,27 +214,48 @@ def run_model(model: str, ctx: dict) -> dict:
         u = qa["usage"]
         steps.append(
             {
-                "model": model, "regime": "append-optical", "step": k, "n": len(recs),
+                "model": model,
+                "regime": "append-optical",
+                "step": k,
+                "n": len(recs),
                 "f1": round(sum(r["f1"] for r in recs) / len(recs), 3),
-                "write_in": 0, "write_out": 0, "write_secs": 0.0, "write_cost": 0.0,
-                "qa_in": u["in"], "qa_cache_r": u["cache_r"], "qa_out": u["out"],
-                "qa_reasoning": u.get("reasoning", 0), "qa_secs": qa["secs"],
-                "step_cost": round(cost, 4), "step_cost_nocache": round(usd_nocache(u, p_in, p_out), 4),
+                "write_in": 0,
+                "write_out": 0,
+                "write_secs": 0.0,
+                "write_cost": 0.0,
+                "qa_in": u["in"],
+                "qa_cache_r": u["cache_r"],
+                "qa_out": u["out"],
+                "qa_reasoning": u.get("reasoning", 0),
+                "qa_secs": qa["secs"],
+                "step_cost": round(cost, 4),
+                "step_cost_nocache": round(usd_nocache(u, p_in, p_out), 4),
                 "cum_cost": round(cum_a, 4),
             }
         )
-        print(f"  {model} A step {k}: in={u['in']} cache_r={u['cache_r']} out={u['out']} f1={steps[-1]['f1']}", flush=True)
+        print(
+            f"  {model} A step {k}: in={u['in']} cache_r={u['cache_r']} out={u['out']} f1={steps[-1]['f1']}",
+            flush=True,
+        )
 
     # --- Cache probe: identical multi-image prefix twice in a row (disk cache bypassed via call index) ---
-    probe_msgs = prefix_messages(K, pages, cols, rows) + [{"role": "user", "content": [{"text": PROBE_TAIL}]}]
+    probe_msgs = prefix_messages(K, pages, cols, rows) + [
+        {"role": "user", "content": [{"text": PROBE_TAIL}]}
+    ]
     probe = []
     for i in (1, 2, 3):
         r = cached(
-            model, "exp09-probe", {"call": i, "messages": probe_msgs},
-            lambda: call(keys, model, probe_msgs, max_tokens=args.max_tokens), args.fresh,
+            model,
+            "exp09-probe",
+            {"call": i, "messages": probe_msgs},
+            lambda: call(keys, model, probe_msgs, max_tokens=args.max_tokens),
+            args.fresh,
         )
         probe.append({"call": i, **r["usage"], "secs": r["secs"]})
-        print(f"  {model} probe call {i}: in={r['usage']['in']} cache_r={r['usage']['cache_r']}", flush=True)
+        print(
+            f"  {model} probe call {i}: in={r['usage']['in']} cache_r={r['usage']['cache_r']}",
+            flush=True,
+        )
 
     # --- Regime B: rewrite-compact (fresh summary each step = write path) ---
     cum_b = 0.0
@@ -194,24 +265,46 @@ def run_model(model: str, ctx: dict) -> dict:
         text_k = flow[:end]
         questions, q_block = step_questions(paras, offsets, end, args.qpc, args.seed)
         sm = cached(
-            model, "exp09-B-sum", {"step": k, "chunk": sha8(text_k)},
+            model,
+            "exp09-B-sum",
+            {"step": k, "chunk": sha8(text_k)},
             lambda: call(
-                keys, model,
-                session_frame(text_k) + [{"role": "user", "content": [{"text": agent_prompt("compaction-summary.md")}]}],
-                system=agent_prompt("summarization-system.md"), max_tokens=args.max_tokens,
+                keys,
+                model,
+                session_frame(text_k)
+                + [
+                    {
+                        "role": "user",
+                        "content": [{"text": agent_prompt("compaction-summary.md")}],
+                    }
+                ],
+                system=agent_prompt("summarization-system.md"),
+                max_tokens=args.max_tokens,
             ),
             args.fresh,
         )
         summaries.append(sm["text"])
         qa_msgs = [
-            {"role": "user", "content": [{"text": load_prompt("qa-text.md").format(context=sm["text"])}, {"text": q_block}]}
+            {
+                "role": "user",
+                "content": [
+                    {"text": load_prompt("qa-text.md").format(context=sm["text"])},
+                    {"text": q_block},
+                ],
+            }
         ]
         qa = cached(
-            model, "exp09-B-qa", {"step": k, "summary": sm["text"], "q": q_block},
-            lambda: call(keys, model, qa_msgs, max_tokens=args.max_tokens), args.fresh,
+            model,
+            "exp09-B-qa",
+            {"step": k, "summary": sm["text"], "q": q_block},
+            lambda: call(keys, model, qa_msgs, max_tokens=args.max_tokens),
+            args.fresh,
         )
         recs = score_records(model, "rewrite-compact", k, questions, qa["text"])
-        recs[0]["usage"] = [{"phase": "summarize", **sm["usage"]}, {"phase": "qa", **qa["usage"]}]
+        recs[0]["usage"] = [
+            {"phase": "summarize", **sm["usage"]},
+            {"phase": "qa", **qa["usage"]},
+        ]
         records += recs
         w_cost = usd(sm["usage"], p_in, p_out)
         q_cost = usd(qa["usage"], p_in, p_out)
@@ -219,41 +312,75 @@ def run_model(model: str, ctx: dict) -> dict:
         su, qu = sm["usage"], qa["usage"]
         steps.append(
             {
-                "model": model, "regime": "rewrite-compact", "step": k, "n": len(recs),
+                "model": model,
+                "regime": "rewrite-compact",
+                "step": k,
+                "n": len(recs),
                 "f1": round(sum(r["f1"] for r in recs) / len(recs), 3),
-                "write_in": su["in"] + su["cache_r"], "write_out": su["out"],
-                "write_secs": sm["secs"], "write_cost": round(w_cost, 4),
-                "qa_in": qu["in"], "qa_cache_r": qu["cache_r"], "qa_out": qu["out"],
-                "qa_reasoning": qu.get("reasoning", 0), "qa_secs": qa["secs"],
+                "write_in": su["in"] + su["cache_r"],
+                "write_out": su["out"],
+                "write_secs": sm["secs"],
+                "write_cost": round(w_cost, 4),
+                "qa_in": qu["in"],
+                "qa_cache_r": qu["cache_r"],
+                "qa_out": qu["out"],
+                "qa_reasoning": qu.get("reasoning", 0),
+                "qa_secs": qa["secs"],
                 "step_cost": round(w_cost + q_cost, 4),
-                "step_cost_nocache": round(usd_nocache(su, p_in, p_out) + usd_nocache(qu, p_in, p_out), 4),
+                "step_cost_nocache": round(
+                    usd_nocache(su, p_in, p_out) + usd_nocache(qu, p_in, p_out), 4
+                ),
                 "cum_cost": round(cum_b, 4),
             }
         )
-        print(f"  {model} B step {k}: write {su['in']}+{su['cache_r']}c->{su['out']} ({sm['secs']}s) f1={steps[-1]['f1']}", flush=True)
+        print(
+            f"  {model} B step {k}: write {su['in']}+{su['cache_r']}c->{su['out']} ({sm['secs']}s) f1={steps[-1]['f1']}",
+            flush=True,
+        )
 
     # Write-path determinism of regime B: re-run the step-1 summarize with identical payload (fresh key).
     det = cached(
-        model, "exp09-B-sum-det", {"step": 1, "chunk": sha8(flow[: pages[0][1]])},
+        model,
+        "exp09-B-sum-det",
+        {"step": 1, "chunk": sha8(flow[: pages[0][1]])},
         lambda: call(
-            keys, model,
-            session_frame(flow[: pages[0][1]]) + [{"role": "user", "content": [{"text": agent_prompt("compaction-summary.md")}]}],
-            system=agent_prompt("summarization-system.md"), max_tokens=args.max_tokens,
+            keys,
+            model,
+            session_frame(flow[: pages[0][1]])
+            + [
+                {
+                    "role": "user",
+                    "content": [{"text": agent_prompt("compaction-summary.md")}],
+                }
+            ],
+            system=agent_prompt("summarization-system.md"),
+            max_tokens=args.max_tokens,
         ),
         args.fresh,
     )
     b_det = {
         "identical": det["text"] == summaries[0],
         "common_prefix_chars": common_prefix_len(det["text"], summaries[0]),
-        "len_a": len(summaries[0]), "len_b": len(det["text"]),
+        "len_a": len(summaries[0]),
+        "len_b": len(det["text"]),
     }
     # Cross-step summary prefix stability (the thing the prompt cache would need).
     step_stability = [
-        {"steps": f"{k}->{k + 1}", "common_prefix_chars": common_prefix_len(summaries[k - 1], summaries[k]),
-         "len_prev": len(summaries[k - 1]), "len_next": len(summaries[k])}
+        {
+            "steps": f"{k}->{k + 1}",
+            "common_prefix_chars": common_prefix_len(summaries[k - 1], summaries[k]),
+            "len_prev": len(summaries[k - 1]),
+            "len_next": len(summaries[k]),
+        }
         for k in range(1, K)
     ]
-    return {"records": records, "steps": steps, "probe": probe, "b_determinism": b_det, "b_step_stability": step_stability}
+    return {
+        "records": records,
+        "steps": steps,
+        "probe": probe,
+        "b_determinism": b_det,
+        "b_step_stability": step_stability,
+    }
 
 
 def aggregate(records: list[dict], p_in: float, p_out: float) -> dict:
@@ -262,7 +389,10 @@ def aggregate(records: list[dict], p_in: float, p_out: float) -> dict:
     mean_f1 = sum(f1s) / n
     se = (sum((x - mean_f1) ** 2 for x in f1s) / (n * (n - 1))) ** 0.5 if n > 1 else 0.0
     us = [u for r in records if "usage" in r for u in r["usage"]]
-    tok = {k: sum(u.get(k, 0) for u in us) for k in ("in", "out", "cache_w", "cache_r", "reasoning")}
+    tok = {
+        k: sum(u.get(k, 0) for u in us)
+        for k in ("in", "out", "cache_w", "cache_r", "reasoning")
+    }
     cost_in = (tok["in"] + 0.1 * tok["cache_r"]) / 1e6 * p_in
     cost_out = tok["out"] / 1e6 * p_out
     return {
@@ -304,9 +434,18 @@ def main() -> None:
     flow, offsets = squad.build_flow(paras)
     pages, a_det = render_pages(flow, args.size)
     pages = pages[:MAX_STEPS]
-    print(f"flow {len(flow)} chars -> {len(pages)} pages (K={len(pages)} steps); render deterministic: {a_det['deterministic']}")
+    print(
+        f"flow {len(flow)} chars -> {len(pages)} pages (K={len(pages)} steps); render deterministic: {a_det['deterministic']}"
+    )
 
-    ctx = {"args": args, "keys": keys, "flow": flow, "paras": paras, "offsets": offsets, "pages": pages}
+    ctx = {
+        "args": args,
+        "keys": keys,
+        "flow": flow,
+        "paras": paras,
+        "offsets": offsets,
+        "pages": pages,
+    }
     with ThreadPoolExecutor(min(2, len(models))) as pool:
         results = dict(zip(models, pool.map(lambda m: run_model(m, ctx), models)))
 
@@ -327,7 +466,12 @@ def main() -> None:
             sub = [r for r in records if r["model"] == model and r["cond"] == cond]
             final_step = max(r["step"] for r in sub)
             fin = [r for r in sub if r["step"] == final_step]
-            cell = {"model": model, "length": LENGTH, "condition": cond, **aggregate(sub, *MODELS[model])}
+            cell = {
+                "model": model,
+                "length": LENGTH,
+                "condition": cond,
+                **aggregate(sub, *MODELS[model]),
+            }
             cell["final_step_f1"] = round(sum(r["f1"] for r in fin) / len(fin), 3)
             cell["final_step_em"] = round(sum(r["em"] for r in fin) / len(fin), 3)
             cells.append(cell)
@@ -348,7 +492,9 @@ def main() -> None:
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=1, default=str))
 
-    print("\n== per-step (qa_in / qa_cache_r / write_cost / step_cost / cum_cost / f1) ==")
+    print(
+        "\n== per-step (qa_in / qa_cache_r / write_cost / step_cost / cum_cost / f1) =="
+    )
     for s in steps:
         print(
             f"{s['model']:<26} {s['regime']:<16} k={s['step']}  in={s['qa_in']:>6} cache_r={s['qa_cache_r']:>6} "
@@ -357,7 +503,9 @@ def main() -> None:
     print("\n== cache probe (same multi-image prefix twice) ==")
     for m in models:
         for p in results[m]["probe"]:
-            print(f"{m:<26} call {p['call']}: in={p['in']:>6} cache_r={p['cache_r']:>6} secs={p['secs']}")
+            print(
+                f"{m:<26} call {p['call']}: in={p['in']:>6} cache_r={p['cache_r']:>6} secs={p['secs']}"
+            )
     print(f"\ndataset -> {out_dir}/records.jsonl, steps.csv, matrix.csv, summary.json")
 
 

@@ -317,6 +317,13 @@ const FONTS: Record<string, FontStyle> = {
 	texttt: "mono",
 	textsf: "sans",
 };
+/**
+ * Math font command names (`\mathbf`, `\mathbb`, …) whose single brace argument
+ * restyles glyphs. Exported for the display block engine (`latex-block`), which
+ * re-wraps inline runs inside these commands when their argument contains 2-D
+ * layout (fractions, matrices) so styling survives box boundaries.
+ */
+export const MATH_FONT_COMMANDS: ReadonlySet<string> = new Set(Object.keys(FONTS));
 
 // Text-mode commands whose argument is passed through literally (no math).
 const TEXT_COMMANDS: Record<string, true> = {
@@ -1134,6 +1141,22 @@ function ansiColor(model: string | null, spec: string): AnsiColor | null {
 	const foreground = Bun.color(css, colorFormat());
 	if (foreground === null || !foreground.startsWith("\x1b[38;")) return null;
 	return { foreground, background: foreground.replace("\x1b[38;", "\x1b[48;") };
+}
+
+/**
+ * Painter for a LaTeX color scope (optional model + spec, e.g. `rgb`/`1,0,0` or
+ * `red`): returns a function that paints already-rendered text with the scope's
+ * foreground, re-asserting it after embedded foreground resets so nested color
+ * runs restore to the scope color; null when the color cannot be resolved. Used
+ * by the display block engine (`latex-block`) to paint structural glyphs
+ * (fraction bars, stretched delimiters, matrix brackets) inside
+ * `\color`/`\textcolor` scopes.
+ */
+export function latexColorScope(model: string | null, spec: string): ((text: string) => string) | null {
+	const color = ansiColor(model, spec);
+	if (color === null) return null;
+	const { foreground } = color;
+	return text => foreground + text.replaceAll(ANSI_FG_RESET, foreground) + ANSI_FG_RESET;
 }
 
 function restoreAnsi(

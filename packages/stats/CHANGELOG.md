@@ -2,6 +2,38 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Recent Errors now honors the selected dashboard time range before returning the newest 50 failures ([#5282](https://github.com/can1357/oh-my-pi/issues/5282))
+
+## [16.4.7] - 2026-07-12
+
+### Fixed
+
+- Fixed a `SQLITE_CONSTRAINT_NOTNULL` crash (`messages.stop_reason`) aborting the entire session sync when a persisted assistant message lacks a `stopReason`. Malformed entries — missing stop reason, token counts, or message timestamp — are now coerced at the parser boundary, and entries with no usage or model attribution are skipped instead of failing the batch insert.
+
+## [16.4.2] - 2026-07-10
+
+### Fixed
+
+- Fixed a crash during stats synchronization on legacy session entries that lack a cost breakdown by falling back to catalog pricing when available.
+
+## [16.3.9] - 2026-07-06
+
+### Changed
+
+- Refined behavior metrics to significantly reduce false positives in profanity, yelling, and anguish detection by excluding technical terms (e.g., "dummy", "trash", "garbage"), neutral punctuation (e.g., dot runs), and single-word capitalization (e.g., filenames or environment variables).
+- Re-categorized frustration interjections (such as "ugh", "argh", and "grr") from profanity to anguish.
+- Improved negation and blame detection to exclude determiners (e.g., "no auto start") and compounds (e.g., "no-op") while adding support for phrases like "why did you" and "makes no sense".
+- Added sad emoticons as a signal for anguish while excluding code-like patterns.
+- Triggered a one-time automatic re-ingestion of sessions on the next database sync to apply the updated metrics.
+
+## [16.3.7] - 2026-07-05
+
+### Changed
+
+- Optimized session-entry lookup and file reading performance by caching file metadata to avoid repeated full-file scans.
+
 ## [16.3.1] - 2026-07-02
 
 ### Added

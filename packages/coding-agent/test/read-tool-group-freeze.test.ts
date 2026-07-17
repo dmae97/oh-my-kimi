@@ -41,7 +41,7 @@ describe("ReadToolGroupComponent transcript freezing", () => {
 	it("repaints a late read result instead of freezing the pending preview", () => {
 		const tc = new TranscriptContainer();
 		const group = new ReadToolGroupComponent();
-		group.updateArgs({ path: "/tmp/example.ts", sel: "280-345" }, "id1");
+		group.updateArgs({ path: "/tmp/example.ts:280-345" }, "id1");
 		tc.addChild(group);
 		tc.render(120); // Frame 1: group is the live (pending) block.
 

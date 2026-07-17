@@ -14,7 +14,6 @@ function makeSession(): ToolSession {
 				if (key === "bash.autoBackground.enabled") return false;
 				if (key === "bash.autoBackground.thresholdMs") return 60_000;
 				if (key === "bashInterceptor.enabled") return false;
-				if (key === "bash.stripTrailingHeadTail") return false;
 				if (key === "astGrep.enabled") return false;
 				if (key === "astEdit.enabled") return false;
 				if (key === "grep.enabled") return false;
@@ -29,7 +28,7 @@ function makeSession(): ToolSession {
 	} as unknown as ToolSession;
 }
 
-describe("BashTool non-zero exit", () => {
+describe("BashTool execution results", () => {
 	it("resolves with an error result carrying execution details instead of throwing", async () => {
 		const tool = new BashTool(makeSession());
 		const result = await tool.execute("call-fail", { command: "exit 3" });
@@ -55,5 +54,21 @@ describe("BashTool non-zero exit", () => {
 		const text = result.content.find(c => c.type === "text")?.text ?? "";
 		expect(text).toContain("hi");
 		expect(text).not.toContain("Command exited with code");
+	});
+
+	it("preserves final-stage output when a pipeline ends in head or tail", async () => {
+		const tool = new BashTool(makeSession());
+
+		for (const scenario of [
+			{ command: "seq 1 5 | head -n2", expected: "1\n2" },
+			{ command: "seq 1 5 | tail -n2", expected: "4\n5" },
+		]) {
+			const result = await tool.execute(`call-pipeline-${scenario.expected[0]}`, { command: scenario.command });
+			const text = result.content.find(c => c.type === "text")?.text ?? "";
+			const stdout = text.replace(/\n\nWall time: \d+\.\d{2} seconds$/, "").trimEnd();
+
+			expect(result.isError).toBeUndefined();
+			expect(stdout).toBe(scenario.expected);
+		}
 	});
 });

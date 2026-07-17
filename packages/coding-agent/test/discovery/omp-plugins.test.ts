@@ -188,6 +188,49 @@ test(".mcp.json with bare entries (no command/url) records a warning and is skip
 	expect((result.warnings ?? []).some(w => w.includes('"broken"'))).toBe(true);
 });
 
+test("relative path-like command and cwd resolve against the plugin config directory", async () => {
+	writeFile(
+		path.join(ext, ".mcp.json"),
+		JSON.stringify({
+			mcpServers: {
+				local: { command: "./bin/server", args: ["mcp"], cwd: "." },
+				bare: { command: "npx", args: ["-y", "@some/mcp"] },
+			},
+		}),
+	);
+	writeFile(path.join(project, ".omp", "settings.json"), JSON.stringify({ extensions: [ext] }));
+
+	const servers = await loadFromPlugin<{ name: string; command?: string; cwd?: string }>(mcpCapability.id, ctx());
+	const local = servers.find(s => s.name === "local");
+	const bare = servers.find(s => s.name === "bare");
+	// Path-like command and "." cwd rebase onto the .mcp.json directory (ext),
+	// not the session cwd (project). Bare executables are left untouched.
+	expect(local?.command).toBe(path.join(ext, "bin", "server"));
+	expect(local?.cwd).toBe(ext);
+	expect(bare?.command).toBe("npx");
+	expect(bare?.cwd).toBeUndefined();
+});
+
+test("path-like command stays rooted at the plugin package root even with a subdirectory cwd", async () => {
+	// Plugin .mcp.json commands are relative to the plugin package root, not the
+	// declared cwd: a plugin may ship its executable at the root yet run from a
+	// data subdir. cwd rebases to <ext>/work but command stays <ext>/bin/server.
+	writeFile(
+		path.join(ext, ".mcp.json"),
+		JSON.stringify({
+			mcpServers: {
+				local: { command: "./bin/server", args: ["mcp"], cwd: "work" },
+			},
+		}),
+	);
+	writeFile(path.join(project, ".omp", "settings.json"), JSON.stringify({ extensions: [ext] }));
+
+	const servers = await loadFromPlugin<{ name: string; command?: string; cwd?: string }>(mcpCapability.id, ctx());
+	const local = servers.find(s => s.name === "local");
+	expect(local?.command).toBe(path.join(ext, "bin", "server"));
+	expect(local?.cwd).toBe(path.join(ext, "work"));
+});
+
 test("installed plugins under `<plugins>/node_modules/` are surfaced (e.g. via `omp plugin link`/`install`)", async () => {
 	// Simulate what `plugin install` / `plugin link` produces: a plugins root
 	// with `package.json#dependencies` and a populated `node_modules/<pkg>/`.

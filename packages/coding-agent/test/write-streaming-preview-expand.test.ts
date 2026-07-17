@@ -24,7 +24,7 @@ describe("write streaming preview honors Ctrl+O expansion", () => {
 			await themeModule.initTheme();
 			initialized = true;
 		}
-		const uiStub = { requestRender() {} } as unknown as TUI;
+		const uiStub = { requestRender() {}, requestComponentRender() {} } as unknown as TUI;
 		const content = Array.from({ length: lineCount }, (_, i) => `line ${i + 1}`).join("\n");
 		// No updateResult() -> the call stays pending, exercising the streaming
 		// `renderCall` path (formatStreamingContent), not the merged result render.
@@ -89,6 +89,7 @@ describe("write streaming preview honors Ctrl+O expansion", () => {
 			options,
 			uiTheme!,
 		);
+		if (!component) throw new Error("expected a rendered component for a non-xdev write path");
 
 		component.render(80);
 		component.render(120);
@@ -108,6 +109,7 @@ describe("write streaming preview honors Ctrl+O expansion", () => {
 			{ expanded: true, isPartial: true, spinnerFrame: 0 },
 			uiTheme,
 		);
+		if (!component) throw new Error("expected a rendered component for a non-xdev write path");
 
 		const rendered = stripAnsi(component.render(120).join("\n"));
 		expect(rendered).toContain("object first");
@@ -183,7 +185,7 @@ describe("write streaming preview honors Ctrl+O expansion", () => {
 			await themeModule.initTheme();
 			initialized = true;
 		}
-		const uiStub = { requestRender() {} } as unknown as TUI;
+		const uiStub = { requestRender() {}, requestComponentRender() {} } as unknown as TUI;
 		const staleContent = "line before throttle";
 		// Provider parsed up to here…
 		const seenByProvider = `{"path":"/tmp/foo.ts","content":"${staleContent}`;

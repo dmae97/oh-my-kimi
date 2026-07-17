@@ -13,6 +13,7 @@ scheduled onto the parent loop complete (`asyncio.run_coroutine_threadsafe`).
 from __future__ import annotations
 
 import asyncio
+import grp
 import logging
 import os
 import shutil
@@ -149,6 +150,10 @@ def _stage_agent_home() -> None:
     chown_to_root = os.geteuid() == 0
     for root, dirs, files in os.walk(_AGENT_HOME):
         root_path = Path(root)
+        if root_path == _AGENT_HOME / ".omp":
+            # ~/.omp/run is slot-writable daemon presence state, not template
+            # config; keep it out of the read-only normalization below.
+            dirs[:] = [d for d in dirs if d != "run"]
         try:
             root_path.chmod(0o755)
             if chown_to_root:
@@ -175,6 +180,36 @@ def _stage_agent_home() -> None:
                 log.warning("Failed to normalize agent home file %s: %s", path, exc)
 
 
+def _ensure_agent_run_dir() -> None:
+    """Keep ``~/.omp/run`` writable by every sandbox slot.
+
+    omp registers daemon project presence under ``~/.omp/run`` at startup,
+    nesting per-project dirs (``daemons/<hash>/clients``) that any slot user
+    must be able to create or enter regardless of which slot made them first.
+    The tree stays group ``omp``, setgid, group-writable; slot subprocesses
+    spawn with umask 0002 so their entries inherit group write.
+    """
+    if os.geteuid() != 0:
+        return
+    run_dir = _AGENT_HOME / ".omp" / "run"
+    try:
+        gid = grp.getgrnam("omp").gr_gid
+    except KeyError:
+        return
+    try:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        for root, _dirs, files in os.walk(run_dir):
+            root_path = Path(root)
+            os.chown(root_path, -1, gid)
+            root_path.chmod(0o2770)
+            for name in files:
+                file_path = root_path / name
+                os.chown(file_path, -1, gid)
+                file_path.chmod(0o660)
+    except OSError as exc:
+        log.warning("Failed to prepare agent run dir %s: %s", run_dir, exc)
+
+
 def _build_extra_env(settings: Settings) -> dict[str, str]:
     """Build the env overlay passed to the omp subprocess.
 
@@ -184,6 +219,7 @@ def _build_extra_env(settings: Settings) -> dict[str, str]:
     """
     del settings  # kept for future hooks (model-specific env, etc.)
     _stage_agent_home()
+    _ensure_agent_run_dir()
     env = dict.fromkeys(_SCRUBBED_ENV_KEYS, "")
     if _AGENT_HOME.is_dir():
         env["HOME"] = str(_AGENT_HOME)
@@ -661,9 +697,7 @@ def _run_rpc_blocking(
                 stop_reason = turn.assistant_message.get("stopReason")
                 if stop_reason == "error":
                     error_msg = turn.assistant_message.get("errorMessage") or "model returned error"
-                    raise RuntimeError(
-                        f"omp agent error (stopReason=error): {error_msg}"
-                    )
+                    raise RuntimeError(f"omp agent error (stopReason=error): {error_msg}")
             log.info(
                 "rpc_done",
                 extra={

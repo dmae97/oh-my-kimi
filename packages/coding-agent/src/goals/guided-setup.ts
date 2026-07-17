@@ -1,6 +1,6 @@
 import { instrumentedCompleteSimple, resolveTelemetry } from "@oh-my-pi/pi-agent-core";
 import type { Tool } from "@oh-my-pi/pi-ai";
-import { prompt } from "@oh-my-pi/pi-utils";
+import { prompt, Snowflake } from "@oh-my-pi/pi-utils";
 import { extractTextContent, extractToolCall, parseJsonPayload } from "../commit/utils";
 import guidedGoalInterviewPrompt from "../prompts/goals/guided-goal-interview.md" with { type: "text" };
 import guidedGoalSystemPrompt from "../prompts/goals/guided-goal-system.md" with { type: "text" };
@@ -37,6 +37,21 @@ export type GuidedGoalTurnResult =
 export interface GuidedGoalTurnOptions {
 	messages: readonly GuidedGoalMessage[];
 	signal?: AbortSignal;
+	/**
+	 * Stable Codex transport session id reused across every turn of one
+	 * interview. `handleGuidedGoalCommand` runs up to six turns; minting a fresh
+	 * id per turn opens a new websocket-only Codex socket each time (kept in
+	 * `providerSessionState` until session dispose), which can trip
+	 * `websocket_connection_limit_reached` and drop back to the SSE path this
+	 * fix avoids. Callers pass one id for the whole interview; omitted for
+	 * one-shot callers, which mint a unique id per call.
+	 */
+	sideSessionId?: string;
+}
+
+/** Mint a guided-goal Codex side-session id keyed off the main session id. */
+export function newGuidedGoalSessionId(session: AgentSession): string {
+	return `${session.sessionId}:guided-goal:${Snowflake.next()}`;
 }
 
 function parseGuidedGoalPayload(value: unknown): GuidedGoalTurnResult {
@@ -106,6 +121,19 @@ export async function runGuidedGoalTurn(
 			reasoning: toReasoningEffort(thinkingLevel),
 			disableReasoning: shouldDisableReasoning(thinkingLevel),
 			toolChoice: { type: "tool", name: RESPOND_TOOL_NAME },
+			// Route through the session's provider transport so websocket-only Codex
+			// models (gpt-5.6-luna/sol/terra) get a websocket session instead of
+			// falling back to SSE — the Codex SSE /responses endpoint does not serve
+			// those ids and rejects the turn with "Model not found" (#5304, same class
+			// as the /btw regression in #5213). The side session id is minted once per
+			// interview and reused across turns so a multi-question interview shares one
+			// Codex socket instead of opening a fresh one each turn; it stays distinct
+			// from the main session id so the oneshot's append-only turn state never
+			// pollutes the main conversation.
+			sessionId: options.sideSessionId ?? newGuidedGoalSessionId(session),
+			promptCacheKey: session.sessionId,
+			preferWebsockets: session.preferWebsockets,
+			providerSessionState: session.providerSessionState,
 		},
 		{ telemetry: resolveTelemetry(session.agent.telemetry, session.sessionId), oneshotKind: "guided_goal_setup" },
 	);

@@ -1,11 +1,11 @@
 /**
- * Regression: a trailing empty assistant `stop` arriving after a successful
- * `yield` must NOT trigger empty-stop retry or any other auto-continuation.
+ * Regression: a terminal `yield` must stop the current prompt loop before a
+ * provider continuation can produce a trailing empty assistant `stop`.
  *
  * The session's executor treats a successful yield as the terminal result for
- * a scripted subagent run; if the empty-stop recovery path then schedules
- * `agent.continue()`, the already-yielded child resumes and produces post-yield
- * tool calls (see issue #3389).
+ * a scripted subagent run; if the loop continues after that tool result, the
+ * already-yielded child resumes and can enter post-yield retries or tool calls
+ * (see issues #3389 and #4963).
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
@@ -14,6 +14,7 @@ import { z } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { IrcMessage } from "@oh-my-pi/pi-coding-agent/irc/bus";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
@@ -129,6 +130,13 @@ function reminderMessages(messages: AgentMessage[]): AgentMessage[] {
 	});
 }
 
+function assistantText(messages: AgentMessage[]): string {
+	return messages
+		.filter((message): message is Extract<AgentMessage, { role: "assistant" }> => message.role === "assistant")
+		.flatMap(message => message.content.flatMap(content => (content.type === "text" ? [content.text] : [])))
+		.join("\n");
+}
+
 afterEach(async () => {
 	for (const harness of activeHarnesses.splice(0)) {
 		await harness.session.dispose();
@@ -139,20 +147,17 @@ afterEach(async () => {
 });
 
 describe("AgentSession yield empty-stop suppression", () => {
-	it("does not retry a trailing empty assistant stop after a successful yield", async () => {
-		const { session, mock } = await createHarness([yieldCall("done", "call-yield-done"), emptyStop()]);
+	it("does not continue to a trailing empty assistant stop after a successful yield", async () => {
+		const { session, mock } = await createHarness([yieldCall("done", "call-yield-done")]);
 
 		await session.prompt("do work then yield");
 		await session.waitForIdle();
 
-		// Two model calls: the yield turn and the trailing empty stop. Without the
-		// fix, the empty stop would schedule a `continue()` and either drive a
-		// third call or throw "no response configured" from the mock.
-		expect(mock.calls).toHaveLength(2);
+		expect(mock.calls).toHaveLength(1);
 		expect(reminderMessages(session.agent.state.messages)).toHaveLength(0);
 	});
 
-	it("suppresses multiple trailing empty stops within the same yield-terminated run", async () => {
+	it("stops at the terminal yield instead of consuming scripted trailing empty stops", async () => {
 		const { session, mock } = await createHarness([
 			yieldCall("done", "call-yield-multi"),
 			emptyStop(),
@@ -163,18 +168,14 @@ describe("AgentSession yield empty-stop suppression", () => {
 		await session.prompt("yield then maybe trail");
 		await session.waitForIdle();
 
-		// Without suppression, empty-stop retries would consume extra mock entries
-		// and append at least one reminder. With the fix, the loop ends at the
-		// first trailing empty stop.
-		expect(mock.calls).toHaveLength(2);
+		expect(mock.calls).toHaveLength(1);
 		expect(reminderMessages(session.agent.state.messages)).toHaveLength(0);
 	});
 
 	it("clears yield-termination on the next prompt so empty stops retry normally", async () => {
 		const { session, mock } = await createHarness([
-			// Run 1: yield then trailing empty stop. Suppression applies.
+			// Run 1: terminal yield stops without consuming a trailing provider response.
 			yieldCall("first", "call-yield-first"),
-			emptyStop(),
 			// Run 2: empty stop should retry as usual now that the flag has cleared.
 			recordCall("alpha", "call-record-alpha"),
 			emptyStop(),
@@ -183,7 +184,7 @@ describe("AgentSession yield empty-stop suppression", () => {
 
 		await session.prompt("yield first");
 		await session.waitForIdle();
-		expect(mock.calls).toHaveLength(2);
+		expect(mock.calls).toHaveLength(1);
 		expect(reminderMessages(session.agent.state.messages)).toHaveLength(0);
 
 		await session.prompt("now record");
@@ -191,7 +192,36 @@ describe("AgentSession yield empty-stop suppression", () => {
 
 		// Three additional calls (record, emptyStop, finished). Exactly one
 		// empty-stop reminder injected on the second run.
-		expect(mock.calls).toHaveLength(5);
+		expect(mock.calls).toHaveLength(4);
 		expect(reminderMessages(session.agent.state.messages)).toHaveLength(1);
+	});
+
+	it("treats an idle IRC wake after a yielded run as a fresh turn for empty-stop retry", async () => {
+		const { session, mock } = await createHarness([
+			// Run 1: terminal yield stops without consuming a trailing provider response.
+			yieldCall("first", "call-yield-before-irc"),
+			// Run 2: an idle IRC wake is a fresh turn, so its empty stop should retry normally.
+			emptyStop(),
+			{ content: ["recovered after IRC retry"], stopReason: "stop" },
+		]);
+
+		await session.prompt("yield first");
+		await session.waitForIdle();
+		expect(mock.calls).toHaveLength(1);
+		expect(reminderMessages(session.agent.state.messages)).toHaveLength(0);
+
+		const outcome = await session.deliverIrcMessage({
+			id: "irc-empty-stop-after-yield",
+			from: "peer",
+			to: "me",
+			body: "ping",
+			ts: Date.now(),
+		} as IrcMessage);
+		expect(outcome).toBe("woken");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(3);
+		expect(reminderMessages(session.agent.state.messages)).toHaveLength(1);
+		expect(assistantText(session.agent.state.messages)).toContain("recovered after IRC retry");
 	});
 });

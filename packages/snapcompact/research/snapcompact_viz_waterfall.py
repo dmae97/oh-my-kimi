@@ -49,17 +49,24 @@ def load_source() -> tuple[dict, dict[str, np.ndarray]]:
     return summary, arrays
 
 
-def build_waterfall_data(summary: dict, arrays: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+def build_waterfall_data(
+    summary: dict, arrays: dict[str, np.ndarray]
+) -> dict[str, np.ndarray]:
     answer = smooth_rows(arrays["answer_binned"], radius=3)
     random = smooth_rows(arrays["random_binned"], radius=3)
     ratio = smooth_rows(arrays["ratio_binned"], radius=2)
 
     # Use one common robust scale so answer/random amplitudes are visually comparable.
-    common_high = float(summary.get("common_delta_scale_p98") or np.percentile(np.r_[answer, random], 98))
+    common_high = float(
+        summary.get("common_delta_scale_p98")
+        or np.percentile(np.r_[answer, random], 98)
+    )
     answer_u = robust_unit(answer, common_high)
     random_u = robust_unit(random, common_high)
     contrast = np.tanh((answer_u - random_u) * 2.8).astype(np.float32)
-    ratio_u = robust_unit(ratio, float(summary.get("ratio_scale_p98") or np.percentile(ratio, 98)))
+    ratio_u = robust_unit(
+        ratio, float(summary.get("ratio_scale_p98") or np.percentile(ratio, 98))
+    )
 
     layers, bins = answer.shape
     x = np.linspace(0.0, 1.0, bins, dtype=np.float32)
@@ -78,7 +85,9 @@ def build_waterfall_data(summary: dict, arrays: dict[str, np.ndarray]) -> dict[s
 
 
 def draw_glow_line(ax, x, y, color, lw=1.4, z=5, alpha=1.0):
-    line, = ax.plot(x, y, color=color, lw=lw, alpha=alpha, zorder=z, solid_joinstyle="round")
+    (line,) = ax.plot(
+        x, y, color=color, lw=lw, alpha=alpha, zorder=z, solid_joinstyle="round"
+    )
     line.set_path_effects(
         [
             pe.Stroke(linewidth=lw + 8.5, foreground=color, alpha=0.055),
@@ -238,20 +247,66 @@ def render(summary: dict, data: dict[str, np.ndarray]) -> None:
     # Legend built as luminous calibration bars.
     legend_y = -1.35
     ax.plot([0.02, 0.10], [legend_y, legend_y], color=answer_color, lw=2.2)
-    ax.text(0.112, legend_y, "answer-mask ridge", color="#ffdca0", fontsize=9, va="center", family="monospace")
+    ax.text(
+        0.112,
+        legend_y,
+        "answer-mask ridge",
+        color="#ffdca0",
+        fontsize=9,
+        va="center",
+        family="monospace",
+    )
     ax.plot([0.32, 0.40], [legend_y, legend_y], color=random_color, lw=2.2)
-    ax.text(0.412, legend_y, "random-mask ridge", color="#9ff0ff", fontsize=9, va="center", family="monospace")
+    ax.text(
+        0.412,
+        legend_y,
+        "random-mask ridge",
+        color="#9ff0ff",
+        fontsize=9,
+        va="center",
+        family="monospace",
+    )
     ax.plot([0.62, 0.70], [legend_y, legend_y], color=gain_color, lw=1.4)
-    ax.text(0.712, legend_y, "answer excess tremor", color="#ff9bbb", fontsize=9, va="center", family="monospace")
+    ax.text(
+        0.712,
+        legend_y,
+        "answer excess tremor",
+        color="#ff9bbb",
+        fontsize=9,
+        va="center",
+        family="monospace",
+    )
 
     # Outer phosphor frame.
-    ax.add_patch(Rectangle((0, -0.78), 1, layers - 0.44, fill=False, lw=0.9, edgecolor="#5fb7ff", alpha=0.34, zorder=10))
+    ax.add_patch(
+        Rectangle(
+            (0, -0.78),
+            1,
+            layers - 0.44,
+            fill=False,
+            lw=0.9,
+            edgecolor="#5fb7ff",
+            alpha=0.34,
+            zorder=10,
+        )
+    )
     ax.set_xlim(-0.055, 1.02)
     ax.set_ylim(-1.62, layers + 0.98)
     ax.set_xticks(np.linspace(0, 1, 7))
-    ax.set_xticklabels([f"{int(t * image_tokens):03d}" for t in np.linspace(0, 1, 7)], color="#8fbede", fontsize=8, family="monospace")
+    ax.set_xticklabels(
+        [f"{int(t * image_tokens):03d}" for t in np.linspace(0, 1, 7)],
+        color="#8fbede",
+        fontsize=8,
+        family="monospace",
+    )
     ax.set_yticks([])
-    ax.set_xlabel("image-token bin →", color="#9cc7e5", fontsize=10, family="monospace", labelpad=12)
+    ax.set_xlabel(
+        "image-token bin →",
+        color="#9cc7e5",
+        fontsize=10,
+        family="monospace",
+        labelpad=12,
+    )
     for spine in ax.spines.values():
         spine.set_visible(False)
     ax.tick_params(axis="x", length=0)
@@ -286,7 +341,9 @@ def render(summary: dict, data: dict[str, np.ndarray]) -> None:
             indent=2,
         )
 
-    fig.savefig(out_png, facecolor=fig.get_facecolor(), bbox_inches="tight", pad_inches=0.14)
+    fig.savefig(
+        out_png, facecolor=fig.get_facecolor(), bbox_inches="tight", pad_inches=0.14
+    )
     plt.close(fig)
     print(out_png)
 

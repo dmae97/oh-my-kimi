@@ -22,6 +22,7 @@ import {
 	getProjectDir,
 	isEnoent,
 	logger,
+	MAIN_CONFIG_FILENAMES,
 	procmgr,
 	setWorktreesDir,
 } from "@oh-my-pi/pi-utils";
@@ -31,7 +32,6 @@ import type { ModelRole } from "../config/model-roles";
 import { loadCapability } from "../discovery";
 import { isLightTheme, setAutoThemeMapping, setColorBlindMode, setSymbolPreset } from "../modes/theme/theme";
 import { AgentStorage } from "../session/agent-storage";
-import { normalizeToolName } from "../tools/builtin-names";
 import { type EditMode, normalizeEditMode } from "../utils/edit-mode";
 import { withFileLock } from "./file-lock";
 import {
@@ -60,7 +60,7 @@ export interface RawSettings {
 export interface SettingsOptions {
 	/** Current working directory for project settings discovery */
 	cwd?: string;
-	/** Agent directory for config.yml storage */
+	/** Agent directory for config.yml/config.yaml storage */
 	agentDir?: string;
 	/** Don't persist to disk (for tests) */
 	inMemory?: boolean;
@@ -172,6 +172,91 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+/**
+ * Migrate a v17 leaf rename that used to nest under a boolean parent path
+ * (`dev.autoqa.consent` → `dev.autoqaConsent`, `todo.reminders.max` →
+ * `todo.remindersMax`). Pre-rename configs left the leaf beneath the parent,
+ * so the parent path resolved to an object and truthy checks like
+ * `isAutoQaEnabled` treated a consent-only container as "enabled".
+ *
+ * Handles nested (`{ parent: { leaf } }`) and quoted-dotted (`"parent.leaf"`)
+ * legacy sources. An explicit new key always wins; a separately configured
+ * boolean parent is preserved; an irrecoverable object-valued parent (only ever
+ * a container for the old leaf) is dropped so the schema default applies.
+ */
+function migrateNestedLeafRename(
+	raw: RawSettings,
+	root: string,
+	parent: string,
+	oldLeaf: string,
+	newLeaf: string,
+	isLeafValue: (value: unknown) => boolean,
+): void {
+	const rootObj = isRecord(raw[root]) ? (raw[root] as Record<string, unknown>) : undefined;
+	const nestedParent = rootObj?.[parent];
+	const flatParent = raw[`${root}.${parent}`];
+	const oldParentPath = `${root}.${parent}`;
+
+	const candidates = [
+		rootObj?.[newLeaf],
+		raw[`${root}.${newLeaf}`],
+		isRecord(nestedParent) ? nestedParent[oldLeaf] : undefined,
+		raw[`${oldParentPath}.${oldLeaf}`],
+	];
+	const resolvedLeaf = candidates.find(isLeafValue);
+
+	const recoveredParent =
+		typeof nestedParent === "boolean" ? nestedParent : typeof flatParent === "boolean" ? flatParent : undefined;
+
+	const ensureRoot = (): Record<string, unknown> => {
+		const current = raw[root];
+		if (isRecord(current)) return current;
+		const created: Record<string, unknown> = {};
+		raw[root] = created;
+		return created;
+	};
+
+	if (resolvedLeaf !== undefined) {
+		const target = ensureRoot();
+		if (!isLeafValue(target[newLeaf])) {
+			target[newLeaf] = resolvedLeaf;
+		}
+	}
+
+	// Strip legacy leaf sources (nested + flat dotted).
+	delete raw[`${oldParentPath}.${oldLeaf}`];
+	delete raw[`${root}.${newLeaf}`];
+	if (isRecord(raw[root]) && isRecord((raw[root] as Record<string, unknown>)[parent])) {
+		const parentObj = (raw[root] as Record<string, unknown>)[parent] as Record<string, unknown>;
+		delete parentObj[oldLeaf];
+		if (Object.keys(parentObj).length === 0) {
+			delete (raw[root] as Record<string, unknown>)[parent];
+		}
+	}
+
+	// The parent path must be a boolean or absent — never a leftover object.
+	if (recoveredParent !== undefined) {
+		const target = ensureRoot();
+		if (typeof target[parent] !== "boolean") {
+			target[parent] = recoveredParent;
+		}
+	} else if (isRecord(raw[root]) && isRecord((raw[root] as Record<string, unknown>)[parent])) {
+		delete (raw[root] as Record<string, unknown>)[parent];
+	}
+	delete raw[oldParentPath];
+	if (isRecord(raw[root]) && Object.keys(raw[root] as Record<string, unknown>).length === 0) {
+		delete raw[root];
+	}
+}
+
+function modelRoleValueFromUnknown(value: unknown): string | undefined {
+	if (typeof value === "string") return value;
+	if (!Array.isArray(value)) return undefined;
+
+	const entries = stringArrayFromUnknown(value);
+	return entries.length === value.length ? entries.join(",") : undefined;
+}
+
 type EditVariantEntry = {
 	patternLower: string;
 	mode: EditMode;
@@ -226,7 +311,7 @@ export class Settings {
 	#storage: AgentStorage | null = null;
 
 	#configFiles: string[] = [];
-	/** Global settings from config.yml */
+	/** Global settings from config.yml/config.yaml */
 	#global: RawSettings = {};
 	/** Project settings from .claude/settings.yml etc */
 	#project: RawSettings = {};
@@ -256,7 +341,7 @@ export class Settings {
 	private constructor(options: SettingsOptions = {}) {
 		this.#cwd = path.normalize(options.cwd ?? getProjectDir());
 		this.#agentDir = path.normalize(options.agentDir ?? getAgentDir());
-		this.#configPath = options.inMemory ? null : path.join(this.#agentDir, "config.yml");
+		this.#configPath = options.inMemory ? null : path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]);
 		this.#configFiles = options.configFiles?.map(file => path.resolve(this.#cwd, expandTilde(file))) ?? [];
 		this.#persist = !options.inMemory && options.readOnly !== true;
 
@@ -421,6 +506,9 @@ export class Settings {
 		if (path === "statusLine.sessionAccent") {
 			statusLineSessionAccentSignal.fire();
 		}
+		if (path === "modelRoles") {
+			modelRolesSignal.fire();
+		}
 	}
 
 	/**
@@ -447,6 +535,7 @@ export class Settings {
 			inMemory: !this.#persist,
 		});
 		cloned.#storage = this.#storage;
+		cloned.#configPath = this.#configPath;
 		cloned.#global = structuredClone(this.#global);
 		cloned.#project = this.#persist ? await cloned.#loadProjectSettings() : structuredClone(this.#project);
 		cloned.#configFiles = [...this.#configFiles];
@@ -472,11 +561,13 @@ export class Settings {
 	async reloadForCwd(cwd: string): Promise<void> {
 		const normalized = path.normalize(cwd);
 		if (normalized === this.#cwd) return;
+		const prevModelRoles = this.get("modelRoles");
 		this.#cwd = normalized;
 		if (this.#persist) {
 			this.#project = await this.#loadProjectSettings();
 		}
 		this.#rebuildMerged();
+		this.#fireEffectiveSettingChanged("modelRoles", this.get("modelRoles"), prevModelRoles);
 		this.#fireAllHooks();
 	}
 
@@ -580,8 +671,8 @@ export class Settings {
 		const roles: Record<string, string> = {};
 		for (const role in value) {
 			if (!Object.hasOwn(value, role)) continue;
-			const modelId = value[role];
-			if (typeof modelId === "string") {
+			const modelId = modelRoleValueFromUnknown(value[role]);
+			if (modelId !== undefined) {
 				roles[role] = modelId;
 			}
 		}
@@ -589,9 +680,10 @@ export class Settings {
 	}
 
 	/**
-	 * Set a model role (helper for modelRoles record).
+	 * Set a model role (helper for modelRoles record). Passing `undefined`
+	 * clears the role from the persisted record and any runtime override.
 	 */
-	setModelRole(role: ModelRole | string, modelId: string): void {
+	setModelRole(role: ModelRole | string, modelId: string | undefined): void {
 		const current = this.#modelRolesFromLayer(this.#global);
 		const runtimeOverrides = getByPath(this.#overrides, ["modelRoles"]);
 		const updateRuntimeOverride =
@@ -600,12 +692,20 @@ export class Settings {
 			!Array.isArray(runtimeOverrides) &&
 			Object.hasOwn(runtimeOverrides, role);
 
-		current[role] = modelId;
+		if (modelId === undefined) {
+			delete current[role];
+		} else {
+			current[role] = modelId;
+		}
 		this.set("modelRoles", current);
 
 		if (updateRuntimeOverride) {
 			const nextRuntimeOverride = this.#modelRolesFromLayer(this.#overrides);
-			nextRuntimeOverride[role] = modelId;
+			if (modelId === undefined) {
+				delete nextRuntimeOverride[role];
+			} else {
+				nextRuntimeOverride[role] = modelId;
+			}
 			this.override("modelRoles", nextRuntimeOverride);
 		}
 	}
@@ -614,15 +714,27 @@ export class Settings {
 	 * Get a model role (helper for modelRoles record).
 	 */
 	getModelRole(role: ModelRole | string): string | undefined {
-		const roles = this.get("modelRoles");
-		return roles[role];
+		const roles: unknown = this.get("modelRoles");
+		if (!isRecord(roles)) return undefined;
+		return modelRoleValueFromUnknown(roles[role]);
 	}
 
 	/**
 	 * Get all model roles (helper for modelRoles record).
 	 */
 	getModelRoles(): ReadOnlyDict<string> {
-		return { ...this.get("modelRoles") };
+		const roles: unknown = this.get("modelRoles");
+		if (!isRecord(roles)) return {};
+
+		const normalized: Record<string, string> = {};
+		for (const role in roles) {
+			if (!Object.hasOwn(roles, role)) continue;
+			const modelId = modelRoleValueFromUnknown(roles[role]);
+			if (modelId !== undefined) {
+				normalized[role] = modelId;
+			}
+		}
+		return normalized;
 	}
 
 	/*
@@ -651,16 +763,22 @@ export class Settings {
 
 	async #load(): Promise<Settings> {
 		// Project settings load (loadCapability scans cwd) is independent of the
-		// persist chain (storage open → legacy migration → global config.yml read),
-		// so kick it off first and await after the persist chain completes. The
-		// persist steps remain sequential: migration may write config.yml, which
-		// #loadYaml then reads; migration's db fallback needs #storage opened.
+		// persist chain (storage open → legacy migration → global config read), so
+		// kick it off first and await after the persist chain completes. The
+		// persist steps remain sequential: existing config discovery decides
+		// whether migration may write config.yml before the global config is read;
+		// migration's db fallback needs #storage opened.
 		const projectPromise = this.#loadProjectSettings();
 
 		if (this.#persist) {
 			this.#storage = await AgentStorage.open(getAgentDbPath(this.#agentDir));
-			await this.#migrateFromLegacy();
-			this.#global = await this.#loadYaml(this.#configPath!);
+			const existingConfig = await this.#loadExistingMainYaml();
+			if (existingConfig) {
+				this.#global = existingConfig;
+			} else {
+				await this.#migrateFromLegacy();
+				this.#global = await this.#loadYaml(this.#configPath!);
+			}
 			await this.#seedLastChangelogVersionMarker();
 		}
 
@@ -676,8 +794,9 @@ export class Settings {
 	async #loadReadOnly(): Promise<Settings> {
 		const projectPromise = this.#loadProjectSettings();
 
-		if (this.#configPath) {
-			this.#global = await this.#loadYaml(this.#configPath);
+		const existingConfig = await this.#loadExistingMainYaml();
+		if (existingConfig) {
+			this.#global = existingConfig;
 		}
 
 		this.#project = await projectPromise;
@@ -687,18 +806,44 @@ export class Settings {
 	}
 
 	async #loadYaml(filePath: string): Promise<RawSettings> {
+		const loaded = await this.#loadYamlIfPresent(filePath);
+		return loaded ?? {};
+	}
+
+	async #loadYamlIfPresent(filePath: string): Promise<RawSettings | null> {
+		let content: string;
 		try {
-			const content = await Bun.file(filePath).text();
+			content = await Bun.file(filePath).text();
+		} catch (error) {
+			if (isEnoent(error)) return null;
+			logger.warn("Settings: failed to load", { path: filePath, error: String(error) });
+			return {};
+		}
+
+		try {
 			const parsed = YAML.parse(content);
 			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
 				return {};
 			}
 			return this.#migrateRawSettings(parsed as RawSettings);
 		} catch (error) {
-			if (isEnoent(error)) return {};
 			logger.warn("Settings: failed to load", { path: filePath, error: String(error) });
 			return {};
 		}
+	}
+
+	async #loadExistingMainYaml(): Promise<RawSettings | null> {
+		if (!this.#configPath) return null;
+		for (const filename of MAIN_CONFIG_FILENAMES) {
+			const configPath = path.join(this.#agentDir, filename);
+			const loaded = await this.#loadYamlIfPresent(configPath);
+			if (loaded) {
+				this.#configPath = configPath;
+				return loaded;
+			}
+		}
+		this.#configPath = path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]);
+		return null;
 	}
 
 	async #loadProjectSettings(): Promise<RawSettings> {
@@ -755,14 +900,6 @@ export class Settings {
 
 	async #migrateFromLegacy(): Promise<void> {
 		if (!this.#configPath) return;
-
-		// Check if config.yml already exists
-		try {
-			await Bun.file(this.#configPath).text();
-			return; // Already exists, no migration needed
-		} catch (err) {
-			if (!isEnoent(err)) return;
-		}
 
 		let settings: RawSettings = {};
 		let migrated = false;
@@ -1134,43 +1271,6 @@ export class Settings {
 			delete raw["search.contextAfter"];
 		}
 
-		// 3. Tool-name arrays use wire IDs too. Preserve user overrides across
-		// the rename without duplicating entries if they already added grep/glob.
-		const migrateToolNameList = (names: unknown): unknown => {
-			if (!Array.isArray(names)) return names;
-			const out: unknown[] = [];
-			const seen = new Set<string>();
-			for (const name of names) {
-				const migrated = typeof name === "string" ? normalizeToolName(name) : name;
-				if (typeof migrated === "string") {
-					if (seen.has(migrated)) continue;
-					seen.add(migrated);
-				}
-				out.push(migrated);
-			}
-			return out;
-		};
-		const ensureToolsObject = (): Record<string, unknown> => {
-			const current = raw.tools;
-			if (current && typeof current === "object" && !Array.isArray(current)) {
-				return current as Record<string, unknown>;
-			}
-			const created: Record<string, unknown> = {};
-			raw.tools = created;
-			return created;
-		};
-		const toolsObj = raw.tools as Record<string, unknown> | undefined;
-		if (toolsObj && "essentialOverride" in toolsObj) {
-			toolsObj.essentialOverride = migrateToolNameList(toolsObj.essentialOverride);
-		}
-		if ("tools.essentialOverride" in raw) {
-			const nestedToolsObj = ensureToolsObject();
-			if (!("essentialOverride" in nestedToolsObj)) {
-				nestedToolsObj.essentialOverride = migrateToolNameList(raw["tools.essentialOverride"]);
-			}
-			delete raw["tools.essentialOverride"];
-		}
-
 		// Also clean up any empty nested objects we might have created or left behind
 		if (raw.glob && typeof raw.glob === "object" && Object.keys(raw.glob).length === 0) {
 			delete raw.glob;
@@ -1229,6 +1329,45 @@ export class Settings {
 		}
 		if (tierTouched) raw.tier = tierObj;
 		delete raw.fastModeScope;
+
+		// v17 renames that used to nest under a boolean parent path:
+		//   dev.autoqa.consent -> dev.autoqaConsent
+		//   todo.reminders.max -> todo.remindersMax
+		migrateNestedLeafRename(
+			raw,
+			"dev",
+			"autoqa",
+			"consent",
+			"autoqaConsent",
+			value => value === "unset" || value === "granted" || value === "denied",
+		);
+		migrateNestedLeafRename(
+			raw,
+			"todo",
+			"reminders",
+			"max",
+			"remindersMax",
+			value => typeof value === "number" && Number.isFinite(value),
+		);
+
+		// BM25 tool discovery removal: tools.discoveryMode / tools.essentialOverride /
+		// mcp.discoveryMode / mcp.discoveryDefaultServers are gone with no
+		// replacement (`tools.xdev` stays at its own default). Dead keys are
+		// deleted so they stop lingering in config.yml.
+		const toolsObj = raw.tools as Record<string, unknown> | undefined;
+		if (toolsObj) {
+			delete toolsObj.discoveryMode;
+			delete toolsObj.essentialOverride;
+		}
+		delete raw["tools.discoveryMode"];
+		delete raw["tools.essentialOverride"];
+		const mcpObj = raw.mcp as Record<string, unknown> | undefined;
+		if (mcpObj) {
+			delete mcpObj.discoveryMode;
+			delete mcpObj.discoveryDefaultServers;
+		}
+		delete raw["mcp.discoveryMode"];
+		delete raw["mcp.discoveryDefaultServers"];
 
 		return raw;
 	}
@@ -1456,6 +1595,12 @@ const appendOnlyModeSignal = new SettingSignal<[value: string]>("provider.append
  * can register independently without overwriting each other.
  */
 export const onAppendOnlyModeChanged = (cb: (value: string) => void) => appendOnlyModeSignal.on(cb);
+
+/** Fires when any model role changes at runtime. */
+const modelRolesSignal = new SettingSignal("modelRoles");
+
+/** Subscribe to model role changes. Returns an unsubscribe function. */
+export const onModelRolesChanged: (cb: () => void) => () => void = modelRolesSignal.on.bind(modelRolesSignal);
 
 /** Fires when `statusLine.sessionAccent` changes at runtime. */
 const statusLineSessionAccentSignal = new SettingSignal("statusLine.sessionAccent");

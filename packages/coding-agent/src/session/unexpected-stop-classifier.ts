@@ -16,8 +16,11 @@ const CLASSIFIER_SYSTEM_PROMPT = prompt.render(unexpectedStopClassifierPrompt);
  */
 const ANSWER_MAX_TOKENS = 16;
 /**
- * Reasoning backends ignore `disableReasoning` on some providers, so reserve
- * enough output room for the keyword to still land after unavoidable thinking.
+ * Online classifier budget. Sized to survive backends that ignore
+ * `disableReasoning` (e.g. Qwen3 via llama.cpp catalogued `reasoning: false`
+ * but still emitting thinking): the yes/no keyword needs to land after any
+ * unavoidable thinking preamble. `maxTokens` is a hard cap — non-thinking
+ * completions still return in a single word (issue #4355).
  */
 const REASONING_SAFE_MAX_TOKENS = 1024;
 
@@ -74,7 +77,7 @@ async function classifyOnline(text: string, deps: ClassifyUnexpectedStopDeps): P
 		throw new Error(`unexpected-stop: no API key for ${model.provider}/${model.id}`);
 	}
 	const metadata = deps.metadataResolver?.(model.provider);
-	const maxTokens = model.reasoning ? Math.max(ANSWER_MAX_TOKENS, REASONING_SAFE_MAX_TOKENS) : ANSWER_MAX_TOKENS;
+	const maxTokens = REASONING_SAFE_MAX_TOKENS;
 
 	const response = await completeSimple(
 		model,

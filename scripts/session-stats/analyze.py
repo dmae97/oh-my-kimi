@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shlex
 import sqlite3
 import sys
 import time
@@ -26,6 +27,7 @@ DB_PATH = Path.home() / ".omp" / "stats.db"
 
 # --------------------------------------------------------------------------- #
 # Shared helpers
+
 
 def open_ro() -> sqlite3.Connection:
     if not DB_PATH.exists():
@@ -115,12 +117,133 @@ FROM per_tool p FULL OUTER JOIN per_tool_res q USING (tool_name)
 ORDER BY (IFNULL(p.arg_tok, 0) + IFNULL(q.res_tok, 0)) DESC
 """
 
+_SEPARATORS_RE = re.compile(r"(\|\||&&|\||;|`|\$\()")
+_EXCLUDE_SET = {
+    # Shell control and builtins that aren't typical external utilities
+    "do",
+    "done",
+    "for",
+    "if",
+    "then",
+    "else",
+    "fi",
+    "while",
+    "break",
+    "continue",
+    "exit",
+    "case",
+    "esac",
+    "select",
+    "in",
+    "elif",
+    "function",
+    "return",
+    "local",
+    "export",
+    "readonly",
+    "unset",
+    "shift",
+    "eval",
+    "exec",
+    "trap",
+    "source",
+    "alias",
+    "unalias",
+    # JS/TS/programming keywords that show up from inline scripts or eval
+    "const",
+    "let",
+    "var",
+    "import",
+    "from",
+    "await",
+    "async",
+    "class",
+    "try",
+    "catch",
+    "throw",
+    "new",
+    "typeof",
+    "instanceof",
+    "null",
+    "true",
+    "false",
+    "undefined",
+    "console",
+    "log",
+    "require",
+    "module",
+    "exports",
+    "def",
+    # Punctuation/operators
+    "+",
+    "-",
+    "*",
+    "/",
+    "=",
+    "==",
+    "===",
+    "!=",
+    "!==",
+    "<",
+    ">",
+    "<=",
+    ">=",
+    "!",
+    "&&",
+    "||",
+    ";",
+    "&",
+    "(",
+    ")",
+    "{",
+    "}",
+    "[",
+    "]",
+}
+
+
+def _get_utils_optimized(cmd: str) -> list[str]:
+    cmd = cmd.replace("\n", " ")
+    parts = _SEPARATORS_RE.split(cmd)
+    utils = []
+    for part in parts:
+        part = part.strip()
+        if not part or part in ("||", "&&", "|", ";", "`", "$("):
+            continue
+
+        # Optimize: only use shlex if quotes are present
+        if "'" in part or '"' in part:
+            try:
+                tokens = shlex.split(part)
+            except Exception:
+                tokens = part.split()
+        else:
+            tokens = part.split()
+
+        for t in tokens:
+            if "=" in t and not t.startswith("-"):
+                continue
+            if t in ("sudo", "nohup", "time", "exec", "env", "xargs", "set"):
+                continue
+            val = t.split("/")[-1]
+            if val:
+                val = val.strip("'\"()[]{}")
+                if val.lower() in _EXCLUDE_SET:
+                    continue
+                if re.match(r"^[a-zA-Z0-9_\-\.\+]+$", val):
+                    if val.isdigit() or val == ".":
+                        continue
+                    utils.append(val)
+                break
+    return utils
+
 
 def cmd_tools(args: argparse.Namespace) -> int:
     conn = open_ro()
     where_session, where_args = _session_filter_clause(conn, args)
 
     cutoff = since_cutoff_ms(args)
+
     def with_session(table_alias: str) -> tuple[str, tuple]:
         """Combined session-file + since-timestamp scope for an alias, or ('', ())."""
         parts: list[str] = []
@@ -151,7 +274,13 @@ def cmd_tools(args: argparse.Namespace) -> int:
           (SELECT COUNT(*)                         FROM ss_tool_calls     c WHERE 1=1 {sf_clause_c}) AS n_calls,
           (SELECT COUNT(*)                         FROM ss_tool_results   r WHERE 1=1 {sf_clause_r}) AS n_results
         """,
-        sf_params_c + sf_params_r + sf_params_a + sf_params_a + sf_params_u + sf_params_c + sf_params_r,
+        sf_params_c
+        + sf_params_r
+        + sf_params_a
+        + sf_params_a
+        + sf_params_u
+        + sf_params_c
+        + sf_params_r,
     ).fetchone()
     if cutoff is None:
         n_sessions = conn.execute(
@@ -160,19 +289,32 @@ def cmd_tools(args: argparse.Namespace) -> int:
     else:
         sc, sp = with_session("c")
         n_sessions = conn.execute(
-            f"SELECT COUNT(DISTINCT c.session_file) FROM ss_tool_calls c WHERE 1=1 {sc}", sp
+            f"SELECT COUNT(DISTINCT c.session_file) FROM ss_tool_calls c WHERE 1=1 {sc}",
+            sp,
         ).fetchone()[0]
     g = grand
 
-    grand_total = g["tool_args"] + g["tool_res"] + g["thinking"] + g["asst_text"] + g["user_text"]
+    grand_total = (
+        g["tool_args"] + g["tool_res"] + g["thinking"] + g["asst_text"] + g["user_text"]
+    )
     print("=== grand totals ===")
     print(f"sessions:               {commas(n_sessions)}")
     print(f"tool calls / results:   {commas(g['n_calls'])} / {commas(g['n_results'])}")
-    print(f"tool ARGS tokens:       {commas(g['tool_args']):>14}  ({pct(g['tool_args'], grand_total):5.1f}%)")
-    print(f"tool RESULTS tokens:    {commas(g['tool_res']):>14}  ({pct(g['tool_res'], grand_total):5.1f}%)")
-    print(f"assistant THINKING:     {commas(g['thinking']):>14}  ({pct(g['thinking'], grand_total):5.1f}%)")
-    print(f"assistant TEXT:         {commas(g['asst_text']):>14}  ({pct(g['asst_text'], grand_total):5.1f}%)")
-    print(f"user TEXT:              {commas(g['user_text']):>14}  ({pct(g['user_text'], grand_total):5.1f}%)")
+    print(
+        f"tool ARGS tokens:       {commas(g['tool_args']):>14}  ({pct(g['tool_args'], grand_total):5.1f}%)"
+    )
+    print(
+        f"tool RESULTS tokens:    {commas(g['tool_res']):>14}  ({pct(g['tool_res'], grand_total):5.1f}%)"
+    )
+    print(
+        f"assistant THINKING:     {commas(g['thinking']):>14}  ({pct(g['thinking'], grand_total):5.1f}%)"
+    )
+    print(
+        f"assistant TEXT:         {commas(g['asst_text']):>14}  ({pct(g['asst_text'], grand_total):5.1f}%)"
+    )
+    print(
+        f"user TEXT:              {commas(g['user_text']):>14}  ({pct(g['user_text'], grand_total):5.1f}%)"
+    )
     print(f"total:                  {commas(grand_total):>14}")
 
     # Per-tool table.
@@ -208,6 +350,48 @@ def cmd_tools(args: argparse.Namespace) -> int:
             f"{commas(r['arg_tok']):>14} {commas(r['res_tok']):>14} {commas(total):>14}"
         )
 
+    # Print most common bash commands
+    bash_tools = (
+        "bash",
+        "uu_run",
+        "gnu_run",
+        "zshell_PLZ_DONT_PIPE",
+        "zshell",
+        "shell",
+        "run_command",
+    )
+    bash_placeholders = ",".join("?" * len(bash_tools))
+    bash_calls = conn.execute(
+        f"""
+        SELECT c.arg_json
+        FROM ss_tool_calls c
+        WHERE c.tool_name IN ({bash_placeholders}) {sf_clause_c}
+        """,
+        bash_tools + sf_params_c,
+    ).fetchall()
+
+    if bash_calls:
+        bash_counter = Counter()
+        for r in bash_calls:
+            arg_json = r["arg_json"]
+            if not arg_json:
+                continue
+            try:
+                obj = json.loads(arg_json)
+                cmd = obj.get("command") or obj.get("cmd")
+                if cmd:
+                    for u in _get_utils_optimized(cmd):
+                        bash_counter[u] += 1
+            except Exception:
+                pass
+
+        if bash_counter:
+            print("\n=== common bash commands ===")
+            print(f"{'command':<24} {'calls':>10}")
+            print("-" * 35)
+            for u, count in bash_counter.most_common(20):
+                print(f"{u:<24} {commas(count):>10}")
+
     if args.by:
         bucket = parse_bucket(args.by)
         _print_buckets(conn, bucket, args.top, args.tool, cutoff)
@@ -226,7 +410,7 @@ def _session_filter_clause(conn, args) -> tuple[str, tuple]:
         rows = conn.execute(
             f"""
             SELECT session_file FROM ss_sessions
-            {('WHERE ' + ' AND '.join(clauses)) if clauses else ''}
+            {("WHERE " + " AND ".join(clauses)) if clauses else ""}
             ORDER BY mtime DESC LIMIT ?
             """,
             (*params, args.limit),
@@ -241,8 +425,9 @@ def _session_filter_clause(conn, args) -> tuple[str, tuple]:
     return ("", ())
 
 
-def _print_buckets(conn, bucket_secs: int, top: int, tool_filter: str | None,
-                   cutoff: int | None = None) -> None:
+def _print_buckets(
+    conn, bucket_secs: int, top: int, tool_filter: str | None, cutoff: int | None = None
+) -> None:
     conds: list[str] = []
     params: list = []
     if tool_filter:
@@ -274,18 +459,25 @@ def _print_buckets(conn, bucket_secs: int, top: int, tool_filter: str | None,
     for r in rows:
         by_bucket[r["bucket"]].append(r)
 
-    print(f"\n=== per-tool tokens, bucketed by {bucket_secs}s "
-          f"({'all tools' if not tool_filter else tool_filter}) ===")
+    print(
+        f"\n=== per-tool tokens, bucketed by {bucket_secs}s "
+        f"({'all tools' if not tool_filter else tool_filter}) ==="
+    )
     for bucket in sorted(by_bucket.keys(), reverse=True)[:20]:
         from datetime import datetime, timezone
-        label = datetime.fromtimestamp(bucket, tz=timezone.utc).strftime("%Y-%m-%d %H:%MZ")
+
+        label = datetime.fromtimestamp(bucket, tz=timezone.utc).strftime(
+            "%Y-%m-%d %H:%MZ"
+        )
         print(f"\n[{label}]")
         ranked = sorted(by_bucket[bucket], key=lambda r: -(r["arg_tok"] + r["res_tok"]))
         for r in ranked[:top]:
             tot = r["arg_tok"] + r["res_tok"]
-            print(f"  {r['tool_name']:<22} {r['calls']:>5}c "
-                  f"args={commas(r['arg_tok']):>12} res={commas(r['res_tok']):>12} "
-                  f"tot={commas(tot):>12}")
+            print(
+                f"  {r['tool_name']:<22} {r['calls']:>5}c "
+                f"args={commas(r['arg_tok']):>12} res={commas(r['res_tok']):>12} "
+                f"tot={commas(tot):>12}"
+            )
 
 
 # --------------------------------------------------------------------------- #
@@ -319,9 +511,12 @@ _RE_SSR_NO_MATCH = re.compile(
     r"0 matches|no replacements|no match found|No replacements made|Failed to find expected lines",
     re.I,
 )
-_RE_FILE_NOT_READ = re.compile(r"must be read first|has not been read|not yet read", re.I)
+_RE_FILE_NOT_READ = re.compile(
+    r"must be read first|has not been read|not yet read", re.I
+)
 _RE_FILE_CHANGED = re.compile(
-    r"file has been (modified|changed) externally|file changed between read and edit", re.I
+    r"file has been (modified|changed) externally|file changed between read and edit",
+    re.I,
 )
 _RE_PERM_DENIED = re.compile(r"permission denied|not allowed", re.I)
 _RE_GENERIC_REJECTED = re.compile(r"\b(rejected|failed|error|invalid)\b", re.I)
@@ -481,7 +676,9 @@ def _loc_shape(loc: str) -> str:
     return "other"
 
 
-def _classify_edit_args(tool_name: str, args_obj: dict | None) -> tuple[str, list[str], list[str]]:
+def _classify_edit_args(
+    tool_name: str, args_obj: dict | None
+) -> tuple[str, list[str], list[str]]:
     """Returns (format, verbs, loc_shapes)."""
     fmt = _detect_edit_format(tool_name, args_obj)
     verbs: list[str] = []
@@ -499,7 +696,9 @@ def _classify_edit_args(tool_name: str, args_obj: dict | None) -> tuple[str, lis
                     if not isinstance(op, dict):
                         continue
                     loc_val = op.get("loc")
-                    loc_shapes.append(_loc_shape(loc_val if isinstance(loc_val, str) else ""))
+                    loc_shapes.append(
+                        _loc_shape(loc_val if isinstance(loc_val, str) else "")
+                    )
                     v: list[str] = []
                     if op.get("splice"):
                         v.append("splice")
@@ -518,7 +717,11 @@ def _classify_edit_args(tool_name: str, args_obj: dict | None) -> tuple[str, lis
 def cmd_edits(args: argparse.Namespace) -> int:
     conn = open_ro()
     where_session, where_args = _session_filter_clause(conn, args)
-    sf_clause = "AND c.session_file IN (" + ",".join("?" * len(where_args)) + ")" if where_args else ""
+    sf_clause = (
+        "AND c.session_file IN (" + ",".join("?" * len(where_args)) + ")"
+        if where_args
+        else ""
+    )
     cutoff = since_cutoff_ms(args)
     since_clause = "AND c.timestamp >= ?" if cutoff is not None else ""
     since_params = (cutoff,) if cutoff is not None else ()
@@ -576,7 +779,9 @@ def cmd_edits(args: argparse.Namespace) -> int:
         if status.startswith("fail") and len(failed_samples) < 8:
             text = r["result_text"] or ""
             first = text.split("\n\n", 1)[0]
-            failed_samples.append((tool, status, verbs, locs, truncate_line(first, 220)))
+            failed_samples.append(
+                (tool, status, verbs, locs, truncate_line(first, 220))
+            )
 
     print("# Edit-tool usage")
     print(f"\nTotal tool calls: {len(rows)} (across {len(sessions)} sessions)")
@@ -667,7 +872,11 @@ def _classify_fix(deleted: int, payload_lines: list[str]) -> str:
 def cmd_followups(args: argparse.Namespace) -> int:
     conn = open_ro()
     where_session, where_args = _session_filter_clause(conn, args)
-    sf_clause = "AND c.session_file IN (" + ",".join("?" * len(where_args)) + ")" if where_args else ""
+    sf_clause = (
+        "AND c.session_file IN (" + ",".join("?" * len(where_args)) + ")"
+        if where_args
+        else ""
+    )
     cutoff = since_cutoff_ms(args)
     since_clause = "AND c.timestamp >= ?" if cutoff is not None else ""
     since_params = (cutoff,) if cutoff is not None else ()
@@ -693,7 +902,7 @@ def cmd_followups(args: argparse.Namespace) -> int:
                s.longest_repeat_sample, s.dup_anchors
         FROM ss_edit_sections s
         JOIN ss_edit_calls c USING (session_file, call_id)
-        WHERE 1=1 {sf_clause.replace('c.session_file', 's.session_file')} {since_clause}
+        WHERE 1=1 {sf_clause.replace("c.session_file", "s.session_file")} {since_clause}
         ORDER BY s.session_file, s.seq, s.section_idx
         """,
         where_args + since_params,
@@ -705,7 +914,9 @@ def cmd_followups(args: argparse.Namespace) -> int:
         sec_by_call[(s["session_file"], s["call_id"])].append(s)
 
     # Build per-(session, target_file) ordered list of (call_meta, section).
-    by_session_file: dict[tuple[str, str], list[tuple[sqlite3.Row, sqlite3.Row]]] = defaultdict(list)
+    by_session_file: dict[tuple[str, str], list[tuple[sqlite3.Row, sqlite3.Row]]] = (
+        defaultdict(list)
+    )
     total_successful_edits = 0
     warning_hits: list[dict] = []
     payload_dups: list[dict] = []
@@ -721,43 +932,50 @@ def cmd_followups(args: argparse.Namespace) -> int:
                     seen.append(w)
             if seen:
                 files_csv = ",".join(
-                    s["target_file"] for s in sec_by_call.get((c["session_file"], c["call_id"]), [])
+                    s["target_file"]
+                    for s in sec_by_call.get((c["session_file"], c["call_id"]), [])
                 )
                 for kind in seen:
-                    warning_hits.append({
-                        "session": c["session_file"],
-                        "call_id": c["call_id"],
-                        "kind": kind,
-                        "files": files_csv,
-                        "input_len": c["raw_input_len"],
-                    })
+                    warning_hits.append(
+                        {
+                            "session": c["session_file"],
+                            "call_id": c["call_id"],
+                            "kind": kind,
+                            "files": files_csv,
+                            "input_len": c["raw_input_len"],
+                        }
+                    )
         if c["success"] != 1:
             continue
         for s in sec_by_call.get((c["session_file"], c["call_id"]), []):
             by_session_file[(c["session_file"], s["target_file"])].append((c, s))
             # Payload self-dup
             if s["longest_repeat_len"] >= 4:
-                payload_dups.append({
-                    "session": c["session_file"],
-                    "call_id": c["call_id"],
-                    "file": s["target_file"],
-                    "block_len": _block_len(s, s["longest_repeat_block_idx"]),
-                    "repeat_len": s["longest_repeat_len"],
-                    "sample": s["longest_repeat_sample"] or "",
-                })
+                payload_dups.append(
+                    {
+                        "session": c["session_file"],
+                        "call_id": c["call_id"],
+                        "file": s["target_file"],
+                        "block_len": _block_len(s, s["longest_repeat_block_idx"]),
+                        "repeat_len": s["longest_repeat_len"],
+                        "sample": s["longest_repeat_sample"] or "",
+                    }
+                )
             # Anchor reuse
             try:
                 dups = json.loads(s["dup_anchors"] or "[]")
             except Exception:
                 dups = []
             for d in dups:
-                anchor_dups.append({
-                    "session": c["session_file"],
-                    "call_id": c["call_id"],
-                    "files": d[2] if len(d) > 2 else s["target_file"],
-                    "anchor": d[0],
-                    "count": d[1],
-                })
+                anchor_dups.append(
+                    {
+                        "session": c["session_file"],
+                        "call_id": c["call_id"],
+                        "files": d[2] if len(d) > 2 else s["target_file"],
+                        "anchor": d[0],
+                        "count": d[1],
+                    }
+                )
 
     # (1) small-fix follow-ups + (3) same-locus re-edits.
     fix_hits: list[dict] = []
@@ -777,29 +995,46 @@ def cmd_followups(args: argparse.Namespace) -> int:
                 pl = _flatten_payload(bsec)
                 pattern = _classify_fix(bsec["deleted_lines"], pl)
                 summary = _render_section_summary(bsec, pl)
-                fix_hits.append({
-                    "session": session, "file": target,
-                    "first_call_id": ac["call_id"], "second_call_id": bc["call_id"],
-                    "first_size": first_size, "first_input_len": ac["raw_input_len"],
-                    "second_size": second_size,
-                    "pattern": pattern, "second_summary": summary, "gap_secs": gap,
-                })
+                fix_hits.append(
+                    {
+                        "session": session,
+                        "file": target,
+                        "first_call_id": ac["call_id"],
+                        "second_call_id": bc["call_id"],
+                        "first_size": first_size,
+                        "first_input_len": ac["raw_input_len"],
+                        "second_size": second_size,
+                        "pattern": pattern,
+                        "second_summary": summary,
+                        "gap_secs": gap,
+                    }
+                )
 
             # (3) same-locus re-edit (both > max-fix)
             if (
-                first_size > 2 and second_size > args.max_fix
-                and asec["min_line"] is not None and asec["max_line"] is not None
-                and bsec["min_line"] is not None and bsec["max_line"] is not None
+                first_size > 2
+                and second_size > args.max_fix
+                and asec["min_line"] is not None
+                and asec["max_line"] is not None
+                and bsec["min_line"] is not None
+                and bsec["max_line"] is not None
             ):
                 a_lo, a_hi = asec["min_line"], asec["max_line"]
                 b_lo, b_hi = bsec["min_line"], bsec["max_line"]
                 if max(a_lo, b_lo) <= min(a_hi, b_hi):
-                    locus_hits.append({
-                        "session": session, "file": target,
-                        "first_call_id": ac["call_id"], "second_call_id": bc["call_id"],
-                        "first_range": (a_lo, a_hi), "second_range": (b_lo, b_hi),
-                        "first_size": first_size, "second_size": second_size, "gap_secs": gap,
-                    })
+                    locus_hits.append(
+                        {
+                            "session": session,
+                            "file": target,
+                            "first_call_id": ac["call_id"],
+                            "second_call_id": bc["call_id"],
+                            "first_range": (a_lo, a_hi),
+                            "second_range": (b_lo, b_hi),
+                            "first_size": first_size,
+                            "second_size": second_size,
+                            "gap_secs": gap,
+                        }
+                    )
 
     if args.max_gap > 0:
         fix_hits = [h for h in fix_hits if h["gap_secs"] <= args.max_gap]
@@ -807,7 +1042,9 @@ def cmd_followups(args: argparse.Namespace) -> int:
     if args.pattern:
         fix_hits = [h for h in fix_hits if h["pattern"] == args.pattern]
 
-    fix_hits.sort(key=lambda h: (_FIX_PRIORITY.get(h["pattern"], 99), -h["first_input_len"]))
+    fix_hits.sort(
+        key=lambda h: (_FIX_PRIORITY.get(h["pattern"], 99), -h["first_input_len"])
+    )
     locus_hits.sort(key=lambda h: -h["first_size"])
     payload_dups = [p for p in payload_dups if p["repeat_len"] >= args.min_dup]
     payload_dups.sort(key=lambda p: -p["repeat_len"])
@@ -830,15 +1067,25 @@ def cmd_followups(args: argparse.Namespace) -> int:
             f"({h['first_input_len']}B) → second={h['second_size']}L  gap={h['gap_secs']}s"
         )
         print(f"        session={h['session']}")
-        print(f"        first_call={h['first_call_id']} second_call={h['second_call_id']}")
+        print(
+            f"        first_call={h['first_call_id']} second_call={h['second_call_id']}"
+        )
         print(f"        fix: {h['second_summary']}")
 
     print("\n=== tool self-corrections ===")
-    print("(emitted as warnings on otherwise-successful edits — the tool caught what the model wrote)")
+    print(
+        "(emitted as warnings on otherwise-successful edits — the tool caught what the model wrote)"
+    )
     by_kind = Counter(w["kind"] for w in warning_hits)
     for kind, n in by_kind.most_common():
-        suffix = (f" ({pct(n, total_successful_edits):.2f}% of "
-                  f"{commas(total_successful_edits)} successful edits)") if total_successful_edits else ""
+        suffix = (
+            (
+                f" ({pct(n, total_successful_edits):.2f}% of "
+                f"{commas(total_successful_edits)} successful edits)"
+            )
+            if total_successful_edits
+            else ""
+        )
         print(f"  {kind:<16} {n:>6}{suffix}")
 
     warn_show = min(args.show, len(warning_hits))
@@ -859,9 +1106,13 @@ def cmd_followups(args: argparse.Namespace) -> int:
             f"({h['second_size']}L)  gap={h['gap_secs']}s"
         )
         print(f"        session={h['session']}")
-        print(f"        first_call={h['first_call_id']} second_call={h['second_call_id']}")
+        print(
+            f"        first_call={h['first_call_id']} second_call={h['second_call_id']}"
+        )
 
-    print("\n=== payload self-duplication (model pasted same N-line chunk twice in one payload) ===")
+    print(
+        "\n=== payload self-duplication (model pasted same N-line chunk twice in one payload) ==="
+    )
     print(
         f"hits with repeat_len >= {args.min_dup}: {commas(len(payload_dups))} "
         f"({pct(len(payload_dups), total_successful_edits):.2f}% of "
@@ -923,33 +1174,56 @@ def _render_section_summary(section_row: sqlite3.Row, payload_lines: list[str]) 
 # --------------------------------------------------------------------------- #
 # Entry point
 
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="session-stats analyses (sqlite-backed)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("-n", "--limit", type=int, default=0,
-                        help="restrict to N most-recent sessions (0 = all)")
-    common.add_argument("--folder", default=None,
-                        help="filter sessions whose folder contains this substring")
-    common.add_argument("--since", default=None,
-                        help="only include calls newer than this window: h, d, w, m, or <N>{h,d,w}")
+    common.add_argument(
+        "-n",
+        "--limit",
+        type=int,
+        default=0,
+        help="restrict to N most-recent sessions (0 = all)",
+    )
+    common.add_argument(
+        "--folder",
+        default=None,
+        help="filter sessions whose folder contains this substring",
+    )
+    common.add_argument(
+        "--since",
+        default=None,
+        help="only include calls newer than this window: h, d, w, m, or <N>{h,d,w}",
+    )
 
     ap_tools = sub.add_parser("tools", parents=[common], help="per-tool token totals")
-    ap_tools.add_argument("--by", default=None,
-                          help="bucket per-call data: h, d, w, m, or <N>{h,d,w}")
+    ap_tools.add_argument(
+        "--by", default=None, help="bucket per-call data: h, d, w, m, or <N>{h,d,w}"
+    )
     ap_tools.add_argument("--top", type=int, default=10, help="top tools per bucket")
-    ap_tools.add_argument("--tool", default=None, help="restrict bucket view to one tool")
+    ap_tools.add_argument(
+        "--tool", default=None, help="restrict bucket view to one tool"
+    )
     ap_tools.set_defaults(func=cmd_tools)
 
     ap_edits = sub.add_parser("edits", parents=[common], help="edit reliability audit")
     ap_edits.set_defaults(func=cmd_edits)
 
-    ap_fu = sub.add_parser("followups", parents=[common], help="hashline edit followup detectors")
+    ap_fu = sub.add_parser(
+        "followups", parents=[common], help="hashline edit followup detectors"
+    )
     ap_fu.add_argument("--max-fix", type=int, default=2)
-    ap_fu.add_argument("--max-gap", type=int, default=0, help="cap seconds between paired edits")
-    ap_fu.add_argument("--min-dup", type=int, default=8, help="min payload-dup repeat length")
-    ap_fu.add_argument("--pattern", default=None, help="filter (1) to a single FixPattern")
+    ap_fu.add_argument(
+        "--max-gap", type=int, default=0, help="cap seconds between paired edits"
+    )
+    ap_fu.add_argument(
+        "--min-dup", type=int, default=8, help="min payload-dup repeat length"
+    )
+    ap_fu.add_argument(
+        "--pattern", default=None, help="filter (1) to a single FixPattern"
+    )
     ap_fu.add_argument("--show", type=int, default=60)
     ap_fu.set_defaults(func=cmd_followups)
 

@@ -124,6 +124,19 @@ describe("CopySelectorComponent", () => {
 		expect(render(component)).toContain("beta()");
 	});
 
+	it("drops cached preview content when invalidated", () => {
+		const roots = makeRoots();
+		const component = new CopySelectorComponent(roots, { onPick: vi.fn(), onCancel: vi.fn() });
+
+		expect(render(component)).toContain("newest-preview-text");
+
+		roots[0]!.preview = "updated-preview-text";
+		component.invalidate();
+
+		expect(render(component)).toContain("updated-preview-text");
+		expect(render(component)).not.toContain("newest-preview-text");
+	});
+
 	it("quits on the cancel key", () => {
 		const onCancel = vi.fn();
 		const component = new CopySelectorComponent(makeRoots(), { onPick: vi.fn(), onCancel });

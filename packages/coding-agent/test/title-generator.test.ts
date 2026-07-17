@@ -17,10 +17,6 @@ function getModelFor(provider: GeneratedProvider, id: string): Model<Api> {
 	return model;
 }
 
-function withoutForcedToolChoice(model: Model<Api>): Model<Api> {
-	return { ...model, compat: { ...model.compat, supportsForcedToolChoice: false } } as Model<Api>;
-}
-
 function createSettings(model: Model<Api>, tinyModel = "online") {
 	return {
 		get(path: string) {
@@ -51,18 +47,11 @@ afterEach(() => {
 });
 
 describe("title generator", () => {
-	it("returns the title from a forced set_title tool call", async () => {
+	it("returns the marker-wrapped title without forcing a tool call", async () => {
 		const model = getModelOrThrow("claude-sonnet-4-5");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
-			content: [
-				{
-					type: "toolCall",
-					id: "call-title",
-					name: "set_title",
-					arguments: { title: "Structured Title" },
-				},
-			],
+			content: [{ type: "text", text: "<title>Structured Title</title>" }],
 		} as never);
 
 		const title = await generateSessionTitle(
@@ -72,38 +61,87 @@ describe("title generator", () => {
 		);
 
 		expect(title).toBe("Structured Title");
-		expect(completeSimpleMock.mock.calls[0]?.[1]).toMatchObject({
-			tools: [expect.objectContaining({ name: "set_title" })],
-		});
-		expect(completeSimpleMock.mock.calls[0]?.[2]).toMatchObject({
-			disableReasoning: true,
-			toolChoice: { type: "tool", name: "set_title" },
-		});
+		const request = completeSimpleMock.mock.calls[0]?.[1] as { tools?: unknown } | undefined;
+		const options = completeSimpleMock.mock.calls[0]?.[2] as
+			| { toolChoice?: unknown; disableReasoning?: boolean }
+			| undefined;
+		expect(request?.tools).toBeUndefined();
+		expect(options?.toolChoice).toBeUndefined();
+		expect(options?.disableReasoning).toBe(true);
+	});
+
+	it.each([
+		[
+			"<thinking>",
+			"<thinking>Thinking process:\n<title>Wrong internal scratchpad</title>\n</thinking>\n<title>Fix login button</title>",
+		],
+		[
+			"<think>",
+			"<think>Thinking process:\n<title>Wrong internal scratchpad</title>\n</think>\n<title>Fix login button</title>",
+		],
+		[
+			"<reasoning>",
+			"<reasoning>Thinking process:\n<title>Wrong internal scratchpad</title>\n</reasoning>\n<title>Fix login button</title>",
+		],
+		[
+			"```reasoning",
+			"```reasoning\nThinking process:\n<title>Wrong internal scratchpad</title>\n```\n<title>Fix login button</title>",
+		],
+	] as const)("ignores leaked %s reasoning markup before the visible title", async (_marker, responseText) => {
+		const model = getModelOrThrow("claude-sonnet-4-5");
+		vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: responseText }],
+		} as never);
+
+		const title = await generateSessionTitle(
+			"the login button is broken on mobile",
+			createRegistry(model),
+			createSettings(model),
+		);
+
+		expect(title).toBe("Fix login button");
+	});
+
+	it("preserves in-band reasoning syntax inside the parsed title", async () => {
+		const model = getModelOrThrow("claude-sonnet-4-5");
+		vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: "<title>Fix <think> tag parsing</title>" }],
+		} as never);
+
+		const title = await generateSessionTitle(
+			"fix title generation for <think> tag parsing",
+			createRegistry(model),
+			createSettings(model),
+		);
+
+		expect(title).toBe("Fix <think> tag parsing");
 	});
 
 	it("uses the bundled default prompt when no title prompt file is resolved", async () => {
 		const model = getModelOrThrow("claude-sonnet-4-5");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
-			content: [{ type: "toolCall", id: "call-title", name: "set_title", arguments: { title: "Default Prompt" } }],
+			content: [{ type: "text", text: "<title>Default Prompt</title>" }],
 		} as never);
 
 		await generateSessionTitle("Investigate the resolver", createRegistry(model), createSettings(model));
 
 		const request = completeSimpleMock.mock.calls[0]?.[1] as { systemPrompt?: string[] } | undefined;
 		expect(request?.systemPrompt).toHaveLength(1);
-		expect(request?.systemPrompt?.[0]).toContain("set_title");
+		expect(request?.systemPrompt?.[0]).toContain("<title>");
 	});
 
-	it("uses the resolved TITLE_SYSTEM.md prompt for online title generation", async () => {
+	it("appends the marker instruction after a resolved TITLE_SYSTEM.md prompt", async () => {
 		const model = getModelOrThrow("claude-sonnet-4-5");
 		const customPrompt = "Generate lowercase colon-delimited session names.";
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
-			content: [{ type: "toolCall", id: "call-title", name: "set_title", arguments: { title: "fix:resolver" } }],
+			content: [{ type: "text", text: "<title>fix:resolver</title>" }],
 		} as never);
 
-		await generateSessionTitle(
+		const title = await generateSessionTitle(
 			"Investigate the resolver",
 			createRegistry(model),
 			createSettings(model),
@@ -113,31 +151,75 @@ describe("title generator", () => {
 			customPrompt,
 		);
 
-		const request = completeSimpleMock.mock.calls[0]?.[1] as
-			| { systemPrompt?: string[]; tools?: Array<{ name?: string }> }
-			| undefined;
-		const options = completeSimpleMock.mock.calls[0]?.[2] as
-			| { toolChoice?: { type?: string; name?: string } }
-			| undefined;
-		expect(request?.systemPrompt).toEqual([customPrompt]);
-		expect(request?.tools?.[0]?.name).toBe("set_title");
-		expect(options?.toolChoice).toEqual({ type: "tool", name: "set_title" });
+		expect(title).toBe("fix:resolver");
+		const request = completeSimpleMock.mock.calls[0]?.[1] as { systemPrompt?: string[] } | undefined;
+		expect(request?.systemPrompt).toHaveLength(2);
+		expect(request?.systemPrompt?.[0]).toBe(customPrompt);
+		expect(request?.systemPrompt?.[1]).toContain("<title>");
 	});
 
-	it("falls back to text content when no set_title tool call is returned", async () => {
+	it('unwraps a JSON {"title": ...} response into the bare title', async () => {
 		const model = getModelOrThrow("claude-sonnet-4-5");
 		vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
-			content: [{ type: "text", text: "Text Title" }],
+			content: [{ type: "text", text: '{"title": "Optimize CNPG kernel reports"}' }],
 		} as never);
 
 		const title = await generateSessionTitle(
-			"Investigate the resolver",
+			"optimize the CNPG kernel report pipeline",
 			createRegistry(model),
 			createSettings(model),
 		);
 
-		expect(title).toBe("Text Title");
+		expect(title).toBe("Optimize CNPG kernel reports");
+	});
+
+	it("unwraps a code-fenced JSON title response", async () => {
+		const model = getModelOrThrow("claude-sonnet-4-5");
+		vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: '```json\n{"title": "Fix login button on mobile"}\n```' }],
+		} as never);
+
+		const title = await generateSessionTitle(
+			"the login button is broken on mobile",
+			createRegistry(model),
+			createSettings(model),
+		);
+
+		expect(title).toBe("Fix login button on mobile");
+	});
+
+	it("unwraps a JSON title wrapped in <title> markers", async () => {
+		const model = getModelOrThrow("claude-sonnet-4-5");
+		vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: '<title>{"title": "Add OAuth authentication"}</title>' }],
+		} as never);
+
+		const title = await generateSessionTitle(
+			"add OAuth authentication to the API",
+			createRegistry(model),
+			createSettings(model),
+		);
+
+		expect(title).toBe("Add OAuth authentication");
+	});
+
+	it("salvages the title from truncated JSON output", async () => {
+		const model = getModelOrThrow("claude-sonnet-4-5");
+		vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: '{"title": "Debug failing CI tests"' }],
+		} as never);
+
+		const title = await generateSessionTitle(
+			"the CI tests keep failing",
+			createRegistry(model),
+			createSettings(model),
+		);
+
+		expect(title).toBe("Debug failing CI tests");
 	});
 
 	it("defers titling for a greeting without invoking the model", async () => {
@@ -154,14 +236,41 @@ describe("title generator", () => {
 		const model = getModelOrThrow("claude-sonnet-4-5");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
-			content: [
-				{
-					type: "toolCall",
-					id: "call-title",
-					name: "set_title",
-					arguments: { title: "none" },
-				},
-			],
+			content: [{ type: "text", text: "<title>none</title>" }],
+		} as never);
+
+		const title = await generateSessionTitle(
+			"I have a quick question for you",
+			createRegistry(model),
+			createSettings(model),
+		);
+
+		expect(title).toBeNull();
+		expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("returns null for a self-closing <title/> marker", async () => {
+		const model = getModelOrThrow("claude-sonnet-4-5");
+		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: "<title/>" }],
+		} as never);
+
+		const title = await generateSessionTitle(
+			"I have a quick question for you",
+			createRegistry(model),
+			createSettings(model),
+		);
+
+		expect(title).toBeNull();
+		expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("returns null for a bare <title> marker", async () => {
+		const model = getModelOrThrow("claude-sonnet-4-5");
+		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: "<title>" }],
 		} as never);
 
 		const title = await generateSessionTitle(
@@ -237,14 +346,30 @@ describe("title generator", () => {
 		const model = getModelOrThrow("claude-sonnet-4-5");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
-			content: [
-				{
-					type: "toolCall",
-					id: "call-title",
-					name: "set_title",
-					arguments: { title: "Budget Title" },
-				},
-			],
+			content: [{ type: "text", text: "<title>Budget Title</title>" }],
+		} as never);
+
+		const title = await generateSessionTitle(
+			"Investigate the resolver",
+			createRegistry(model),
+			createSettings(model),
+		);
+		const maxTokens = (completeSimpleMock.mock.calls[0]?.[2] as { maxTokens?: number } | undefined)?.maxTokens;
+
+		expect(title).toBe("Budget Title");
+		expect(maxTokens).toBeGreaterThanOrEqual(1024);
+	});
+
+	// Regression for #4355: a model catalogued with `reasoning: false` that
+	// still emits thinking (e.g. Qwen3 via llama.cpp) must get the same
+	// reasoning-safe budget, otherwise the `<title>` output is truncated
+	// before it can be emitted.
+	it("uses a reasoning-safe output budget even when the model declares reasoning: false", async () => {
+		const baseModel = getModelOrThrow("claude-sonnet-4-5");
+		const model = { ...baseModel, reasoning: false } as Model<Api>;
+		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: "<title>Budget Title</title>" }],
 		} as never);
 
 		const title = await generateSessionTitle(
@@ -262,7 +387,7 @@ describe("title generator", () => {
 		const model = getModelOrThrow("claude-sonnet-4-5");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
-			content: [{ type: "toolCall", id: "call-title", name: "set_title", arguments: { title: "Setup Screen" } }],
+			content: [{ type: "text", text: "<title>Setup Screen</title>" }],
 		} as never);
 
 		await generateSessionTitle(
@@ -276,45 +401,6 @@ describe("title generator", () => {
 		const userContent = sentMessages?.[0]?.content ?? "";
 		expect(userContent).not.toContain("Claude Code v2.1.158");
 		expect(userContent).toContain("pick provider then theme");
-	});
-
-	it("uses <title> markers instead of a forced tool call when the model lacks tool_choice support", async () => {
-		const model = getModelFor("deepseek", "deepseek-v4-pro");
-		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
-			stopReason: "stop",
-			content: [{ type: "text", text: "<title>Add OAuth authentication</title>" }],
-		} as never);
-
-		const title = await generateSessionTitle(
-			"Add OAuth authentication",
-			createRegistry(model),
-			createSettings(model),
-		);
-
-		expect(title).toBe("Add OAuth authentication");
-		const request = completeSimpleMock.mock.calls[0]?.[1] as { systemPrompt?: string[]; tools?: unknown };
-		const options = completeSimpleMock.mock.calls[0]?.[2] as { toolChoice?: unknown };
-		expect(request?.tools).toBeUndefined();
-		expect(options?.toolChoice).toBeUndefined();
-		expect(request?.systemPrompt?.[0]).toContain("<title>");
-	});
-
-	it("uses the marker path when the model rejects forced tool choice", async () => {
-		const model = withoutForcedToolChoice(getModelOrThrow("claude-sonnet-4-5"));
-		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
-			stopReason: "stop",
-			content: [{ type: "text", text: "<title>Investigate the resolver</title>" }],
-		} as never);
-
-		const title = await generateSessionTitle(
-			"Investigate the resolver",
-			createRegistry(model),
-			createSettings(model),
-		);
-
-		expect(title).toBe("Investigate the resolver");
-		expect((completeSimpleMock.mock.calls[0]?.[1] as { tools?: unknown }).tools).toBeUndefined();
-		expect((completeSimpleMock.mock.calls[0]?.[2] as { toolChoice?: unknown }).toolChoice).toBeUndefined();
 	});
 
 	it("accepts a plain sentence when the model omits the <title> markers", async () => {
@@ -333,6 +419,59 @@ describe("title generator", () => {
 		expect(title).toBe("Fix login button on mobile");
 	});
 
+	it.each([
+		"Here's a thinking process:",
+		"Thinking process:",
+		"Reasoning process:",
+	])("rejects a markerless prose thinking preamble: %s", async responseText => {
+		const model = getModelFor("deepseek", "deepseek-v4-pro");
+		vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: responseText }],
+		} as never);
+
+		const title = await generateSessionTitle(
+			"the login button is broken on mobile",
+			createRegistry(model),
+			createSettings(model),
+		);
+
+		expect(title).toBeNull();
+	});
+
+	it("preserves a markerless title that mentions a <think> tag", async () => {
+		const model = getModelFor("deepseek", "deepseek-v4-pro");
+		vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: "Fix <think> tag parsing" }],
+		} as never);
+
+		const title = await generateSessionTitle(
+			"fix title generation for <think> tag parsing",
+			createRegistry(model),
+			createSettings(model),
+		);
+
+		expect(title).toBe("Fix <think> tag parsing");
+	});
+
+	it("preserves a markerless title that mentions a ```thinking fence", async () => {
+		const model = getModelFor("deepseek", "deepseek-v4-pro");
+		vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: "Fix ```thinking fence parsing" }],
+		} as never);
+
+		const title = await generateSessionTitle(
+			"fix title generation for a ```thinking fence",
+			createRegistry(model),
+			createSettings(model),
+		);
+
+		expect(title).toContain("```thinking");
+		expect(title).toContain("fence");
+	});
+
 	it("strips an unclosed <title> tag from a truncated response", async () => {
 		const model = getModelFor("deepseek", "deepseek-v4-pro");
 		vi.spyOn(ai, "completeSimple").mockResolvedValue({
@@ -347,31 +486,6 @@ describe("title generator", () => {
 		);
 
 		expect(title).toBe("Refactor API client error handling");
-	});
-
-	it("appends the marker instruction after a custom prompt in marker mode", async () => {
-		const model = getModelFor("deepseek", "deepseek-v4-pro");
-		const customPrompt = "Generate lowercase colon-delimited session names.";
-		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
-			stopReason: "stop",
-			content: [{ type: "text", text: "<title>fix:resolver</title>" }],
-		} as never);
-
-		const title = await generateSessionTitle(
-			"Investigate the resolver",
-			createRegistry(model),
-			createSettings(model),
-			undefined,
-			undefined,
-			undefined,
-			customPrompt,
-		);
-
-		expect(title).toBe("fix:resolver");
-		const request = completeSimpleMock.mock.calls[0]?.[1] as { systemPrompt?: string[] };
-		expect(request?.systemPrompt).toHaveLength(2);
-		expect(request?.systemPrompt?.[0]).toBe(customPrompt);
-		expect(request?.systemPrompt?.[1]).toContain("<title>");
 	});
 
 	it("resolves the model roles in precedence order: tiny -> commit -> smol", async () => {

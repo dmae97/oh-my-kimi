@@ -115,7 +115,7 @@ function kimiZaiModel(): Model<"openai-completions"> {
 async function captureOpenAICompletionsPayload(
 	model: Model<"openai-completions">,
 	context: Context = baseContext(),
-	options?: { reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh" },
+	options?: { reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max"; temperature?: number },
 ): Promise<unknown> {
 	const { promise, resolve } = Promise.withResolvers<unknown>();
 	const fetchMock = createMockFetch(["[DONE]"]);
@@ -156,6 +156,19 @@ function getLastTextPart(content: unknown): Record<string, unknown> | undefined 
 }
 
 describe("openai-completions compatibility", () => {
+	it("omits sampling params for OpenAI reasoning models", async () => {
+		const model = buildModel({
+			...gpt4oMiniSpec,
+			id: "gpt-5.6-luna",
+			provider: "github-copilot",
+			api: "openai-completions",
+		} as ModelSpec<"openai-completions">);
+		expect(model.compat.supportsSamplingParams).toBe(false);
+
+		const payload = await captureOpenAICompletionsPayload(model, undefined, { temperature: 0 });
+		expect(toObject(payload)?.temperature).toBeUndefined();
+	});
+
 	it("serializes assistant text content as a plain string", () => {
 		const model: Model<"openai-completions"> = buildModel({
 			...gpt4oMiniSpec,
@@ -196,6 +209,7 @@ describe("openai-completions compatibility", () => {
 			supportsStrictMode: true,
 			toolStrictMode: "none",
 			supportsReasoningParams: true,
+			supportsSamplingParams: true,
 			alwaysSendMaxTokens: false,
 			isOpenRouterHost: false,
 			isVercelGatewayHost: false,
@@ -233,6 +247,11 @@ describe("openai-completions compatibility", () => {
 			throw new Error("assistant message missing");
 		}
 		expect(typeof assistant.content).toBe("string");
+		// Ordinary adjacent text blocks (bridge stitching, imported transcripts,
+		// streaming chunk splits) preserve their original byte sequence on
+		// flatten. The demoted-thinking separator is inserted by the flatten
+		// itself, gated on the kDemotedThinking marker, so unmarked blocks like
+		// these are never touched.
 		expect(assistant.content).toBe("hello world");
 	});
 
@@ -615,6 +634,104 @@ describe("openai-completions compatibility", () => {
 		expect(result.usage.totalTokens).toBe(15);
 	});
 
+	it("keeps unindexed batched tool-call arguments isolated", async () => {
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
+			api: "openai-completions",
+		} as ModelSpec<"openai-completions">);
+		const fetchMock = createMockFetch([
+			{
+				id: "chatcmpl-batched-tools",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [
+					{
+						index: 0,
+						delta: {
+							tool_calls: [
+								{ function: { name: "bash", arguments: '{"command":"echo hello"}' } },
+								{ function: { name: "bash", arguments: '{"command":"echo goodbye"}' } },
+							],
+						},
+					},
+				],
+			},
+			{
+				id: "chatcmpl-batched-tools",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+			},
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(model, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
+
+		const calls = result.content.filter(content => content.type === "toolCall");
+		expect(calls.map(call => call.arguments)).toEqual([{ command: "echo hello" }, { command: "echo goodbye" }]);
+	});
+
+	it("routes unindexed batched tool-call continuation chunks back by array offset", async () => {
+		const model: Model<"openai-completions"> = buildModel({
+			...gpt4oMiniSpec,
+			api: "openai-completions",
+		} as ModelSpec<"openai-completions">);
+		const fetchMock = createMockFetch([
+			{
+				id: "chatcmpl-batched-continuation",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [
+					{
+						index: 0,
+						delta: {
+							tool_calls: [
+								{ function: { name: "bash", arguments: '{"command":"echo hello"' } },
+								{ function: { name: "bash", arguments: '{"command":"echo goodbye"' } },
+							],
+						},
+					},
+				],
+			},
+			{
+				id: "chatcmpl-batched-continuation",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [
+					{
+						index: 0,
+						delta: {
+							tool_calls: [{ function: { arguments: "}" } }, { function: { arguments: "}" } }],
+						},
+					},
+				],
+			},
+			{
+				id: "chatcmpl-batched-continuation",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+			},
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(model, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
+
+		const calls = result.content.filter(content => content.type === "toolCall");
+		expect(calls.map(call => call.arguments)).toEqual([{ command: "echo hello" }, { command: "echo goodbye" }]);
+	});
+
 	it("falls through zero cached-token candidates to later non-zero usage fields", () => {
 		const model: Model<"openai-completions"> = buildModel({
 			...gpt4oMiniSpec,
@@ -707,7 +824,7 @@ describe("openai-completions compatibility", () => {
 		expect(getNestedBoolean(chatTemplateArgs, "enable_thinking")).toBe(true);
 	});
 
-	it("maps GLM-5.2 xhigh to Z.AI max and enables tool streaming", async () => {
+	it("sends reasoning_effort:max for the real Z.AI max tier and enables tool streaming", async () => {
 		const model = zaiGlm52Model();
 		const readTool: Tool = {
 			name: "read",
@@ -725,7 +842,7 @@ describe("openai-completions compatibility", () => {
 			{ ...baseContext(), tools: [readTool] },
 			{
 				apiKey: "test-key",
-				reasoning: "xhigh",
+				reasoning: "max",
 				signal: createAbortedSignal(),
 				onPayload: payload => resolve(payload),
 				maxTokens: 65_536,
@@ -776,21 +893,10 @@ describe("openai-completions compatibility", () => {
 		expect(payloadObject?.tool_stream).toBeUndefined();
 	});
 
-	it("maps GLM-5.2 minimal reasoning to disabled Z.AI thinking", async () => {
+	it("bakes the honest [high, max] Z.AI GLM-5.2 ladder with no effortMap", () => {
 		const model = zaiGlm52Model();
-
-		const { promise, resolve } = Promise.withResolvers<unknown>();
-		streamOpenAICompletions(model, baseContext(), {
-			apiKey: "test-key",
-			reasoning: "minimal",
-			signal: createAbortedSignal(),
-			onPayload: payload => resolve(payload),
-		});
-		const payload = await promise;
-		const thinking = getNestedObject(payload, "thinking");
-
-		expect(thinking?.type).toBe("disabled");
-		expect(toObject(payload)?.reasoning_effort).toBeUndefined();
+		expect(model.thinking?.efforts).toEqual([Effort.High, Effort.Max]);
+		expect(model.thinking?.effortMap).toBeUndefined();
 	});
 
 	it("treats finish_reason end as stop", async () => {
@@ -1114,7 +1220,7 @@ describe("kimi model detection via detectCompat", () => {
 		expect(openRouterKimi.compat.thinkingFormat).toBe("openrouter");
 	});
 
-	it("maps OpenRouter Anthropic adaptive reasoning efforts to the Anthropic scale", async () => {
+	it("sends OpenRouter Anthropic adaptive reasoning efforts 1:1 on the wire", async () => {
 		const model: Model<"openai-completions"> = buildModel({
 			...gpt4oMiniSpec,
 			api: "openai-completions",
@@ -1126,9 +1232,11 @@ describe("kimi model detection via detectCompat", () => {
 
 		const highPayload = await captureOpenAICompletionsPayload(model, baseContext(), { reasoning: "high" });
 		const xhighPayload = await captureOpenAICompletionsPayload(model, baseContext(), { reasoning: "xhigh" });
+		const maxPayload = await captureOpenAICompletionsPayload(model, baseContext(), { reasoning: "max" });
 
-		expect(getNestedObject(highPayload, "reasoning")).toEqual({ effort: "xhigh" });
-		expect(getNestedObject(xhighPayload, "reasoning")).toEqual({ effort: "max" });
+		expect(getNestedObject(highPayload, "reasoning")).toEqual({ effort: "high" });
+		expect(getNestedObject(xhighPayload, "reasoning")).toEqual({ effort: "xhigh" });
+		expect(getNestedObject(maxPayload, "reasoning")).toEqual({ effort: "max" });
 	});
 
 	// Regression for #1071: OpenCode-Go/Zen handle reasoning content server-side

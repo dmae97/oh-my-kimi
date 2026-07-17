@@ -1,10 +1,15 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import * as reportIssue from "@oh-my-pi/pi-coding-agent/tools/report-tool-issue";
 import {
+	__resetAutoQaConsentForTests,
 	__resetAutoQaFlushStateForTests,
+	dispatchReportIssueDevice,
 	flushGrievances,
 	isAutoQaEnabled,
+	reportIssueDeviceUsage,
 } from "@oh-my-pi/pi-coding-agent/tools/report-tool-issue";
 import * as piUtils from "@oh-my-pi/pi-utils";
 import { mockFetch } from "../helpers/fetch-mock";
@@ -55,7 +60,7 @@ function pushSettings(overrides: Record<string, unknown> = {}): Settings {
 		"dev.autoqa": true,
 		// Consent is the push opt-in; `granted` is what `resolvePushConfig`
 		// gates on (or `PI_AUTO_QA_PUSH=1` for headless overrides).
-		"dev.autoqa.consent": "granted",
+		"dev.autoqaConsent": "granted",
 		"dev.autoqaPush.endpoint": "https://qa.example.com/grievances",
 		...overrides,
 	});
@@ -78,7 +83,6 @@ describe("flushGrievances", () => {
 		__resetAutoQaFlushStateForTests();
 		originalPiAutoQa = Bun.env.PI_AUTO_QA;
 		delete Bun.env.PI_AUTO_QA;
-		vi.spyOn(piUtils, "getInstallId").mockReturnValue("11111111-2222-3333-4444-555555555555");
 		db = openTempDb();
 	});
 
@@ -106,7 +110,7 @@ describe("flushGrievances", () => {
 		const fetchSpy = vi.fn(async () => new Response("unexpected", { status: 200 }));
 
 		// `denied` is the user-facing kill switch for push.
-		const result = await flushGrievances(db, pushSettings({ "dev.autoqa.consent": "denied" }), {
+		const result = await flushGrievances(db, pushSettings({ "dev.autoqaConsent": "denied" }), {
 			fetch: mockFetch(fetchSpy),
 		});
 
@@ -138,6 +142,7 @@ describe("flushGrievances", () => {
 	});
 
 	it("posts pending rows with bearer header and marks them pushed=1 on 200", async () => {
+		vi.spyOn(piUtils, "getInstallId").mockReturnValue("11111111-2222-3333-4444-555555555555");
 		insertGrievance(db, "glob", "weird ordering");
 		insertGrievance(db, "read", "selector ignored");
 
@@ -323,5 +328,56 @@ describe("flushGrievances", () => {
 		expect(fetchSpy).toHaveBeenCalledTimes(2);
 		expect(selectPushedIds(db).length).toBe(firstBatch);
 		expect(selectUnpushedIds(db).length).toBe(secondBatch);
+	});
+});
+
+describe("dispatchReportIssueDevice", () => {
+	afterEach(() => {
+		__resetAutoQaConsentForTests();
+	});
+
+	it("records a grievance from `<tool>: <report>` text", async () => {
+		Bun.env.PI_AUTO_QA = "1";
+		const db = openTempDb();
+		const openSpy = vi.spyOn(reportIssue, "openAutoQaDb").mockReturnValue(db);
+		try {
+			const session = { settings: Settings.isolated({ "dev.autoqa": true }) } as ToolSession;
+			const { result, xdev } = await dispatchReportIssueDevice(
+				session,
+				"read: selector parse dropped trailing line",
+			);
+			const first = result.content[0];
+			expect(first?.type).toBe("text");
+			if (first?.type === "text") expect(first.text).toBe("Noted, thanks!");
+			expect(xdev.tool).toBe("report_issue");
+			expect(selectIds(db)).toHaveLength(1);
+			const row = db.prepare("SELECT tool, report FROM grievances").get() as { tool: string; report: string };
+			expect(row).toEqual({ tool: "read", report: "selector parse dropped trailing line" });
+		} finally {
+			openSpy.mockRestore();
+			db.close();
+		}
+	});
+
+	it("accepts the two-line fallback body format", async () => {
+		Bun.env.PI_AUTO_QA = "1";
+		const db = openTempDb();
+		const openSpy = vi.spyOn(reportIssue, "openAutoQaDb").mockReturnValue(db);
+		try {
+			const session = { settings: Settings.isolated({ "dev.autoqa": true }) } as ToolSession;
+			await dispatchReportIssueDevice(session, "grep\nreported matches include a deleted file");
+			const row = db.prepare("SELECT tool, report FROM grievances").get() as { tool: string; report: string };
+			expect(row).toEqual({ tool: "grep", report: "reported matches include a deleted file" });
+		} finally {
+			openSpy.mockRestore();
+			db.close();
+		}
+	});
+
+	it("rejects malformed body text with a usage hint", async () => {
+		const session = { settings: Settings.isolated({ "dev.autoqa": true }) } as ToolSession;
+		await expect(dispatchReportIssueDevice(session, "just a vague sentence")).rejects.toThrow(
+			reportIssueDeviceUsage(),
+		);
 	});
 });

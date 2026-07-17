@@ -208,9 +208,21 @@ const modeSegment: StatusLineSegment = {
 			return { content: theme.fg(color, content), visible: true };
 		}
 
+		const prewalk = ctx.prewalk;
+		if (prewalk?.enabled) {
+			const content = withIcon(theme.icon.prewalk, "Prewalk");
+			return { content: theme.fg("accent", content), visible: true };
+		}
+
 		const goal = ctx.goalMode;
 		if (goal && (goal.enabled || goal.paused)) {
 			return renderGoalMode(ctx, goal);
+		}
+
+		const vibe = ctx.vibeMode;
+		if (vibe?.enabled) {
+			const content = withIcon(theme.icon.agents, "Vibe");
+			return { content: theme.fg("accent", content), visible: true };
 		}
 
 		const loop = ctx.loopMode;
@@ -362,10 +374,11 @@ const tokenTotalSegment: StatusLineSegment = {
 	id: "token_total",
 	render(ctx) {
 		// Excludes cacheRead: that field re-reads the full cached context every
-		// turn, making the cumulative sum N×context_size. The dedicated cache_read
-		// segment handles cache monitoring; the cost segment handles billing.
-		const { input, output, cacheWrite } = ctx.usageStats;
-		const total = input + output + cacheWrite;
+		// turn, making the cumulative sum N×context_size. Orchestration cache read
+		// follows the same rule; orchestration input/output remain in the total so
+		// provider-side service work is preserved without labeling it prompt input.
+		const { input, output, cacheWrite, orchestrationInput, orchestrationOutput } = ctx.usageStats;
+		const total = input + output + cacheWrite + orchestrationInput + orchestrationOutput;
 		if (!total) return { content: "", visible: false };
 
 		const content = withIcon(theme.icon.tokens, formatNumber(total));
@@ -379,7 +392,7 @@ const tokenRateSegment: StatusLineSegment = {
 		const { tokensPerSecond } = ctx.usageStats;
 		if (!tokensPerSecond) return { content: "", visible: false };
 
-		const content = withIcon(theme.icon.throughput, `${tokensPerSecond.toFixed(1)}/s`);
+		const content = withIcon(theme.icon.throughput, `${tokensPerSecond.toFixed(1)} tok/s`);
 		return { content: theme.fg("statusLineOutput", content), visible: true };
 	},
 };

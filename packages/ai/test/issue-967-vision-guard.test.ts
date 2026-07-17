@@ -27,6 +27,7 @@ const compat: ResolvedOpenAICompat = {
 	supportsMultipleSystemMessages: true,
 	supportsReasoningEffort: true,
 	supportsReasoningParams: true,
+	supportsSamplingParams: true,
 	alwaysSendMaxTokens: false,
 	isOpenRouterHost: false,
 	isVercelGatewayHost: false,

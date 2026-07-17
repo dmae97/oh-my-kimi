@@ -12,10 +12,13 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
  * neither recalled nor influences generation). `transformMessages` therefore
  * demotes the reasoning to a `text` block so it survives as conversation
  * context, usually wrapping it in the TARGET model's own canonical
- * thinking-block dialect (e.g. a ```thinking fence for Gemini). Claude Fable is
- * the exception: it receives markdown-italic assistant prose so replayed
- * reasoning does not look like an extraction request it should continue.
- * Same-model continuations keep the native `thinking` block untouched.
+ * thinking-block dialect (e.g. a ```thinking fence for Gemini). The
+ * Anthropic/Claude dialect is the exception: every Claude model
+ * (Opus / Sonnet / Haiku / Fable / Mythos, etc.) receives bare assistant prose,
+ * because Anthropic's `reasoning_extraction` classifier flags `<thinking>` /
+ * `antml:thinking` tags in prior turn history — refusing (Fable) or leaking
+ * the wrapped chain-of-thought as visible reasoning on the others. Same-model
+ * continuations keep the native `thinking` block untouched.
  */
 const REASONING = "The user wants the Paris weather; I will call get_weather with city=Paris.";
 
@@ -121,37 +124,31 @@ describe("transformMessages cross-provider thinking demotion → canonical diale
 		// No harmony chat-template control tokens leaked, and the unsafe native
 		// renderThinking output was explicitly NOT used.
 		expect(text).not.toContain("<|");
-		expect(text).not.toBe(`${getDialectDefinition("harmony").renderThinking(REASONING)}\n`);
+		expect(text).not.toBe(getDialectDefinition("harmony").renderThinking(REASONING));
 		// Reasoning is still preserved inside the neutral block.
 		expect(text).toContain("<think>");
 		expect(text).toContain(REASONING);
 	});
 
-	it("renders demoted foreign reasoning for Claude Fable as bare assistant prose (no _Hmm./thinking wrapper)", () => {
-		const fable = makeModel("anthropic-messages", "anthropic", "claude-fable-5");
-		const assistant = transformedAssistant([user("weather in Paris?"), geminiThinkingTurn()], fable);
-
-		expect(assistant.content.some(b => b.type === "thinking")).toBe(false);
-
-		const first = assistant.content[0];
-		expect(first?.type).toBe("text");
-		const text = first && first.type === "text" ? first.text : "";
-		expect(text).toBe(REASONING);
-		expect(text).not.toContain("<thinking>");
-		expect(text).not.toContain("</thinking>");
-		expect(text).not.toContain("<think>");
-		expect(text).not.toContain("</think>");
-		expect(text).not.toContain("_Hmm.");
-
-		const reply = assistant.content[1];
-		expect(reply?.type).toBe("text");
-		expect(reply && reply.type === "text" ? reply.text : "").toBe("Checking the forecast.");
-	});
-
-	it("keeps canonical Anthropic thinking tags for non-Fable Anthropic targets", () => {
+	it("renders demoted foreign reasoning as bare assistant prose for every Anthropic-dialect Claude target", () => {
+		// The Anthropic reasoning_extraction classifier flags `<thinking>` and
+		// `antml:thinking` tags in prior turn history for the whole Claude family
+		// — Fable refuses outright, Opus/Sonnet/Haiku/Mythos leak the wrapped
+		// chain-of-thought as visible reasoning. Every Anthropic-dialect target
+		// therefore receives bare prose, not the dialect's canonical thinking
+		// tags.
 		const targets = [
 			{ name: "Claude Opus", id: "claude-opus-4-8" },
+			{ name: "Claude Sonnet", id: "claude-sonnet-4-6" },
+			{ name: "Claude Haiku", id: "claude-haiku-4-5" },
+			{ name: "Claude Fable", id: "claude-fable-5" },
 			{ name: "Claude Mythos", id: "claude-mythos-5" },
+			// Bedrock cross-region inference profiles. `parseAnthropicModel`
+			// doesn't enumerate `haiku`, so this exercises the isClaudeModelId
+			// dotted-prefix fallback specifically.
+			{ name: "Claude Haiku (Bedrock US)", id: "us.anthropic.claude-haiku-4-5-20251001-v1:0" },
+			{ name: "Claude Haiku (Bedrock EU)", id: "eu.anthropic.claude-haiku-4-5-20251001-v1:0" },
+			{ name: "Claude Opus (Bedrock Global)", id: "global.anthropic.claude-opus-4-8" },
 		] as const;
 
 		for (const target of targets) {
@@ -166,11 +163,62 @@ describe("transformMessages cross-provider thinking demotion → canonical diale
 			const first = assistant.content[0];
 			expect(first?.type).toBe("text");
 			const text = first && first.type === "text" ? first.text : "";
-			expect(text).toBe(getDialectDefinition("anthropic").renderThinking(REASONING));
-			expect(text).toContain("<thinking>");
-			expect(text).toContain("</thinking>");
+			expect(text).toBe(REASONING);
+			expect(text).toBe(renderDemotedThinking(target.id, REASONING));
+			expect(text).not.toContain("<thinking>");
+			expect(text).not.toContain("</thinking>");
+			expect(text).not.toContain("<think>");
+			expect(text).not.toContain("</think>");
 			expect(text).not.toContain("_Hmm.");
+
+			const reply = assistant.content[1];
+			expect(reply?.type).toBe("text");
+			expect(reply && reply.type === "text" ? reply.text : "").toBe("Checking the forecast.");
 		}
+	});
+
+	it("trims a demoted block that becomes final after following empty thinking blocks are dropped", () => {
+		const claude = makeModel("anthropic-messages", "anthropic", "claude-sonnet-4-6");
+		const turn: AssistantMessage = {
+			...geminiThinkingTurn(),
+			content: [
+				{ type: "thinking", thinking: `${REASONING}\n`, thinkingSignature: "google-sig" },
+				{ type: "thinking", thinking: " \n\t", thinkingSignature: "" },
+			],
+		};
+
+		const assistant = transformedAssistant([user("weather in Paris?"), turn], claude);
+
+		expect(assistant.content).toHaveLength(1);
+		const first = assistant.content[0];
+		expect(first?.type).toBe("text");
+		const text = first && first.type === "text" ? first.text : "";
+		expect(text).toBe(REASONING);
+		expect(/\s$/.test(text)).toBe(false);
+	});
+
+	it("trimEnds trailing whitespace already present in bare Anthropic-dialect demoted thinking", () => {
+		const claude = makeModel("anthropic-messages", "anthropic", "claude-sonnet-4-6");
+		const reasoningWithTrailingWhitespace = "The plan is complete.\n \t";
+		const turn: AssistantMessage = {
+			...geminiThinkingTurn(),
+			content: [
+				{
+					type: "thinking",
+					thinking: reasoningWithTrailingWhitespace,
+					thinkingSignature: "google-sig",
+				},
+			],
+		};
+
+		const assistant = transformedAssistant([user("weather in Paris?"), turn], claude);
+
+		expect(assistant.content).toHaveLength(1);
+		const first = assistant.content[0];
+		expect(first?.type).toBe("text");
+		const text = first && first.type === "text" ? first.text : "";
+		expect(text).toBe("The plan is complete.");
+		expect(/\s$/.test(text)).toBe(false);
 	});
 
 	it("keeps the native thinking block for a same-provider/same-model continuation", () => {

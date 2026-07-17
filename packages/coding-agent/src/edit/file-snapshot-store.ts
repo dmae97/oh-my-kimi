@@ -131,27 +131,18 @@ export function recordSeenLines(
 }
 
 /**
- * Attach the lines a read displayed to the snapshot it minted, so the patcher
- * can reject edits anchored on lines the model never saw. Best-effort: a no-op
- * when the body has no numbered rows or the snapshot already aged out. `tag`
- * must be the tag returned when this exact content was recorded.
- *
- * `excludedLines` prunes 1-indexed line numbers whose displayed text was
- * column-truncated (or otherwise not shown in full). A column-clipped row
- * still carries a `NN:` prefix — the parser sees the number and would
- * otherwise mark the line "seen" even though only its prefix ever reached
- * the model. Producers that apply per-line column truncation MUST supply
- * the clipped line set so the patcher's seen-line guard keeps rejecting
- * edits against those lines until a full-width read of them occurs.
+ * Attach the lines a read displayed to the snapshot it minted, so the patcher's
+ * (opt-in) seen-line guard can reject edits anchored on lines the model never
+ * saw. Best-effort: a no-op when the body has no numbered rows or the snapshot
+ * already aged out. `tag` must be the tag returned when this exact content was
+ * recorded. Every displayed `NN:` row counts as seen, including column-clipped
+ * rows — the guard no longer distinguishes full-width from truncated display.
  */
 export function recordSeenLinesFromBody(
 	session: FileSnapshotStoreOwner,
 	absolutePath: string,
 	tag: string,
 	body: string,
-	excludedLines?: ReadonlySet<number>,
 ): void {
-	const parsed = parseSeenLinesFromHashlineBody(body);
-	const filtered = excludedLines && excludedLines.size > 0 ? parsed.filter(line => !excludedLines.has(line)) : parsed;
-	recordSeenLines(session, absolutePath, tag, filtered);
+	recordSeenLines(session, absolutePath, tag, parseSeenLinesFromHashlineBody(body));
 }

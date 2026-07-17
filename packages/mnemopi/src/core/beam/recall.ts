@@ -69,6 +69,34 @@ const VERACITY_WEIGHTS: Record<string, number> = {
 	false: 0,
 };
 
+/**
+ * Default per-result content preview cap enforced by {@link recall}. Content
+ * longer than this is clipped and the last character replaced with `…` so
+ * callers see the truncation; the full row remains reachable via
+ * `Mnemopi.get()` (and, in the coding-agent, `memory://<id>`). Overridable per
+ * call via {@link RecallOptions.contentPreviewChars}.
+ */
+export const RECALL_CONTENT_PREVIEW_CHARS = 500;
+
+/**
+ * Clip `content` to at most `limit` characters, replacing the tail with `…`
+ * when truncated so agents can distinguish a preview from a full row. Returns
+ * the original string (and `truncated: false`) when the limit is 0/negative or
+ * the content already fits. The single `…` occupies one character of the cap,
+ * so a 500-char cap yields at most 499 real characters plus the marker.
+ */
+export function clipRecallContent(
+	content: string,
+	limit: number = RECALL_CONTENT_PREVIEW_CHARS,
+): { content: string; truncated: boolean; fullLength: number } {
+	const fullLength = content.length;
+	if (limit <= 0 || fullLength <= limit) {
+		return { content, truncated: false, fullLength };
+	}
+	const head = content.slice(0, Math.max(0, limit - 1));
+	return { content: `${head}…`, truncated: true, fullLength };
+}
+
 const DEFAULT_LIMIT = 500;
 const STOP_WORDS = new Set([
 	"a",
@@ -125,6 +153,7 @@ const FACT_QUERY_FILLER_WORDS = new Set([
 ]);
 
 const FACT_CLITIC_FRAGMENTS = new Set(["d", "ll", "m", "re", "s", "t", "ve"]);
+const FLAT_FACT_SEARCH_NOISE: Record<string, true> = { entity: true, fact: true };
 
 function nowIso(): string {
 	return new Date().toISOString();
@@ -736,10 +765,11 @@ function scoreCandidate(
 		score *= tierWeight;
 	}
 	score *= veracityWeight * currentContentAdjustment(searchableContent, options.currentSensitive === true);
+	const preview = clipRecallContent(content, options.contentPreviewChars ?? RECALL_CONTENT_PREVIEW_CHARS);
 	const result: RecallResult = {
 		...candidate.row,
 		id: asString(candidate.row.id),
-		content: content.slice(0, 500),
+		content: preview.content,
 		source: asNullableString(candidate.row.source),
 		timestamp: asNullableString(candidate.row.timestamp),
 		importance,
@@ -765,6 +795,8 @@ function scoreCandidate(
 			recency_decay: round4(decay),
 			temporal: round4(temporalScore),
 		},
+		truncated: preview.truncated,
+		full_length: preview.fullLength,
 	};
 	return result;
 }
@@ -1019,7 +1051,7 @@ export async function recallEnhanced(
 		updateRecallCounts: false,
 	});
 	if (options.includeFacts === true) {
-		const facts = factRecall(beam, query, Math.min(3, topK));
+		const facts = factRecall(beam, query, factRecallLimit(topK));
 		results.push(...facts);
 	}
 	results.sort((left, right) => (right.score ?? 0) - (left.score ?? 0));
@@ -1028,20 +1060,36 @@ export async function recallEnhanced(
 	return finalResults;
 }
 
+function factRecallLimit(topK: number): number {
+	const requested = Math.max(0, Math.floor(topK));
+	if (requested === 0) return 0;
+	return Math.min(requested, Math.max(3, Math.ceil(requested / 2)));
+}
+
 function sandwichOrder(results: readonly RecallResult[]): {
 	high: RecallResult[];
 	medium: RecallResult[];
 	closing: RecallResult[];
 } {
 	const scored = [...results].sort((left, right) => (right.score ?? 0) - (left.score ?? 0));
-	const high = scored.filter(r => (r.score ?? 0) > 0.7).slice(0, 3);
-	const medium = scored.filter(r => (r.score ?? 0) > 0.3 && (r.score ?? 0) <= 0.7).slice(0, 5);
-	const closing = scored.filter(r => !high.includes(r)).slice(0, 3);
-	return { high, medium, closing: closing.length > 0 ? closing : high.slice(0, 2) };
+	const highLimit = scored.length > 0 && scored.length < 4 ? 1 : 3;
+	const high = scored.slice(0, highLimit);
+	const medium = scored.slice(high.length, high.length + 5);
+	const closing = scored.slice(high.length + medium.length, high.length + medium.length + 3);
+	return { high, medium, closing };
+}
+function factSearchableText(subject: string, predicate: string, object: string): string {
+	const objectText = object.trim();
+	if (objectText.length === 0) return `${subject} ${predicate}`.trim();
+	const structuralParts = [subject, predicate].filter(part => {
+		const token = part.trim().toLowerCase();
+		return token.length > 0 && FLAT_FACT_SEARCH_NOISE[token] !== true;
+	});
+	return [...structuralParts, objectText].join(" ").trim();
 }
 
 function factLine(result: RecallResult): string {
-	const content = result.content.slice(0, 200).trim();
+	const content = clipRecallContent(result.content.trim(), 200).content;
 	const ts = typeof result.timestamp === "string" && result.timestamp.length > 0 ? result.timestamp.slice(0, 10) : "?";
 	const source = result.source ?? "unknown";
 	const score = result.score ?? result.importance ?? 0;
@@ -1140,7 +1188,7 @@ export function factRecall(beam: BeamMemoryState, query: string, topK = 30): Fac
 			const object = asString(row.object);
 			const confidence = asNumber(row.confidence, 0.5);
 			const content = object.length > 0 ? object : `${subject} ${predicate}`.trim();
-			const searchable = `${subject} ${predicate} ${object}`.trim();
+			const searchable = factSearchableText(subject, predicate, object);
 			const queryGroups = factExpandedTokenGroups(query, searchable);
 			const queryTokens = tokensFromGroups(queryGroups);
 			const lexical =
@@ -1171,6 +1219,7 @@ export function factRecall(beam: BeamMemoryState, query: string, topK = 30): Fac
 			};
 			return result;
 		})
+		.filter(result => (result.score ?? 0) > 0)
 		.sort((left, right) => (right.score ?? 0) - (left.score ?? 0))
 		.slice(0, topK);
 }

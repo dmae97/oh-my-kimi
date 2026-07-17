@@ -75,21 +75,10 @@ export interface GoogleSharedStreamOptions extends StreamOptions {
 		budgetTokens?: number;
 		level?: GoogleThinkingLevel;
 	};
+	/** Request that Google omit human-readable thought summaries while still allowing internal reasoning. */
+	hideThinkingSummary?: boolean;
 	/** Gemini/Vertex serving tier (`flex`/`priority`); other values are omitted. */
 	serviceTier?: ServiceTier;
-	/**
-	 * Continues a Gemini Interactions API conversation from a stored interaction.
-	 * When set on the direct Google provider, the request uses `/interactions`
-	 * with `previous_interaction_id` instead of the legacy generateContent stream.
-	 */
-	previousInteractionId?: string;
-	/**
-	 * Uses the Gemini Interactions API for direct Google requests, storing the
-	 * returned interaction id on the assistant response for follow-up turns.
-	 */
-	useInteractionsApi?: boolean;
-	/** Overrides Interactions API request storage; default is the API default (`true`). */
-	storeInteraction?: boolean;
 }
 
 /**
@@ -859,7 +848,7 @@ export function buildGoogleGenerateContentParams<T extends "google-generative-ai
 	}
 
 	if (options.thinking?.enabled && model.reasoning) {
-		const cfg: ThinkingConfig = { includeThoughts: true };
+		const cfg: ThinkingConfig = { includeThoughts: !options.hideThinkingSummary };
 		if (options.thinking.level !== undefined) {
 			// GoogleThinkingLevel mirrors the SDK's `ThinkingLevel` string enum values 1:1.
 			cfg.thinkingLevel = options.thinking.level as ThinkingLevel;

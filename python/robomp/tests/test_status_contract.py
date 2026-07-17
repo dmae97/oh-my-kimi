@@ -18,7 +18,6 @@ from robomp.config import Settings, reset_settings_cache
 from robomp.db import get_database
 from robomp.server import create_app
 
-
 # Runtime/timestamp fields vary every run; normalize them so the live payload
 # can be compared against (or regenerated into) a byte-stable committed fixture.
 _VOLATILE_TS_KEYS = {"received_at", "started_at", "last_tool_ts", "updated_at"}
@@ -47,7 +46,7 @@ def test_status_contract(settings: Settings) -> None:
     with TestClient(app) as client:
         # Seed AFTER startup:
         db = get_database(settings.sqlite_path)
-        
+
         # 1. A running issue with live detail:
         db.upsert_issue(
             key="octo/widget#1",
@@ -169,15 +168,31 @@ def test_status_contract(settings: Settings) -> None:
         data = resp.json()
 
         # Assert Python-side: top-level keys exactly:
-        expected_keys = {"runtime", "event_counts", "issue_event_counts", "running_events", "inflight", "issues", "recent_events"}
+        expected_keys = {
+            "runtime",
+            "event_counts",
+            "issue_event_counts",
+            "running_events",
+            "inflight",
+            "issues",
+            "recent_events",
+        }
         assert set(data.keys()) == expected_keys
 
         # check running_events[0] keys:
         running_ev = data["running_events"]
         assert len(running_ev) == 1
         assert set(running_ev[0].keys()) == {
-            "delivery_id", "event_type", "repo", "issue_key", "received_at",
-            "started_at", "attempts", "model", "last_tool", "last_tool_ts"
+            "delivery_id",
+            "event_type",
+            "repo",
+            "issue_key",
+            "received_at",
+            "started_at",
+            "attempts",
+            "model",
+            "last_tool",
+            "last_tool_ts",
         }
         assert running_ev[0]["model"] == "anthropic/claude-3-5-sonnet"
         assert running_ev[0]["last_tool"] == "edit"
@@ -185,13 +200,25 @@ def test_status_contract(settings: Settings) -> None:
         # check issues keys / latest_event keys:
         for issue_row in data["issues"]:
             assert set(issue_row.keys()) == {
-                "key", "repo", "number", "branch", "pr_number",
-                "state", "classification", "updated_at", "latest_event",
+                "key",
+                "repo",
+                "number",
+                "branch",
+                "pr_number",
+                "state",
+                "classification",
+                "updated_at",
+                "latest_event",
             }
             latest = issue_row["latest_event"]
             if latest is not None:
                 assert set(latest.keys()) == {
-                    "delivery_id", "event_type", "state", "attempts", "received_at", "last_error"
+                    "delivery_id",
+                    "event_type",
+                    "state",
+                    "attempts",
+                    "received_at",
+                    "last_error",
                 }
 
         # check runtime:
@@ -358,4 +385,3 @@ def test_retry_state_transition(env, monkeypatch: pytest.MonkeyPatch) -> None:
         evt = db.get_event("failed-retry-1")
         assert evt is not None
         assert evt.state == "queued"
-

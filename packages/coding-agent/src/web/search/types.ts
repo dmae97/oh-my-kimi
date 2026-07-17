@@ -39,14 +39,44 @@ export const SEARCH_PROVIDER_OPTIONS = [
 	{ value: "tavily", label: "Tavily", description: "Requires TAVILY_API_KEY" },
 	{ value: "firecrawl", label: "Firecrawl", description: "Requires FIRECRAWL_API_KEY" },
 	{ value: "brave", label: "Brave", description: "Requires BRAVE_API_KEY" },
-	{ value: "kimi", label: "Kimi", description: "Requires MOONSHOT_SEARCH_API_KEY or MOONSHOT_API_KEY" },
+	{
+		value: "kimi",
+		label: "Kimi",
+		description:
+			"Kimi Code search (requires a Kimi Code Console key via KIMI_SEARCH_API_KEY/MOONSHOT_SEARCH_API_KEY or /login kimi-code; not MOONSHOT_API_KEY)",
+	},
 	{ value: "parallel", label: "Parallel", description: "Requires PARALLEL_API_KEY" },
 	{ value: "synthetic", label: "Synthetic", description: "Requires SYNTHETIC_API_KEY" },
 	{ value: "searxng", label: "SearXNG", description: "Requires SEARXNG_ENDPOINT or searxng.endpoint" },
 	{
+		value: "startpage",
+		label: "Startpage",
+		description: "Credential-free scrape of Startpage (Google-backed) results; may be bot-challenged",
+	},
+	{
 		value: "duckduckgo",
 		label: "DuckDuckGo",
 		description: "Credential-free best-effort fallback; may be bot-challenged on datacenter/shared-egress IPs",
+	},
+	{
+		value: "ecosia",
+		label: "Ecosia",
+		description: "Credential-free browser-backed scrape of Ecosia (Google-backed) results",
+	},
+	{
+		value: "google",
+		label: "Google",
+		description: "Credential-free browser-backed fallback; slower and may be bot-challenged",
+	},
+	{
+		value: "mojeek",
+		label: "Mojeek",
+		description: "Credential-free browser-backed scrape of Mojeek's independent index",
+	},
+	{
+		value: "public",
+		label: "Public Web",
+		description: "Queries every credential-free engine in parallel and consolidates deduplicated results",
 	},
 ] as const;
 

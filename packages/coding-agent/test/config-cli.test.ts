@@ -8,6 +8,7 @@ import { getConfigRootDir, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 let testAgentDir: TempDir | undefined;
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 const fallbackAgentDir = path.join(getConfigRootDir(), "agent");
+const cliEntry = path.join(import.meta.dir, "..", "src", "cli.ts");
 
 beforeEach(() => {
 	resetSettingsForTest();
@@ -165,5 +166,26 @@ describe("config CLI schema coverage", () => {
 		expect(parsed.key).toBe("defaultThinkingLevel");
 		expect(parsed.type).toBe("enum");
 		expect(parsed.value).toBe("max");
+	});
+	it("fully flushes JSON larger than a pipe buffer", async () => {
+		if (!testAgentDir) throw new Error("Test agent directory was not initialized");
+		const proc = Bun.spawn([process.execPath, cliEntry, "config", "list", "--json"], {
+			stdout: "pipe",
+			stderr: "pipe",
+			env: {
+				...process.env,
+				NO_COLOR: "1",
+				PI_CODING_AGENT_DIR: testAgentDir.path(),
+			},
+		});
+		const stdout = new Response(proc.stdout).text();
+		const stderr = new Response(proc.stderr).text();
+		const [exitCode, output, error] = await Promise.all([proc.exited, stdout, stderr]);
+
+		expect(exitCode).toBe(0);
+		expect(error).toBe("");
+		expect(Buffer.byteLength(output)).toBeGreaterThan(65_536);
+		const parsed: unknown = JSON.parse(output);
+		expect(parsed).toMatchObject({ modelRoles: { type: "record" } });
 	});
 });

@@ -17,7 +17,8 @@ import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 const enc = (s: string): Uint8Array => new TextEncoder().encode(s);
 const WML = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
-
+const repoRoot = path.resolve(import.meta.dir, "..", "..", "..");
+const cliEntry = path.join(repoRoot, "packages", "coding-agent", "src", "cli.ts");
 function makeDocx(bodyXml: string): Uint8Array {
 	return zip({
 		"[Content_Types].xml": enc(
@@ -150,6 +151,69 @@ describe("markit converters", () => {
 		// normalizeTablesHtml promotes the first row to a header so GFM renders a table.
 		expect(result.content).toContain("| A | B |");
 		expect(result.content).toContain("| --- | --- |");
+	});
+
+	it("reads PDF text after inline image binary data containing delimiter bytes", async () => {
+		const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-pdf-inline-home-"));
+		const homeRoot = path.parse(homeDir).root;
+		const homeDrive = homeRoot.endsWith(path.sep) ? homeRoot.slice(0, -1) : homeRoot;
+		const homePath = homeDir.slice(homeDrive.length) || path.sep;
+		try {
+			const pdfPath = path.join(
+				import.meta.dir,
+				"fixtures",
+				"pdf-inline-image-repro",
+				"bad-inline-image-delimiter.pdf",
+			);
+			const proc = Bun.spawn([process.execPath, cliEntry, "read", pdfPath], {
+				cwd: repoRoot,
+				stdout: "pipe",
+				stderr: "pipe",
+				env: {
+					...process.env,
+					APPDATA: path.join(homeDir, "AppData", "Roaming"),
+					HOME: homeDir,
+					HOMEDRIVE: homeDrive,
+					HOMEPATH: homePath,
+					LOCALAPPDATA: path.join(homeDir, "AppData", "Local"),
+					USERPROFILE: homeDir,
+					NO_COLOR: "1",
+					OMP_PROFILE: "",
+					PI_CODING_AGENT_DIR: path.join(homeDir, ".omp", "agent"),
+					PI_CONFIG_DIR: ".omp",
+					PI_NO_TITLE: "1",
+					PI_PROFILE: "",
+					XDG_CACHE_HOME: path.join(homeDir, ".cache"),
+					XDG_DATA_HOME: path.join(homeDir, ".local", "share"),
+					XDG_STATE_HOME: path.join(homeDir, ".local", "state"),
+				},
+			});
+			const stdout = new Response(proc.stdout).text();
+			const stderr = new Response(proc.stderr).text();
+			// The regression is a synchronous child-process spin; there is no in-process signal to await.
+			const outcome = await Promise.race([
+				proc.exited.then(exitCode => ({ type: "exit" as const, exitCode })),
+				Bun.sleep(5_000).then(() => ({ type: "timeout" as const })),
+			]);
+			if (outcome.type === "timeout") {
+				try {
+					proc.kill("SIGKILL");
+				} catch {
+					// already exited
+				}
+				await proc.exited;
+				throw new Error("read command timed out on inline image PDF");
+			}
+
+			const [out, err] = await Promise.all([stdout, stderr]);
+			expect(outcome.exitCode).toBe(0);
+			expect(err).toBe("");
+			expect(out).toContain("Inline image tokenizer repro issue");
+			expect(out).toContain("| Name | Qty |");
+			expect(out).toContain("| Wire | 12 |");
+		} finally {
+			await removeWithRetries(homeDir);
+		}
 	});
 
 	it("reports an unsupported format instead of emitting garbage", async () => {

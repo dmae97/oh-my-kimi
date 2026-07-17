@@ -50,6 +50,37 @@ describe("SessionManager usage statistics", () => {
 		expect(usage.premiumRequests).toBe(3);
 	});
 
+	it("keeps orchestration usage out of ordinary input while preserving total tokens", () => {
+		const session = SessionManager.inMemory();
+
+		session.appendMessage({ role: "user", content: "hello", timestamp: 1 });
+		session.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "" }],
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			model: "gpt-5.5",
+			usage: {
+				input: 0,
+				output: 29,
+				cacheRead: 180_224,
+				cacheWrite: 0,
+				totalTokens: 185_882,
+				orchestration: { input: 5_629 },
+				cost: { input: 5.629, output: 0, cacheRead: 0, cacheWrite: 0, total: 5.629 },
+			},
+			stopReason: "toolUse",
+			timestamp: 2,
+		});
+
+		const usage = session.getUsageStatistics();
+		expect(usage.input).toBe(0);
+		expect(usage.cacheRead).toBe(180_224);
+		expect(usage.totalTokens).toBe(185_882);
+		expect(usage.orchestrationInput).toBe(5_629);
+		expect(usage.cost).toBeCloseTo(5.629, 8);
+	});
+
 	it("preserves fractional premium request multipliers", () => {
 		const session = SessionManager.inMemory();
 

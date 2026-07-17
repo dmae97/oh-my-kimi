@@ -5,6 +5,20 @@
 import { isValidThemeColor, type ThemeColor } from "../modes/theme/theme";
 import type { Settings } from "./settings";
 
+/** Canonical prefix for a configured model role selector. */
+export const MODEL_ROLE_ALIAS_PREFIX = "@";
+
+/** Legacy prefix accepted for backwards-compatible role selectors. */
+export const LEGACY_MODEL_ROLE_ALIAS_PREFIX = "pi/";
+
+/** Shorthand selector for the default model role. */
+export const DEFAULT_MODEL_ROLE_ALIAS = "*";
+
+/** Format a model role as its canonical selector. */
+export function formatModelRoleAlias(role: string): string {
+	return `${MODEL_ROLE_ALIAS_PREFIX}${role}`;
+}
+
 export type ModelRole =
 	| "default"
 	| "smol"

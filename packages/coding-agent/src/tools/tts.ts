@@ -103,7 +103,7 @@ async function synthesizeXai(
 			content: [
 				{
 					type: "text",
-					text: "No xAI credentials. Run /login → xAI Grok OAuth (SuperGrok Subscription) or set XAI_API_KEY.",
+					text: "No xAI credentials. Run /login → xAI Grok OAuth (SuperGrok or X Premium+) or set XAI_API_KEY.",
 				},
 			],
 		};

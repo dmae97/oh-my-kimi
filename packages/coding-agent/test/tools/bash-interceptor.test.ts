@@ -111,6 +111,32 @@ describe("default echo/printf redirect rule", () => {
 	});
 });
 
+describe("default hub start rules", () => {
+	const tools = ["hub"];
+
+	it.each([
+		"bun run dev",
+		"vite --host 0.0.0.0",
+		"lldb ./app",
+		"bun test --watch",
+		"nohup server",
+		"server &",
+	])("routes %s to hub start", command => {
+		const result = checkBashInterception(command, tools, DEFAULT_BASH_INTERCEPTOR_RULES);
+		expect(result.block).toBe(true);
+		expect(result.suggestedTool).toBe("hub");
+	});
+
+	it.each([
+		"git diff -w",
+		"docker compose up -d",
+		"bun test",
+		"printf 'server &'",
+	])("does not misclassify finite command %s", command => {
+		expect(checkBashInterception(command, tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(false);
+	});
+});
+
 describe("BashTool argument validation", () => {
 	it("preserves async requests so disabled async mode returns the explicit error", async () => {
 		const tool = createBashTool([]);
@@ -124,49 +150,5 @@ describe("BashTool argument validation", () => {
 		await expect(tool.execute("tool-call", args as unknown as BashToolInput)).rejects.toThrow(
 			"Async bash execution is disabled",
 		);
-	});
-});
-
-describe("BashTool head/tail stripping", () => {
-	function createBashToolWithStrip(stripEnabled: boolean): BashTool {
-		const session = {
-			cwd: process.cwd(),
-			settings: {
-				get(key: string) {
-					if (key === "bashInterceptor.enabled") return false;
-					if (key === "async.enabled") return false;
-					if (key === "bash.autoBackground.enabled") return false;
-					if (key === "bash.autoBackground.thresholdMs") return 60_000;
-					if (key === "bash.stripTrailingHeadTail") return stripEnabled;
-					return undefined;
-				},
-				getBashInterceptorRules() {
-					return [];
-				},
-			},
-		} as unknown as ToolSession;
-		return new BashTool(session);
-	}
-
-	it("executes the stripped command", async () => {
-		const tool = createBashToolWithStrip(true);
-		// `seq 1 100 | head -3` would emit "1\n2\n3"; stripped, it emits 1..100.
-		// We assert on the tail of the output rather than head, so a successful
-		// strip is observable: line "100" only appears when head is gone.
-		const result = await tool.execute("tool-call", { command: "seq 1 100 | head -3" }, undefined, undefined, {
-			toolNames: ["bash"],
-		} as AgentToolContext);
-		const text = result.content.find(b => b.type === "text")?.text ?? "";
-		expect(text).toContain("100");
-	});
-
-	it("does not strip when the setting is disabled", async () => {
-		const tool = createBashToolWithStrip(false);
-		const result = await tool.execute("tool-call", { command: "seq 1 100 | head -3" }, undefined, undefined, {
-			toolNames: ["bash"],
-		} as AgentToolContext);
-		const text = result.content.find(b => b.type === "text")?.text ?? "";
-		expect(text).toContain("1\n2\n3");
-		expect(text).not.toContain("100");
 	});
 });

@@ -251,6 +251,29 @@ def round_trip_app(proxy_settings: Settings):
                     }
                 ],
             )
+        if path == "/search/issues" and req.method == "GET":
+            assert req.url.params["q"].startswith("repo:octo/widget ")
+            return httpx.Response(
+                200,
+                json={
+                    "total_count": 1,
+                    "items": [
+                        {
+                            "number": 9,
+                            "title": "fixed it",
+                            "state": "closed",
+                            "state_reason": "completed",
+                            "user": {"login": "bob"},
+                            "labels": [{"name": "bug"}],
+                            "comments": 2,
+                            "updated_at": "2026-02-01T00:00:00Z",
+                            "created_at": "2026-01-15T00:00:00Z",
+                            "html_url": "https://example/9",
+                            "pull_request": {"url": "https://example/pull/9"},
+                        }
+                    ],
+                },
+            )
         if path == "/repos/octo/widget/issues/1/comments" and req.method == "GET":
             return httpx.Response(
                 200,
@@ -364,6 +387,10 @@ async def test_round_trip_all_endpoints(round_trip_app) -> None:
 
     issues = await client.list_issues("octo/widget")
     assert len(issues) == 1 and isinstance(issues[0], IssueSummary)
+
+    found = await client.search_issues("octo/widget", "colon selector is:pr")
+    assert len(found) == 1 and isinstance(found[0], IssueSummary)
+    assert found[0].is_pull_request and found[0].state_reason == "completed"
 
     comments = await client.list_comments("octo/widget", 1)
     assert len(comments) == 1 and isinstance(comments[0], CommentInfo)

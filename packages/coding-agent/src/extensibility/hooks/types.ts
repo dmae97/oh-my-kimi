@@ -8,7 +8,7 @@ import type { EditToolDetails } from "../../edit";
 import type { ExecOptions, ExecResult } from "../../exec/exec";
 import type * as PiCodingAgent from "../../index";
 import type { Theme } from "../../modes/theme/theme";
-import type { HookMessage } from "../../session/messages";
+import type { CustomMessagePayload, HookMessage } from "../../session/messages";
 import type { ReadonlySessionManager, SessionManager } from "../../session/session-manager";
 import type { BashToolDetails, GlobToolDetails, GrepToolDetails, ReadToolDetails } from "../../tools";
 import type {
@@ -425,7 +425,7 @@ export type { ToolCallEventResult, ToolResultEventResult } from "../shared-event
  */
 export interface BeforeAgentStartEventResult {
 	/** Message to inject into context (persisted to session, visible in TUI) */
-	message?: Pick<HookMessage, "customType" | "content" | "display" | "details" | "attribution">;
+	message?: CustomMessagePayload;
 }
 
 export type {
@@ -519,7 +519,7 @@ export interface HookAPI {
 	 * Use this when you want the LLM to see the message content.
 	 * For hook state that should NOT be sent to the LLM, use appendEntry() instead.
 	 *
-	 * @param message - The message to send
+	 * @param message - The message object to send, or a string shorthand for visible message content
 	 * @param message.customType - Identifier for your hook (used for filtering on reload)
 	 * @param message.content - Message content (string or TextContent/ImageContent array)
 	 * @param message.display - Whether to show in TUI (true = styled display, false = hidden)
@@ -530,7 +530,7 @@ export interface HookAPI {
 	 * @param options.deliverAs - How to deliver the message: "steer" or "followUp".
 	 */
 	sendMessage<T = unknown>(
-		message: Pick<HookMessage<T>, "customType" | "content" | "display" | "details" | "attribution">,
+		message: CustomMessagePayload<T>,
 		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" },
 	): void;
 

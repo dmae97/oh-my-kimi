@@ -27,6 +27,7 @@ import {
 import { declareWorkerHostEntry, installWorkerInbox } from "@oh-my-pi/pi-utils/worker-host";
 import { installProfileAlias, resolveProfileAliasCommandFromProcess } from "./cli/profile-alias";
 import { extractProfileFlags } from "./cli/profile-bootstrap";
+import { DAEMON_BROKER_WORKER_ARG } from "./launch/protocol";
 
 if (Bun.semver.order(Bun.version, MIN_BUN_VERSION) < 0) {
 	process.stderr.write(
@@ -36,6 +37,14 @@ if (Bun.semver.order(Bun.version, MIN_BUN_VERSION) < 0) {
 }
 
 process.title = APP_NAME;
+
+// `Bun.build`-API compiled Windows executables report `import.meta.main ===
+// false`: the standalone loader keys the entry module with native backslashes
+// (`B:\~BUN\root\cli.js`) but registers the main path with forward slashes
+// (`B:/~BUN/root/cli.js`), so Bun's internal match fails. `bun build --compile`
+// CLI builds are unaffected. A compiled binary's entry module is by definition
+// the process entry, so the define-folded PI_COMPILED marker stands in.
+const isProcessEntry = import.meta.main || process.env.PI_COMPILED === "true";
 
 // Worker-host entry declaration (Worker threads and worker subprocesses
 // re-enter `Bun.main` with a hidden argv selector instead of loading separate
@@ -70,6 +79,8 @@ async function runSmokeTest(): Promise<void> {
 	const { smokeTestTtsWorker } = await import("./tts/tts-client");
 	const { smokeTestMnemopiEmbedWorker } = await import("./mnemopi/embed-client");
 	const { smokeTestJsEvalWorker } = await import("./eval/js/context-manager");
+	// Smoke dependencies stay lazy so normal CLI startup does not load worker clients.
+	const { smokeTestDaemonBroker } = await import("./launch/client");
 	await smokeTestSyncWorker();
 
 	const statsServer = await startServer(0);
@@ -89,6 +100,7 @@ async function runSmokeTest(): Promise<void> {
 	await smokeTestJsEvalWorker();
 	await smokeTestTtsWorker();
 	await smokeTestMnemopiEmbedWorker();
+	await smokeTestDaemonBroker();
 	process.stdout.write("smoke-test: ok\n");
 }
 
@@ -96,6 +108,7 @@ const TINY_WORKER_ARG = "__omp_worker_tiny_inference";
 const STATS_SYNC_WORKER_ARG = "__omp_worker_stats_sync";
 const TAB_WORKER_ARG = "__omp_worker_tab";
 const JS_EVAL_WORKER_ARG = "__omp_worker_js_eval";
+const JS_EVAL_PROCESS_ARG = "__omp_worker_js_eval_process";
 const STT_WORKER_ARG = "__omp_worker_stt";
 const TTS_WORKER_ARG = "__omp_worker_tts";
 const MNEMOPI_EMBED_WORKER_ARG = "__omp_worker_mnemopi_embed";
@@ -144,6 +157,14 @@ async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 		await import("./eval/js/worker-entry");
 		return true;
 	}
+	if (arg === JS_EVAL_PROCESS_ARG) {
+		const { startJsEvalProcess } = await import("./eval/js/process-entry");
+		// The JS evaluator forwards user-controlled payloads (tool-call args,
+		// display outputs); a non-serializable one must fail that cell, not
+		// SIGKILL the kernel and erase the eval session's state.
+		await runIpcSubprocessWorker(startJsEvalProcess, { rethrowConnectedSendErrors: true });
+		return true;
+	}
 	if (arg === STT_WORKER_ARG) {
 		const { startSttWorker } = await import("./stt/asr-worker");
 		await runIpcSubprocessWorker(startSttWorker);
@@ -157,6 +178,12 @@ async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 	if (arg === MNEMOPI_EMBED_WORKER_ARG) {
 		const { startMnemopiEmbedWorker } = await import("./mnemopi/embed-worker");
 		await runIpcSubprocessWorker(startMnemopiEmbedWorker);
+		return true;
+	}
+	if (arg === DAEMON_BROKER_WORKER_ARG) {
+		// Worker selectors must dispatch before the normal command graph loads.
+		const { startDaemonBrokerFromEnvironment } = await import("./launch/broker");
+		await startDaemonBrokerFromEnvironment();
 		return true;
 	}
 	return false;
@@ -178,6 +205,18 @@ async function runIpcSubprocessWorker<In, Out>(
 		sendAndFlush(message: Out): Promise<void>;
 		onMessage(handler: (message: In) => void): () => void;
 	}) => void,
+	options?: {
+		/**
+		 * Rethrow send failures while the IPC channel is still connected instead
+		 * of shutting down. A connected-channel failure means this particular
+		 * message could not be serialized (e.g. a JS eval cell passed a function
+		 * into tool args, a DataCloneError under advanced serialization) — the
+		 * caller must see that error, exactly as Worker `postMessage` would
+		 * deliver it, rather than losing the whole worker and its state.
+		 * Channel-gone failures still shut down.
+		 */
+		rethrowConnectedSendErrors?: boolean;
+	},
 ): Promise<void> {
 	const { promise: shuttingDown, resolve: shutdown } = Promise.withResolvers<void>();
 	type IpcSend = (this: NodeJS.Process, message: unknown, callback?: (error: Error | null) => void) => boolean;
@@ -193,7 +232,8 @@ async function runIpcSubprocessWorker<In, Out>(
 		}
 		try {
 			sender.call(process, message);
-		} catch {
+		} catch (error) {
+			if (options?.rethrowConnectedSendErrors && process.connected) throw error;
 			shutdown();
 		}
 	};
@@ -298,20 +338,24 @@ export async function runCli(argv: string[]): Promise<void> {
 	// worker's parked initial messages as soon as the entry module's
 	// top-level evaluation finishes.
 	if (resolvedArgv[0]?.startsWith("__omp_worker_")) {
-		await runWorkerEntrypoint(resolvedArgv[0]);
+		const dispatched = await runWorkerEntrypoint(resolvedArgv[0]);
+		if (!dispatched) {
+			process.stderr.write(`Error: unknown worker selector: ${resolvedArgv[0]}\n`);
+			process.exitCode = 1;
+		}
 		return;
 	}
 
 	// Declare this module as the worker-host entry now that the active profile
 	// is resolved. The worker-host module is side-effect-free; importing
 	// `@oh-my-pi/pi-utils/env` here would snapshot the wrong agent `.env`.
-	// Gated on `import.meta.main`: only the real CLI process entry is a valid
+	// Gated on `isProcessEntry`: only the real CLI process entry is a valid
 	// worker host. Worker-thread re-entry already returned above at the
 	// `__omp_worker_` dispatch, and importers (`runCli` in profile-CLI tests,
 	// SDK embedding) have `import.meta.main === false` — declaring there would
 	// poison `workerHostEntry()` for the whole test process, forcing eval/stats/
 	// browser workers onto the same-realm inline fallback.
-	if (import.meta.main) declareWorkerHostEntry();
+	if (isProcessEntry) declareWorkerHostEntry();
 
 	if (resolvedArgv[0] === "--smoke-test") {
 		await runSmokeTest();
@@ -340,7 +384,7 @@ export async function runCli(argv: string[]): Promise<void> {
 // launch the agent as a side effect. Worker threads re-enter this module as
 // their entry with `import.meta.main === false`, so the worker-host dispatch
 // is admitted via `!Bun.isMainThread`.
-if (import.meta.main || !Bun.isMainThread) {
+if (isProcessEntry || !Bun.isMainThread) {
 	runCli(process.argv.slice(2)).catch((err: unknown) => {
 		process.stderr.write(`${Bun.inspect(err, { colors: process.stderr.isTTY === true })}\n`);
 		process.exit(1);

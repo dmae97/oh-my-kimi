@@ -11,10 +11,10 @@ to short-circuit the network.
 
 from __future__ import annotations
 
-import json
 import asyncio
-import time
+import json
 import logging
+import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -25,6 +25,7 @@ from robomp.git_ops import GitCommandError, HeadDriftError, PushResult
 from robomp.github_client import (
     CommentInfo,
     GitHubError,
+    IssueIndexEntry,
     IssueInfo,
     IssueSummary,
     PullRequestFileInfo,
@@ -203,6 +204,28 @@ class GitHubProxyClient:
             params={"repo": repo, "state": state, "limit": limit},
         )
         return [_issue_summary_from(item) for item in (data.get("items") if isinstance(data, dict) else None) or []]
+
+    async def search_issues(self, repo: str, query: str, *, limit: int = 10) -> list[IssueSummary]:
+        data = await self._request(
+            "GET",
+            "/gh/v1/search_issues",
+            params={"repo": repo, "q": query, "limit": limit},
+        )
+        return [_issue_summary_from(item) for item in (data.get("items") if isinstance(data, dict) else None) or []]
+
+    async def list_issue_index_entries(
+        self,
+        repo: str,
+        *,
+        since: str | None = None,
+        page: int = 1,
+        per_page: int = 100,
+    ) -> list[IssueIndexEntry]:
+        params: dict[str, Any] = {"repo": repo, "page": page, "per_page": per_page}
+        if since:
+            params["since"] = since
+        data = await self._request("GET", "/gh/v1/issue_index_entries", params=params)
+        return [_index_entry_from(item) for item in (data.get("items") if isinstance(data, dict) else None) or []]
 
     async def list_comments(self, repo: str, number: int) -> list[CommentInfo]:
         data = await self._request("GET", "/gh/v1/comments", params={"repo": repo, "number": number})
@@ -497,6 +520,29 @@ def _issue_summary_from(data: Any) -> IssueSummary:
         comments=int(data.get("comments") or 0),
         updated_at=str(data.get("updated_at") or ""),
         created_at=str(data.get("created_at") or ""),
+        html_url=str(data.get("html_url") or ""),
+        state_reason=str(data.get("state_reason") or ""),
+        is_pull_request=bool(data.get("is_pull_request")),
+    )
+
+
+def _index_entry_from(data: Any) -> IssueIndexEntry:
+    if not isinstance(data, dict):
+        raise GitHubError(500, "proxy returned malformed issue index payload")
+    return IssueIndexEntry(
+        repo=str(data["repo"]),
+        number=int(data["number"]),
+        is_pull_request=bool(data.get("is_pull_request")),
+        title=str(data.get("title") or ""),
+        body=str(data.get("body") or ""),
+        state=str(data.get("state") or ""),
+        state_reason=str(data.get("state_reason") or ""),
+        merged_at=str(data.get("merged_at") or ""),
+        author=str(data.get("author") or ""),
+        labels=tuple(str(x) for x in (data.get("labels") or [])),
+        comments=int(data.get("comments") or 0),
+        created_at=str(data.get("created_at") or ""),
+        updated_at=str(data.get("updated_at") or ""),
         html_url=str(data.get("html_url") or ""),
     )
 

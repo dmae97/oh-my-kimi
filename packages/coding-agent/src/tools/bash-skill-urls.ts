@@ -27,6 +27,7 @@ export interface InternalUrlExpansionOptions {
 	noEscape?: boolean;
 	internalRouter?: InternalUrlResolver;
 	localOptions?: LocalProtocolOptions;
+	cwd?: string;
 	ensureLocalParentDirs?: boolean;
 }
 
@@ -66,7 +67,7 @@ export function resolveSkillUrlToPath(url: string, skills: readonly Skill[]): st
 	const hasRelativePath = rawPath !== "" && rawPath !== "/";
 
 	if (!hasRelativePath) {
-		return path.resolve(skill.filePath);
+		return path.resolve(skill.baseDir);
 	}
 
 	let relativePath: string;
@@ -140,6 +141,56 @@ function unquoteToken(token: string): string {
 	return token;
 }
 
+function isInsideShellQuote(command: string, index: number): boolean {
+	type ShellQuote = "'" | '"' | undefined;
+	interface CommandSubstitution {
+		outerQuote: ShellQuote;
+		depth: number;
+	}
+
+	let quote: ShellQuote;
+	const substitutions: CommandSubstitution[] = [];
+	for (let i = 0; i < index; i++) {
+		const char = command[i];
+		if (char === "\\" && quote !== "'") {
+			i++;
+			continue;
+		}
+		if (char === "'" && quote !== '"') {
+			quote = quote === "'" ? undefined : "'";
+			continue;
+		}
+		if (char === '"' && quote !== "'") {
+			quote = quote === '"' ? undefined : '"';
+			continue;
+		}
+		if (char === "$" && command[i + 1] === "(" && quote !== "'") {
+			substitutions.push({ outerQuote: quote, depth: 1 });
+			quote = undefined;
+			i++;
+			continue;
+		}
+		if (quote !== undefined) continue;
+
+		const substitution = substitutions.at(-1);
+		if (!substitution) continue;
+		if (char === "(") {
+			substitution.depth++;
+		} else if (char === ")") {
+			substitution.depth--;
+			if (substitution.depth === 0) {
+				quote = substitutions.pop()?.outerQuote;
+			}
+		}
+	}
+	return quote !== undefined;
+}
+
+function isEmbeddedInQuotedText(command: string, token: string, index: number): boolean {
+	if (token.startsWith("'") || token.startsWith('"')) return false;
+	return isInsideShellQuote(command, index);
+}
+
 /** Shell-escape a path using single quotes. */
 function shellEscape(p: string): string {
 	return `'${p.replace(/'/g, "'\\''")}'`;
@@ -151,6 +202,7 @@ async function resolveInternalUrlToPath(
 	internalRouter?: InternalUrlResolver,
 	localOptions?: LocalProtocolOptions,
 	ensureLocalParentDirs?: boolean,
+	cwd?: string,
 ): Promise<string> {
 	const url = normalizeLocalScheme(rawUrl);
 	const scheme = extractScheme(url);
@@ -184,7 +236,7 @@ async function resolveInternalUrlToPath(
 
 	let resource: InternalResource;
 	try {
-		resource = await internalRouter.resolve(url, { pathOnly: true });
+		resource = await internalRouter.resolve(url, { cwd, pathOnly: true });
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		throw new ToolError(`Failed to resolve ${scheme}:// URL in bash command: ${url}\n${message}`);
@@ -216,6 +268,7 @@ export function expandSkillUrls(command: string, skills: readonly Skill[]): stri
 
 /**
  * Expand supported internal URLs in a bash command string to shell-escaped absolute paths.
+ * Unresolvable URLs and literal mentions inside larger quoted text are left unchanged.
  * Supported schemes: skill://, agent://, artifact://, memory://, rule://, local://
  */
 export async function expandInternalUrls(command: string, options: InternalUrlExpansionOptions): Promise<string> {
@@ -231,15 +284,23 @@ export async function expandInternalUrls(command: string, options: InternalUrlEx
 		const index = match.index;
 		if (index === undefined) continue;
 
+		if (isEmbeddedInQuotedText(command, token, index)) continue;
+
 		const rawUrl = unquoteToken(token);
 		const url = normalizeLocalScheme(rawUrl);
-		const resolvedPath = await resolveInternalUrlToPath(
-			url,
-			options.skills,
-			options.internalRouter,
-			options.localOptions,
-			options.ensureLocalParentDirs,
-		);
+		let resolvedPath: string;
+		try {
+			resolvedPath = await resolveInternalUrlToPath(
+				url,
+				options.skills,
+				options.internalRouter,
+				options.localOptions,
+				options.ensureLocalParentDirs,
+				options.cwd,
+			);
+		} catch {
+			continue;
+		}
 		const replacement = options.noEscape ? resolvedPath : shellEscape(resolvedPath);
 		expanded = `${expanded.slice(0, index)}${replacement}${expanded.slice(index + token.length)}`;
 	}

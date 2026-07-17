@@ -21,6 +21,7 @@ import * as path from "node:path";
 import { Filesystem, NotFoundError, type PreflightWriteOptions, type WriteResult } from "@oh-my-pi/hashline";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import type { FileDiagnosticsResult, WritethroughCallback, WritethroughDeferredHandle } from "../../lsp";
+import { FileChangeType, notifyWorkspaceWatchedFiles } from "../../lsp/client";
 import type { ToolSession } from "../../tools";
 import { routeWriteThroughBridge } from "../../tools/acp-bridge";
 import { assertEditableFileContent } from "../../tools/auto-generated-guard";
@@ -157,6 +158,13 @@ export class HashlineFilesystem extends Filesystem {
 			if (isEnoent(error)) throw new NotFoundError(relativePath, error);
 			throw error;
 		}
+		if (this.session.enableLsp ?? true) {
+			await notifyWorkspaceWatchedFiles(
+				this.session.cwd,
+				[{ filePath: absolutePath, type: FileChangeType.Deleted }],
+				this.#signal,
+			);
+		}
 		invalidateFsScanAfterWrite(absolutePath);
 	}
 
@@ -170,6 +178,16 @@ export class HashlineFilesystem extends Filesystem {
 		} else {
 			await fs.rename(fromAbsolute, toAbsolute);
 		}
+		if (this.session.enableLsp ?? true) {
+			await notifyWorkspaceWatchedFiles(
+				this.session.cwd,
+				[
+					{ filePath: fromAbsolute, type: FileChangeType.Deleted },
+					{ filePath: toAbsolute, type: FileChangeType.Created },
+				],
+				this.#signal,
+			);
+		}
 		invalidateFsScanAfterWrite(fromAbsolute);
 		invalidateFsScanAfterWrite(toAbsolute);
 	}
@@ -180,7 +198,7 @@ export class HashlineFilesystem extends Filesystem {
 		const finalContent = await serializeEditFileText(absolutePath, relativePath, content);
 
 		// Route through ACP bridge when available; skips internal artifacts.
-		if (await routeWriteThroughBridge(this.session, relativePath, absolutePath, finalContent)) {
+		if (await routeWriteThroughBridge(this.session, relativePath, absolutePath, finalContent, this.#signal)) {
 			this.#diagnosticsByPath.set(relativePath, undefined);
 			return { text: finalContent };
 		}

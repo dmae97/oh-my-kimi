@@ -7,6 +7,8 @@
  * Missing files are treated as zero records — never an error.
  */
 
+import type { Stats } from "node:fs";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getStatsDbPath, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { getTimeRangeConfig } from "./aggregator";
@@ -149,37 +151,65 @@ async function readProjectsBySession(sessions: readonly string[]): Promise<Map<s
 	return projectsBySession;
 }
 
+interface SnapcompactCache {
+	key: string;
+	records: SnapcompactRecord[];
+}
+
+let snapcompactCache: SnapcompactCache | undefined;
+
 async function readSnapcompactRecords(cutoff: number | null, project: string | null): Promise<SnapcompactSets> {
 	const filePath = path.join(path.dirname(getStatsDbPath()), "snapcompact-savings.jsonl");
-	let text: string;
+
+	let stat: Stats;
 	try {
-		text = await Bun.file(filePath).text();
+		stat = await fs.stat(filePath);
 	} catch (err) {
 		if (isEnoent(err)) return { records: [], projects: new Set() };
-		logger.debug("gain-aggregator: failed to read snapcompact-savings.jsonl", { err: String(err) });
+		logger.debug("gain-aggregator: failed to stat snapcompact-savings.jsonl", { err: String(err) });
 		return { records: [], projects: new Set() };
 	}
 
-	const seen = new Set<string>();
-	const parsed: SnapcompactRecord[] = [];
-	for (const line of text.split("\n")) {
-		if (!line.trim()) continue;
+	const cacheKey = `${filePath}:${stat.mtimeMs}:${stat.size}`;
+	let parsed: SnapcompactRecord[];
+	if (snapcompactCache?.key === cacheKey) {
+		parsed = snapcompactCache.records;
+	} else {
+		let text: string;
 		try {
-			const rec = JSON.parse(line) as SnapcompactRecord;
-			if (cutoff !== null && rec.ts < cutoff) continue;
-			const key = `${rec.session}:${rec.toolCallId}`;
-			if (seen.has(key)) continue;
-			seen.add(key);
-			parsed.push(rec);
-		} catch {
-			/* skip malformed line */
+			text = await Bun.file(filePath).text();
+		} catch (readErr) {
+			if (isEnoent(readErr)) return { records: [], projects: new Set() };
+			logger.debug("gain-aggregator: failed to read snapcompact-savings.jsonl", { err: String(readErr) });
+			return { records: [], projects: new Set() };
 		}
+
+		parsed = [];
+		for (const line of text.split("\n")) {
+			if (!line.trim()) continue;
+			try {
+				const rec = JSON.parse(line) as SnapcompactRecord;
+				parsed.push(rec);
+			} catch {
+				/* skip malformed line */
+			}
+		}
+		snapcompactCache = { key: cacheKey, records: parsed };
 	}
 
-	const projectsBySession = await readProjectsBySession(parsed.map(rec => rec.session));
+	const filtered = cutoff === null ? parsed : parsed.filter(rec => rec.ts >= cutoff);
+	const seen = new Set<string>();
+	const deduped: SnapcompactRecord[] = [];
+	for (const rec of filtered) {
+		const key = `${rec.session}:${rec.toolCallId}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		deduped.push(rec);
+	}
+	const projectsBySession = await readProjectsBySession(deduped.map(rec => rec.session));
 	const projects = new Set<string>();
 	const records: SnapcompactRecord[] = [];
-	for (const rec of parsed) {
+	for (const rec of deduped) {
 		const sessionProjects = projectsBySession.get(rec.session);
 		if (sessionProjects) {
 			for (const sessionProject of sessionProjects) projects.add(sessionProject);

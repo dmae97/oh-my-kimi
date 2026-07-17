@@ -16,9 +16,11 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
  * SIGNING endpoint (`replayUnsignedThinking: false` — see the catalog compat
  * regression test). This pins the consequence: when a checkpoint/branch-return
  * turn is an abandoned tool-use turn (adaptive Opus emits a tool call then ends
- * on `stop`), the transform strips its end_turn-bound signature and the encoder
- * must DEGRADE the block to text — never replay it as `{ signature: "" }`, which
- * 400s the whole request with "Invalid signature" on every full re-send.
+ * on `stop`), the transform strips its end_turn-bound signature. Since the turn
+ * is same-model with an invalid (undefined) signature, the thinking block is
+ * dropped entirely — never emitted as `{ signature: "" }` (which would 400 the
+ * request with "Invalid signature") and never demoted to text (which would
+ * trigger the reasoning_extraction safety classifier and cause refusals).
  *
  * The signing classification is asserted directly in
  * `packages/catalog/test/anthropic-copilot-signing-compat.test.ts`; the explicit
@@ -132,10 +134,11 @@ describe("#2851 github-copilot checkpoint/branch-return thinking signature", () 
 			expect(block.signature && block.signature.length > 0).toBeTruthy();
 		}
 
-		// The stripped checkpoint thinking is preserved as text (reasoning not silently lost),
-		// and its tool_use stays paired with the appended tool_result.
+		// When a checkpoint thinking block with a valid signature is stripped (abandoned
+		// tool-use), the block is dropped entirely — not demoted to text. Demotion would
+		// trigger the reasoning_extraction safety classifier and cause model refusals.
+		// The tool_use stays paired with the appended tool_result.
 		const checkpointBlocks = assistantBlocksAt(params, 0);
-		expect(checkpointBlocks.some(b => b.type === "text" && b.text?.includes("Checkpoint first"))).toBe(true);
 		expect(checkpointBlocks.some(b => b.type === "thinking")).toBe(false);
 		expect(checkpointBlocks.some(b => b.type === "tool_use" && b.id === "toolu_ckpt")).toBe(true);
 	});

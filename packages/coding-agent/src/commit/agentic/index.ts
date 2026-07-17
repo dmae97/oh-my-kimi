@@ -6,13 +6,14 @@ import { detectChangelogBoundaries } from "../../commit/changelog/detect";
 import { parseUnreleasedSection } from "../../commit/changelog/parse";
 import { formatCommitMessage } from "../../commit/message";
 import { resolvePrimaryModel, resolveSmolModel } from "../../commit/model-selection";
-import type { CommitCommandArgs, ConventionalAnalysis } from "../../commit/types";
+import type { CommitCommandArgs, ConventionalAnalysis, NumstatEntry } from "../../commit/types";
 import { ModelRegistry } from "../../config/model-registry";
 import { Settings } from "../../config/settings";
 import { discoverAuthStorage, discoverContextFiles } from "../../sdk";
 import * as git from "../../utils/git";
 import { type ExistingChangelogEntries, runCommitAgentSession } from "./agent";
 import { generateFallbackProposal } from "./fallback";
+import { assignLockFilesToPlan } from "./lock-files";
 import splitConfirmPrompt from "./prompts/split-confirm.md" with { type: "text" };
 import type { CommitAgentState, CommitProposal, HunkSelector, SplitCommitPlan } from "./state";
 import { computeDependencyOrder } from "./topo-sort";
@@ -121,11 +122,10 @@ export async function runAgenticCommit(args: CommitCommandArgs): Promise<void> {
 	}
 
 	process.stdout.write("● Starting commit agent...\n");
-	let commitState: CommitAgentState;
-	let usedFallback = false;
+	let agentSessionCompleted = false;
 
 	try {
-		commitState = await runCommitAgentSession({
+		await runCommitAgentSession({
 			cwd,
 			model: agentModel,
 			thinkingLevel: agentThinkingLevel,
@@ -138,42 +138,67 @@ export async function runAgenticCommit(args: CommitCommandArgs): Promise<void> {
 			requireChangelog: !args.noChangelog && changelogTargets.length > 0,
 			diffText: diff,
 			existingChangelogEntries,
+			onComplete: async commitState => {
+				agentSessionCompleted = true;
+				await completeAgentCommitState(commitState, {
+					cwd,
+					dryRun: args.dryRun,
+					push: args.push,
+					noChangelog: args.noChangelog,
+					changelogTargets,
+					numstat,
+				});
+			},
 		});
+		return;
 	} catch (error) {
+		if (agentSessionCompleted) {
+			throw error;
+		}
 		const errorMessage = error instanceof Error ? error.message : String(error);
 		process.stderr.write(`Agent error: ${errorMessage}\n`);
 		if (error instanceof Error && error.stack && $env.DEBUG) {
 			process.stderr.write(`${error.stack}\n`);
 		}
 		process.stdout.write("● Using fallback commit generation...\n");
-		commitState = { proposal: generateFallbackProposal(numstat) };
-		usedFallback = true;
+		const fallbackProposal = generateFallbackProposal(numstat);
+		await runSingleCommit(fallbackProposal, { cwd, dryRun: args.dryRun, push: args.push });
+		return;
 	}
+}
 
-	if (!usedFallback && !commitState.proposal && !commitState.splitProposal) {
+async function completeAgentCommitState(
+	commitState: CommitAgentState,
+	ctx: CommitExecutionContext & {
+		noChangelog: boolean;
+		changelogTargets: string[];
+		numstat: NumstatEntry[];
+	},
+): Promise<void> {
+	let usedFallback = false;
+	if (!commitState.proposal && !commitState.splitProposal) {
 		if ($env.PI_COMMIT_NO_FALLBACK?.toLowerCase() !== "true") {
 			process.stdout.write("● Agent did not provide proposal, using fallback...\n");
-			commitState.proposal = generateFallbackProposal(numstat);
+			commitState.proposal = generateFallbackProposal(ctx.numstat);
 			usedFallback = true;
 		}
 	}
 
 	let updatedChangelogFiles: string[] = [];
-	if (!args.noChangelog && changelogTargets.length > 0 && !usedFallback) {
+	if (!ctx.noChangelog && ctx.changelogTargets.length > 0 && !usedFallback) {
 		if (!commitState.changelogProposal) {
-			process.stderr.write("Commit agent did not provide changelog entries.\n");
-			return;
+			throw new Error("Commit agent did not provide changelog entries.");
 		}
 		process.stdout.write("● Applying changelog entries...\n");
 		const updated = await applyChangelogProposals({
-			cwd,
+			cwd: ctx.cwd,
 			proposals: commitState.changelogProposal.entries,
-			dryRun: args.dryRun,
+			dryRun: ctx.dryRun,
 			onProgress: message => {
 				process.stdout.write(`  ├─ ${message}\n`);
 			},
 		});
-		updatedChangelogFiles = updated.map(filePath => path.relative(cwd, filePath));
+		updatedChangelogFiles = updated.map(filePath => path.relative(ctx.cwd, filePath));
 		if (updated.length > 0) {
 			for (const filePath of updated) {
 				process.stdout.write(`  └─ ${filePath}\n`);
@@ -184,21 +209,21 @@ export async function runAgenticCommit(args: CommitCommandArgs): Promise<void> {
 	}
 
 	if (commitState.proposal) {
-		await runSingleCommit(commitState.proposal, { cwd, dryRun: args.dryRun, push: args.push });
+		await runSingleCommit(commitState.proposal, ctx);
 		return;
 	}
 
 	if (commitState.splitProposal) {
 		await runSplitCommit(commitState.splitProposal, {
-			cwd,
-			dryRun: args.dryRun,
-			push: args.push,
+			cwd: ctx.cwd,
+			dryRun: ctx.dryRun,
+			push: ctx.push,
 			additionalFiles: updatedChangelogFiles,
 		});
 		return;
 	}
 
-	process.stderr.write("Commit agent did not provide a proposal.\n");
+	throw new Error("Commit agent did not provide a proposal.");
 }
 
 async function runSingleCommit(proposal: CommitProposal, ctx: CommitExecutionContext): Promise<void> {
@@ -211,6 +236,7 @@ async function runSingleCommit(proposal: CommitProposal, ctx: CommitExecutionCon
 		process.stdout.write(`${commitMessage}\n`);
 		return;
 	}
+	process.stdout.write("● Creating commit...\n");
 	await git.commit(ctx.cwd, commitMessage);
 	process.stdout.write("Commit created.\n");
 	if (ctx.push) {
@@ -230,11 +256,11 @@ async function runSplitCommit(
 		appendFilesToLastCommit(plan, ctx.additionalFiles);
 	}
 	const stagedFiles = await git.diff.changedFiles(ctx.cwd, { cached: true });
+	assignLockFilesToPlan(plan, stagedFiles);
 	const plannedFiles = new Set(plan.commits.flatMap(commit => commit.changes.map(change => change.path)));
 	const missingFiles = stagedFiles.filter(file => !plannedFiles.has(file));
 	if (missingFiles.length > 0) {
-		process.stderr.write(`Split commit plan missing staged files: ${missingFiles.join(", ")}\n`);
-		return;
+		throw new Error(`Split commit plan missing staged files: ${missingFiles.join(", ")}`);
 	}
 
 	if (ctx.dryRun) {
@@ -266,7 +292,8 @@ async function runSplitCommit(
 		throw new Error(order.error);
 	}
 
-	const stagedDiff = await git.diff(ctx.cwd, { cached: true });
+	process.stdout.write("● Creating split commits...\n");
+	const stagedDiff = await git.diff(ctx.cwd, { cached: true, binary: true });
 	await git.stage.reset(ctx.cwd);
 	for (const commitIndex of order) {
 		const commit = plan.commits[commitIndex];

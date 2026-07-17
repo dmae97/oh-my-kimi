@@ -523,6 +523,57 @@ describe("StreamMarkupHealing thinking pattern", () => {
 		expect(heal("see <div>content</div> end")).toEqual({ text: "see <div>content</div> end", thinking: "" });
 	});
 
+	// Issue #5665: a literal reasoning tag inside a Markdown inline-code span was
+	// read as a leaked <think> boundary, splitting the visible row into
+	// text + thinking and corrupting the rendered Markdown.
+	it("keeps a literal think tag inside inline code as visible text", () => {
+		const literal = `<${"think"}>`;
+		const row = `| [#1203 MiniMax CN leaks \`${literal}\` text](https://x) | Fixed | PR merged |`;
+		expect(heal(row)).toEqual({ text: row, thinking: "" });
+	});
+
+	it("keeps a literal think tag inside inline code when streamed char by char", () => {
+		const literal = `<${"think"}>`;
+		const row = `prefix \`${literal}\` suffix`;
+		expect(heal(...row)).toEqual({ text: row, thinking: "" });
+	});
+
+	it("keeps a literal think tag inside a fenced code block as visible text", () => {
+		const literal = `<${"think"}>`;
+		const block = `\`\`\`md\n${literal}\n\`\`\`\nafter`;
+		expect(heal(block)).toEqual({ text: block, thinking: "" });
+	});
+
+	// Issue #5665 (review follow-up): a fenced block only closes on its own fence
+	// line. An inline backtick run inside the block (a `` ``` `` string literal)
+	// must not exit code mode early and let a later literal think tag be healed.
+	it("keeps a fenced block open across an inner triple-backtick literal", () => {
+		const literal = `<${"think"}>literal</${"think"}>`;
+		const block = `\`\`\`md\nconst fence = '\`\`\`';\n${literal}\n\`\`\`\nafter`;
+		expect(heal(block)).toEqual({ text: block, thinking: "" });
+		expect(heal(...block)).toEqual({ text: block, thinking: "" });
+	});
+
+	// Issue #5665 (review follow-up): CommonMark treats a fence indented by up to
+	// three spaces as fenced code. The scanner must still open a fenced block (not
+	// an inline span) so an inner triple-backtick literal does not close it early.
+	it("recognizes a fence indented up to three spaces as a fenced block", () => {
+		const literal = `<${"think"}>literal</${"think"}>`;
+		for (const indent of ["", " ", "   "]) {
+			const block = `${indent}\`\`\`md\nconst fence = '\`\`\`';\n${literal}\n${indent}\`\`\`\nafter`;
+			expect(heal(block)).toEqual({ text: block, thinking: "" });
+			expect(heal(...block)).toEqual({ text: block, thinking: "" });
+		}
+	});
+
+	it("still heals a leaked think tag outside inline code", () => {
+		const literal = `<${"think"}>`;
+		expect(heal(`before \`code\` ${literal}secret</think> after`)).toEqual({
+			text: "before `code`  after",
+			thinking: "secret",
+		});
+	});
+
 	it("emits one balanced thinking boundary for a healed fence", () => {
 		const scanner = new ThinkingInbandScanner();
 		const events: InbandScanEvent[] = [...scanner.feed("a```thinking\nx\n```b"), ...scanner.flush()];

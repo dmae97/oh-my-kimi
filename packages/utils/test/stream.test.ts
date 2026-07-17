@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import { sanitizeText } from "@oh-my-pi/pi-utils/sanitize-text";
 import {
 	parseJsonlLenient,
@@ -360,6 +360,19 @@ describe("readSseEvents", () => {
 		const events = await collectAsync(readSseEvents(stream));
 		expect(events.map(e => e.event)).toEqual(["message_start", "message_stop"]);
 		expect(events.map(e => e.data)).toEqual(['{"id":1}', "{}"]);
+	});
+
+	it("decodes all complete lines in a source chunk as one batch", async () => {
+		const decodeSpy = spyOn(TextDecoder.prototype, "decode");
+		try {
+			const stream = bytesStreamFromChunks([encoder.encode("event: first\ndata: 1\n\nevent: second\ndata: 2\n\n")]);
+			const events = await collectAsync(readSseEvents(stream));
+
+			expect(events.map(event => event.data)).toEqual(["1", "2"]);
+			expect(decodeSpy).toHaveBeenCalledTimes(1);
+		} finally {
+			decodeSpy.mockRestore();
+		}
 	});
 
 	it("joins multiple data: lines with newlines", async () => {

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { agentLoop, agentLoopContinue, agentLoopDetailed } from "@oh-my-pi/pi-agent-core/agent-loop";
+import {
+	agentLoop,
+	agentLoopContinue,
+	agentLoopDetailed,
+	TERMINAL_TOOL_RESULT_ABORT_REASON,
+} from "@oh-my-pi/pi-agent-core/agent-loop";
 import type {
 	AgentContext,
 	AgentEvent,
@@ -15,6 +20,19 @@ import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream"
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { type } from "arktype";
 import { createAssistantMessage, createUserMessage } from "./helpers";
+
+declare module "@oh-my-pi/pi-agent-core/types" {
+	interface CustomAgentMessages {
+		advisor: {
+			role: "custom";
+			customType: "advisor";
+			content: string;
+			display: boolean;
+			attribution: "agent";
+			timestamp: number;
+		};
+	}
+}
 
 // Simple identity converter for tests - just passes through standard messages
 function identityConverter(messages: AgentMessage[]): Message[] {
@@ -1189,6 +1207,99 @@ describe("agentLoop with AgentMessage", () => {
 		expect(sawInterruptInContext).toBe(true);
 	});
 
+	it("should skip remaining tool calls with system advisory wording when advisor steering is queued", async () => {
+		const toolSchema = type({ value: "string" });
+		const executed: string[] = [];
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			concurrency: "exclusive",
+			async execute(_toolCallId, params) {
+				executed.push(params.value);
+				return {
+					content: [{ type: "text", text: `ok:${params.value}` }],
+					details: { value: params.value },
+				};
+			},
+		};
+
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+
+		const advisorMessage: AgentMessage = {
+			role: "custom",
+			customType: "advisor",
+			content: "pause before continuing",
+			display: true,
+			attribution: "agent",
+			timestamp: Date.now(),
+		};
+		let advisorDelivered = false;
+
+		const mock = createMockModel({
+			responses: [
+				{
+					content: [
+						{ type: "toolCall", id: "tool-1", name: "echo", arguments: { value: "first" } },
+						{ type: "toolCall", id: "tool-2", name: "echo", arguments: { value: "second" } },
+					],
+				},
+				{ content: ["done"] },
+			],
+		});
+
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			interruptMode: "immediate",
+			hasSteeringMessages: () => {
+				if (executed.length < 1 || advisorDelivered) {
+					return { queued: false };
+				}
+				return { queued: true, source: "system" };
+			},
+			getSteeringMessages: async () => {
+				if (executed.length >= 1 && !advisorDelivered) {
+					advisorDelivered = true;
+					return [advisorMessage];
+				}
+				return [];
+			},
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("start")], context, config, undefined, mock.stream);
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		expect(executed).toEqual(["first"]);
+
+		const toolEnds = events.filter(
+			(e): e is Extract<AgentEvent, { type: "tool_execution_end" }> => e.type === "tool_execution_end",
+		);
+		expect(toolEnds.length).toBe(2);
+		expect(toolEnds[0].isError).toBe(false);
+		expect(toolEnds[1].isError).toBe(true);
+		const skippedContent = toolEnds[1].result.content[0];
+		expect(skippedContent?.type).toBe("text");
+		if (skippedContent?.type !== "text") throw new Error("skipped tool result must be text");
+		expect(skippedContent.text).toContain("Skipped due to pending system advisory");
+		expect(skippedContent.text).not.toContain("queued user message");
+		expect(skippedContent.text).toContain("Do not count this skipped result as completed work");
+		expect(skippedContent.text).toContain("retry the skipped tool if it is still needed");
+
+		const advisorInjected = events.some(
+			event =>
+				event.type === "message_start" &&
+				event.message.role === "custom" &&
+				event.message.customType === "advisor" &&
+				event.message.content === "pause before continuing",
+		);
+		expect(advisorInjected).toBe(true);
+	});
+
 	it("drains queued steering by aborting an interruptible tool mid-wait", async () => {
 		const toolSchema = type({});
 		let steerReady = false;
@@ -1256,6 +1367,82 @@ describe("agentLoop with AgentMessage", () => {
 		expect(observedAbort).toBe(true);
 		expect(resolvedByTimeout).toBe(false);
 		expect(drained).toBe(true);
+		expect(
+			events.some(e => e.type === "message_start" && e.message.role === "user" && e.message.content === "interrupt"),
+		).toBe(true);
+	});
+
+	it("keeps a completed error result instead of clobbering it into skipped when a steer aborts the signal (#4752)", async () => {
+		// A steer lands while an interruptible tool is in flight, aborting its shared
+		// signal via the mid-batch watch poll. The tool nonetheless runs to completion
+		// and returns a genuine error result (e.g. `ls` on a missing path exiting
+		// non-zero). Its real output MUST survive — not be replaced by the "Skipped due
+		// to queued user message" placeholder, which discards work the tool performed.
+		const toolSchema = type({});
+		let steerReady = false;
+		let drained = false;
+
+		const tool: AgentTool<typeof toolSchema, Record<string, never>> = {
+			name: "lslike",
+			label: "Lslike",
+			description: "Completes with an error result even after its signal aborts",
+			parameters: toolSchema,
+			interruptible: true,
+			async execute(_toolCallId, _params, signal) {
+				steerReady = true;
+				// Wait for the steering-watch poll to abort our signal, then finish
+				// anyway with a real error result (no wall-clock sleep — await the abort).
+				if (!signal?.aborted) {
+					const { promise, resolve } = Promise.withResolvers<void>();
+					signal?.addEventListener("abort", () => resolve(), { once: true });
+					await promise;
+				}
+				expect(signal?.aborted).toBe(true);
+				return {
+					content: [{ type: "text", text: "ls: cannot access X: No such file or directory" }],
+					details: {},
+					isError: true,
+				};
+			},
+		};
+
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+		const mock = createMockModel({
+			responses: [
+				{ content: [{ type: "toolCall", id: "tool-1", name: "lslike", arguments: {} }] },
+				{ content: ["done"] },
+			],
+		});
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			interruptMode: "immediate",
+			hasSteeringMessages: () => steerReady && !drained,
+			getSteeringMessages: async () => {
+				if (steerReady && !drained) {
+					drained = true;
+					return [createUserMessage("interrupt")];
+				}
+				return [];
+			},
+		};
+
+		const events: AgentEvent[] = [];
+		for await (const event of agentLoop([createUserMessage("start")], context, config, undefined, mock.stream)) {
+			events.push(event);
+		}
+
+		const toolEnds = events.filter(
+			(e): e is Extract<AgentEvent, { type: "tool_execution_end" }> => e.type === "tool_execution_end",
+		);
+		expect(toolEnds.length).toBe(1);
+		const content = toolEnds[0].result.content[0];
+		expect(content?.type).toBe("text");
+		if (content?.type !== "text") throw new Error("tool result must be text");
+		expect(content.text).toContain("No such file or directory");
+		expect(content.text).not.toContain("Skipped due to queued user message");
+		expect(toolEnds[0].isError).toBe(true);
+		// The steer is still delivered at the injection boundary.
 		expect(
 			events.some(e => e.type === "message_start" && e.message.role === "user" && e.message.content === "interrupt"),
 		).toBe(true);
@@ -2353,6 +2540,107 @@ describe("agentLoopContinue with AgentMessage", () => {
 		}
 	});
 
+	it("stops after a post-tool hook marks the completed result terminal", async () => {
+		const toolSchema = type({ value: "string" });
+		const controller = new AbortController();
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				return {
+					content: [{ type: "text", text: params.value }],
+					details: { value: params.value },
+				};
+			},
+		};
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+		const mock = createMockModel({
+			responses: [
+				{ content: [{ type: "toolCall", id: "tool-terminal", name: "echo", arguments: { value: "done" } }] },
+				{ content: ["must not be reached"] },
+			],
+		});
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+			afterToolCall: async () => {
+				controller.abort(TERMINAL_TOOL_RESULT_ABORT_REASON);
+			},
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("echo")], context, config, controller.signal, mock.stream);
+		for await (const event of stream) events.push(event);
+
+		expect(mock.calls).toHaveLength(1);
+		expect(events.some(event => event.type === "tool_execution_end")).toBe(true);
+		expect(
+			events.some(
+				event =>
+					event.type === "message_end" &&
+					event.message.role === "assistant" &&
+					event.message.stopReason === "aborted",
+			),
+		).toBe(false);
+	});
+
+	it("preserves an external abort boundary when a completed tool ignores cancellation", async () => {
+		const toolSchema = type({ value: "string" });
+		const controller = new AbortController();
+		const started = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				started.resolve();
+				await release.promise;
+				return {
+					content: [{ type: "text", text: params.value }],
+					details: { value: params.value },
+				};
+			},
+		};
+		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
+		const mock = createMockModel({
+			responses: [
+				{ content: [{ type: "toolCall", id: "tool-abort", name: "echo", arguments: { value: "done" } }] },
+				{ content: ["must not be observed"] },
+			],
+		});
+		const config: AgentLoopConfig = {
+			model: mock.model,
+			convertToLlm: identityConverter,
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("echo")], context, config, controller.signal, mock.stream);
+		const consuming = (async () => {
+			for await (const event of stream) events.push(event);
+		})();
+		await started.promise;
+		controller.abort("Stopped by user");
+		release.resolve();
+		await consuming;
+
+		expect(mock.calls).toHaveLength(2);
+		const aborted = events.find(
+			event =>
+				event.type === "message_end" &&
+				event.message.role === "assistant" &&
+				event.message.stopReason === "aborted",
+		);
+		expect(aborted).toBeDefined();
+		if (aborted?.type !== "message_end" || aborted.message.role !== "assistant") {
+			throw new Error("Expected an aborted assistant message");
+		}
+		expect(aborted.message.errorMessage).toBe("Stopped by user");
+	});
+
 	it("surfaces afterToolCall errors as a tool error result", async () => {
 		const toolSchema = type({ value: "string" });
 		const tool: AgentTool<typeof toolSchema, { value: string }> = {
@@ -2643,9 +2931,11 @@ describe("agentLoopContinue with AgentMessage", () => {
 		// loop hands it. The merged deadline signal must fire and cancel the request,
 		// surfacing the deadline reason on the synthesized aborted message.
 		let providerSignalAborted = false;
+		let providerSignalReason: unknown;
 		const stream = agentLoop([createUserMessage("Wait")], context, config, undefined, (_model, _context, options) => {
 			options?.signal?.addEventListener("abort", () => {
 				providerSignalAborted = true;
+				providerSignalReason = options.signal?.reason;
 			});
 			return new AssistantMessageEventStream();
 		});
@@ -2653,6 +2943,9 @@ describe("agentLoopContinue with AgentMessage", () => {
 		const messages = await stream.result();
 
 		expect(providerSignalAborted).toBe(true);
+		if (!(providerSignalReason instanceof DOMException)) throw new Error("Expected a DOMException deadline reason");
+		expect(providerSignalReason.name).toBe("TimeoutError");
+		expect(providerSignalReason.message).toBe("Deadline exceeded");
 		const finalMessage = messages[messages.length - 1];
 		expect(finalMessage.role).toBe("assistant");
 		if (finalMessage.role !== "assistant") throw new Error("Expected assistant message");

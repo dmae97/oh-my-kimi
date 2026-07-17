@@ -332,6 +332,40 @@ describe("write resolves conflicts via conflict://N", () => {
 		expect(session.conflictHistory?.get(1)).toBeUndefined();
 	});
 
+	it("drops trailing lines that echo the context below the region and notes the repair", async () => {
+		const filePath = path.join(tempDir, "echo.ts");
+		const content = [
+			"function f() {",
+			"<<<<<<< HEAD",
+			"\tours();",
+			"=======",
+			"\ttheirs();",
+			">>>>>>> feature/x",
+			"\tdone();",
+			"}",
+			"",
+		].join("\n");
+		await Bun.write(filePath, content);
+		const session = createTestSession(tempDir);
+		const read = await getTool(session, "read");
+		const write = await getTool(session, "write");
+
+		await read.execute("read-echo", { path: "echo.ts" });
+		// The classic failure: the model pastes the whole resolved function,
+		// including the two lines that live below the marker block.
+		const result = await write.execute("write-echo", {
+			path: "conflict://1",
+			content: "\tours();\n\ttheirs();\n\tdone();\n}\n",
+		});
+
+		const text = getText(result);
+		expect(text).toContain("Resolved conflict #1");
+		expect(text).toContain("dropped 2 content line(s)");
+		expect(await Bun.file(filePath).text()).toBe(
+			["function f() {", "\tours();", "\ttheirs();", "\tdone();", "}", ""].join("\n"),
+		);
+	});
+
 	it("auto-recovers a `<file>:conflict://N` path and resolves the conflict", async () => {
 		const filePath = path.join(tempDir, "prefix.ts");
 		await Bun.write(filePath, TWO_WAY);
@@ -370,6 +404,120 @@ describe("write resolves conflicts via conflict://N", () => {
 		expect(text).toContain("Resolved 1 conflict");
 		expect(text).toContain("stripped erroneous 'bulk-prefix.ts:' prefix");
 		expect(await Bun.file(filePath).text()).toBe("line 1\noldApi(x)\nline N\n");
+	});
+
+	it("resolves per-id bulk directives in one call, leaving unlisted ids registered", async () => {
+		const filePath = path.join(tempDir, "directives.ts");
+		await Bun.write(filePath, TWO_BLOCKS);
+		const session = createTestSession(tempDir);
+		const read = await getTool(session, "read");
+		const write = await getTool(session, "write");
+
+		await read.execute("read-directives", { path: "directives.ts" });
+		const result = await write.execute("write-directives", {
+			path: "conflict://*",
+			content: "1: @ours\n2: @theirs\n",
+		});
+
+		const text = getText(result);
+		expect(text).toContain("Resolved 2 conflicts");
+		expect(await Bun.file(filePath).text()).toBe("a-ours\nmiddle\nb-theirs\ntail\n");
+		expect(session.conflictHistory?.get(1)).toBeUndefined();
+		expect(session.conflictHistory?.get(2)).toBeUndefined();
+	});
+
+	it("directive mode resolves a subset and reports the ids left registered", async () => {
+		const filePath = path.join(tempDir, "directives-subset.ts");
+		await Bun.write(filePath, TWO_BLOCKS);
+		const session = createTestSession(tempDir);
+		const read = await getTool(session, "read");
+		const write = await getTool(session, "write");
+
+		await read.execute("read-directives-subset", { path: "directives-subset.ts" });
+		const result = await write.execute("write-directives-subset", {
+			path: "conflict://*",
+			content: "2: @ours",
+		});
+
+		const text = getText(result);
+		expect(text).toContain("Resolved 1 conflict");
+		expect(text).toContain("still registered (#1)");
+		expect(await Bun.file(filePath).text()).toBe(
+			["<<<<<<< A", "a-ours", "=======", "a-theirs", ">>>>>>> A", "middle", "b-ours", "tail", ""].join("\n"),
+		);
+		expect(session.conflictHistory?.get(1)).toBeDefined();
+	});
+
+	it("rejects directives referencing unknown ids", async () => {
+		const filePath = path.join(tempDir, "directives-bad.ts");
+		await Bun.write(filePath, TWO_WAY);
+		const session = createTestSession(tempDir);
+		const read = await getTool(session, "read");
+		const write = await getTool(session, "write");
+
+		await read.execute("read-directives-bad", { path: "directives-bad.ts" });
+		const promise = write.execute("write-directives-bad", {
+			path: "conflict://*",
+			content: "1: @ours\n7: @theirs",
+		});
+		await expect(promise).rejects.toThrow(/unknown conflict id\(s\) #7/);
+	});
+
+	it("rejects a per-id block that mixes directives with literal content instead of leaking it", async () => {
+		const filePath = path.join(tempDir, "directives-mixed.ts");
+		await Bun.write(filePath, TWO_BLOCKS);
+		const original = await Bun.file(filePath).text();
+		const session = createTestSession(tempDir);
+		const read = await getTool(session, "read");
+		const write = await getTool(session, "write");
+
+		await read.execute("read-directives-mixed", { path: "directives-mixed.ts" });
+		// #1 picks a side, but #2 carries multi-line literal content. Previously this
+		// fell through to uniform bulk mode and pasted the raw directive text into
+		// every block while reporting success. It must now hard-fail.
+		const promise = write.execute("write-directives-mixed", {
+			path: "conflict://*",
+			content: "1: @ours\n2: combined line A\ncombined line B\n",
+		});
+		await expect(promise).rejects.toThrow(/Malformed `conflict:\/\/\*` per-id block/);
+		// File untouched — the markers are still present, nothing leaked.
+		expect(await Bun.file(filePath).text()).toBe(original);
+		// Ids stay registered for a corrected retry.
+		expect(session.conflictHistory?.get(1)).toBeDefined();
+		expect(session.conflictHistory?.get(2)).toBeDefined();
+	});
+
+	it("rejects a per-id line whose value is not a recognized @side token", async () => {
+		const filePath = path.join(tempDir, "directives-badtoken.ts");
+		await Bun.write(filePath, TWO_BLOCKS);
+		const session = createTestSession(tempDir);
+		const read = await getTool(session, "read");
+		const write = await getTool(session, "write");
+
+		await read.execute("read-directives-badtoken", { path: "directives-badtoken.ts" });
+		const promise = write.execute("write-directives-badtoken", {
+			path: "conflict://*",
+			content: "1: @ours\n2: @mine",
+		});
+		await expect(promise).rejects.toThrow(/only accepts the tokens @ours\/@theirs\/@base\/@both/);
+		expect(await Bun.file(filePath).text()).toBe(TWO_BLOCKS);
+	});
+
+	it("still treats pure-literal content as a uniform bulk write (no false directive rejection)", async () => {
+		const filePath = path.join(tempDir, "directives-literal.ts");
+		await Bun.write(filePath, TWO_WAY);
+		const session = createTestSession(tempDir);
+		const read = await getTool(session, "read");
+		const write = await getTool(session, "write");
+
+		await read.execute("read-directives-literal", { path: "directives-literal.ts" });
+		// No line is `<id>: @side`, so this is a uniform replacement, not a per-id block.
+		const result = await write.execute("write-directives-literal", {
+			path: "conflict://*",
+			content: "resolvedApi(x)\n",
+		});
+		expect(getText(result)).toContain("Resolved 1 conflict");
+		expect(await Bun.file(filePath).text()).toBe("line 1\nresolvedApi(x)\nline N\n");
 	});
 
 	it("can resolve two blocks in the same file by id, in either order", async () => {

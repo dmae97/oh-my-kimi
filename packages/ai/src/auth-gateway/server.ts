@@ -22,6 +22,7 @@ import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { extractHttpStatusFromError, extractRetryHint, logger } from "@oh-my-pi/pi-utils";
 import type { ApiKeyResolver } from "../auth-retry";
 import type { AuthStorage } from "../auth-storage";
+import * as AIError from "../error";
 import { classifyGatewayError } from "../error/gateway";
 import { isUsageLimitOutcome } from "../error/rate-limit";
 import * as anthropicMessages from "../providers/anthropic-messages-server";
@@ -32,7 +33,15 @@ import { completeSimple, streamSimple } from "../stream";
 import type { Api, AssistantMessageEventStream, Context, Model, SimpleStreamOptions } from "../types";
 import { deterministicUuid } from "../utils/deterministic-id";
 import { parseBind } from "../utils/parse-bind";
-import { captureRequestHeaders, corsHeaders, isAuthorized, json, resolvePeer, withCors } from "./http";
+import {
+	captureRequestHeaders,
+	corsHeaders,
+	gatewayResponseHeaders,
+	isAuthorized,
+	json,
+	resolvePeer,
+	withCors,
+} from "./http";
 import type {
 	AuthGatewayServerHandle,
 	AuthGatewayServerOptions,
@@ -112,8 +121,8 @@ function deriveSessionId(modelId: string, context: Context): string {
 		parts.push(JSON.stringify({ role: first.role, content: first.content }));
 	}
 	const seed = parts.join("\u0000");
-	// The 36-char UUID flows through unchanged: Codex's
-	// `normalizeOpenAIResponsesPromptCacheKey` accepts ≤64 chars verbatim.
+	// The 36-char UUID flows through unchanged:
+	// `normalizeOpenAIPromptCacheKey` accepts ≤64 chars verbatim.
 	return deterministicUuid(seed);
 }
 
@@ -227,12 +236,14 @@ async function refreshGatewayApiKeyAfterAuthError(
 	peer: string,
 ): Promise<string | undefined> {
 	const message = error instanceof Error ? error.message : String(error);
-	if (isUsageLimitOutcome(extractHttpStatusFromError(error), message)) {
+	const status = extractHttpStatusFromError(error);
+	if (AIError.isUsageLimit(error) || isUsageLimitOutcome(status, message)) {
 		const retryAfterMs = extractRetryHint(undefined, message);
 		const { switched, retryAtMs } = await storage.markUsageLimitReached(provider, sessionId, {
 			retryAfterMs,
 			baseUrl: model.baseUrl,
 			modelId: model.id,
+			apiKey: oldKey,
 			signal,
 		});
 		logger.debug("auth-gateway retrying provider request after usage-limit block", {
@@ -333,6 +344,8 @@ async function handleFormatEndpoint(
 	req: Request,
 	peer: string,
 ): Promise<Response> {
+	const startedAt = performance.now();
+	const requestId = crypto.randomUUID();
 	const controller = mirrorRequestAbort(req);
 	if (controller.signal.aborted) return clientClosedResponse(route);
 
@@ -429,6 +442,7 @@ async function handleFormatEndpoint(
 	);
 
 	logger.info("auth-gateway request", {
+		requestId,
 		format: route.label,
 		model: parsed.modelId,
 		resolvedProvider: model.provider,
@@ -457,7 +471,11 @@ async function handleFormatEndpoint(
 				const classified = classifyGatewayError(errorMessage);
 				return route.module.formatError(classified.status, classified.type, errorMessage);
 			}
-			return json(200, route.module.encodeResponse(message, parsed.modelId));
+			return json(
+				200,
+				route.module.encodeResponse(message, parsed.modelId),
+				gatewayResponseHeaders(model, { requestId, message, startedAt }),
+			);
 		} catch (error) {
 			if (controller.signal.aborted) return clientClosedResponse(route);
 			const classified = classifyGatewayError(error);
@@ -492,6 +510,7 @@ async function handleFormatEndpoint(
 	return new Response(sseStream, {
 		status: 200,
 		headers: {
+			...gatewayResponseHeaders(model, { requestId }),
 			"Content-Type": "text/event-stream; charset=utf-8",
 			"Cache-Control": "no-cache",
 			Connection: "keep-alive",
@@ -518,6 +537,8 @@ async function handleFormatEndpoint(
  * path.
  */
 async function handlePiNative(bootOpts: AuthGatewayBootOptions, req: Request, peer: string): Promise<Response> {
+	const startedAt = performance.now();
+	const requestId = crypto.randomUUID();
 	const controller = mirrorRequestAbort(req);
 	const aborted = (): Response => piNative.formatError(499, "request_aborted", "client closed request");
 	if (controller.signal.aborted) return aborted();
@@ -604,6 +625,7 @@ async function handlePiNative(bootOpts: AuthGatewayBootOptions, req: Request, pe
 	streamOpts.sessionId ??= sessionId;
 
 	logger.info("auth-gateway request", {
+		requestId,
 		format: "pi-native",
 		model: parsed.modelId,
 		resolvedProvider: model.provider,
@@ -632,7 +654,7 @@ async function handlePiNative(bootOpts: AuthGatewayBootOptions, req: Request, pe
 				const classified = classifyGatewayError(errorMessage);
 				return piNative.formatError(classified.status, classified.type, errorMessage);
 			}
-			return json(200, { message });
+			return json(200, { message }, gatewayResponseHeaders(model, { requestId, message, startedAt }));
 		} catch (error) {
 			if (controller.signal.aborted) return aborted();
 			const classified = classifyGatewayError(error);
@@ -663,6 +685,7 @@ async function handlePiNative(bootOpts: AuthGatewayBootOptions, req: Request, pe
 	return new Response(sseStream, {
 		status: 200,
 		headers: {
+			...gatewayResponseHeaders(model, { requestId }),
 			"Content-Type": "text/event-stream; charset=utf-8",
 			"Cache-Control": "no-cache",
 			Connection: "keep-alive",

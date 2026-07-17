@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, test, vi } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
@@ -64,7 +65,10 @@ function createInitialRenderHarness(): { ctx: InteractiveModeContext; helpers: U
 
 describe("InteractiveMode.showStatus", () => {
 	beforeAll(async () => {
-		// showStatus uses the global theme instance
+		// showStatus uses the global theme instance; renderInitialMessages reads
+		// the global Settings (display.collapseCompacted).
+		resetSettingsForTest();
+		await Settings.init({ inMemory: true });
 		await initTheme();
 	});
 
@@ -134,6 +138,7 @@ describe("InteractiveMode.showStatus", () => {
 			chatContainer: new Container(),
 			pendingTools: new Map(),
 			ui: { requestRender: vi.fn() },
+			viewSession: { isStreaming: false },
 			optimisticUserMessageSignature: "hello\u00001",
 		} as unknown as InteractiveModeContext;
 		const helpers = new UiHelpers(ctx);

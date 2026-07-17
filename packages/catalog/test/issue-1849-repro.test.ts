@@ -40,6 +40,12 @@ describe("Fireworks Kimi K2 maxTokens cap (#1849)", () => {
 			"deepseek-v4-pro",
 			"glm-5.1",
 			"accounts/fireworks/models/minimax-m2.7",
+			// K2.7-Code is excluded from the K2.5/K2.6 cap (Fireworks serves its
+			// full context), so it must not match — public, fast, and wire ids.
+			"kimi-k2.7-code",
+			"kimi-k2.7-code-fast",
+			"kimi-k2.7-code-highspeed",
+			"accounts/fireworks/models/kimi-k2p7-code",
 		];
 		for (const id of negatives) {
 			expect(isFireworksKimiK2ModelId(id)).toBe(false);
@@ -69,6 +75,17 @@ describe("Fireworks Kimi K2 maxTokens cap (#1849)", () => {
 			const model = getBundledModel(provider, id);
 			expect(model).toBeDefined();
 			expect(model.maxTokens).toBe(FIREWORKS_KIMI_MAX_TOKENS);
+		}
+	});
+
+	it("leaves Kimi K2.7-Code uncapped on Fireworks", () => {
+		// K2.7-Code is not part of the K2.5/K2.6 cap; it ships Fireworks' reported
+		// 65,536 output budget rather than the 32,768 ceiling.
+		for (const id of ["kimi-k2.7-code", "kimi-k2.7-code-fast"]) {
+			const model = getBundledModel("fireworks", id);
+			expect(model).toBeDefined();
+			expect(model.maxTokens).toBe(65_536);
+			expect(model.maxTokens).toBeGreaterThan(FIREWORKS_KIMI_MAX_TOKENS);
 		}
 	});
 });

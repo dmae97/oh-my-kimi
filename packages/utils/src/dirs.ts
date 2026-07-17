@@ -22,6 +22,9 @@ export const APP_NAME: string = "omp";
 /** Config directory name (e.g. ".omp") */
 export const CONFIG_DIR_NAME: string = ".omp";
 
+/** Ordered main settings filenames: canonical write target first, legacy-compatible YAML fallback second. */
+export const MAIN_CONFIG_FILENAMES = ["config.yml", "config.yaml"] as const;
+
 /** Version (e.g. "1.0.0") */
 export const VERSION: string = version;
 
@@ -510,9 +513,9 @@ export function getLogsDir(): string {
 	return dirs.rootSubdir("logs", "state");
 }
 
-/** Get the path to a dated log file (~/.omp/logs/omp.YYYY-MM-DD.log). */
-export function getLogPath(date = new Date()): string {
-	return path.join(getLogsDir(), `${APP_NAME}.${date.toISOString().slice(0, 10)}.log`);
+/** Get this process's dated log path (~/.omp/logs/omp.YYYY-MM-DD.PID.log). */
+export function getLogPath(date = new Date(), pid = process.pid): string {
+	return path.join(getLogsDir(), `${APP_NAME}.${date.toISOString().slice(0, 10)}.${pid}.log`);
 }
 
 /**

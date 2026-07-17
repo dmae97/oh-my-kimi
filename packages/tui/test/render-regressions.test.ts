@@ -1,3 +1,5 @@
+process.env.PI_TUI_SCROLLBACK_REBUILD = "true";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import {
 	type Component,
@@ -124,6 +126,18 @@ class LegacyKeyboardVirtualTerminal extends VirtualTerminal {
 
 	get keyboardEnhancementExitSequence(): string | null {
 		return undefined as unknown as string | null;
+	}
+}
+
+class PrivateModeProbeTerminal extends VirtualTerminal {
+	#callback: ((mode: number, supported: boolean, confirmed?: boolean) => void) | undefined;
+
+	onPrivateModeReport(callback: (mode: number, supported: boolean, confirmed?: boolean) => void): void {
+		this.#callback = callback;
+	}
+
+	reportPrivateMode(mode: number, supported: boolean, confirmed: boolean): void {
+		this.#callback?.(mode, supported, confirmed);
 	}
 }
 
@@ -432,7 +446,7 @@ describe("TUI terminal-state regressions", () => {
 				tui.resetDisplay();
 				await settle(term);
 
-				expect(writes.some(write => write.includes("\x1b[2J\x1b[H\x1b[3J"))).toBe(true);
+				expect(writes.some(write => write.includes("\x1b[H\x1b[3J") && !write.includes("\x1b[2J"))).toBe(true);
 				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(rows("L", 8));
 				expect(visible(term)).toEqual(["L5", "L6", "L7"]);
 			} finally {
@@ -1357,27 +1371,108 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 
-		it("uses ED3 for destructive rebuilds even when CSI 22 J is supported", async () => {
+		it("uses ED3 without blanking the viewport for destructive rebuilds even when CSI 22 J is supported", async () => {
 			const saved = TERMINAL.supportsScreenToScrollback;
 			setTerminalScreenToScrollback(true);
 			const term = new VirtualTerminal(20, 3);
 			const tui = new TUI(term);
-			tui.addChild(new MutableLinesComponent(rows("line-", 6)));
+			const component = new MutableLinesComponent(rows("line-", 6));
+			tui.addChild(component);
 			const writes = captureWrites(term);
 
 			try {
 				tui.start();
 				await settle(term);
 				writes.length = 0;
+				component.setLines(["new"]);
 
 				tui.requestRender(true, { clearScrollback: true });
 				await settle(term);
 				const out = writes.join("");
-				expect(out).toContain("\x1b[2J\x1b[H\x1b[3J");
+				expect(out).toContain("\x1b[H\x1b[3J");
+				expect(out).not.toContain("\x1b[2J");
 				expect(out).not.toContain("\x1b[22J");
+				expect(visible(term)).toEqual(["new", "", ""]);
 			} finally {
 				tui.stop();
 				setTerminalScreenToScrollback(saved);
+			}
+		});
+
+		it("keeps destructive paints synchronized when DECRQM is unavailable", async () => {
+			await withEnvPatch(
+				{
+					TERM_FEATURES: "Sy",
+					PI_NO_SYNC_OUTPUT: undefined,
+					PI_FORCE_SYNC_OUTPUT: undefined,
+					PI_TUI_SYNC_OUTPUT: undefined,
+				},
+				async () => {
+					const term = new PrivateModeProbeTerminal(20, 3);
+					const component = new MutableLinesComponent(rows("old-", 6));
+					const tui = new TUI(term);
+					tui.addChild(component);
+
+					try {
+						tui.start();
+						await settle(term);
+						const writes = captureWrites(term);
+
+						// A DA1 sentinel without DECRPM is inconclusive. Terminals such as
+						// xterm.js can implement synchronized output without implementing
+						// the query, so the static TERM_FEATURES capability must survive.
+						term.reportPrivateMode(2026, false, false);
+						expect(tui.synchronizedOutput).toBe(true);
+
+						component.setLines(rows("resumed-", 8));
+						tui.requestRender(true, { clearScrollback: true });
+						await settle(term);
+
+						const paint = writes.find(write => write.includes("\x1b[3J"));
+						expect(paint).toBeDefined();
+						expect(paint).toContain("\x1b[?2026h");
+						expect(paint).toContain("\x1b[?2026l");
+						expect(visible(term)).toEqual(["resumed-5", "resumed-6", "resumed-7"]);
+					} finally {
+						tui.stop();
+					}
+				},
+			);
+		});
+
+		it("fuses fullscreen overlay exit into a pending session replacement paint", async () => {
+			const term = new VirtualTerminal(24, 4);
+			const component = new MutableLinesComponent(rows("old-session-", 8));
+			const tui = new TUI(term);
+			tui.addChild(component);
+
+			try {
+				tui.start();
+				await settle(term);
+				const overlay = tui.showOverlay(new MutableLinesComponent(["session selector"]), {
+					width: "100%",
+					maxHeight: "100%",
+					fullscreen: true,
+				});
+				await settle(term);
+
+				// Session loading finishes behind the still-visible selector. The forced
+				// replacement remains pending while the fullscreen path owns the frame.
+				component.setLines(rows("resumed-", 9));
+				tui.requestRender(true, { clearScrollback: true });
+				await settle(term);
+
+				const writes = captureWrites(term);
+				overlay.hide();
+				await settle(term);
+
+				const exits = writes.filter(write => write.includes("\x1b[?1049l"));
+				expect(exits).toHaveLength(1);
+				expect(exits[0]).toContain("\x1b[3J");
+				expect(exits[0]).toContain("resumed-8");
+				expect(visible(term)).toEqual(["resumed-5", "resumed-6", "resumed-7", "resumed-8"]);
+			} finally {
+				tui.stop();
 			}
 		});
 	});
@@ -1742,7 +1837,7 @@ describe("TUI terminal-state regressions", () => {
 				tui.stop();
 			}
 		});
-		it("recommits an offscreen expansion behind the stale prefix while seam commits continue in order", async () => {
+		it("rebuilds history when an offscreen expansion lands with a tail append", async () => {
 			const term = new VirtualTerminal(32, 6);
 			const tui = new TUI(term);
 			const component = new MutableLinesComponent(["status-0", ...rows("line-", 11)]);
@@ -1763,7 +1858,8 @@ describe("TUI terminal-state regressions", () => {
 				// Rows 0..5 (status-0, line-0..line-4) are committed. The frame edits
 				// row 0 and inserts a row above the commit boundary while a tail
 				// append lands in the same frame: 2+ prefix tail samples change, so
-				// the committed-prefix audit re-anchors at row 0 and recommits.
+				// the committed-prefix audit re-anchors and the engine erases and
+				// replays — history holds the expanded frame exactly once.
 				component.setLines(["status-1", "expanded-details", ...rows("line-", 12)]);
 				tui.requestRender();
 				await settle(term);
@@ -1778,19 +1874,11 @@ describe("TUI terminal-state regressions", () => {
 				]);
 				const buffer = term.getScrollBuffer().map(line => line.trimEnd());
 				const history = buffer.slice(0, term.getBufferPosition().baseY);
-				// RESYNC law: native history keeps the stale committed copy AND gains
-				// a fresh copy of the diverged frame from row 0 — the offscreen edit
-				// and the expansion reach history (duplication, never loss).
-				expect(history).toEqual([
-					// stale committed prefix, never rewritten
-					"status-0",
-					...rows("line-", 5),
-					// recommitted frame rows 0..7 (new committed = 14 - height)
-					"status-1",
-					"expanded-details",
-					...rows("line-", 6),
-				]);
-				// The appended tail row reaches the screen exactly once.
+				// REBUILD law: the stale committed copy is erased; history is the
+				// diverged frame's own prefix — the offscreen edit and the expansion
+				// reach history exactly once.
+				expect(history).toEqual(["status-1", "expanded-details", ...rows("line-", 6)]);
+				expect(buffer).not.toContain("status-0");
 				expect(buffer.filter(row => row === "line-11").length).toBe(1);
 			} finally {
 				tui.stop();
@@ -1832,11 +1920,11 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 
-		it("keeps stale collapsed ctrl-o markers in history and recommits the expanded rows behind them", async () => {
+		it("erases stale collapsed ctrl-o markers and rebuilds history with the expanded rows", async () => {
 			// A Ctrl+O expansion mutates committed rows, so the committed-prefix
-			// audit resyncs: the collapsed markers that already scrolled into native
-			// history stay there — one stale copy each, never rewritten — and the
-			// expanded rows recommit behind them (duplication, never loss).
+			// audit resyncs and the engine erases-and-replays: the collapsed
+			// markers that already scrolled into native history are erased with
+			// the rebuild and the expanded rows land in history exactly once.
 			const term = new VirtualTerminal(48, 6);
 			const tui = new TUI(term);
 			const collapsedLines = [
@@ -1867,7 +1955,6 @@ describe("TUI terminal-state regressions", () => {
 				]);
 				tui.requestRender();
 				await settle(term);
-				const history = term.getScrollBuffer().slice(0, term.getBufferPosition().baseY);
 
 				expect(visible(term).map(line => line.trim())).toEqual([
 					"json-6",
@@ -1877,79 +1964,32 @@ describe("TUI terminal-state regressions", () => {
 					"status",
 					"editor",
 				]);
-				const scrollback = term.getScrollBuffer();
-				expect(countMatches(scrollback, /Ctrl\+O: Expand/)).toBe(1);
-				expect(countMatches(scrollback, /ctrl\+o/)).toBe(1);
-				// The resync re-anchors at the first diverged row (the code marker)
-				// and recommits from there: the expanded rows reach history exactly
-				// once, right behind the stale markers.
-				for (const line of ["code line 0", "code line 1", "output line 0", "output line 1"]) {
-					expect(countMatches(history, new RegExp(`^${line}\\s*$`)), `${line} recommits exactly once`).toBe(1);
-				}
-				// json rows inside the recommitted span carry one stale + one fresh
-				// copy; rows still in the live window appear exactly once.
-				for (let i = 0; i < 6; i++) {
-					const pattern = new RegExp(`\\bjson-${i}\\b`);
-					expect(countMatches(scrollback, pattern), `json-${i} appears twice (stale + recommit)`).toBe(2);
-				}
-				for (let i = 6; i < 10; i++) {
-					const pattern = new RegExp(`\\bjson-${i}\\b`);
-					expect(countMatches(scrollback, pattern), `json-${i} should appear exactly once`).toBe(1);
-				}
-			} finally {
-				tui.stop();
-			}
-		});
-
-		it("defers offscreen expansion rebuild when the viewport position is unknown", async () => {
-			// POSIX terminals cannot report whether the user scrolled up, so an
-			// ordinary offscreen expansion must NOT destructively rebuild scrollback
-			// (anti-yank). The collapsed ctrl+o markers that scrolled into history
-			// therefore stay stale until the next checkpoint — this is the deferral
-			// that makes an un-flagged Ctrl+O expand look broken above the fold.
-			const term = new UnknownViewportTerminal(48, 6);
-			const tui = new TUI(term);
-			const component = new MutableLinesComponent([
-				"frame-top",
-				"code preview … 16 more lines ⟨Ctrl+O: Expand⟩",
-				"output preview … 106 more lines (ctrl+o to expand)",
-				...rows("json-", 10),
-				"status",
-				"editor",
-			]);
-			tui.addChild(component);
-
-			try {
-				tui.start();
-				await settle(term);
-				expect(term.isNativeViewportAtBottom()).toBeUndefined();
-				expect(term.getScrollBuffer().join("\n")).toContain("ctrl+o");
-
-				component.setLines([
+				// Rebuilt history: the expanded rows exactly once, no stale markers
+				// anywhere on the tape.
+				expect(term.getScrollBuffer().join("\n")).not.toContain("ctrl+o");
+				expect(term.getScrollBuffer().join("\n")).not.toContain("Ctrl+O");
+				const history = term
+					.getScrollBuffer()
+					.slice(0, term.getBufferPosition().baseY)
+					.map(line => line.trimEnd());
+				expect(history).toEqual([
 					"frame-top",
 					"code line 0",
 					"code line 1",
 					"output line 0",
 					"output line 1",
-					...rows("json-", 10),
-					"status",
-					"editor",
+					...rows("json-", 6),
 				]);
-				tui.requestRender();
-				await settle(term);
-
-				// No flag: the rebuild is deferred, so the stale markers survive offscreen.
-				expect(term.getScrollBuffer().join("\n")).toContain("ctrl+o");
 			} finally {
 				tui.stop();
 			}
 		});
 
-		it("paints an offscreen expansion identically when the viewport probe is unavailable", async () => {
-			// Law 3: there is no probe and no platform fork. A terminal that cannot
-			// report its native viewport position gets exactly the same treatment as
-			// one that can: committed rows stay immutable, the live window repaints,
-			// and no clear/home bytes are emitted.
+		it("rebuilds an offscreen expansion identically when the viewport probe is unavailable", async () => {
+			// There is no probe and no platform fork: a terminal that cannot
+			// report its native viewport position gets exactly the same
+			// erase-and-replay as one that can — exactly-once history wins over
+			// the parked-reader anchor (upstream pi semantics).
 			const term = new UnknownViewportTerminal(48, 6);
 			const tui = new TUI(term);
 			const component = new MutableLinesComponent([
@@ -1982,9 +2022,7 @@ describe("TUI terminal-state regressions", () => {
 				tui.requestRender();
 				await settle(term);
 
-				const paint = writes.join("");
-				expect(paint).not.toContain("\x1b[3J");
-				expect(paint).not.toContain("\x1b[2J");
+				expect((writes.join("").match(/\x1b\[3J/g) ?? []).length).toBe(1);
 				expect(visible(term).map(line => line.trim())).toEqual([
 					"json-6",
 					"json-7",
@@ -1993,8 +2031,8 @@ describe("TUI terminal-state regressions", () => {
 					"status",
 					"editor",
 				]);
-				// History is never rewritten: the stale markers survive offscreen.
-				expect(term.getScrollBuffer().join("\n")).toContain("ctrl+o");
+				// History was rebuilt, not left stale: the markers are gone.
+				expect(term.getScrollBuffer().join("\n")).not.toContain("ctrl+o");
 			} finally {
 				tui.stop();
 			}
@@ -2049,14 +2087,11 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 
-		it("re-anchors a bottom-anchored high-water collapse at the divergence and recommits the tail into history", async () => {
-			// RESYNC law: the collapse shrinks the frame below the committed count,
-			// so the engine re-anchors the commit index at the first diverged row
-			// (row 8, where preview-* became result-*). Native history is
-			// append-only: the high-water preview copy stays in scrollback above
-			// (accepted artifact) — never clawed back. The window starts at the
-			// re-anchored commit index, which here sits past `length - height`, so
-			// the short tail is blank-padded rather than overwriting committed rows.
+		it("rebuilds a bottom-anchored high-water collapse with the final tail exactly once", async () => {
+			// REBUILD law: the collapse shrinks the frame below the committed
+			// count, so the engine erases and replays the final frame — the
+			// high-water preview copy is erased instead of surviving above as a
+			// stale artifact, and the result rows are history's only copy.
 			const term = new VirtualTerminal(40, 5);
 			const highWaterFrame = [...rows("base-", 8), ...rows("preview-", 10)];
 			const finalFrame = [...rows("base-", 8), "result-0", "result-1"];
@@ -2075,13 +2110,18 @@ describe("TUI terminal-state regressions", () => {
 				tui.requestRender();
 				await settle(term);
 
-				expect(writes.join("")).not.toContain("\x1b[3J");
-				expect(visible(term).map(line => line.trim())).toEqual(["result-0", "result-1", "", "", ""]);
-				const history = term.getScrollBuffer().slice(0, term.getBufferPosition().baseY);
-				expect(history.map(line => line.trimEnd())).toEqual(highWaterFrame.slice(0, 13));
+				expect((writes.join("").match(/\x1b\[3J/g) ?? []).length).toBe(1);
+				expect(term.getScrollBuffer().map(line => line.trimEnd())).toEqual(finalFrame);
+				expect(visible(term).map(line => line.trim())).toEqual([
+					"base-5",
+					"base-6",
+					"base-7",
+					"result-0",
+					"result-1",
+				]);
 
 				// Once the transcript grows past the window again, the post-collapse
-				// tail commits: result rows REACH history instead of being ignored.
+				// tail commits normally on the update path — exactly once.
 				component.setLines([...finalFrame, ...rows("tail-", 5)]);
 				tui.requestRender();
 				await settle(term);
@@ -2091,7 +2131,7 @@ describe("TUI terminal-state regressions", () => {
 					.getScrollBuffer()
 					.slice(0, term.getBufferPosition().baseY)
 					.map(line => line.trimEnd());
-				expect(grownHistory).toEqual([...highWaterFrame.slice(0, 13), "result-0", "result-1"]);
+				expect(grownHistory).toEqual(finalFrame);
 			} finally {
 				tui.stop();
 			}
@@ -2123,12 +2163,11 @@ describe("TUI terminal-state regressions", () => {
 			}
 		});
 
-		it("recommits an offscreen expansion at the seam while the reader is parked in scrollback", async () => {
+		it("rebuilds an offscreen expansion and snaps a parked reader to the tail", async () => {
 			// An expansion above the commit boundary triggers the committed-prefix
-			// resync: the inserted rows (and the shifted committed rows) recommit
-			// at the seam, so the expansion reaches native history instead of
-			// being skipped. The reader scrolled into scrollback keeps a stable
-			// view — the recommit only appends below their anchor.
+			// resync: the engine erases and replays, so the expansion reaches
+			// native history exactly once. The parked reader is snapped to the
+			// bottom — the price of exactly-once history (upstream pi semantics).
 			const term = new VirtualTerminal(32, 5);
 			const tui = new TUI(term);
 			const component = new MutableLinesComponent(rows("line-", 12));
@@ -2147,23 +2186,13 @@ describe("TUI terminal-state regressions", () => {
 				tui.requestRender();
 				await settle(term);
 
-				const paint = writes.join("");
-				expect(paint).not.toContain("\x1b[3J");
-				expect(paint).not.toContain("\x1b[2J");
-				expect(paint).not.toContain("\x1b[H");
-				expect(term.getBufferPosition().viewportY).toBe(before.viewportY);
-				expect(visible(term).map(line => line.trim())).toEqual(["line-2", "line-3", "line-4", "line-5", "line-6"]);
-				// The resync recommits the expansion: it reaches native history
-				// exactly because the commit index re-anchored at the divergence.
-				expect(term.getScrollBuffer().join("\n")).toContain("expanded-0");
+				expect((writes.join("").match(/\x1b\[3J/g) ?? []).length).toBe(1);
+				const buffer = term.getScrollBuffer().map(line => line.trimEnd());
+				expect(buffer).toEqual(["line-0", "line-1", "expanded-0", "expanded-1", ...rows("line-", 12).slice(2)]);
 
 				term.scrollLines(999);
 				tui.requestRender();
 				await settle(term);
-
-				const finalPosition = term.getBufferPosition();
-				expect(finalPosition.viewportY).toBe(finalPosition.baseY);
-				expect(term.getScrollBuffer().join("\n")).toContain("expanded-0");
 				expect(visible(term).map(line => line.trim())).toEqual([
 					"line-7",
 					"line-8",
@@ -2352,13 +2381,12 @@ describe("TUI terminal-state regressions", () => {
 				scrolledTui.stop();
 			}
 		});
-		it("re-anchors a huge completion-style collapse at the new tail and recommits the diverged head behind stale history", async () => {
-			// RESYNC law (#1599 lineage): a 100-row transcript collapsing to 20 rows
-			// in a 10-row window must keep the new tail (including the prompt) on
-			// screen. The frame no longer covers the committed prefix, so the commit
-			// index re-anchors at the first diverged row (row 0) and recommits up to
-			// `newLength - height`: short-0..short-9 land in history right behind
-			// the stale line-* copy — duplication of the stale prefix, never loss.
+		it("rebuilds a huge completion-style collapse with the new tail exactly once", async () => {
+			// REBUILD law (#1599 lineage): a 100-row transcript collapsing to 20
+			// rows in a 10-row window keeps the new tail (including the prompt) on
+			// screen. The frame no longer covers the committed prefix, so the
+			// engine erases and replays: short-0..short-9 are history's only
+			// rows — the stale line-* transcript is gone.
 			const term = new UnknownViewportTerminal(40, 10);
 			const tui = new TUI(term);
 			const body = rows("line-", 99);
@@ -2387,25 +2415,20 @@ describe("TUI terminal-state regressions", () => {
 					"short-18",
 					"prompt-row",
 				]);
-				const buffer = term.getScrollBuffer();
-				// The recommit puts short-0..short-9 into history exactly once and
-				// the re-anchored window holds short-10..prompt-row exactly once —
-				// nothing is lost, nothing duplicates.
-				for (let i = 0; i < short.length; i++) {
-					expect(countMatches(buffer, new RegExp(`\\bshort-${i}\\b`)), `short-${i} appears once`).toBe(1);
-				}
-				const history = buffer.slice(0, term.getBufferPosition().baseY).map(line => line.trimEnd());
-				expect(history).toEqual([...body.slice(0, 90), ...rows("short-", 10)]);
+				const buffer = term.getScrollBuffer().map(line => line.trimEnd());
+				expect(buffer).toEqual([...short, "prompt-row"]);
+				const history = buffer.slice(0, term.getBufferPosition().baseY);
+				expect(history).toEqual(rows("short-", 10));
 			} finally {
 				tui.stop();
 			}
 		});
 
-		it("recommits a huge collapse without clears while the reader is parked in scrollback", async () => {
-			// RESYNC + no-clear law: even a 100→20 row collapse never emits ED2/ED3
-			// — the re-anchor recommits the diverged frame head behind the stale
-			// prefix and rewrites the window, so a reader parked in native
-			// scrollback keeps a byte-stable view and their anchor.
+		it("rebuilds a huge collapse and snaps a parked reader to the tail", async () => {
+			// REBUILD law: a 100→20 row collapse erases and replays (one ED3).
+			// The reader parked in native scrollback is snapped to the bottom —
+			// stale history is no longer preserved for them (upstream pi
+			// semantics: exactly-once history wins over the anchored view).
 			const term = new UnknownViewportTerminal(40, 10);
 			const tui = new TUI(term);
 			const body = rows("line-", 99);
@@ -2416,9 +2439,7 @@ describe("TUI terminal-state regressions", () => {
 				tui.start();
 				await settle(term);
 				term.scrollLines(-10);
-				const before = term.getBufferPosition();
-				const beforeViewport = visible(term).map(line => line.trim());
-				expect(before.viewportY).toBeGreaterThan(0);
+				expect(term.getBufferPosition().viewportY).toBeGreaterThan(0);
 
 				const writes = captureWrites(term);
 				const short = rows("short-", 19);
@@ -2426,11 +2447,7 @@ describe("TUI terminal-state regressions", () => {
 				tui.requestRender();
 				await settle(term);
 
-				const paint = writes.join("");
-				expect(paint).not.toContain("\x1b[3J");
-				expect(paint).not.toContain("\x1b[2J");
-				expect(term.getBufferPosition().viewportY).toBe(before.viewportY);
-				expect(visible(term).map(line => line.trim())).toEqual(beforeViewport);
+				expect((writes.join("").match(/\x1b\[3J/g) ?? []).length).toBe(1);
 
 				term.scrollLines(999);
 				await settle(term);
@@ -2447,21 +2464,18 @@ describe("TUI terminal-state regressions", () => {
 					"short-18",
 					"prompt-row",
 				]);
-				// Stale committed history stays above — never clawed back — and the
-				// recommitted frame head follows it (no row loss).
-				const history = term.getScrollBuffer().slice(0, term.getBufferPosition().baseY);
-				expect(history.join("\n")).toContain("line-89");
-				for (let i = 0; i < 10; i++) {
-					expect(countMatches(history, new RegExp(`\\bshort-${i}\\b`)), `short-${i} recommits once`).toBe(1);
-				}
-				for (let i = 10; i < short.length; i++) {
-					expect(countMatches(history, new RegExp(`\\bshort-${i}\\b`)), `short-${i} stays in the window`).toBe(0);
-				}
+				// History was rebuilt: the short head exactly once, the stale
+				// line-* transcript erased.
+				const history = term
+					.getScrollBuffer()
+					.slice(0, term.getBufferPosition().baseY)
+					.map(line => line.trimEnd());
+				expect(history).toEqual(rows("short-", 10));
 			} finally {
 				tui.stop();
 			}
 		});
-		it("resyncs an offscreen-edit grow and re-anchors the following collapse", async () => {
+		it("rebuilds on an offscreen-edit grow and again on the following collapse", async () => {
 			const term = new UnknownViewportTerminal(40, 10);
 			const tui = new TUI(term);
 			const initial = rows("line-", 19);
@@ -2473,9 +2487,9 @@ describe("TUI terminal-state regressions", () => {
 				await settle(term);
 
 				// Offscreen edit (row 0) + 100-row growth in one frame: the edit is
-				// an insertion above the commit boundary, so the audit re-anchors and
-				// the edited transcript recommits behind the stale original (law 1
-				// content-at-commit-time, duplication never loss).
+				// an insertion above the commit boundary, so the audit re-anchors
+				// and the engine erases-and-replays — the edited transcript is
+				// history's only copy.
 				const expanded = ["edited-line", ...rows("line-", 118), "prompt-row"];
 				component.setLines(expanded);
 				tui.requestRender();
@@ -2492,10 +2506,14 @@ describe("TUI terminal-state regressions", () => {
 					"line-117",
 					"prompt-row",
 				]);
-				expect(term.getScrollBuffer().join("\n")).toContain("edited-line");
+				const grownHistory = term
+					.getScrollBuffer()
+					.slice(0, term.getBufferPosition().baseY)
+					.map(line => line.trimEnd());
+				expect(grownHistory).toEqual(expanded.slice(0, 110));
 
-				// Collapse far below the commit boundary: law 4 re-anchors the window
-				// at the new tail; the stale committed transcript stays above.
+				// Collapse far below the commit boundary: a second rebuild replays
+				// the short frame; the tall transcript is erased.
 				const short = [...rows("short-", 14), "prompt-row"];
 				component.setLines(short);
 				tui.requestRender();
@@ -2513,10 +2531,11 @@ describe("TUI terminal-state regressions", () => {
 					"short-13",
 					"prompt-row",
 				]);
-				const history = term.getScrollBuffer().slice(0, term.getBufferPosition().baseY).join("\n");
-				expect(history).toContain("line-108");
-				expect(history).toContain("short-4");
-				expect(history).toContain("edited-line");
+				const history = term
+					.getScrollBuffer()
+					.slice(0, term.getBufferPosition().baseY)
+					.map(line => line.trimEnd());
+				expect(history).toEqual(rows("short-", 5));
 			} finally {
 				tui.stop();
 			}
@@ -3286,6 +3305,48 @@ describe("TUI terminal-state regressions", () => {
 				// Transcript is back on the normal screen after leaving the alt buffer.
 				expect(visible(term).some(line => line.includes("base-"))).toBeTrue();
 				expect(visible(term).some(line => line.includes("MODAL-0"))).toBeFalse();
+			} finally {
+				tui.stop();
+			}
+		});
+
+		it("leaves native text selection available for selection-first fullscreen overlays", async () => {
+			const term = new VirtualTerminal(40, 8, 200);
+			const writes = captureWrites(term);
+			const tui = new TUI(term);
+			tui.addChild(new MutableLinesComponent(rows("base-", 8)));
+
+			try {
+				tui.start();
+				await settle(term);
+
+				const showFrom = writes.length;
+				const handle = tui.showOverlay(new MutableLinesComponent(["SELECTABLE PLAN TEXT"]), {
+					anchor: "bottom-center",
+					width: "100%",
+					maxHeight: "100%",
+					margin: 0,
+					fullscreen: true,
+					mouseTracking: false,
+				});
+				await settle(term);
+
+				const modalWrites = writes.slice(showFrom).join("");
+				expect(modalWrites).toContain("\x1b[?1049h");
+				expect(modalWrites).not.toContain("\x1b[?1000h");
+				expect(modalWrites).not.toContain("\x1b[?1003h");
+				expect(modalWrites).not.toContain("\x1b[?1006h");
+				expect(visible(term).some(line => line.includes("SELECTABLE PLAN TEXT"))).toBeTrue();
+
+				const hideFrom = writes.length;
+				handle.hide();
+				await settle(term);
+
+				const hideWrites = writes.slice(hideFrom).join("");
+				expect(hideWrites).toContain("\x1b[?1049l");
+				expect(hideWrites).not.toContain("\x1b[?1000l");
+				expect(hideWrites).not.toContain("\x1b[?1003l");
+				expect(hideWrites).not.toContain("\x1b[?1006l");
 			} finally {
 				tui.stop();
 			}

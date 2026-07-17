@@ -39,7 +39,8 @@ PRICE_IN, PRICE_OUT = 0.6, 4.0  # $/M, matches final.MODELS google/gemini-3.5-fl
 def _post(body: dict, api_key: str, retries: int = 4) -> dict:
     payload = json.dumps(body).encode()
     req = urllib.request.Request(
-        GEMINI_URL, data=payload,
+        GEMINI_URL,
+        data=payload,
         headers={"content-type": "application/json", "x-goog-api-key": api_key},
     )
     for attempt in range(retries + 1):
@@ -64,7 +65,9 @@ def _post(body: dict, api_key: str, retries: int = 4) -> dict:
     raise AssertionError("unreachable")
 
 
-def gemini_complete(api_key: str, blocks: list[dict], resolution: str | None, max_tokens: int) -> dict:
+def gemini_complete(
+    api_key: str, blocks: list[dict], resolution: str | None, max_tokens: int
+) -> dict:
     """blocks: [{"text": str} | {"image_path": Path}]; returns {"text", "usage", "stop"}."""
     parts = []
     for b in blocks:
@@ -74,7 +77,9 @@ def gemini_complete(api_key: str, blocks: list[dict], resolution: str | None, ma
             part: dict = {
                 "inline_data": {
                     "mime_type": "image/png",
-                    "data": base64.b64encode(Path(b["image_path"]).read_bytes()).decode(),
+                    "data": base64.b64encode(
+                        Path(b["image_path"]).read_bytes()
+                    ).decode(),
                 }
             }
             if resolution:
@@ -99,7 +104,11 @@ def gemini_complete(api_key: str, blocks: list[dict], resolution: str | None, ma
         "cache_r": u.get("cachedContentTokenCount", 0),
         "reasoning": u.get("thoughtsTokenCount", 0),
     }
-    stop = "max_tokens" if cand.get("finishReason") == "MAX_TOKENS" else (cand.get("finishReason") or "").lower()
+    stop = (
+        "max_tokens"
+        if cand.get("finishReason") == "MAX_TOKENS"
+        else (cand.get("finishReason") or "").lower()
+    )
     return {"text": text, "usage": usage, "stop": stop}
 
 
@@ -107,8 +116,11 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--shape-json", required=True)
     ap.add_argument("--name", required=True)
-    ap.add_argument("--resolution", default=None,
-                    help="per-part media_resolution level, e.g. MEDIA_RESOLUTION_ULTRA_HIGH; omit for API default")
+    ap.add_argument(
+        "--resolution",
+        default=None,
+        help="per-part media_resolution level, e.g. MEDIA_RESOLUTION_ULTRA_HIGH; omit for API default",
+    )
     ap.add_argument("--chars", type=int, default=400_000)
     ap.add_argument("--questions", type=int, default=25)
     ap.add_argument("--qpb", type=int, default=5)
@@ -121,29 +133,49 @@ def main() -> None:
     api_key = load_env_key("GEMINI_API_KEY", args.env)
     paras = squad.load_paragraphs(CACHE)
     flow, offsets = squad.build_flow(paras, args.chars)
-    questions = squad.sample_chunk_questions(paras, offsets, 0, len(flow), args.questions, args.seed)
+    questions = squad.sample_chunk_questions(
+        paras, offsets, 0, len(flow), args.questions, args.seed
+    )
     shape, label = json.loads(args.shape_json), args.name
     cond = f"prod-{label}"
     size = shape["frameSize"]
 
-    frame_dir = CACHE / f"prod-frames-{label}-{sha8(flow, json.dumps(shape, sort_keys=True))}"
+    frame_dir = (
+        CACHE / f"prod-frames-{label}-{sha8(flow, json.dumps(shape, sort_keys=True))}"
+    )
     if not frame_dir.exists() or not any(frame_dir.iterdir()):
         flow_file = CACHE / f"prod-flow-{sha8(flow)}.txt"
         flow_file.write_text(flow)
         subprocess.run(
-            ["bun", str(HERE / "render_pages.ts"), str(flow_file), json.dumps(shape), str(frame_dir)],
+            [
+                "bun",
+                str(HERE / "render_pages.ts"),
+                str(flow_file),
+                json.dumps(shape),
+                str(frame_dir),
+            ],
             check=True,
         )
     pngs = sorted(frame_dir.glob("page-*.png"))
-    cols = (size // shape["cellWidth"] - 3) // 2 if shape.get("columns") == 2 else size // shape["cellWidth"]
+    cols = (
+        (size // shape["cellWidth"] - 3) // 2
+        if shape.get("columns") == 2
+        else size // shape["cellWidth"]
+    )
     rows = size // shape["cellHeight"] // shape.get("lineRepeat", 1)
-    preamble = load_prompt("qa-image-multi.md").format(k=len(pngs), cols=cols, rows=rows)
+    preamble = load_prompt("qa-image-multi.md").format(
+        k=len(pngs), cols=cols, rows=rows
+    )
     if shape.get("columns") == 2:
         preamble += (
             "\nNote: each image lays text out as two word-wrapped newspaper columns separated by a gutter; "
             "read the left column top to bottom, then the right column."
         )
-    ctx_blocks = [{"text": preamble}, *({"image_path": str(p)} for p in pngs), {"text": "End of images."}]
+    ctx_blocks = [
+        {"text": preamble},
+        *({"image_path": str(p)} for p in pngs),
+        {"text": "End of images."},
+    ]
 
     out_dir = RESULTS / f"mono-prod-gemini-direct-{label}"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -153,9 +185,15 @@ def main() -> None:
         q_block = "\n".join(f"{i + 1}. {q['q']}" for i, q in enumerate(batch))
         blocks = [*ctx_blocks, {"text": q_block}]
         qa = cached(
-            f"gemini-direct-{GEMINI_MODEL}", "qa-mono-prod-direct",
-            {"blocks": [{k: str(v) for k, v in blk.items()} for blk in blocks], "resolution": args.resolution},
-            lambda blk=blocks: gemini_complete(api_key, blk, args.resolution, args.max_tokens),
+            f"gemini-direct-{GEMINI_MODEL}",
+            "qa-mono-prod-direct",
+            {
+                "blocks": [{k: str(v) for k, v in blk.items()} for blk in blocks],
+                "resolution": args.resolution,
+            },
+            lambda blk=blocks: gemini_complete(
+                api_key, blk, args.resolution, args.max_tokens
+            ),
             args.fresh,
         )
         answers.extend(squad.parse_numbered(qa["text"], len(batch)))
@@ -163,21 +201,39 @@ def main() -> None:
         stops.append(qa["stop"])
     rows_out = [
         {
-            "model": GEMINI_MODEL, "cond": cond, "pos_rel": q["pos_rel"], "q": q["q"], "answer": a,
-            "golds": q["golds"], "em": squad.exact_match(a, q["golds"]), "f1": squad.f1(a, q["golds"]),
+            "model": GEMINI_MODEL,
+            "cond": cond,
+            "pos_rel": q["pos_rel"],
+            "q": q["q"],
+            "answer": a,
+            "golds": q["golds"],
+            "em": squad.exact_match(a, q["golds"]),
+            "f1": squad.f1(a, q["golds"]),
             "abstained": "unreadable" in a.lower(),
         }
         for q, a in zip(questions, answers)
     ]
-    u = {k: sum(x[k] for x in usages) for k in ("in", "out", "cache_w", "cache_r", "reasoning")}
+    u = {
+        k: sum(x[k] for x in usages)
+        for k in ("in", "out", "cache_w", "cache_r", "reasoning")
+    }
     cost = (u["in"] + 0.1 * u["cache_r"]) / 1e6 * PRICE_IN + u["out"] / 1e6 * PRICE_OUT
     summary = {
-        "cond": cond, "n": len(rows_out), "imgs": len(pngs), "resolution": args.resolution,
+        "cond": cond,
+        "n": len(rows_out),
+        "imgs": len(pngs),
+        "resolution": args.resolution,
         "em": sum(r["em"] for r in rows_out) / len(rows_out),
         "f1": sum(r["f1"] for r in rows_out) / len(rows_out),
         "abst": sum(r["abstained"] for r in rows_out),
-        "tok_in": u["in"], "tok_cached": u["cache_r"], "tok_out": u["out"], "reas": u["reasoning"],
-        "cost": cost, "stop": next((s for s in stops if s == "max_tokens"), stops[-1] if stops else ""),
+        "tok_in": u["in"],
+        "tok_cached": u["cache_r"],
+        "tok_out": u["out"],
+        "reas": u["reasoning"],
+        "cost": cost,
+        "stop": next(
+            (s for s in stops if s == "max_tokens"), stops[-1] if stops else ""
+        ),
     }
     (out_dir / "records.jsonl").write_text("\n".join(json.dumps(r) for r in rows_out))
     (out_dir / "summary.json").write_text(json.dumps([summary], indent=1))

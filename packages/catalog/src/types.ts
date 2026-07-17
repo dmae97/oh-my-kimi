@@ -93,16 +93,25 @@ export type Provider = string;
 export type ThinkingBudgets = { [key in Effort]?: number };
 
 export interface Usage {
-	/** Non-cached input tokens (matches the bucket the provider bills as new input). */
+	/** Non-cached conversation input tokens (matches the bucket the provider bills as new input). */
 	input: number;
-	/** Total output tokens for the turn, including thinking, assistant text, and tool-call argument tokens. */
+	/** Total conversation output tokens for the turn, including thinking, assistant text, and tool-call argument tokens. */
 	output: number;
-	/** Tokens read from the prompt cache. */
+	/** Conversation tokens read from the prompt cache. */
 	cacheRead: number;
-	/** Tokens written to the prompt cache (cache creation). */
+	/** Conversation tokens written to the prompt cache (cache creation). */
 	cacheWrite: number;
-	/** Sum of input + output + cacheRead + cacheWrite. */
+	/** Sum of input + output + cacheRead + cacheWrite plus provider-side orchestration tokens when reported. */
 	totalTokens: number;
+	/** Provider-side orchestration tokens, billed but not part of the conversation prompt/cache buckets. */
+	orchestration?: {
+		/** Non-cached orchestration input tokens. */
+		input?: number;
+		/** Orchestration tokens read from provider-side cache. */
+		cacheRead?: number;
+		/** Orchestration output tokens. */
+		output?: number;
+	};
 	/** Copilot premium-request counter, when applicable. */
 	premiumRequests?: number;
 	/**
@@ -318,6 +327,15 @@ export interface OpenAICompat {
 	toolStrictMode?: "all_strict" | "none";
 	/** Whether request shaping may send reasoning params at all. Default: auto-detected (disabled for GitHub Copilot chat-completions). */
 	supportsReasoningParams?: boolean;
+	/**
+	 * Whether the endpoint accepts explicit sampling parameters (`temperature`,
+	 * `top_p`, `top_k`, `min_p`, penalties). OpenAI proprietary reasoning models
+	 * (o-series, gpt-5+) reject them with `400 Unsupported parameter:
+	 * 'temperature' is not supported with this model` on every serving host
+	 * (official, Azure, GitHub Copilot). When unset, auto-detected from the
+	 * model id. Default: true. Issue #5606.
+	 */
+	supportsSamplingParams?: boolean;
 	/** Always send a max-token field when the caller did not provide one. Default: auto-detected (Kimi-family models derive TPM limits from max_tokens). */
 	alwaysSendMaxTokens?: boolean;
 	/** Whether Responses-API tool-call/result history must be strictly paired. Default: auto-detected (Azure OpenAI, GitHub Copilot). */
@@ -363,7 +381,7 @@ export interface AnthropicCompat {
 	 * tags: 'disabled', 'enabled'`.
 	 */
 	disableAdaptiveThinking?: boolean;
-	/** Whether tools may include Anthropic's per-tool eager_input_streaming flag. Default: true. */
+	/** Whether tools may include Anthropic's per-tool eager_input_streaming flag. Default: true for the canonical Anthropic API. */
 	supportsEagerToolInputStreaming?: boolean;
 	/** Whether long prompt-cache retention (`ttl: "1h"`) is supported. Default: true for canonical Anthropic API. */
 	supportsLongCacheRetention?: boolean;
@@ -455,6 +473,7 @@ export interface ResolvedOpenAISharedCompat {
 	supportsReasoningEffort: boolean;
 	reasoningEffortMap: Partial<Record<Effort, string>>;
 	supportsReasoningParams: boolean;
+	supportsSamplingParams: boolean;
 	thinkingFormat: OpenAIReasoningFormat;
 	reasoningDisableMode: OpenAIReasoningDisableMode;
 	omitReasoningEffort: boolean;
@@ -507,6 +526,7 @@ export type ResolvedOpenAICompat = ResolvedOpenAISharedCompat &
 			| "supportsReasoningEffort"
 			| "reasoningEffortMap"
 			| "supportsReasoningParams"
+			| "supportsSamplingParams"
 			| "thinkingFormat"
 			| "reasoningDisableMode"
 			| "omitReasoningEffort"
@@ -682,6 +702,13 @@ export interface Model<TApi extends Api = Api> {
 	 * everything local (selection, caching, usage attribution) keys on `id`.
 	 */
 	requestModelId?: string;
+	/**
+	 * `reasoning.mode` to send on OpenAI Responses-family requests. Set on
+	 * generated pro aliases (`gpt-5.6-*-pro` on `openai`/`openai-codex`) that
+	 * pair a base wire id (`requestModelId`) with OpenAI's pro reasoning
+	 * serving path. Absent everywhere else; providers omit the wire field.
+	 */
+	reasoningMode?: "pro";
 	name: string;
 	api: TApi;
 	provider: Provider;
@@ -702,6 +729,8 @@ export interface Model<TApi extends Api = Api> {
 	supportsTools?: boolean;
 	/** GitLab Duo Workflow root namespace selected during catalog discovery. */
 	gitlabDuoWorkflowRootNamespaceId?: string;
+	/** Cursor `max_mode` request flag returned by `GetUsableModels` for premium models that require max mode. */
+	cursorMaxMode?: boolean;
 	cost: {
 		input: number; // $/million tokens
 		output: number; // $/million tokens
@@ -742,6 +771,8 @@ export interface Model<TApi extends Api = Api> {
 	transport?: "pi-native";
 	/** Hint that websocket transport should be preferred when supported by the provider implementation. */
 	preferWebsockets?: boolean;
+	/** Codex Responses Lite transport: send the lite marker and carry instructions/tools as input items (mirrors codex-rs `use_responses_lite`). */
+	useResponsesLite?: boolean;
 	/** Preferred model to switch to when context promotion is triggered (model id or provider/id). */
 	contextPromotionTarget?: string;
 	/** Preferred model to use only for compaction (model id or provider/id); the active session model is unchanged. */

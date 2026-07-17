@@ -54,7 +54,7 @@ describe("ToolExecutionComponent tool-result render memoization", () => {
 	it("re-shapes once per meaningful change, never per invalidate() frame", () => {
 		const tool = makeShapingTool();
 		const shapeSpy = vi.spyOn(tool, "renderResult");
-		const ui = { requestRender() {} } as unknown as TUI;
+		const ui = { requestRender() {}, requestComponentRender() {} } as unknown as TUI;
 
 		const component = new ToolExecutionComponent(
 			"custom_render",
@@ -108,7 +108,7 @@ describe("ToolExecutionComponent tool-result render memoization", () => {
 			},
 		};
 		const callSpy = vi.spyOn(tool, "renderCall");
-		const ui = { requestRender() {} } as unknown as TUI;
+		const ui = { requestRender() {}, requestComponentRender() {} } as unknown as TUI;
 
 		const component = new ToolExecutionComponent(
 			"custom_render",
@@ -150,7 +150,7 @@ describe("ToolExecutionComponent tool-result render memoization", () => {
 	it("re-shapes when a background task freezes via seal(), not only on key fields", () => {
 		const tool = makeShapingTool();
 		const shapeSpy = vi.spyOn(tool, "renderResult");
-		const ui = { requestRender() {} } as unknown as TUI;
+		const ui = { requestRender() {}, requestComponentRender() {} } as unknown as TUI;
 
 		const component = new ToolExecutionComponent(
 			"custom_render",

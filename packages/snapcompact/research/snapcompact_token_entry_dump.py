@@ -64,10 +64,20 @@ def main() -> None:
     print(f"loading {args.model_dir}", flush=True)
     from transformers import AutoTokenizer
 
-    processor = AutoProcessor.from_pretrained(args.model_dir, local_files_only=True, trust_remote_code=True, use_fast=False)
-    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(args.model_dir, local_files_only=True, trust_remote_code=True, dtype=torch.bfloat16, device_map="auto").eval()
+    processor = AutoProcessor.from_pretrained(
+        args.model_dir, local_files_only=True, trust_remote_code=True, use_fast=False
+    )
+    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        args.model_dir,
+        local_files_only=True,
+        trust_remote_code=True,
+        dtype=torch.bfloat16,
+        device_map="auto",
+    ).eval()
     device = next(model.parameters()).device
-    tokenizer = AutoTokenizer.from_pretrained(args.model_dir, local_files_only=True, trust_remote_code=True)  # fast tokenizer for offsets
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.model_dir, local_files_only=True, trust_remote_code=True
+    )  # fast tokenizer for offsets
 
     # --- Text lane: real tokenization of the snippet around the answer.
     snip_start = max(0, q["answer_start"] - args.context_chars)
@@ -78,22 +88,35 @@ def main() -> None:
     answer_token_idx: list[int] = []
     rel_a = q["answer_start"] - snip_start
     rel_b = q["answer_end"] - snip_start
-    for ti, (tok_id, (o0, o1)) in enumerate(zip(enc["input_ids"], enc["offset_mapping"])):
+    for ti, (tok_id, (o0, o1)) in enumerate(
+        zip(enc["input_ids"], enc["offset_mapping"])
+    ):
         is_answer = o0 < rel_b and o1 > rel_a
         if is_answer:
             answer_token_idx.append(ti)
-        tokens.append({"i": ti, "id": int(tok_id), "str": tokenizer.decode([tok_id]), "answer": bool(is_answer)})
+        tokens.append(
+            {
+                "i": ti,
+                "id": int(tok_id),
+                "str": tokenizer.decode([tok_id]),
+                "answer": bool(is_answer),
+            }
+        )
 
     # Real embedding rows entering the decoder for the answer tokens.
     embed = model.get_input_embeddings()
-    answer_ids = torch.tensor([tokens[i]["id"] for i in answer_token_idx], device=device)
+    answer_ids = torch.tensor(
+        [tokens[i]["id"] for i in answer_token_idx], device=device
+    )
     with torch.no_grad():
         answer_embeds = embed(answer_ids).float().cpu().numpy()
     text_entry = [
         {
             "id": tokens[i]["id"],
             "str": tokens[i]["str"],
-            "vector_head": [round(float(v), 4) for v in answer_embeds[k, : args.embed_dims]],
+            "vector_head": [
+                round(float(v), 4) for v in answer_embeds[k, : args.embed_dims]
+            ],
             "norm": round(float(np.linalg.norm(answer_embeds[k])), 4),
         }
         for k, i in enumerate(answer_token_idx)
@@ -101,34 +124,74 @@ def main() -> None:
     chunk_token_count = len(tokenizer(chunk, add_special_tokens=False)["input_ids"])
 
     # --- Image lane: real pixel patches and visual-tower output vectors.
-    batch = processor(images=img, text="<|vision_start|><|image_pad|><|vision_end|>", return_tensors="pt")
+    batch = processor(
+        images=img,
+        text="<|vision_start|><|image_pad|><|vision_end|>",
+        return_tensors="pt",
+    )
     pixel_values = batch["pixel_values"]
     grid_thw = batch["image_grid_thw"]
     merge = int(getattr(processor.image_processor, "merge_size", 2))
     patch = int(getattr(processor.image_processor, "patch_size", 14))
     with torch.no_grad():
-        visual_out = model.model.visual(pixel_values.to(device, dtype=torch.bfloat16), grid_thw=grid_thw.to(device)).float().cpu().numpy()
+        visual_out = (
+            model.model.visual(
+                pixel_values.to(device, dtype=torch.bfloat16),
+                grid_thw=grid_thw.to(device),
+            )
+            .float()
+            .cpu()
+            .numpy()
+        )
     n_tokens = visual_out.shape[0]
     grid = int(round(n_tokens**0.5))
-    answer_img_indices = image_answer_token_indices(q["answer_start"], q["answer_end"], cols, cfg.adv, cfg.pitch, img.width, img.height, n_tokens)
+    answer_img_indices = image_answer_token_indices(
+        q["answer_start"],
+        q["answer_end"],
+        cols,
+        cfg.adv,
+        cfg.pitch,
+        img.width,
+        img.height,
+        n_tokens,
+    )
     image_entry = [
         {
             "token_index": int(idx),
             "grid_rc": [int(idx // grid), int(idx % grid)],
-            "vector_head": [round(float(v), 4) for v in visual_out[idx, : args.embed_dims]],
+            "vector_head": [
+                round(float(v), 4) for v in visual_out[idx, : args.embed_dims]
+            ],
             "norm": round(float(np.linalg.norm(visual_out[idx])), 4),
         }
         for idx in answer_img_indices
     ]
     # A few real normalized pixel values from the first answer patch (pre-visual-tower input).
     patches_per_token = merge * merge
-    first_patch_row = answer_img_indices[0] * patches_per_token if answer_img_indices else 0
-    pixel_head = [round(float(v), 4) for v in pixel_values[min(first_patch_row, pixel_values.shape[0] - 1), : args.embed_dims].tolist()]
+    first_patch_row = (
+        answer_img_indices[0] * patches_per_token if answer_img_indices else 0
+    )
+    pixel_head = [
+        round(float(v), 4)
+        for v in pixel_values[
+            min(first_patch_row, pixel_values.shape[0] - 1), : args.embed_dims
+        ].tolist()
+    ]
 
     dump = {
         "args": vars(args),
-        "question": {"q": q["q"], "answer_text": q["answer_text"], "answer_start": q["answer_start"], "answer_end": q["answer_end"]},
-        "geometry": {"cols": cols, "rows": rows, "image_w": img.width, "image_h": img.height},
+        "question": {
+            "q": q["q"],
+            "answer_text": q["answer_text"],
+            "answer_start": q["answer_start"],
+            "answer_end": q["answer_end"],
+        },
+        "geometry": {
+            "cols": cols,
+            "rows": rows,
+            "image_w": img.width,
+            "image_h": img.height,
+        },
         "snippet": snippet,
         "snippet_rel_answer": [rel_a, rel_b],
         "tokens": tokens,
@@ -150,7 +213,11 @@ def main() -> None:
         "visual_out_dim": int(visual_out.shape[1]),
     }
     (out_dir / "token_entry.json").write_text(json.dumps(dump, indent=1))
-    print(json.dumps({k: v for k, v in dump.items() if k not in ("tokens", "snippet")}, indent=1))
+    print(
+        json.dumps(
+            {k: v for k, v in dump.items() if k not in ("tokens", "snippet")}, indent=1
+        )
+    )
     print(f"results -> {out_dir}")
 
 

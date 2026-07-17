@@ -1,6 +1,14 @@
 import { describe, expect, it } from "bun:test";
 import type { ApiKeyResolveContext, OAuthAccess, OAuthAccessSource } from "@oh-my-pi/pi-ai";
-import { isApiKeyResolver, isAuthRetryableError, resolveApiKeyOnce, withAuth, withOAuthAccess } from "@oh-my-pi/pi-ai";
+import {
+	AUTH_RETRY_MAX_ATTEMPTS,
+	isApiKeyResolver,
+	isAuthRetryableError,
+	resolveApiKeyOnce,
+	withAuth,
+	withOAuthAccess,
+} from "@oh-my-pi/pi-ai";
+import { ProviderHttpError } from "@oh-my-pi/pi-ai/error";
 
 function authError(status = 401): Error & { status: number } {
 	return Object.assign(new Error(`${status} authentication_error`), { status });
@@ -10,6 +18,10 @@ function usageLimitError(): Error & { status: number } {
 	return Object.assign(new Error("You have hit your ChatGPT usage limit (pro plan). Try again in ~158 min."), {
 		status: 429,
 	});
+}
+
+function opaque429Error(): Error & { status: number } {
+	return Object.assign(new Error(""), { status: 429 });
 }
 
 describe("isApiKeyResolver / resolveApiKeyOnce", () => {
@@ -36,6 +48,12 @@ describe("isAuthRetryableError", () => {
 	it("treats 401 and usage-limit phrasing as retryable, everything else as not", () => {
 		expect(isAuthRetryableError(authError(401))).toBe(true);
 		expect(isAuthRetryableError(usageLimitError())).toBe(true);
+		expect(
+			isAuthRetryableError(new ProviderHttpError("Generic provider failure", 429, { code: "insufficient_quota" })),
+		).toBe(true);
+		expect(
+			isAuthRetryableError(new ProviderHttpError("Generic provider failure", 429, { code: "rate_limit_error" })),
+		).toBe(false);
 		// A 429 whose body names the *account's* rate limit is rotatable (switch
 		// account), even though it isn't a 401 and isn't phrased "usage limit".
 		expect(
@@ -52,6 +70,19 @@ describe("isAuthRetryableError", () => {
 		// credentials won't help an org/global limit.
 		expect(isAuthRetryableError(Object.assign(new Error("429 too many requests"), { status: 429 }))).toBe(false);
 		expect(isAuthRetryableError("Error: 401 unauthorized")).toBe(true);
+		expect(isAuthRetryableError("Encountered invalidated oauth token for user, failing request")).toBe(true);
+		// xAI SuperGrok surfaces account exhaustion as 403 + "run out of credits" /
+		// spending-limit, not 429. Must rotate so multi-account xai-oauth pools work.
+		expect(
+			isAuthRetryableError(
+				Object.assign(
+					new Error(
+						"403 You have run out of credits or need a Grok subscription. Add credits at https://grok.com/?_s=usage or upgrade at https://grok.com/supergrok. (type=personal-team-blocked:spending-limit)",
+					),
+					{ status: 403 },
+				),
+			),
+		).toBe(true);
 		expect(isAuthRetryableError(authError(403))).toBe(false);
 		expect(isAuthRetryableError(authError(500))).toBe(false);
 		expect(isAuthRetryableError(new Error("network blip"))).toBe(false);
@@ -97,6 +128,209 @@ describe("withAuth", () => {
 			{ lastChance: false, hasError: true },
 			{ lastChance: true, hasError: true },
 		]);
+	});
+
+	it("does not exhaust every sibling on pure 401 auth failures", async () => {
+		const keys: string[] = [];
+		const contexts: ApiKeyResolveContext[] = [];
+		const pool = ["k0", "k1", "k2", "k3"];
+		let resolveIndex = 0;
+		let lastError: unknown;
+		let caught: unknown;
+
+		try {
+			await withAuth(
+				ctx => {
+					contexts.push(ctx);
+					return ctx.error === undefined ? pool[0] : pool[++resolveIndex];
+				},
+				async key => {
+					keys.push(key);
+					lastError = authError();
+					throw lastError;
+				},
+			);
+		} catch (error) {
+			caught = error;
+		}
+
+		expect(caught).toBe(lastError);
+		expect(keys).toEqual(["k0", "k1", "k2"]);
+		expect(contexts.map(ctx => ctx.lastChance)).toEqual([false, false, true]);
+	});
+
+	it("continues quota rotation when a refreshed 401 retry becomes a usage limit", async () => {
+		const keys: string[] = [];
+		const contexts: ApiKeyResolveContext[] = [];
+		const pool = ["k0", "k1", "k2", "k3"];
+		let resolveIndex = 0;
+		const result = await withAuth(
+			ctx => {
+				contexts.push(ctx);
+				return ctx.error === undefined ? pool[0] : pool[++resolveIndex];
+			},
+			async key => {
+				keys.push(key);
+				if (key === "k3") return "success";
+				if (key === "k0") throw authError();
+				throw usageLimitError();
+			},
+		);
+
+		expect(result).toBe("success");
+		expect(keys).toEqual(pool);
+		expect(contexts.map(ctx => ctx.lastChance)).toEqual([false, false, true, true]);
+	});
+
+	it("switches accounts before refreshing the same account on usage limits", async () => {
+		const keys: string[] = [];
+		const contexts: ApiKeyResolveContext[] = [];
+		const result = await withAuth(
+			ctx => {
+				contexts.push(ctx);
+				return ctx.error === undefined ? "k0" : ctx.lastChance ? "k2" : "k1";
+			},
+			async key => {
+				keys.push(key);
+				if (key === "k2") return "success";
+				throw usageLimitError();
+			},
+		);
+		expect(result).toBe("success");
+		expect(keys).toEqual(["k0", "k2"]);
+		expect(contexts.map(ctx => ({ lastChance: ctx.lastChance, hasError: ctx.error !== undefined }))).toEqual([
+			{ lastChance: false, hasError: false },
+			{ lastChance: true, hasError: true },
+		]);
+	});
+
+	it("switches accounts before refreshing on opaque 429 usage outcomes", async () => {
+		const keys: string[] = [];
+		const contexts: ApiKeyResolveContext[] = [];
+		const result = await withAuth(
+			ctx => {
+				contexts.push(ctx);
+				return ctx.error === undefined ? "k0" : ctx.lastChance ? "k2" : "k1";
+			},
+			async key => {
+				keys.push(key);
+				if (key === "k2") return "success";
+				throw opaque429Error();
+			},
+		);
+		expect(result).toBe("success");
+		expect(keys).toEqual(["k0", "k2"]);
+		expect(contexts.map(ctx => ({ lastChance: ctx.lastChance, hasError: ctx.error !== undefined }))).toEqual([
+			{ lastChance: false, hasError: false },
+			{ lastChance: true, hasError: true },
+		]);
+	});
+
+	it("rotates through every distinct sibling after consecutive usage limits", async () => {
+		const keys: string[] = [];
+		const contexts: ApiKeyResolveContext[] = [];
+		const pool = ["k0", "k1", "k2", "k3"];
+		let nextSibling = 0;
+		const result = await withAuth(
+			ctx => {
+				contexts.push(ctx);
+				return ctx.error === undefined ? pool[0] : pool[++nextSibling];
+			},
+			async key => {
+				keys.push(key);
+				if (key === "k3") return "success";
+				throw usageLimitError();
+			},
+		);
+
+		expect(result).toBe("success");
+		expect(keys).toEqual(pool);
+		expect(contexts.map(ctx => ctx.lastChance)).toEqual([false, true, true, true]);
+	});
+
+	it("stops usage-limit rotation before retrying an already-attempted credential", async () => {
+		const keys: string[] = [];
+		const errors = [usageLimitError(), usageLimitError()];
+		const resolved = ["k0", "k1", "k0"];
+		let resolveIndex = 0;
+		let attemptIndex = 0;
+
+		await expect(
+			withAuth(
+				() => resolved[resolveIndex++],
+				async key => {
+					keys.push(key);
+					throw errors[Math.min(attemptIndex++, errors.length - 1)]!;
+				},
+			),
+		).rejects.toBe(errors[1]);
+		expect(keys).toEqual(["k0", "k1"]);
+	});
+
+	it("caps endlessly unique resolver retries", async () => {
+		const keys: string[] = [];
+		let resolveIndex = 0;
+		let lastError: unknown;
+		let caught: unknown;
+
+		try {
+			await withAuth(
+				() => `k${resolveIndex++}`,
+				async key => {
+					keys.push(key);
+					lastError = usageLimitError();
+					throw lastError;
+				},
+			);
+		} catch (error) {
+			caught = error;
+		}
+
+		expect(caught).toBe(lastError);
+		expect(keys).toHaveLength(AUTH_RETRY_MAX_ATTEMPTS);
+		expect(resolveIndex).toBe(AUTH_RETRY_MAX_ATTEMPTS);
+	});
+
+	it("does not attempt a retry key resolved after abort", async () => {
+		const controller = new AbortController();
+		const keys: string[] = [];
+		const original = usageLimitError();
+
+		await expect(
+			withAuth(
+				ctx => {
+					if (ctx.error === undefined) return "k0";
+					controller.abort();
+					return "k1";
+				},
+				async key => {
+					keys.push(key);
+					throw original;
+				},
+				{ signal: controller.signal },
+			),
+		).rejects.toBe(original);
+		expect(keys).toEqual(["k0"]);
+	});
+
+	it("switches credentials when OpenRouter exhausts the daily free-model allowance", async () => {
+		const keys: string[] = [];
+		const result = await withAuth(
+			ctx => (ctx.error === undefined || !ctx.lastChance ? "exhausted-key" : "healthy-key"),
+			async key => {
+				keys.push(key);
+				if (key === "healthy-key") return "success";
+				throw Object.assign(
+					new Error(
+						"429 Rate limit exceeded: free-models-per-day. Add 10 credits to unlock 1000 free model requests per day",
+					),
+					{ status: 429 },
+				);
+			},
+		);
+
+		expect(result).toBe("success");
+		expect(keys).toEqual(["exhausted-key", "healthy-key"]);
 	});
 
 	it("stops retrying when the resolver returns undefined", async () => {
@@ -221,10 +455,86 @@ describe("withOAuthAccess", () => {
 		expect(storage.calls).toEqual([{ forceRefresh: undefined }, { forceRefresh: true }]);
 	});
 
-	it("skips an unchanged force-refresh token and rotates to a sibling", async () => {
+	it("tries a refreshed bearer for the same credential id on 401 before rotating", async () => {
+		const storage = fakeStorage({
+			initial: access("stale", { credentialId: 7 }),
+			forced: access("fresh", { credentialId: 7 }),
+			rotated: access("sibling", { credentialId: 8 }),
+		});
+		const attempts: string[] = [];
+		const result = await withOAuthAccess(storage, "prov", async a => {
+			attempts.push(a.accessToken);
+			if (a.accessToken === "stale") throw authError();
+			return "ok";
+		});
+		expect(result).toBe("ok");
+		expect(attempts).toEqual(["stale", "fresh"]);
+		expect(storage.calls).toEqual([{ forceRefresh: undefined }, { forceRefresh: true }]);
+	});
+
+	it("does not exhaust every OAuth sibling on pure 401 auth failures", async () => {
+		const attempts: string[] = [];
+		const calls: Array<{ forceRefresh: boolean | undefined } | "rotate"> = [];
+		const rotated = [access("sibling-1", { credentialId: 2 }), access("sibling-2", { credentialId: 3 })];
+		let rotateIndex = 0;
+		let lastError: unknown;
+		let caught: unknown;
+		const storage: OAuthAccessSource = {
+			async getOAuthAccess(_provider, _sessionId, options) {
+				calls.push({ forceRefresh: options?.forceRefresh });
+				if (options?.forceRefresh) return access("fresh", { credentialId: 1 });
+				if (rotateIndex > 0) return rotated[rotateIndex - 1];
+				return access("stale", { credentialId: 1 });
+			},
+			async rotateSessionCredential() {
+				calls.push("rotate");
+				rotateIndex += 1;
+				return true;
+			},
+		};
+
+		try {
+			await withOAuthAccess(storage, "prov", async a => {
+				attempts.push(a.accessToken);
+				lastError = authError();
+				throw lastError;
+			});
+		} catch (error) {
+			caught = error;
+		}
+
+		expect(caught).toBe(lastError);
+		expect(attempts).toEqual(["stale", "fresh", "sibling-1"]);
+		expect(calls).toEqual([
+			{ forceRefresh: undefined },
+			{ forceRefresh: true },
+			"rotate",
+			{ forceRefresh: undefined },
+		]);
+	});
+
+	it("invalidates and rotates directly when upstream reports an invalidated OAuth token", async () => {
+		const storage = fakeStorage({
+			initial: access("dead", { credentialId: 1 }),
+			rotated: access("sibling", { credentialId: 2 }),
+		});
+		const attempts: string[] = [];
+		const result = await withOAuthAccess(storage, "prov", async a => {
+			attempts.push(a.accessToken);
+			if (a.accessToken === "dead") {
+				throw new Error("Encountered invalidated oauth token for user, failing request");
+			}
+			return "ok";
+		});
+
+		expect(result).toBe("ok");
+		expect(attempts).toEqual(["dead", "sibling"]);
+		expect(storage.calls).toEqual([{ forceRefresh: undefined }, "rotate", { forceRefresh: undefined }]);
+	});
+
+	it("rotates directly to a sibling on usage limits", async () => {
 		const storage = fakeStorage({
 			initial: access("dead"),
-			forced: access("dead"),
 			rotated: access("sibling"),
 		});
 		const attempts: string[] = [];
@@ -234,14 +544,67 @@ describe("withOAuthAccess", () => {
 			return "ok";
 		});
 		expect(result).toBe("ok");
-		// "dead" must not be re-attempted after the no-op force refresh.
+		// Usage-limit failures burn/rotate the exhausted account directly; a
+		// force-refresh of the same account would duplicate the failed side effect.
 		expect(attempts).toEqual(["dead", "sibling"]);
-		expect(storage.calls).toEqual([
-			{ forceRefresh: undefined },
-			{ forceRefresh: true },
-			"rotate",
-			{ forceRefresh: undefined },
-		]);
+		expect(storage.calls).toEqual([{ forceRefresh: undefined }, "rotate", { forceRefresh: undefined }]);
+	});
+
+	it("passes the failed OAuth bearer to rotation", async () => {
+		const rotationTargets: Array<{ apiKey: string | undefined; credentialId: number | undefined }> = [];
+		const storage: OAuthAccessSource = {
+			async getOAuthAccess() {
+				return rotationTargets.length === 0
+					? access("dead", { credentialId: 17 })
+					: access("sibling", { credentialId: 18 });
+			},
+			async rotateSessionCredential(_provider, _sessionId, options) {
+				rotationTargets.push({ apiKey: options?.apiKey, credentialId: options?.credentialId });
+				return true;
+			},
+		};
+		const attempts: string[] = [];
+		const result = await withOAuthAccess(storage, "prov", async a => {
+			attempts.push(a.accessToken);
+			if (a.accessToken === "dead") throw usageLimitError();
+			return "ok";
+		});
+
+		expect(result).toBe("ok");
+		expect(attempts).toEqual(["dead", "sibling"]);
+		expect(rotationTargets).toEqual([{ apiKey: "dead", credentialId: 17 }]);
+	});
+
+	it("caps endlessly unique OAuth rotation attempts", async () => {
+		const attempts: string[] = [];
+		let nextCredential = 0;
+		let rotateCalls = 0;
+		let lastError: unknown;
+		let caught: unknown;
+		const storage: OAuthAccessSource = {
+			async getOAuthAccess() {
+				const credentialId = nextCredential++;
+				return access(`token-${credentialId}`, { credentialId });
+			},
+			async rotateSessionCredential() {
+				rotateCalls += 1;
+				return true;
+			},
+		};
+
+		try {
+			await withOAuthAccess(storage, "prov", async a => {
+				attempts.push(a.accessToken);
+				lastError = usageLimitError();
+				throw lastError;
+			});
+		} catch (error) {
+			caught = error;
+		}
+
+		expect(caught).toBe(lastError);
+		expect(attempts).toHaveLength(AUTH_RETRY_MAX_ATTEMPTS);
+		expect(rotateCalls).toBe(AUTH_RETRY_MAX_ATTEMPTS - 1);
 	});
 
 	it("propagates non-auth errors immediately and surfaces the last auth error when exhausted", async () => {

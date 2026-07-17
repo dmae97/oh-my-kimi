@@ -1,4 +1,4 @@
-/** Gallery fixtures for the shell tools (bash, eval). */
+/** Gallery fixtures for the shell tools (bash, eval, launch). */
 import type { GalleryFixture } from "./types";
 
 export const shellFixtures: Record<string, GalleryFixture> = {
@@ -53,6 +53,88 @@ export const shellFixtures: Record<string, GalleryFixture> = {
 				wallTimeMs: 5120,
 				timeoutSeconds: 30,
 			},
+		},
+	},
+
+	hub_start: {
+		label: "Hub start",
+		renderer: "hub",
+		streamingArgs: { op: "start", name: "web" },
+		args: {
+			op: "start",
+			name: "web",
+			application: "bun",
+			args: ["run", "dev"],
+			ready: { log: "Local:.*http", port: 5173, timeout: 30 },
+		},
+		result: {
+			content: [
+				{
+					type: "text",
+					text: "Started web: ready pid=51234 uptime=1.2s restarts=0\nReady: Local: http://localhost:5173",
+				},
+			],
+			details: {
+				op: "start",
+				daemon: {
+					name: "web",
+					id: "d-1",
+					state: "ready",
+					pid: 51234,
+					createdAt: 0,
+					startedAt: Date.now() - 1_200,
+					readyAt: Date.now(),
+					restartCount: 0,
+					outputBytes: 2048,
+					readyMatch: "Local:   http://localhost:5173/",
+					persist: false,
+					detached: false,
+				},
+				timedOut: false,
+			},
+		},
+		errorResult: {
+			content: [{ type: "text", text: "start requires application" }],
+			isError: true,
+			details: { op: "start" },
+		},
+	},
+
+	hub_logs: {
+		label: "Hub logs",
+		renderer: "hub",
+		args: { op: "logs", name: "comp-debug", lines: 100, follow: true, cursor: 233_512, timeout: 30 },
+		result: {
+			content: [
+				{
+					type: "text",
+					text: [
+						"Breakpoint 1: 3 locations.",
+						"(lldb) run",
+						"Process 726 launched: '/tmp/compiler'",
+						"frame #0: 0x0000000100012f80 compiler`parse_expression",
+						"[comp-debug: ready; cursor=233797]",
+					].join("\n"),
+				},
+			],
+			details: {
+				op: "logs",
+				cursor: 233_797,
+				timedOut: false,
+				state: "ready",
+				terminalRows: [
+					"\x1b[0mBreakpoint 1: 3 locations.",
+					"\x1b[0m(lldb) run",
+					"\x1b[0mProcess 726 launched: '/tmp/compiler'",
+					"\x1b[0mframe #0: 0x0000000100012f80 compiler`parse_expression",
+					"\x1b[0m\x1b[1;38;5;2m(lldb)\x1b[0m ",
+				],
+			},
+		},
+		errorResult: {
+			content: [{ type: "text", text: "No daemon named web" }],
+			isError: true,
+			details: { op: "logs" },
 		},
 	},
 

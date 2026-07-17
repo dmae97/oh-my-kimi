@@ -7,10 +7,16 @@
  * compaction item as replacement history.
  */
 
-import type { Api, FetchImpl, Model } from "@oh-my-pi/pi-ai";
+import type { Api, CodexCompactionContext, FetchImpl, Model, ProviderSessionState } from "@oh-my-pi/pi-ai";
 import { isTransientStatus, ProviderHttpError } from "@oh-my-pi/pi-ai/error";
+import { applyCodexResponsesLiteShape } from "@oh-my-pi/pi-ai/providers/openai-codex/request-transformer";
 import {
-	getOpenAIResponsesPromptCacheKey,
+	createOpenAICodexCompactionRequestContext,
+	createOpenAICodexCompatibilityMetadata,
+	type OpenAICodexCompatibilityMetadata,
+} from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
+import {
+	getOpenAIPromptCacheKey,
 	getOpenAIResponsesRoutingSessionId,
 	parseAzureDeploymentNameMap,
 	resolveOpenAIRequestSetup,
@@ -21,7 +27,7 @@ import {
 	OPENAI_HEADER_VALUES,
 	OPENAI_HEADERS,
 } from "@oh-my-pi/pi-catalog/wire/codex";
-import { $env, logger } from "@oh-my-pi/pi-utils";
+import { $env, logger, stringifyJson } from "@oh-my-pi/pi-utils";
 
 // ============================================================================
 // Types & Configuration
@@ -219,6 +225,8 @@ export async function requestCompactionV2Streaming(
 		fetch?: FetchImpl;
 		timeoutMs?: number;
 		retryWait?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
+		providerSessionState?: Map<string, ProviderSessionState>;
+		codexCompaction?: CodexCompactionContext;
 	},
 ): Promise<CompactionV2Response> {
 	const endpoint = getCompactionV2Endpoint(model);
@@ -228,12 +236,32 @@ export async function requestCompactionV2Streaming(
 
 	const fetchImpl = options?.fetch ?? globalThis.fetch;
 	const retryWait = options?.retryWait ?? ((delayMs: number) => Bun.sleep(delayMs));
+	const isCodexResponses = compactionV2Api(model) === "openai-codex-responses" || model.provider === "openai-codex";
+	const codexMetadata = isCodexResponses
+		? createOpenAICodexCompatibilityMetadata({
+				sessionId: request.sessionId,
+				providerSessionState: options?.providerSessionState,
+				requestKind: "compaction",
+				compaction: createOpenAICodexCompactionRequestContext({
+					context: options?.codexCompaction,
+					implementation: "responses_compaction_v2",
+				}),
+			})
+		: undefined;
 	let lastError: Error | undefined;
 
 	for (let attempt = 0; attempt <= V2_COMPACTION_MAX_RETRIES; attempt++) {
 		const timeoutSignal = withRequestTimeout(signal, options?.timeoutMs ?? V2_COMPACTION_TIMEOUT_MS);
 		try {
-			return await attemptCompactionV2Streaming(endpoint, apiKey, model, request, fetchImpl, timeoutSignal);
+			return await attemptCompactionV2Streaming(
+				endpoint,
+				apiKey,
+				model,
+				request,
+				fetchImpl,
+				timeoutSignal,
+				codexMetadata,
+			);
 		} catch (err) {
 			const error = err instanceof Error ? err : new Error(String(err));
 			if (signal?.aborted) throw error;
@@ -264,26 +292,44 @@ async function attemptCompactionV2Streaming(
 	request: CompactionV2Request,
 	fetchImpl: FetchImpl,
 	signal?: AbortSignal,
+	codexMetadata?: OpenAICodexCompatibilityMetadata,
 ): Promise<CompactionV2Response> {
 	// Faithful to Codex: append the compaction trigger as the final input item
 	// of an otherwise-normal Responses request, then stream the result. `store`
 	// stays false — compaction must never persist a server-side response object.
 	const cacheOptions = { sessionId: request.sessionId, promptCacheKey: request.promptCacheKey };
-	const promptCacheKey = getOpenAIResponsesPromptCacheKey(cacheOptions);
+	const promptCacheKey = getOpenAIPromptCacheKey(cacheOptions);
 	const body: Record<string, unknown> = {
 		model: request.model,
 		input: [...request.input, COMPACTION_TRIGGER_ITEM],
 		instructions: request.instructions,
 		stream: true,
 		store: false,
-		...(request.reasoning ? { reasoning: request.reasoning, include: ["reasoning.encrypted_content"] } : {}),
+		...(request.reasoning || model.useResponsesLite
+			? {
+					// Lite implies gpt-5.4+, where codex-rs sends `all_turns` replay.
+					reasoning: model.useResponsesLite
+						? { ...(request.reasoning ?? {}), context: "all_turns" }
+						: request.reasoning,
+					include: ["reasoning.encrypted_content"],
+				}
+			: {}),
 		...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
 		...(request.tools && request.tools.length > 0 ? { tools: request.tools, tool_choice: "auto" } : {}),
 	};
+	if (codexMetadata) {
+		body.client_metadata = codexMetadata.clientMetadata;
+	}
+	// Responses Lite models take the same rewrite on the compaction stream:
+	// instructions/tools ride as input items (codex-rs `compact_remote_v2`
+	// builds through `build_responses_request`).
+	if (model.useResponsesLite) {
+		applyCodexResponsesLiteShape(body);
+	}
 	const response = await fetchImpl(endpoint, {
 		method: "POST",
-		headers: buildCompactionV2Headers(model, apiKey, request),
-		body: JSON.stringify(body),
+		headers: buildCompactionV2Headers(model, apiKey, request, codexMetadata),
+		body: stringifyJson(body),
 		signal,
 	});
 
@@ -307,11 +353,16 @@ async function attemptCompactionV2Streaming(
 	return collectCompactionV2Output(response, request);
 }
 
-function buildCompactionV2Headers(model: Model, apiKey: string, request: CompactionV2Request): Record<string, string> {
+function buildCompactionV2Headers(
+	model: Model,
+	apiKey: string,
+	request: CompactionV2Request,
+	codexMetadata?: OpenAICodexCompatibilityMetadata,
+): Record<string, string> {
 	const api = compactionV2Api(model);
 	const cacheOptions = { sessionId: request.sessionId, promptCacheKey: request.promptCacheKey };
 	const routingSessionId = getOpenAIResponsesRoutingSessionId(cacheOptions);
-	const promptCacheSessionId = getOpenAIResponsesPromptCacheKey(cacheOptions);
+	const promptCacheSessionId = getOpenAIPromptCacheKey(cacheOptions);
 	const headers: Record<string, string> =
 		api === "azure-openai-responses"
 			? {
@@ -338,7 +389,11 @@ function buildCompactionV2Headers(model: Model, apiKey: string, request: Compact
 		}
 		headers[OPENAI_HEADERS.BETA] = OPENAI_HEADER_VALUES.BETA_RESPONSES;
 		headers[OPENAI_HEADERS.ORIGINATOR] = OPENAI_HEADER_VALUES.ORIGINATOR_CODEX;
+		if (model.useResponsesLite) {
+			headers[OPENAI_HEADERS.RESPONSES_LITE] = "true";
+		}
 	}
+	if (codexMetadata) Object.assign(headers, codexMetadata.headers);
 
 	return headers;
 }

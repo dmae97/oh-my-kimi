@@ -37,7 +37,9 @@ def load_env_key(var: str, env_path: str = "~/.env") -> str:
 
 def _post(url: str, body: dict, headers: dict, retries: int = 4) -> dict:
     payload = json.dumps(body).encode()
-    req = urllib.request.Request(url, data=payload, headers={"content-type": "application/json", **headers})
+    req = urllib.request.Request(
+        url, data=payload, headers={"content-type": "application/json", **headers}
+    )
     for attempt in range(retries + 1):
         try:
             with urllib.request.urlopen(req, timeout=600) as resp:
@@ -76,7 +78,11 @@ def _anthropic_blocks(blocks: list[dict]) -> list[dict]:
         else:
             item = {
                 "type": "image",
-                "source": {"type": "base64", "media_type": "image/png", "data": _png_b64(b["image_path"])},
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": _png_b64(b["image_path"]),
+                },
             }
         if b.get("cache"):
             item["cache_control"] = {"type": "ephemeral"}
@@ -85,12 +91,20 @@ def _anthropic_blocks(blocks: list[dict]) -> list[dict]:
 
 
 def _anthropic_complete(
-    api_key: str, model: str, messages: list[dict], system: str | None, max_tokens: int, effort: str | None
+    api_key: str,
+    model: str,
+    messages: list[dict],
+    system: str | None,
+    max_tokens: int,
+    effort: str | None,
 ) -> tuple[str, dict, str]:
     body: dict = {
         "model": model,
         "max_tokens": max_tokens,
-        "messages": [{"role": m["role"], "content": _anthropic_blocks(m["content"])} for m in messages],
+        "messages": [
+            {"role": m["role"], "content": _anthropic_blocks(m["content"])}
+            for m in messages
+        ],
     }
     if system:
         body["system"] = system
@@ -163,23 +177,40 @@ def _openai_complete(
     extra_input_items: list[dict] | None = None,
 ) -> tuple[str, dict, str]:
     input_items: list[dict] = list(extra_input_items or [])
-    input_items += [{"role": m["role"], "content": _openai_content(m["content"], m["role"])} for m in messages]
-    body: dict = {"model": model, "input": input_items, "max_output_tokens": max_tokens, "store": False}
+    input_items += [
+        {"role": m["role"], "content": _openai_content(m["content"], m["role"])}
+        for m in messages
+    ]
+    body: dict = {
+        "model": model,
+        "input": input_items,
+        "max_output_tokens": max_tokens,
+        "store": False,
+    }
     if system:
         body["instructions"] = system
     if effort:
         body["reasoning"] = {"effort": "high" if effort in ("xhigh", "max") else effort}
     out = _post(OPENAI_URL, body, {"authorization": f"Bearer {api_key}"})
     status = out.get("status", "")
-    stop = "max_tokens" if (out.get("incomplete_details") or {}).get("reason") == "max_output_tokens" else status
+    stop = (
+        "max_tokens"
+        if (out.get("incomplete_details") or {}).get("reason") == "max_output_tokens"
+        else status
+    )
     return _openai_output_text(out), _openai_usage(out), stop
 
 
-def openai_compact(api_key: str, model: str, messages: list[dict]) -> tuple[list[dict], dict]:
+def openai_compact(
+    api_key: str, model: str, messages: list[dict]
+) -> tuple[list[dict], dict]:
     """POST /responses/compact: returns (compacted output items, usage)."""
     body = {
         "model": model,
-        "input": [{"role": m["role"], "content": _openai_content(m["content"], m["role"])} for m in messages],
+        "input": [
+            {"role": m["role"], "content": _openai_content(m["content"], m["role"])}
+            for m in messages
+        ],
     }
     out = _post(f"{OPENAI_URL}/compact", body, {"authorization": f"Bearer {api_key}"})
     return out.get("output", []), _openai_usage(out)
@@ -191,7 +222,12 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 
 def _openrouter_complete(
-    api_key: str, model: str, messages: list[dict], system: str | None, max_tokens: int, effort: str | None
+    api_key: str,
+    model: str,
+    messages: list[dict],
+    system: str | None,
+    max_tokens: int,
+    effort: str | None,
 ) -> tuple[str, dict, str]:
     def content(blocks: list[dict]) -> list[dict]:
         out = []
@@ -199,15 +235,26 @@ def _openrouter_complete(
             if "text" in b:
                 out.append({"type": "text", "text": b["text"]})
             else:
-                out.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{_png_b64(b['image_path'])}"}})
+                out.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{_png_b64(b['image_path'])}"
+                        },
+                    }
+                )
         return out
 
-    chat_messages = [{"role": m["role"], "content": content(m["content"])} for m in messages]
+    chat_messages = [
+        {"role": m["role"], "content": content(m["content"])} for m in messages
+    ]
     if system:
         chat_messages.insert(0, {"role": "system", "content": system})
     body: dict = {"model": model, "messages": chat_messages, "max_tokens": max_tokens}
     if effort == "none":
-        body["reasoning"] = {"enabled": False}  # OpenRouter's disable switch; effort "none" is not a valid level
+        body["reasoning"] = {
+            "enabled": False
+        }  # OpenRouter's disable switch; effort "none" is not a valid level
     elif effort:
         body["reasoning"] = {"effort": "high" if effort in ("xhigh", "max") else effort}
     out = _post(OPENROUTER_URL, body, {"authorization": f"Bearer {api_key}"})
@@ -217,13 +264,20 @@ def _openrouter_complete(
         text = "".join(p.get("text", "") for p in text if isinstance(p, dict))
     u = out.get("usage", {})
     usage = {
-        "in": u.get("prompt_tokens", 0) - (u.get("prompt_tokens_details") or {}).get("cached_tokens", 0),
+        "in": u.get("prompt_tokens", 0)
+        - (u.get("prompt_tokens_details") or {}).get("cached_tokens", 0),
         "out": u.get("completion_tokens", 0),
         "cache_w": 0,
         "cache_r": (u.get("prompt_tokens_details") or {}).get("cached_tokens", 0),
-        "reasoning": (u.get("completion_tokens_details") or {}).get("reasoning_tokens", 0),
+        "reasoning": (u.get("completion_tokens_details") or {}).get(
+            "reasoning_tokens", 0
+        ),
     }
-    stop = "max_tokens" if choice.get("finish_reason") == "length" else (choice.get("finish_reason") or "")
+    stop = (
+        "max_tokens"
+        if choice.get("finish_reason") == "length"
+        else (choice.get("finish_reason") or "")
+    )
     return text, usage, stop
 
 
@@ -250,12 +304,24 @@ def llm_complete(
     """Returns (text, normalized usage, stop). stop == "max_tokens" means truncated."""
     if is_openrouter(model):
         if extra_input_items:
-            raise ValueError("extra_input_items is OpenAI-only (compacted window replay)")
-        return _openrouter_complete(api_keys["openrouter"], model, messages, system, max_tokens, effort)
+            raise ValueError(
+                "extra_input_items is OpenAI-only (compacted window replay)"
+            )
+        return _openrouter_complete(
+            api_keys["openrouter"], model, messages, system, max_tokens, effort
+        )
     if is_openai(model):
         return _openai_complete(
-            api_keys["openai"], model, messages, system, max_tokens, effort, extra_input_items
+            api_keys["openai"],
+            model,
+            messages,
+            system,
+            max_tokens,
+            effort,
+            extra_input_items,
         )
     if extra_input_items:
         raise ValueError("extra_input_items is OpenAI-only (compacted window replay)")
-    return _anthropic_complete(api_keys["anthropic"], model, messages, system, max_tokens, effort)
+    return _anthropic_complete(
+        api_keys["anthropic"], model, messages, system, max_tokens, effort
+    )

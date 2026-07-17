@@ -15,8 +15,8 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { AgentTool } from "@oh-my-pi/pi-agent-core";
-import { Container, Ellipsis, matchesKey, type OverlayHandle, type TUI } from "@oh-my-pi/pi-tui";
+import { type AgentTool, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import { Container, Ellipsis, matchesKey, type OverlayHandle, padding, type TUI, visibleWidth } from "@oh-my-pi/pi-tui";
 import { formatAge, getProjectDir, logger } from "@oh-my-pi/pi-utils";
 import { ADVISOR_TRANSCRIPT_FILENAME, isAdvisorTranscriptName } from "../../advisor";
 import type { KeyId } from "../../config/keybindings";
@@ -25,6 +25,7 @@ import { IrcBus } from "../../irc/bus";
 import { AgentLifecycleManager } from "../../registry/agent-lifecycle";
 import { type AgentRef, AgentRegistry, type AgentStatus, MAIN_AGENT_ID } from "../../registry/agent-registry";
 import { USER_INTERRUPT_LABEL } from "../../session/messages";
+import { parseThinkingLevel } from "../../thinking";
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../../tools/render-utils";
 import type { ObservableSession, SessionObserverRegistry } from "../session-observer-registry";
 import { theme } from "../theme/theme";
@@ -34,6 +35,7 @@ import { DynamicBorder } from "./dynamic-border";
 
 /** Refresh cadence for the relative-time column */
 const AGE_TICK_MS = 5_000;
+const DATA_CHANGE_RENDER_COALESCE_MS = 100;
 /** Double-tap window for the table's left-left "close hub" gesture. */
 const LEFT_TAP_WINDOW_MS = 500;
 
@@ -54,30 +56,67 @@ function clampHubLine(line: string, width: number): string {
 
 const STATUS_ORDER: Record<AgentStatus, number> = { running: 0, idle: 1, parked: 2, aborted: 3 };
 
-/** Glyph + status word, colored per theme status conventions. */
-function statusBadge(status: AgentStatus): string {
+/** Status glyph, colored per theme status conventions. The title-line counts spell out the words. */
+function statusGlyph(status: AgentStatus): string {
 	switch (status) {
 		case "running":
-			return theme.fg("accent", `${theme.status.running} running`);
+			return theme.fg("accent", theme.status.running);
 		case "idle":
-			return theme.fg("success", `${theme.status.enabled} idle`);
+			return theme.fg("success", theme.status.enabled);
 		case "parked":
-			return theme.fg("muted", `${theme.status.shadowed} parked`);
+			return theme.fg("muted", theme.status.shadowed);
 		case "aborted":
-			return theme.fg("error", `${theme.status.aborted} aborted`);
+			return theme.fg("error", theme.status.aborted);
 	}
 }
 
-function registerPersistedSubagents(registry: AgentRegistry, sessionFile: string | null | undefined): void {
-	if (!sessionFile?.endsWith(".jsonl")) return;
-	const root = sessionFile.slice(0, -6);
-	registerPersistedSubagentsFromDir(registry, root, undefined);
+/** Model id + thinking level (`sonnet-4-6 ◒ high`), level colored per theme. */
+function formatModelBadge(modelId: string, level: ThinkingLevel | undefined): string {
+	const model = theme.fg("muted", replaceTabs(modelId));
+	if (!level || level === ThinkingLevel.Off || level === ThinkingLevel.Inherit) return model;
+	const display = theme.thinking[level as keyof typeof theme.thinking] ?? level;
+	return `${model} ${theme.getThinkingBorderColor(level)(display)}`;
 }
 
-function registerPersistedSubagentsFromDir(registry: AgentRegistry, dir: string, parentId: string | undefined): void {
+/**
+ * Active model + reasoning level for a hub row: live session state when the
+ * agent is attached, else the executor-reported `resolvedModel` selector
+ * (`provider/id`, optionally `:<level>`). Undefined when neither is known
+ * (e.g. a parked historical agent restored from disk).
+ */
+function modelBadge(ref: AgentRef, observed: ObservableSession | undefined): string | undefined {
+	const model = ref.session?.model;
+	if (model) {
+		const level = model.thinking ? ref.session?.thinkingLevel : undefined;
+		return formatModelBadge(model.id, level);
+	}
+	const resolved = observed?.progress?.resolvedModel;
+	if (!resolved) return undefined;
+	// Model ids may themselves contain colons (`qwen3:14b`), so only treat the
+	// suffix as a thinking level when it parses as one.
+	const colon = resolved.lastIndexOf(":");
+	const level = colon >= 0 ? parseThinkingLevel(resolved.slice(colon + 1)) : undefined;
+	const selector = level !== undefined ? resolved.slice(0, colon) : resolved;
+	return formatModelBadge(selector.slice(selector.indexOf("/") + 1), level);
+}
+
+async function registerPersistedSubagents(
+	registry: AgentRegistry,
+	sessionFile: string | null | undefined,
+): Promise<void> {
+	if (!sessionFile?.endsWith(".jsonl")) return;
+	const root = sessionFile.slice(0, -6);
+	await registerPersistedSubagentsFromDir(registry, root, undefined);
+}
+
+async function registerPersistedSubagentsFromDir(
+	registry: AgentRegistry,
+	dir: string,
+	parentId: string | undefined,
+): Promise<void> {
 	let entries: fs.Dirent[];
 	try {
-		entries = fs.readdirSync(dir, { withFileTypes: true });
+		entries = await fs.promises.readdir(dir, { withFileTypes: true });
 	} catch {
 		return;
 	}
@@ -126,7 +165,7 @@ function registerPersistedSubagentsFromDir(registry: AgentRegistry, dir: string,
 				status: "parked",
 			});
 		}
-		registerPersistedSubagentsFromDir(registry, path.join(dir, id), id);
+		await registerPersistedSubagentsFromDir(registry, path.join(dir, id), id);
 	}
 }
 
@@ -191,7 +230,10 @@ export class AgentHubOverlayComponent extends Container {
 	#hubKeys: KeyId[];
 	#unsubscribers: Array<() => void> = [];
 	#ageTimer: NodeJS.Timeout | undefined;
+	#dataChangeTimer?: NodeJS.Timeout;
 	#remote: AgentHubRemote | undefined;
+	/** Resolves after persisted historical subagents have been registered and rows refreshed. */
+	readonly persistedSubagentsReady: Promise<void>;
 
 	// Table state
 	#rows: AgentRef[] = [];
@@ -242,19 +284,28 @@ export class AgentHubOverlayComponent extends Container {
 		this.#expandKeys = deps.expandKeys ?? ["ctrl+o"];
 		this.#focusAgent = deps.focusAgent;
 
-		this.#unsubscribers.push(this.#registry.onChange(() => this.#onDataChange()));
-		this.#unsubscribers.push(this.#observers.onChange(() => this.#onDataChange()));
+		this.#unsubscribers.push(this.#registry.onChange(() => this.#scheduleDataChange()));
+		this.#unsubscribers.push(this.#observers.onChange(() => this.#scheduleDataChange()));
 		this.#ageTimer = setInterval(() => this.#requestRender(), AGE_TICK_MS);
 		this.#ageTimer.unref?.();
 
-		if (!this.#remote) registerPersistedSubagents(this.#registry, deps.sessionFile);
+		this.persistedSubagentsReady = this.#remote
+			? Promise.resolve()
+			: registerPersistedSubagents(this.#registry, deps.sessionFile)
+					.catch((error: unknown) => {
+						logger.warn("Failed to register persisted subagents", { error });
+					})
+					.then(() => {
+						this.#refreshRows();
+					})
+					.finally(() => this.#requestRender());
 		this.#refreshRows();
 	}
 
 	/**
-	 * Whether the table view has no agents to show (every registered agent except
-	 * Main, after the persisted-subagent scan in the constructor). The double-←
-	 * gesture reads this to stay inert when there is nothing to open.
+	 * Whether the current table view has no agents to show (every registered agent
+	 * except Main). Persisted historical rows may arrive later; callers that need
+	 * those included must wait for {@link persistedSubagentsReady} first.
 	 */
 	get isEmpty(): boolean {
 		return this.#rows.length === 0;
@@ -266,6 +317,10 @@ export class AgentHubOverlayComponent extends Container {
 		if (this.#ageTimer) {
 			clearInterval(this.#ageTimer);
 			this.#ageTimer = undefined;
+		}
+		if (this.#dataChangeTimer) {
+			clearTimeout(this.#dataChangeTimer);
+			this.#dataChangeTimer = undefined;
 		}
 		this.#closeTranscriptOverlay();
 	}
@@ -283,6 +338,19 @@ export class AgentHubOverlayComponent extends Container {
 			}
 		}
 		this.#handleTableInput(keyData);
+	}
+
+	/**
+	 * Seed the table's left-left close detector with the current time so a single
+	 * subsequent `←` (within {@link LEFT_TAP_WINDOW_MS}) dismisses the hub.
+	 *
+	 * The editor's own double-tap detector consumes the `←←` that opens the hub,
+	 * leaving this detector at its fresh `0` — without this handoff the user would
+	 * have to press `←←` a second time to escape. Called by the opener when the hub
+	 * was raised by that gesture.
+	 */
+	armCloseTap(): void {
+		this.#lastLeftTap = Date.now();
 	}
 
 	/**
@@ -336,6 +404,15 @@ export class AgentHubOverlayComponent extends Container {
 	// ========================================================================
 	// Live data plumbing
 	// ========================================================================
+
+	#scheduleDataChange(): void {
+		if (this.#dataChangeTimer) return;
+		this.#dataChangeTimer = setTimeout(() => {
+			this.#dataChangeTimer = undefined;
+			this.#onDataChange();
+		}, DATA_CHANGE_RENDER_COALESCE_MS);
+		this.#dataChangeTimer.unref?.();
+	}
 
 	#onDataChange(): void {
 		this.#refreshRows();
@@ -394,17 +471,31 @@ export class AgentHubOverlayComponent extends Container {
 		} else {
 			const termHeight = process.stdout.rows || 40;
 			// Chrome: 2 borders + title + notice? + blank + hints + border
-			const maxVisible = Math.max(3, termHeight - 7 - (this.#notice ? 1 : 0));
-			let start = 0;
-			if (this.#rows.length > maxVisible) {
-				start = Math.min(
-					Math.max(0, this.#selectedRow - Math.floor(maxVisible / 2)),
-					this.#rows.length - maxVisible,
-				);
+			const budget = Math.max(4, termHeight - 7 - (this.#notice ? 1 : 0));
+			const entries = this.#rows.map((ref, i) => this.#renderEntry(ref, i === this.#selectedRow, width));
+			// Entries are 1-2 lines tall; grow a window around the selection until
+			// the line budget is spent, so the selected entry stays centered.
+			let start = this.#selectedRow;
+			let end = this.#selectedRow + 1;
+			let used = entries[start]?.length ?? 0;
+			for (let grew = true; grew; ) {
+				grew = false;
+				if (end < entries.length && used + entries[end].length <= budget) {
+					used += entries[end].length;
+					end++;
+					grew = true;
+				}
+				if (start > 0 && used + entries[start - 1].length <= budget) {
+					start--;
+					used += entries[start].length;
+					grew = true;
+				}
 			}
-			const end = Math.min(start + maxVisible, this.#rows.length);
+			if (start > 0) {
+				lines.push(` ${theme.fg("dim", `… ${start} more`)}`);
+			}
 			for (let i = start; i < end; i++) {
-				lines.push(this.#renderRow(this.#rows[i], i === this.#selectedRow, width));
+				lines.push(...entries[i]);
 			}
 			if (end < this.#rows.length) {
 				lines.push(` ${theme.fg("dim", `… ${this.#rows.length - end} more`)}`);
@@ -433,26 +524,51 @@ export class AgentHubOverlayComponent extends Container {
 		return parts.join(theme.sep.dot);
 	}
 
-	#renderRow(ref: AgentRef, selected: boolean, width: number): string {
+	/**
+	 * One agent entry, 1-2 lines:
+	 * `❯ ⟳ Name  type  ↳ parent  ⧉ 2 ········ model ◒ level · age` — identity
+	 * left, metadata right-aligned (inlined when the terminal is too narrow) —
+	 * plus an indented dim task line when the agent's work is known.
+	 */
+	#renderEntry(ref: AgentRef, selected: boolean, width: number): string[] {
+		const max = Math.max(1, width - 2);
 		const cursor = selected ? theme.fg("accent", theme.nav.cursor) : " ";
-		const parts: string[] = [statusBadge(ref.status), theme.bold(replaceTabs(ref.id))];
-		parts.push(theme.fg("dim", replaceTabs(ref.displayName)));
-		parts.push(theme.fg("dim", ref.parentId ? `${ref.kind} · of ${ref.parentId}` : ref.kind));
-		if (ref.kind === "advisor") {
-			parts.push(theme.fg("warning", "read-only"));
+		const fields: string[] = [`${cursor} ${statusGlyph(ref.status)} ${theme.bold(replaceTabs(ref.id))}`];
+		if (ref.displayName && ref.displayName !== ref.id) {
+			fields.push(theme.fg("dim", replaceTabs(ref.displayName)));
 		}
-		const observed = this.#observableFor(ref.id);
-		const task = observed?.description ?? observed?.progress?.task;
-		if (task) {
-			parts.push(theme.fg("muted", sanitizeLine(task, TRUNCATE_LENGTHS.TITLE)));
+		if (ref.parentId && ref.parentId !== MAIN_AGENT_ID) {
+			fields.push(theme.fg("dim", `↳ ${replaceTabs(ref.parentId)}`));
+		}
+		if (ref.kind === "advisor") {
+			fields.push(theme.fg("warning", "read-only"));
 		}
 		const unread = this.#irc.unreadCount(ref.id);
 		if (unread > 0) {
-			parts.push(theme.fg("warning", `⧉ ${unread}`));
+			fields.push(theme.fg("warning", `⧉ ${unread}`));
 		}
-		parts.push(theme.fg("dim", formatAge(Math.max(1, Math.round((Date.now() - ref.lastActivity) / 1000)))));
-		const rawLine = ` ${cursor} ${parts.join(theme.sep.dot)}`;
-		return truncateToWidth(rawLine.replace(/[\r\n]+/g, " "), Math.max(1, width - 1));
+		const left = ` ${fields.join("  ")}`;
+
+		const observed = this.#observableFor(ref.id);
+		const meta: string[] = [];
+		const badge = modelBadge(ref, observed);
+		if (badge) meta.push(badge);
+		meta.push(theme.fg("dim", formatAge(Math.max(1, Math.round((Date.now() - ref.lastActivity) / 1000)))));
+		const right = meta.join(theme.sep.dot);
+
+		const leftWidth = visibleWidth(left);
+		const rightWidth = visibleWidth(right);
+		const line =
+			leftWidth + 2 + rightWidth <= max
+				? left + padding(max - leftWidth - rightWidth) + right
+				: truncateToWidth(`${left}  ${right}`.replace(/[\r\n]+/g, " "), max);
+		const entry = [line];
+
+		const task = observed?.description ?? observed?.progress?.task ?? ref.activity;
+		if (task) {
+			entry.push(`     ${theme.fg("muted", sanitizeLine(task, Math.max(10, max - 5)))}`);
+		}
+		return entry;
 	}
 
 	#handleTableInput(keyData: string): void {
@@ -470,14 +586,14 @@ export class AgentHubOverlayComponent extends Container {
 			}
 			return;
 		}
-		if (keyData === "j" || matchesSelectDown(keyData)) {
+		if (matchesKey(keyData, "j") || matchesSelectDown(keyData)) {
 			if (this.#rows.length > 0) {
 				this.#selectedRow = Math.min(this.#selectedRow + 1, this.#rows.length - 1);
 			}
 			this.#requestRender();
 			return;
 		}
-		if (keyData === "k" || matchesSelectUp(keyData)) {
+		if (matchesKey(keyData, "k") || matchesSelectUp(keyData)) {
 			if (this.#rows.length > 0) {
 				this.#selectedRow = Math.max(this.#selectedRow - 1, 0);
 			}

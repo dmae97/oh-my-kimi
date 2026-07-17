@@ -1,7 +1,7 @@
 ---
 description: "Don't assert an inline object type and immediately read a property — `(x as { y: T }).y` trusts an unchecked shape; validate with a schema parse at trust boundaries, narrow with `in`/`typeof`, or use a validated named type"
 scope: "tool:edit(*.{ts,tsx,mts,cts}), tool:write(*.{ts,tsx,mts,cts})"
-interruptMode: tool-only
+interruptMode: never
 astCondition:
   - "($X as { $$$BODY }).$PROP"
   - "($X as { $$$BODY })?.$PROP"

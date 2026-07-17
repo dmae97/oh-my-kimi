@@ -67,8 +67,8 @@ interface InFlight {
 
 /**
  * A non-forcing pending preview invoker. Registered by `queueResolveHandler`
- * (resolve previews) so the `resolve` tool can dispatch to a staged action
- * WITHOUT this queue forcing `tool_choice`. The agent-loop's
+ * (resolve previews) so a `write` to `xd://resolve` or `xd://reject` can
+ * dispatch to a staged action WITHOUT this queue forcing `tool_choice`. The agent-loop's
  * SoftToolRequirement lifecycle (remind-then-escalate) owns any forcing.
  */
 interface PendingInvoker {
@@ -90,9 +90,9 @@ export class ToolChoiceQueue {
 	 */
 	#lastResolvedLabel: string | undefined;
 	/**
-	 * Non-forcing pending preview invokers, stacked by UNIQUE id. The `resolve`
-	 * tool dispatches to the head; the agent-loop's soft-tool-requirement
-	 * lifecycle drives resolution without this queue forcing `tool_choice`.
+	 * Non-forcing pending preview invokers, stacked by UNIQUE id. The
+	 * `xd://resolve` or `xd://reject` dispatch runs the head; the agent-loop's
+	 * soft-tool-requirement lifecycle drives resolution without this queue forcing `tool_choice`.
 	 */
 	#pendingInvokers: PendingInvoker[] = [];
 
@@ -211,9 +211,9 @@ export class ToolChoiceQueue {
 	}
 
 	// ── Non-forcing pending invokers ──────────────────────────────────────
-	// Preview producers (queueResolveHandler) register here so `resolve` can
-	// dispatch to a staged action WITHOUT a forced tool_choice (no messages-cache
-	// bust). Stacked by UNIQUE id: a re-register replaces only the same id, so
+	// Preview producers (queueResolveHandler) register here so a resolve-device
+	// write can dispatch to a staged action WITHOUT a forced tool_choice (no
+	// messages-cache bust). Stacked by UNIQUE id: a re-register replaces only the same id, so
 	// concurrent/sequential previews each survive and resolve independently.
 
 	/** Register (or replace by exact id) a non-forcing pending preview invoker. */

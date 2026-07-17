@@ -446,10 +446,17 @@ function mergeUsage(partial?: Partial<Omit<Usage, "cost">> & { cost?: Partial<Us
 	if (costProvided) {
 		merged.cost = { ...base.cost, ...partial.cost } as Usage["cost"];
 	}
-	// Recompute totalTokens when not explicitly provided (canonical formula matches types.ts:
-	// input + output + cacheRead + cacheWrite).
+	// Recompute totalTokens when not explicitly provided (canonical formula matches types.ts).
 	if (partial.totalTokens === undefined) {
-		merged.totalTokens = merged.input + merged.output + merged.cacheRead + merged.cacheWrite;
+		const orchestration = merged.orchestration;
+		merged.totalTokens =
+			merged.input +
+			merged.output +
+			merged.cacheRead +
+			merged.cacheWrite +
+			(orchestration?.input ?? 0) +
+			(orchestration?.output ?? 0) +
+			(orchestration?.cacheRead ?? 0);
 	}
 	// Recompute cost.total when cost components were supplied without an explicit total.
 	if (costProvided && partial.cost?.total === undefined) {

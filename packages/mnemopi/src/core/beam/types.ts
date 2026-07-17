@@ -172,6 +172,15 @@ export interface RecallOptions {
 	useIntent?: boolean;
 	useMmr?: boolean;
 	mmrLambda?: number;
+	/**
+	 * Maximum characters of `content` returned per {@link RecallResult}. When the
+	 * stored content exceeds this, the preview is clipped and the trailing
+	 * character is replaced with `…` so callers can see it was truncated. The
+	 * full row is always reachable via {@link BeamMemoryState.get}. `0` or a
+	 * negative value disables clipping. Defaults to
+	 * {@link RECALL_CONTENT_PREVIEW_CHARS} (500).
+	 */
+	contentPreviewChars?: number;
 }
 
 export interface RecallEnhancedOptions extends RecallOptions {
@@ -238,6 +247,15 @@ export type RecallResult = RecallRowFields & {
 	[key: string]: unknown;
 	id: string;
 	content: string;
+	/**
+	 * True when {@link content} is a clipped preview of the stored row. The
+	 * clip is capped at {@link RecallOptions.contentPreviewChars} (default 500)
+	 * and the last character is replaced with `…`. Fetch the full row via
+	 * `memory://<id>` (mnemopi backend) or the `Mnemopi.get(id)` API.
+	 */
+	truncated?: boolean;
+	/** Original character count of `content` before {@link truncated} clipping. */
+	full_length?: number;
 	score?: number;
 	distance?: number;
 	rank?: number;

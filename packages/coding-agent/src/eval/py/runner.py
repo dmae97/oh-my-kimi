@@ -191,10 +191,14 @@ class _RunnerState:
         self.capture_rid: str | None = None
 
 
-_CURRENT_RID: contextvars.ContextVar[str | None] = contextvars.ContextVar("omp_current_rid", default=None)
-_CURRENT_DISPLAYED_MATPLOTLIB_FIGURE_IDS: contextvars.ContextVar[set[int] | None] = contextvars.ContextVar(
-    "omp_displayed_matplotlib_figure_ids",
-    default=None,
+_CURRENT_RID: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "omp_current_rid", default=None
+)
+_CURRENT_DISPLAYED_MATPLOTLIB_FIGURE_IDS: contextvars.ContextVar[set[int] | None] = (
+    contextvars.ContextVar(
+        "omp_displayed_matplotlib_figure_ids",
+        default=None,
+    )
 )
 
 
@@ -233,7 +237,9 @@ def _drain_captured_stdout() -> None:
 def _start_capture_drain() -> None:
     if _CAPTURE_READ_FD is None:
         return
-    thread = threading.Thread(target=_drain_captured_stdout, name="omp-fd1-capture", daemon=True)
+    thread = threading.Thread(
+        target=_drain_captured_stdout, name="omp-fd1-capture", daemon=True
+    )
     thread.start()
 
 
@@ -242,7 +248,9 @@ def _start_capture_drain() -> None:
 # ---------------------------------------------------------------------------
 
 
-_MAGIC_LINE_RE = re.compile(r"^(?P<indent>[ \t]*)(?P<name>[A-Za-z_][A-Za-z_0-9]*)(?:[ \t]+(?P<args>.*))?$")
+_MAGIC_LINE_RE = re.compile(
+    r"^(?P<indent>[ \t]*)(?P<name>[A-Za-z_][A-Za-z_0-9]*)(?:[ \t]+(?P<args>.*))?$"
+)
 _ASSIGN_LINE_RE = re.compile(
     r"^(?P<indent>[ \t]*)(?P<lhs>[A-Za-z_][A-Za-z_0-9.\[\], ]*?)\s*=\s*(?P<rhs>.+)$"
 )
@@ -337,7 +345,9 @@ def transform_cell(source: str) -> str:
             rhs = m.group("rhs").strip()
             if rhs.startswith("!"):
                 cmd = rhs[1:].strip()
-                out.append(f"{m.group('indent')}{m.group('lhs').rstrip()} = __omp_shell({_quote_arg(cmd)})")
+                out.append(
+                    f"{m.group('indent')}{m.group('lhs').rstrip()} = __omp_shell({_quote_arg(cmd)})"
+                )
                 i += 1
                 continue
             if rhs.startswith("%") and not rhs.startswith("%%"):
@@ -383,7 +393,9 @@ def line_magic(name: str) -> Callable[[Callable[[str], Any]], Callable[[str], An
     return decorator
 
 
-def cell_magic(name: str) -> Callable[[Callable[[str, str], Any]], Callable[[str, str], Any]]:
+def cell_magic(
+    name: str,
+) -> Callable[[Callable[[str, str], Any]], Callable[[str, str], Any]]:
     def decorator(fn: Callable[[str, str], Any]) -> Callable[[str, str], Any]:
         _CELL_MAGICS[name] = fn
         return fn
@@ -397,6 +409,7 @@ def _emit_status(op: str, **data: Any) -> None:
     if rid is None:
         return
     _emit({"type": "display", "id": rid, "bundle": bundle})
+
 
 _SHELL_READ_CHUNK_BYTES = 8192
 _SHELL_OUTPUT_MAX_BYTES = 1024 * 1024
@@ -458,12 +471,16 @@ class _ShellOutputLimiter:
             return
         limited = _take_prefix_by_lines(text, self._remaining_lines)
         truncated = limited != text
-        byte_limited = _take_prefix_by_encoded_bytes(limited, self._remaining_bytes, self._encoding)
+        byte_limited = _take_prefix_by_encoded_bytes(
+            limited, self._remaining_bytes, self._encoding
+        )
         truncated = truncated or byte_limited != limited
         if byte_limited:
             sys.stdout.write(byte_limited)
             sys.stdout.flush()
-            self._remaining_bytes -= len(byte_limited.encode(self._encoding, errors="strict"))
+            self._remaining_bytes -= len(
+                byte_limited.encode(self._encoding, errors="strict")
+            )
             self._remaining_lines -= byte_limited.count("\n")
             self._at_line_start = byte_limited.endswith("\n")
         if truncated:
@@ -478,7 +495,9 @@ class _ShellOutputLimiter:
         self._truncated = True
 
 
-def _stream_process_output(proc: subprocess.Popen, on_text: Callable[[str], None] | None = None) -> None:
+def _stream_process_output(
+    proc: subprocess.Popen, on_text: Callable[[str], None] | None = None
+) -> None:
     assert proc.stdout is not None
     encoding = _process_output_encoding()
     decoder = _process_output_decoder(encoding)
@@ -514,7 +533,9 @@ class _BoundedTextCapture:
         if self._remaining_bytes <= 0 or self._remaining_lines <= 0:
             return
         line_limited = _take_prefix_by_lines(text, self._remaining_lines)
-        part = _take_prefix_by_encoded_bytes(line_limited, self._remaining_bytes, self._encoding)
+        part = _take_prefix_by_encoded_bytes(
+            line_limited, self._remaining_bytes, self._encoding
+        )
         if not part:
             return
         self._parts.append(part)
@@ -583,7 +604,9 @@ def _magic_pip(args: str) -> None:
             head = mod_name.split(".", 1)[0].lower()
             if head in prefixes:
                 sys.modules.pop(mod_name, None)
-    _emit_status("pip", args=args, installed=installed_packages, exit_code=proc.returncode)
+    _emit_status(
+        "pip", args=args, installed=installed_packages, exit_code=proc.returncode
+    )
 
 
 @line_magic("cd")
@@ -658,7 +681,9 @@ def _magic_who(_args: str) -> list[str]:
     names = sorted(
         name
         for name, value in _STATE.user_ns.items()
-        if not name.startswith("_") and not callable(value) or hasattr(value, "__class__")
+        if not name.startswith("_")
+        and not callable(value)
+        or hasattr(value, "__class__")
     )
     return [n for n in names if not n.startswith("__")]
 
@@ -677,7 +702,9 @@ def _magic_whos(_args: str) -> list[tuple[str, str]]:
 @line_magic("reset")
 def _magic_reset(_args: str) -> None:
     _STATE.user_ns.clear()
-    _STATE.user_ns.update({"__name__": "__main__", "__doc__": None, "__builtins__": builtins})
+    _STATE.user_ns.update(
+        {"__name__": "__main__", "__doc__": None, "__builtins__": builtins}
+    )
     _install_builtins(_STATE.user_ns)
     _emit_status("reset")
 
@@ -686,7 +713,9 @@ def _magic_reset(_args: str) -> None:
 def _magic_load(args: str) -> None:
     path = Path(os.path.expanduser(args.strip()))
     source = path.read_text(encoding="utf-8")
-    _emit({"type": "display", "id": _CURRENT_RID.get(), "bundle": {"text/plain": source}})
+    _emit(
+        {"type": "display", "id": _CURRENT_RID.get(), "bundle": {"text/plain": source}}
+    )
     _exec_source(source, _STATE.user_ns)
 
 
@@ -711,6 +740,7 @@ def _magic_run(args: str) -> None:
 @cell_magic("bash")
 def _magic_cell_bash(args: str, body: str) -> int:
     return _run_shell_body(body, shell_arg="/bin/bash")
+
 
 @cell_magic("capture")
 def _magic_cell_capture(args: str, body: str) -> str:
@@ -797,7 +827,9 @@ def __omp_shell(cmd: str) -> _ShellResult:
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
-    capture = _BoundedTextCapture(_SHELL_RESULT_CAPTURE_BYTES, _SHELL_OUTPUT_MAX_LINES, _process_output_encoding())
+    capture = _BoundedTextCapture(
+        _SHELL_RESULT_CAPTURE_BYTES, _SHELL_OUTPUT_MAX_LINES, _process_output_encoding()
+    )
     _stream_process_output(proc, capture.add)
     proc.wait()
     lines = [line for line in capture.text().splitlines()]
@@ -827,7 +859,9 @@ def _is_matplotlib_figure(value: Any) -> bool:
         return True
 
     value_type = type(value)
-    return value_type.__module__ == "matplotlib.figure" and value_type.__name__ == "Figure"
+    return (
+        value_type.__module__ == "matplotlib.figure" and value_type.__name__ == "Figure"
+    )
 
 
 def _matplotlib_figure_png(value: Any) -> str | None:
@@ -868,7 +902,6 @@ def _mime_bundle(value: Any) -> dict:
     matplotlib_png = _matplotlib_figure_png(value)
     if matplotlib_png is not None:
         bundle["image/png"] = matplotlib_png
-
 
     mimebundle = getattr(value, "_repr_mimebundle_", None)
     if callable(mimebundle):
@@ -990,7 +1023,9 @@ def _await_sync(coro) -> Any:
     except RuntimeError:
         running_loop = None
     if running_loop is not None and running_loop.is_running():
-        raise RuntimeError("top-level await is not supported from synchronous magic execution")
+        raise RuntimeError(
+            "top-level await is not supported from synchronous magic execution"
+        )
     return asyncio.run(coro)
 
 
@@ -1003,7 +1038,6 @@ def _run_compiled_sync(code, ns: dict, *, want_value: bool) -> Any:
         return eval(code, ns)
     exec(code, ns)
     return None
-
 
 
 async def _run_compiled_async(code, ns: dict, *, want_value: bool) -> Any:
@@ -1127,6 +1161,7 @@ def _apply_request_runtime(req: dict) -> None:
             elif value is None:
                 os.environ.pop(key, None)
 
+
 def _start_parent_watchdog() -> None:
     """Self-terminate when the host process dies.
 
@@ -1182,23 +1217,27 @@ async def _handle_request_async(req: dict) -> None:
             transformed = transform_cell(req.get("code", ""))
         except SyntaxError as exc:
             _emit_error(rid, exc)
-            _emit({
-                "type": "done",
-                "id": rid,
-                "status": "error",
-                "executionCount": execution_count,
-                "cancelled": False,
-            })
+            _emit(
+                {
+                    "type": "done",
+                    "id": rid,
+                    "status": "error",
+                    "executionCount": execution_count,
+                    "cancelled": False,
+                }
+            )
             return
         except BaseException as exc:  # noqa: BLE001 - runtime setup errors must settle the request
             _emit_error(rid, exc)
-            _emit({
-                "type": "done",
-                "id": rid,
-                "status": "error",
-                "executionCount": execution_count,
-                "cancelled": False,
-            })
+            _emit(
+                {
+                    "type": "done",
+                    "id": rid,
+                    "status": "error",
+                    "executionCount": execution_count,
+                    "cancelled": False,
+                }
+            )
             return
 
         _begin_exec_sigint()
@@ -1222,13 +1261,15 @@ async def _handle_request_async(req: dict) -> None:
                 pass
 
         _flush_stream_proxies(rid)
-        _emit({
-            "type": "done",
-            "id": rid,
-            "status": status,
-            "executionCount": execution_count,
-            "cancelled": cancelled,
-        })
+        _emit(
+            {
+                "type": "done",
+                "id": rid,
+                "status": status,
+                "executionCount": execution_count,
+                "cancelled": cancelled,
+            }
+        )
     finally:
         if _STATE.capture_rid == rid:
             _STATE.capture_rid = None
@@ -1239,13 +1280,15 @@ async def _handle_request_async(req: dict) -> None:
 
 def _emit_error(rid: str, exc: BaseException) -> None:
     tb_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
-    _emit({
-        "type": "error",
-        "id": rid,
-        "ename": type(exc).__name__,
-        "evalue": str(exc),
-        "traceback": [line.rstrip("\n") for line in tb_lines],
-    })
+    _emit(
+        {
+            "type": "error",
+            "id": rid,
+            "ename": type(exc).__name__,
+            "evalue": str(exc),
+            "traceback": [line.rstrip("\n") for line in tb_lines],
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1261,13 +1304,15 @@ def _read_stdin(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue, stdin) ->
         try:
             req = json.loads(line)
         except json.JSONDecodeError as exc:
-            _emit({
-                "type": "error",
-                "id": "",
-                "ename": "ProtocolError",
-                "evalue": f"Invalid JSON request: {exc}",
-                "traceback": [],
-            })
+            _emit(
+                {
+                    "type": "error",
+                    "id": "",
+                    "ename": "ProtocolError",
+                    "evalue": f"Invalid JSON request: {exc}",
+                    "traceback": [],
+                }
+            )
             continue
         loop.call_soon_threadsafe(queue.put_nowait, req)
     loop.call_soon_threadsafe(queue.put_nowait, {"type": "exit"})
@@ -1287,10 +1332,16 @@ async def _main_async() -> None:
     loop = asyncio.get_running_loop()
     _STATE.loop = loop
     queue: asyncio.Queue = asyncio.Queue()
-    reader = threading.Thread(target=_read_stdin, args=(loop, queue, stdin), name="omp-stdin-reader", daemon=True)
+    reader = threading.Thread(
+        target=_read_stdin,
+        args=(loop, queue, stdin),
+        name="omp-stdin-reader",
+        daemon=True,
+    )
     reader.start()
 
     tasks: set[asyncio.Task] = set()
+
     def _task_done(task: asyncio.Task) -> None:
         tasks.discard(task)
         try:
@@ -1299,6 +1350,7 @@ async def _main_async() -> None:
             return
         if exc is not None:
             _emit_error("", exc)
+
     try:
         while True:
             req = await queue.get()

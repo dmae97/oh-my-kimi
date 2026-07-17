@@ -19,7 +19,13 @@
  * `types.ts` via the `export *` below — pi-ai still exports both as types,
  * only the runtime `Type` builder and `StringEnum()` helper were removed.
  */
-import { getBundledModel, getBundledModels } from "@oh-my-pi/pi-catalog/models";
+import {
+	calculateCost,
+	getBundledModel,
+	getBundledModels,
+	getBundledProviders,
+	modelsAreEqual,
+} from "@oh-my-pi/pi-catalog/models";
 import { type TSchema, Type } from "./typebox";
 
 export interface StringEnumOptions<T extends string> {
@@ -66,8 +72,15 @@ export function StringEnum<T extends string | number>(
 }
 
 export * from "@oh-my-pi/pi-ai";
-export { Type };
-
-/** Compatibility aliases for renamed catalog functions */
+/**
+ * Compatibility re-exports for catalog symbols that pi-ai historically exposed
+ * from its own barrel prior to the `refactor(catalog)!: split model catalog
+ * from pi-ai` change. Legacy extensions still import these from the pi-ai
+ * root, so the shim bridges them through to their new home in
+ * `@oh-my-pi/pi-catalog/models`. `getModel`/`getModels` are the historical
+ * pi-ai names for `getBundledModel`/`getBundledModels`; the remaining symbols
+ * kept their names across the move.
+ */
+export { calculateCost, getBundledModel, getBundledModels, getBundledProviders, modelsAreEqual, Type };
 export const getModel = getBundledModel;
 export const getModels = getBundledModels;

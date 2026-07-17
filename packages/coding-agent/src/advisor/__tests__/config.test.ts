@@ -5,6 +5,7 @@ import * as path from "node:path";
 import {
 	advisorConfigFilePath,
 	discoverAdvisorConfigs,
+	getOrCreateAdvisorProviderSessionId,
 	loadWatchdogConfigFile,
 	resolveAdvisorConfigEditPath,
 	saveWatchdogConfigFile,
@@ -55,6 +56,27 @@ describe("discoverAdvisorConfigs", () => {
 		expect(sharedInstructions).toBe("Shared baseline for all advisors.");
 	});
 
+	it("distinguishes omitted tools, explicit no-tools, and invalid-only lists", async () => {
+		const yaml = [
+			"advisors:",
+			"  - name: No Tools",
+			"    tools: []",
+			"  - name: Default Tools",
+			"  - name: Invalid Only",
+			"    tools: [reed]",
+		].join("\n");
+		await Bun.write(path.join(tmp, "WATCHDOG.yml"), yaml);
+
+		const { advisors } = await discoverAdvisorConfigs(tmp, agentDir);
+		const noTools = advisors.find(a => a.name === "No Tools");
+		const defaultTools = advisors.find(a => a.name === "Default Tools");
+		const invalidOnly = advisors.find(a => a.name === "Invalid Only");
+
+		expect(noTools?.tools).toEqual([]);
+		expect(defaultTools?.tools).toBeUndefined();
+		expect(invalidOnly?.tools).toBeUndefined();
+	});
+
 	it("ignores a malformed YAML file without throwing", async () => {
 		await Bun.write(path.join(tmp, "WATCHDOG.yml"), "advisors: [unclosed bracket");
 		const result = await discoverAdvisorConfigs(tmp, agentDir);
@@ -83,6 +105,89 @@ describe("slugifyAdvisorName", () => {
 
 	it("falls back to 'advisor' when nothing alphanumeric survives", () => {
 		expect(slugifyAdvisorName("!!!")).toBe("advisor");
+	});
+});
+
+describe("getOrCreateAdvisorProviderSessionId", () => {
+	const primarySessionA = "018f8f5d-75b0-7cc6-8a6f-2f1c0b8e4c9d";
+	const primarySessionB = "018f8f5d-75b1-7cc6-8a6f-2f1c0b8e4c9d";
+
+	it("returns the generated UUIDv7 instead of a local advisor label", () => {
+		const generated = "0193c8f2-7b1a-7c4d-9e2f-123456789abc";
+
+		const providerSessionId = getOrCreateAdvisorProviderSessionId(
+			new Map<string, string>(),
+			primarySessionA,
+			"security-advisor",
+			() => generated,
+		);
+
+		expect(providerSessionId).toBe(generated);
+		expect(providerSessionId).not.toContain("-advisor");
+	});
+
+	it("reuses the same generated UUIDv7 for repeated calls with the same primary session and slug", () => {
+		const generatedIds = ["0193c8f2-7b1a-7c4d-9e2f-123456789abc", "0193c8f2-7b1b-7c4d-9e2f-123456789abc"];
+		let nextGeneratedIdIndex = 0;
+		const ids = new Map<string, string>();
+
+		const first = getOrCreateAdvisorProviderSessionId(ids, primarySessionA, "architecture", () => {
+			const generated = generatedIds[nextGeneratedIdIndex];
+			if (!generated) throw new Error("unexpected generator call");
+			nextGeneratedIdIndex += 1;
+			return generated;
+		});
+		const second = getOrCreateAdvisorProviderSessionId(ids, primarySessionA, "architecture", () => {
+			const generated = generatedIds[nextGeneratedIdIndex];
+			if (!generated) throw new Error("unexpected generator call");
+			nextGeneratedIdIndex += 1;
+			return generated;
+		});
+
+		expect(first).toBe(generatedIds[0]);
+		expect(second).toBe(generatedIds[0]);
+		expect(nextGeneratedIdIndex).toBe(1);
+	});
+
+	it("creates distinct UUIDv7 values for different advisor slugs or primary sessions", () => {
+		const generatedIds = [
+			"0193c8f2-7b1a-7c4d-9e2f-123456789abc",
+			"0193c8f2-7b1b-7c4d-9e2f-123456789abc",
+			"0193c8f2-7b1c-7c4d-9e2f-123456789abc",
+		];
+		let nextGeneratedIdIndex = 0;
+		const ids = new Map<string, string>();
+		const nextGeneratedId = () => {
+			const generated = generatedIds[nextGeneratedIdIndex];
+			if (!generated) throw new Error("unexpected generator call");
+			nextGeneratedIdIndex += 1;
+			return generated;
+		};
+
+		const architecture = getOrCreateAdvisorProviderSessionId(ids, primarySessionA, "architecture", nextGeneratedId);
+		const security = getOrCreateAdvisorProviderSessionId(ids, primarySessionA, "security", nextGeneratedId);
+		const architectureForOtherSession = getOrCreateAdvisorProviderSessionId(
+			ids,
+			primarySessionB,
+			"architecture",
+			nextGeneratedId,
+		);
+
+		expect(architecture).toBe(generatedIds[0]);
+		expect(security).toBe(generatedIds[1]);
+		expect(architectureForOtherSession).toBe(generatedIds[2]);
+		expect(new Set([architecture, security, architectureForOtherSession]).size).toBe(3);
+	});
+
+	it("rejects generated values that are not UUIDv7", () => {
+		expect(() =>
+			getOrCreateAdvisorProviderSessionId(
+				new Map<string, string>(),
+				primarySessionA,
+				"architecture",
+				() => "550e8400-e29b-41d4-a716-446655440000",
+			),
+		).toThrow("non-UUIDv7");
 	});
 });
 
@@ -120,6 +225,21 @@ describe("WATCHDOG.yml file round-trip", () => {
 		const { advisors, sharedInstructions } = await discoverAdvisorConfigs(tmp, tmp);
 		expect(advisors.map(a => a.name)).toEqual(["Architecture", "Security"]);
 		expect(sharedInstructions).toContain("Shared baseline.");
+	});
+
+	it("round-trips an explicit empty tools list without collapsing it into the default", async () => {
+		const file = path.join(tmp, "WATCHDOG.yml");
+		const explicitNoToolsDoc: WatchdogConfigDoc = {
+			advisors: [{ name: "No Tools", tools: [] }, { name: "Default Tools" }],
+		};
+
+		await saveWatchdogConfigFile(file, explicitNoToolsDoc);
+		const serializedDoc = await loadWatchdogConfigFile(file);
+		expect(serializedDoc).toEqual(explicitNoToolsDoc);
+
+		const { advisors } = await discoverAdvisorConfigs(tmp, tmp);
+		expect(advisors.find(a => a.name === "No Tools")?.tools).toEqual([]);
+		expect(advisors.find(a => a.name === "Default Tools")?.tools).toBeUndefined();
 	});
 
 	it("removes the file when the doc is empty so legacy discovery resumes", async () => {

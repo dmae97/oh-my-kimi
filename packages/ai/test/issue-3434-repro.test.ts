@@ -194,7 +194,7 @@ describe("cross-API thinking-block preservation (#3433/#3434)", () => {
 		if (!assistant) throw new Error("assistant message missing");
 
 		expect(assistant.reasoning_content).toBe("");
-		expect(assistant.content).toBe(`${renderDemotedThinking(target.id, "Read README and answer.")}Done.`);
+		expect(assistant.content).toBe(`${renderDemotedThinking(target.id, "Read README and answer.")}\nDone.`);
 	});
 
 	it("demotes thinking to canonical text when the target cannot replay it semantically", () => {
@@ -211,7 +211,7 @@ describe("cross-API thinking-block preservation (#3433/#3434)", () => {
 		if (!assistant) throw new Error("assistant message missing");
 
 		expect(assistant.reasoning_content).toBeUndefined();
-		expect(assistant.content).toBe(`${renderDemotedThinking(target.id, "Explore the repo, then patch it.")}Done.`);
+		expect(assistant.content).toBe(`${renderDemotedThinking(target.id, "Explore the repo, then patch it.")}\nDone.`);
 	});
 
 	it("demotes cross-API thinking for OpenCode reasoning targets with whenThinking schema", () => {
@@ -233,7 +233,7 @@ describe("cross-API thinking-block preservation (#3433/#3434)", () => {
 		if (!assistant) throw new Error("assistant message missing");
 
 		expect(assistant.reasoning_content).toBeUndefined();
-		expect(assistant.content).toBe(`${renderDemotedThinking(target.id, "Read README and answer.")}Done.`);
+		expect(assistant.content).toBe(`${renderDemotedThinking(target.id, "Read README and answer.")}\nDone.`);
 	});
 
 	it("demotes prior thinking to content when the OpenCode base compat runs with thinking off", () => {
@@ -253,7 +253,7 @@ describe("cross-API thinking-block preservation (#3433/#3434)", () => {
 		if (!assistant) throw new Error("assistant message missing");
 
 		expect(assistant.reasoning_content).toBeUndefined();
-		expect(assistant.content).toBe(`${renderDemotedThinking(target.id, "Read README and answer.")}Done.`);
+		expect(assistant.content).toBe(`${renderDemotedThinking(target.id, "Read README and answer.")}\nDone.`);
 	});
 
 	it("does not promote markup-healed same-model thinking into visible content", () => {

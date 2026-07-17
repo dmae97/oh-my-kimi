@@ -39,8 +39,15 @@ INSTR = "Reply with exactly: OK"
 
 # ---------------------------------------------------------------- part A: mine
 
-MINE_DIRS = ("optimal-combined", "optimal-gpt55", "optimal-gemini", "optimal-fable",
-             "optimal-opus", "optimal-kimi", "optimal-glm")
+MINE_DIRS = (
+    "optimal-combined",
+    "optimal-gpt55",
+    "optimal-gemini",
+    "optimal-fable",
+    "optimal-opus",
+    "optimal-kimi",
+    "optimal-glm",
+)
 
 
 def cond_budget(cond: str) -> int | None:
@@ -86,18 +93,27 @@ def mine() -> tuple[list[dict], dict]:
                 continue
             tok = qa["in"] + qa["cache_r"] + qa["cache_w"]
             chars = min(r["chunk"] + budget, len(flows[r["length"]])) - r["chunk"]
-            cell = agg.setdefault((r["model"], r["cond"]), {"chars": 0, "tok_in": 0, "chunks": 0})
+            cell = agg.setdefault(
+                (r["model"], r["cond"]), {"chars": 0, "tok_in": 0, "chunks": 0}
+            )
             cell["chars"] += chars
             cell["tok_in"] += tok
             cell["chunks"] += 1
-            detail.setdefault(r["model"], {}).setdefault(r["cond"], []).append((chars, tok))
+            detail.setdefault(r["model"], {}).setdefault(r["cond"], []).append(
+                (chars, tok)
+            )
     rows = []
     for (model, cond), c in sorted(agg.items()):
-        rows.append({
-            "model": model, "cond": cond, "chunks": c["chunks"], "chars": c["chars"],
-            "tok_in_total": c["tok_in"],
-            "chars_per_tok": round(c["chars"] / c["tok_in"], 3),
-        })
+        rows.append(
+            {
+                "model": model,
+                "cond": cond,
+                "chunks": c["chunks"],
+                "chars": c["chars"],
+                "tok_in_total": c["tok_in"],
+                "chars_per_tok": round(c["chars"] / c["tok_in"], 3),
+            }
+        )
     return rows, detail
 
 
@@ -111,11 +127,17 @@ RL_PREFIXES = ("x-ratelimit", "ratelimit", "retry-after")
 
 def post_h(url: str, body: dict, headers: dict, retries: int = 4) -> tuple[dict, dict]:
     payload = json.dumps(body).encode()
-    req = urllib.request.Request(url, data=payload, headers={"content-type": "application/json", **headers})
+    req = urllib.request.Request(
+        url, data=payload, headers={"content-type": "application/json", **headers}
+    )
     for attempt in range(retries + 1):
         try:
             with urllib.request.urlopen(req, timeout=600) as resp:
-                rl = {k.lower(): v for k, v in resp.headers.items() if k.lower().startswith(RL_PREFIXES)}
+                rl = {
+                    k.lower(): v
+                    for k, v in resp.headers.items()
+                    if k.lower().startswith(RL_PREFIXES)
+                }
                 return json.load(resp), rl
         except urllib.error.HTTPError as err:
             detail = err.read().decode(errors="replace")[:300]
@@ -140,29 +162,57 @@ def probe_call(model: str, keys: dict, blocks: list[dict]) -> tuple[dict, dict]:
             if "text" in b:
                 content.append({"type": "input_text", "text": b["text"]})
             else:
-                content.append({"type": "input_image",
-                                "image_url": f"data:image/png;base64,{png_b64(b['image_path'])}",
-                                "detail": "original"})
-        body = {"model": model, "input": [{"role": "user", "content": content}],
-                "max_output_tokens": 512, "store": False}
-        out, rl = post_h(OPENAI_URL, body, {"authorization": f"Bearer {keys['openai']}"})
+                content.append(
+                    {
+                        "type": "input_image",
+                        "image_url": f"data:image/png;base64,{png_b64(b['image_path'])}",
+                        "detail": "original",
+                    }
+                )
+        body = {
+            "model": model,
+            "input": [{"role": "user", "content": content}],
+            "max_output_tokens": 512,
+            "store": False,
+        }
+        out, rl = post_h(
+            OPENAI_URL, body, {"authorization": f"Bearer {keys['openai']}"}
+        )
         u = out.get("usage", {})
         cached = (u.get("input_tokens_details") or {}).get("cached_tokens", 0)
-        usage = {"in": u.get("input_tokens", 0), "cached": cached, "out": u.get("output_tokens", 0)}
+        usage = {
+            "in": u.get("input_tokens", 0),
+            "cached": cached,
+            "out": u.get("output_tokens", 0),
+        }
         return usage, rl
     content = []
     for b in blocks:
         if "text" in b:
             content.append({"type": "text", "text": b["text"]})
         else:
-            content.append({"type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{png_b64(b['image_path'])}"}})
-    body = {"model": model, "messages": [{"role": "user", "content": content}], "max_tokens": 512}
-    out, rl = post_h(OPENROUTER_URL, body, {"authorization": f"Bearer {keys['openrouter']}"})
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{png_b64(b['image_path'])}"
+                    },
+                }
+            )
+    body = {
+        "model": model,
+        "messages": [{"role": "user", "content": content}],
+        "max_tokens": 512,
+    }
+    out, rl = post_h(
+        OPENROUTER_URL, body, {"authorization": f"Bearer {keys['openrouter']}"}
+    )
     u = out.get("usage", {})
-    usage = {"in": u.get("prompt_tokens", 0),
-             "cached": (u.get("prompt_tokens_details") or {}).get("cached_tokens", 0),
-             "out": u.get("completion_tokens", 0)}
+    usage = {
+        "in": u.get("prompt_tokens", 0),
+        "cached": (u.get("prompt_tokens_details") or {}).get("cached_tokens", 0),
+        "out": u.get("completion_tokens", 0),
+    }
     return usage, rl
 
 
@@ -190,17 +240,23 @@ def run_probes(keys: dict, flow: str) -> dict:
     page_text = flow[:TEXT_CHUNK]
     out: dict = {"page_chars": len(page_text), "models": {}}
     for model in PROBE_MODELS:
-        steps = [("overhead-1", [{"text": INSTR}]),
-                 ("text-page", [{"text": INSTR}, {"text": page_text}]),
-                 ("overhead-2", [{"text": INSTR}])]
-        steps += [(f"img-{s}", [{"text": INSTR}, {"image_path": pngs[s]}]) for s in SIZES]
+        steps = [
+            ("overhead-1", [{"text": INSTR}]),
+            ("text-page", [{"text": INSTR}, {"text": page_text}]),
+            ("overhead-2", [{"text": INSTR}]),
+        ]
+        steps += [
+            (f"img-{s}", [{"text": INSTR}, {"image_path": pngs[s]}]) for s in SIZES
+        ]
         rows = []
         for name, blocks in steps:
             usage, rl = probe_call(model, keys, blocks)
             row = {"step": name, "usage": usage, "ratelimit": rl, "t": time.time()}
             rows.append(row)
-            print(f"  {model:>24} {name:<11} in={usage['in']:>6} (cached={usage['cached']}) "
-                  f"out={usage['out']:>5} rl-remaining-tokens={rl.get('x-ratelimit-remaining-tokens', '-')}")
+            print(
+                f"  {model:>24} {name:<11} in={usage['in']:>6} (cached={usage['cached']}) "
+                f"out={usage['out']:>5} rl-remaining-tokens={rl.get('x-ratelimit-remaining-tokens', '-')}"
+            )
         out["models"][model] = rows
     return out
 
@@ -253,9 +309,12 @@ def derive(mined: list[dict], detail: dict, probes: dict) -> dict:
         img = {}
         for s in SIZES:
             itok = by[f"img-{s}"]["in"] - overhead
-            img[s] = {"image_tokens": itok, "page_chars": caps[s],
-                      "chars_per_img_tok": round(caps[s] / itok, 3),
-                      "tok_per_megapixel": round(itok / (s * s / 1e6), 1)}
+            img[s] = {
+                "image_tokens": itok,
+                "page_chars": caps[s],
+                "chars_per_img_tok": round(caps[s] / itok, 3),
+                "tok_per_megapixel": round(itok / (s * s / 1e6), 1),
+            }
         cpt_text = page_chars / text_tok
         cpt_img = img[1568]["chars_per_img_tok"]
         stretch = cpt_img / cpt_text
@@ -266,17 +325,31 @@ def derive(mined: list[dict], detail: dict, probes: dict) -> dict:
             "chars_per_text_tok": round(cpt_text, 3),
             "images": img,
             "window_stretch_6x10_1568": round(stretch, 3),
-            "chars_in_200k_window": {"text": int(200_000 * cpt_text), "img_6x10_1568": int(200_000 * cpt_img)},
+            "chars_in_200k_window": {
+                "text": int(200_000 * cpt_text),
+                "img_6x10_1568": int(200_000 * cpt_img),
+            },
             "breakeven_img_token_multiple": round(stretch, 3),
-            "input_cost_per_mchar": {"text": round(p_in / cpt_text, 4), "img_6x10_1568": round(p_in / cpt_img, 4)},
+            "input_cost_per_mchar": {
+                "text": round(p_in / cpt_text, 4),
+                "img_6x10_1568": round(p_in / cpt_img, 4),
+            },
         }
-    return {"mined": mined, "probes": probes, "derived": per_model,
-            "carrier_estimates": estimate_carriers(detail, per_model)}
+    return {
+        "mined": mined,
+        "probes": probes,
+        "derived": per_model,
+        "carrier_estimates": estimate_carriers(detail, per_model),
+    }
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--fresh", action="store_true", help="re-run API probes even if probes.json exists")
+    ap.add_argument(
+        "--fresh",
+        action="store_true",
+        help="re-run API probes even if probes.json exists",
+    )
     ap.add_argument("--env", default="~/.env")
     args = ap.parse_args()
 
@@ -286,16 +359,20 @@ def main() -> None:
     mined, detail = mine()
     print(f"mined {len(mined)} (model, cond) cells from {', '.join(MINE_DIRS)}")
     for r in mined:
-        print(f"  {r['model']:>24} {r['cond']:<18} chunks={r['chunks']:>2} chars={r['chars']:>7} "
-              f"tok={r['tok_in_total']:>7} chars/tok={r['chars_per_tok']:>7.3f}")
+        print(
+            f"  {r['model']:>24} {r['cond']:<18} chunks={r['chunks']:>2} chars={r['chars']:>7} "
+            f"tok={r['tok_in_total']:>7} chars/tok={r['chars_per_tok']:>7.3f}"
+        )
 
     probes_path = OUT / "probes.json"
     if probes_path.exists() and not args.fresh:
         probes = json.loads(probes_path.read_text())
         print("reusing probes.json (pass --fresh to re-run)")
     else:
-        keys = {"openai": load_env_key("OPENAI_API_KEY", args.env),
-                "openrouter": load_env_key("OPENROUTER_API_KEY", args.env)}
+        keys = {
+            "openai": load_env_key("OPENAI_API_KEY", args.env),
+            "openrouter": load_env_key("OPENROUTER_API_KEY", args.env),
+        }
         # 150 paragraphs -> flow ~90k chars, so every probe page (incl. 1568px / 40716
         # chars) is completely full; image token cost is content-independent anyway
         # (verified: identical tok/megapixel at three different fill ratios).
@@ -311,9 +388,11 @@ def main() -> None:
     tmp.replace(OUT / "measurements.json")
     print(f"\nwrote {OUT}/measurements.json")
     for model, d in measurements["derived"].items():
-        print(f"{model}: text {d['chars_per_text_tok']} c/t | img-1568 "
-              f"{d['images'][1568 if 1568 in d['images'] else '1568']['chars_per_img_tok']} c/t | "
-              f"stretch {d['window_stretch_6x10_1568']}x | breakeven {d['breakeven_img_token_multiple']}x")
+        print(
+            f"{model}: text {d['chars_per_text_tok']} c/t | img-1568 "
+            f"{d['images'][1568 if 1568 in d['images'] else '1568']['chars_per_img_tok']} c/t | "
+            f"stretch {d['window_stretch_6x10_1568']}x | breakeven {d['breakeven_img_token_multiple']}x"
+        )
 
 
 if __name__ == "__main__":

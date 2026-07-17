@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Container, Text } from "@oh-my-pi/pi-tui";
-import { InternalUrlRouter } from "../../internal-urls";
+import { InternalUrlRouter, XD_URL_PREFIX } from "../../internal-urls";
 import { getLanguageFromPath, theme } from "../../modes/theme/theme";
 import { parseLineRanges, selectorLineRanges, splitPathAndSel } from "../../tools/path-utils";
 import { PREVIEW_LIMITS, shortenPath } from "../../tools/render-utils";
@@ -9,10 +9,8 @@ import { fileHyperlink, renderCodeCell, tryResolveInternalUrlSync } from "../../
 import type { ToolExecutionHandle } from "./tool-execution";
 
 /**
- * Read calls whose target is resolved through {@link InternalUrlRouter} are
- * rendered as full tool executions (not collapsed into the read group) so the
- * resolved content is visible. `path` is the canonical arg; `file_path` is the
- * legacy alias still tolerated by the read tool schema.
+ * Extract the read call's target path. `path` is the canonical arg; `file_path`
+ * is the legacy alias still tolerated by the read tool schema.
  */
 function readArgsTarget(args: unknown): string | undefined {
 	if (!args || typeof args !== "object" || Array.isArray(args)) return undefined;
@@ -28,17 +26,22 @@ export function readArgsHaveTarget(args: unknown): boolean {
 	return readArgsTarget(args) !== undefined;
 }
 
-export function readArgsTargetInternalUrl(args: unknown): boolean {
+/**
+ * Whether a read collapses into the compact {@link ReadToolGroupComponent}
+ * rather than a full tool execution. Filesystem/external targets always
+ * collapse; other internal URLs (`skill://`, `agent://`, …) render full so
+ * their resolved content is visible. `xd://` device reads are the exception —
+ * they list devices/docs and read better in the compact grouped view.
+ */
+export function readArgsCollapseIntoGroup(args: unknown): boolean {
 	const target = readArgsTarget(args);
-	if (!target) return false;
-	return InternalUrlRouter.instance().canHandle(target);
+	if (target === undefined) return false;
+	return target.startsWith(XD_URL_PREFIX) || !InternalUrlRouter.instance().canHandle(target);
 }
 
 type ReadRenderArgs = {
 	path?: string;
 	file_path?: string;
-	// Legacy field from the old schema; tolerated for rebuilt transcripts.
-	sel?: string;
 };
 
 type ReadToolSuffixResolution = {
@@ -343,8 +346,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 	updateArgs(args: ReadRenderArgs, toolCallId?: string): void {
 		if (!toolCallId) return;
-		const basePath = args.file_path || args.path || "";
-		const rawPath = args.sel ? `${basePath}:${args.sel}` : basePath;
+		const rawPath = args.file_path || args.path || "";
 		const entry: ReadEntry = this.#entries.get(toolCallId) ?? {
 			toolCallId,
 			path: rawPath,

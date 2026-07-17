@@ -5,7 +5,7 @@
  * selection must not jump around as agents heartbeat or update activity. New
  * agents that appear while the hub is open are appended at the end.
  */
-import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeAll, describe, expect, it, setSystemTime, vi } from "bun:test";
 import { IrcBus } from "@oh-my-pi/pi-coding-agent/irc/bus";
 import { AgentHubOverlayComponent } from "@oh-my-pi/pi-coding-agent/modes/components/agent-hub";
 import { SessionObserverRegistry } from "@oh-my-pi/pi-coding-agent/modes/session-observer-registry";
@@ -53,15 +53,14 @@ function makeHub(agents: AgentRegistry) {
 }
 
 function renderedAgentIds(hub: AgentHubOverlayComponent): string[] {
-	return hub
-		.render(120)
-		.map(line => Bun.stripANSI(line))
-		.map(line => line.split(" · "))
-		.filter(
-			parts =>
-				parts.length >= 4 && ["running", "idle", "parked", "aborted"].some(status => parts[0].endsWith(status)),
-		)
-		.map(parts => parts[1]!);
+	// Entry first lines are ` <cursor> <status-glyph> <id> …`; task lines are
+	// indented deeper and chrome lines never carry the cursor slot.
+	const ids: string[] = [];
+	for (const raw of hub.render(120)) {
+		const match = /^ (?:❯| ) (\S+) (\S+)/u.exec(Bun.stripANSI(raw));
+		if (match) ids.push(match[2]!);
+	}
+	return ids;
 }
 
 describe("Agent hub row ordering", () => {
@@ -72,6 +71,8 @@ describe("Agent hub row ordering", () => {
 	});
 
 	afterEach(() => {
+		vi.useRealTimers();
+		setSystemTime();
 		vi.restoreAllMocks();
 		geometry?.restore();
 		geometry = undefined;
@@ -79,42 +80,45 @@ describe("Agent hub row ordering", () => {
 	});
 
 	it("freezes the initial lastActivity order while the hub is open", () => {
-		geometry = stubStdoutGeometry(120);
-		const now = vi.spyOn(Date, "now");
-		const agents = new AgentRegistry();
-		const sessions = new Map<string, AgentSession>();
+		vi.useFakeTimers();
+		let hub: AgentHubOverlayComponent | undefined;
+		try {
+			geometry = stubStdoutGeometry(120);
+			const agents = new AgentRegistry();
+			setSystemTime(1000);
+			const sessionA = {} as AgentSession;
+			agents.register({ id: "A", displayName: "Alpha", kind: "sub", session: sessionA });
 
-		now.mockReturnValue(1000);
-		const sessionA = {} as AgentSession;
-		sessions.set("A", sessionA);
-		agents.register({ id: "A", displayName: "Alpha", kind: "sub", session: sessionA });
+			setSystemTime(2000);
+			const sessionB = {} as AgentSession;
+			agents.register({ id: "B", displayName: "Beta", kind: "sub", session: sessionB });
 
-		now.mockReturnValue(2000);
-		const sessionB = {} as AgentSession;
-		sessions.set("B", sessionB);
-		agents.register({ id: "B", displayName: "Beta", kind: "sub", session: sessionB });
+			setSystemTime(3000);
+			const sessionC = {} as AgentSession;
+			agents.register({ id: "C", displayName: "Gamma", kind: "sub", session: sessionC });
 
-		now.mockReturnValue(3000);
-		const sessionC = {} as AgentSession;
-		sessions.set("C", sessionC);
-		agents.register({ id: "C", displayName: "Gamma", kind: "sub", session: sessionC });
+			hub = makeHub(agents);
+			expect(renderedAgentIds(hub)).toEqual(["C", "B", "A"]);
 
-		const hub = makeHub(agents);
-		expect(renderedAgentIds(hub)).toEqual(["C", "B", "A"]);
+			// Bump A's lastActivity far ahead of the others. The hub is already open,
+			// so the captured order must not change.
+			setSystemTime(4000);
+			agents.setActivity("A", "still running");
 
-		// Bump A's lastActivity far ahead of the others. The hub is already open,
-		// so the captured order must not change.
-		now.mockReturnValue(4000);
-		agents.setActivity("A", "still running");
+			// Registering a new agent schedules a coalesced row refresh; the
+			// existing rows must stay put once the scheduled refresh runs.
+			setSystemTime(5000);
+			const sessionD = {} as AgentSession;
+			agents.register({ id: "D", displayName: "Delta", kind: "sub", session: sessionD });
 
-		// Force a refresh by registering a new agent; the existing rows must stay put.
-		now.mockReturnValue(5000);
-		const sessionD = {} as AgentSession;
-		agents.register({ id: "D", displayName: "Delta", kind: "sub", session: sessionD });
-
-		expect(renderedAgentIds(hub)).toEqual(["C", "B", "A", "D"]);
-
-		hub.dispose();
+			expect(renderedAgentIds(hub)).toEqual(["C", "B", "A"]);
+			vi.advanceTimersByTime(100);
+			expect(renderedAgentIds(hub)).toEqual(["C", "B", "A", "D"]);
+		} finally {
+			hub?.dispose();
+			vi.useRealTimers();
+			setSystemTime();
+		}
 	});
 
 	it("truncates lines and sanitizes newlines to prevent terminal wrapping", () => {

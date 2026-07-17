@@ -282,6 +282,31 @@ describe("openai-completions wire-quirk compat detection", () => {
 		expect(buildOpenAICompat(completionsSpec()).reasoningDeltasMayBeCumulative).toBe(false);
 	});
 
+	it("extends the reasoning stream idle floor to Kimi K2.6 and K2.7 Code, not other reasoning models", () => {
+		const kimiOverrides = {
+			provider: "moonshot",
+			baseUrl: "https://api.moonshot.ai/v1",
+			reasoning: true,
+		} as const;
+		expect(buildOpenAICompat(completionsSpec({ ...kimiOverrides, id: "kimi-k2.6" })).streamIdleTimeoutMs).toBe(
+			300_000,
+		);
+		expect(buildOpenAICompat(completionsSpec({ ...kimiOverrides, id: "kimi-k2.7-code" })).streamIdleTimeoutMs).toBe(
+			300_000,
+		);
+		expect(
+			buildOpenAICompat(completionsSpec({ ...kimiOverrides, id: "kimi-k2.7-code-highspeed" })).streamIdleTimeoutMs,
+		).toBe(300_000);
+		// K2.7 Code on non-native OpenAI-compatible hosts keeps their default.
+		expect(
+			buildOpenAICompat(completionsSpec({ id: "kimi-k2.7-code", reasoning: true })).streamIdleTimeoutMs,
+		).toBeUndefined();
+		// A non-Kimi reasoning model on a generic host keeps the runtime default.
+		expect(
+			buildOpenAICompat(completionsSpec({ id: "some-reasoner", reasoning: true })).streamIdleTimeoutMs,
+		).toBeUndefined();
+	});
+
 	it("maps the remaining provider-keyed wire quirks", () => {
 		expect(buildOpenAICompat(completionsSpec({ provider: "ollama" })).emptyLengthFinishIsContextError).toBe(true);
 		expect(buildOpenAICompat(completionsSpec()).emptyLengthFinishIsContextError).toBe(false);
@@ -474,6 +499,66 @@ describe("model cache spec round trip", () => {
 			expect(model?.compat.supportsDeveloperRole).toBe(true);
 			expect(model?.compat.isOpenRouterHost).toBe(false);
 			expect(model?.compatConfig).toEqual(sparse);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("uses current static limits for same-id cache rows when the static fingerprint changed", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-static-fingerprint-"));
+		const dbPath = path.join(tempDir, "models.db");
+		const staleSameId = buildModel(
+			completionsSpec({
+				id: "catalog-updated-model",
+				name: "Catalog Updated Model (cached)",
+				provider: "spec-cache-test",
+				contextWindow: 64_000,
+				maxTokens: 4_000,
+			}),
+		);
+		const cachedOnly = buildModel(
+			completionsSpec({
+				id: "cache-only-model",
+				name: "Cache Only Model",
+				provider: "spec-cache-test",
+				contextWindow: 96_000,
+				maxTokens: 6_000,
+			}),
+		);
+		const updatedStatic = completionsSpec({
+			id: staleSameId.id,
+			name: "Catalog Updated Model",
+			provider: "spec-cache-test",
+			contextWindow: 256_000,
+			maxTokens: 32_000,
+		});
+
+		try {
+			writeModelCache(
+				"spec-cache-test",
+				Date.now(),
+				[staleSameId, cachedOnly],
+				true,
+				"merge-v3:stale-static-catalog",
+				dbPath,
+			);
+
+			const offline = await resolveProviderModels<"openai-completions">(
+				{
+					providerId: "spec-cache-test",
+					staticModels: [updatedStatic],
+					cacheDbPath: dbPath,
+				},
+				"offline",
+			);
+
+			const sameId = offline.models.find(candidate => candidate.id === updatedStatic.id);
+			expect(sameId?.contextWindow).toBe(256_000);
+			expect(sameId?.maxTokens).toBe(32_000);
+
+			const cacheOnly = offline.models.find(candidate => candidate.id === cachedOnly.id);
+			expect(cacheOnly?.contextWindow).toBe(96_000);
+			expect(cacheOnly?.maxTokens).toBe(6_000);
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}

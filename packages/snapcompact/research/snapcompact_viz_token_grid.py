@@ -41,9 +41,15 @@ PALETTE = {
 
 def font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     candidates = [
-        "/System/Library/Fonts/Supplemental/Arial Bold.ttf" if bold else "/System/Library/Fonts/Supplemental/Arial.ttf",
-        "/System/Library/Fonts/Supplemental/Helvetica Bold.ttf" if bold else "/System/Library/Fonts/Supplemental/Helvetica.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf"
+        if bold
+        else "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/System/Library/Fonts/Supplemental/Helvetica Bold.ttf"
+        if bold
+        else "/System/Library/Fonts/Supplemental/Helvetica.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        if bold
+        else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     ]
     for candidate in candidates:
         if candidate and Path(candidate).exists():
@@ -55,7 +61,9 @@ def lerp(a: int, b: int, t: float) -> int:
     return round(a + (b - a) * t)
 
 
-def mix(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tuple[int, int, int]:
+def mix(
+    a: tuple[int, int, int], b: tuple[int, int, int], t: float
+) -> tuple[int, int, int]:
     return (lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t))
 
 
@@ -89,7 +97,12 @@ def token_side(summary: dict, token_count: int) -> int:
     grid = summary.get("processor_meta", {}).get("image_grid_thw", [[1, 0, 0]])[0]
     _, gh, gw = grid
     merge = math.isqrt(max(1, (gh * gw) // token_count))
-    if merge and gh % merge == 0 and gw % merge == 0 and (gh // merge) * (gw // merge) == token_count:
+    if (
+        merge
+        and gh % merge == 0
+        and gw % merge == 0
+        and (gh // merge) * (gw // merge) == token_count
+    ):
         return gh // merge
     raise ValueError(f"cannot fold {token_count} image tokens into a square grid")
 
@@ -100,7 +113,9 @@ def fold_tokens(arr: np.ndarray, side: int) -> np.ndarray:
     return arr.reshape(arr.shape[0], side, side)
 
 
-def heat_overlay(base: Image.Image, heat: np.ndarray, alpha_floor: int = 28, alpha_peak: int = 220) -> Image.Image:
+def heat_overlay(
+    base: Image.Image, heat: np.ndarray, alpha_floor: int = 28, alpha_peak: int = 220
+) -> Image.Image:
     norm, _ = normalize(heat)
     small = Image.new("RGBA", (heat.shape[1], heat.shape[0]), (0, 0, 0, 0))
     pix = small.load()
@@ -108,13 +123,27 @@ def heat_overlay(base: Image.Image, heat: np.ndarray, alpha_floor: int = 28, alp
         for x in range(heat.shape[1]):
             t = float(norm[y, x])
             r, g, b = heat_color(t)
-            pix[x, y] = (r, g, b, round(alpha_floor + (alpha_peak - alpha_floor) * (t ** 0.85)))
-    overlay = small.resize(base.size, Image.Resampling.BICUBIC).filter(ImageFilter.GaussianBlur(1.0))
-    dim = Image.blend(base.convert("RGB"), Image.new("RGB", base.size, (5, 8, 13)), 0.28).convert("RGBA")
+            pix[x, y] = (
+                r,
+                g,
+                b,
+                round(alpha_floor + (alpha_peak - alpha_floor) * (t**0.85)),
+            )
+    overlay = small.resize(base.size, Image.Resampling.BICUBIC).filter(
+        ImageFilter.GaussianBlur(1.0)
+    )
+    dim = Image.blend(
+        base.convert("RGB"), Image.new("RGB", base.size, (5, 8, 13)), 0.28
+    ).convert("RGBA")
     return Image.alpha_composite(dim, overlay).convert("RGB")
 
 
-def draw_token_grid(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], side: int, color: tuple[int, int, int] = (255, 255, 255)) -> None:
+def draw_token_grid(
+    draw: ImageDraw.ImageDraw,
+    box: tuple[int, int, int, int],
+    side: int,
+    color: tuple[int, int, int] = (255, 255, 255),
+) -> None:
     x0, y0, x1, y1 = box
     for i in range(side + 1):
         x = round(x0 + (x1 - x0) * i / side)
@@ -124,7 +153,12 @@ def draw_token_grid(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], s
         draw.line((x0, y, x1, y), fill=fill, width=1)
 
 
-def paste_fit(canvas: Image.Image, img: Image.Image, box: tuple[int, int, int, int], resample: int = Image.Resampling.LANCZOS) -> tuple[int, int, int, int]:
+def paste_fit(
+    canvas: Image.Image,
+    img: Image.Image,
+    box: tuple[int, int, int, int],
+    resample: int = Image.Resampling.LANCZOS,
+) -> tuple[int, int, int, int]:
     x0, y0, x1, y1 = box
     scale = min((x1 - x0) / img.width, (y1 - y0) / img.height)
     w = max(1, round(img.width * scale))
@@ -136,7 +170,15 @@ def paste_fit(canvas: Image.Image, img: Image.Image, box: tuple[int, int, int, i
     return (px, py, px + w, py + h)
 
 
-def crop_answer(img: Image.Image, start: int, end: int, cols: int, adv: int, pitch: int, pad_cells: int = 34) -> Image.Image:
+def crop_answer(
+    img: Image.Image,
+    start: int,
+    end: int,
+    cols: int,
+    adv: int,
+    pitch: int,
+    pad_cells: int = 34,
+) -> Image.Image:
     rows = img.height // pitch
     row0 = max(0, start // cols - 5)
     row1 = min(rows, end // cols + 6)
@@ -154,7 +196,9 @@ def crop_answer(img: Image.Image, start: int, end: int, cols: int, adv: int, pit
     return crop
 
 
-def answer_bbox(start: int, end: int, cols: int, adv: int, pitch: int) -> tuple[int, int, int, int]:
+def answer_bbox(
+    start: int, end: int, cols: int, adv: int, pitch: int
+) -> tuple[int, int, int, int]:
     return (
         max(0, (start % cols) * adv - adv),
         max(0, (start // cols) * pitch - 2),
@@ -163,15 +207,28 @@ def answer_bbox(start: int, end: int, cols: int, adv: int, pitch: int) -> tuple[
     )
 
 
-def draw_panel(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], title: str, subtitle: str | None = None) -> None:
-    draw.rounded_rectangle(box, radius=26, fill=PALETTE["panel"], outline=(32, 43, 55), width=1)
+def draw_panel(
+    draw: ImageDraw.ImageDraw,
+    box: tuple[int, int, int, int],
+    title: str,
+    subtitle: str | None = None,
+) -> None:
+    draw.rounded_rectangle(
+        box, radius=26, fill=PALETTE["panel"], outline=(32, 43, 55), width=1
+    )
     x0, y0, _, _ = box
     draw.text((x0 + 24, y0 + 20), title, fill=PALETTE["ink"], font=font(28, True))
     if subtitle:
         draw.text((x0 + 24, y0 + 56), subtitle, fill=PALETTE["muted"], font=font(17))
 
 
-def draw_micro_grid(canvas: Image.Image, heat: np.ndarray, box: tuple[int, int, int, int], title: str, subtitle: str) -> None:
+def draw_micro_grid(
+    canvas: Image.Image,
+    heat: np.ndarray,
+    box: tuple[int, int, int, int],
+    title: str,
+    subtitle: str,
+) -> None:
     draw = ImageDraw.Draw(canvas)
     draw_panel(draw, box, title, subtitle)
     x0, y0, x1, y1 = box
@@ -194,16 +251,34 @@ def draw_micro_grid(canvas: Image.Image, heat: np.ndarray, box: tuple[int, int, 
         draw.line((gx0, y, gx1, y), fill=(255, 255, 255, 34))
 
 
-def label(draw: ImageDraw.ImageDraw, xy: tuple[int, int], text: str, color: tuple[int, int, int], size: int = 18, bold: bool = True) -> None:
+def label(
+    draw: ImageDraw.ImageDraw,
+    xy: tuple[int, int],
+    text: str,
+    color: tuple[int, int, int],
+    size: int = 18,
+    bold: bool = True,
+) -> None:
     x, y = xy
     pad = 8
     f = font(size, bold)
     box = draw.textbbox((x, y), text, font=f)
-    draw.rounded_rectangle((box[0] - pad, box[1] - 4, box[2] + pad, box[3] + 5), radius=9, fill=(4, 6, 10), outline=color, width=1)
+    draw.rounded_rectangle(
+        (box[0] - pad, box[1] - 4, box[2] + pad, box[3] + 5),
+        radius=9,
+        fill=(4, 6, 10),
+        outline=color,
+        width=1,
+    )
     draw.text((x, y), text, fill=color, font=f)
 
 
-def draw_hotspots(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], heat: np.ndarray, count: int = 9) -> None:
+def draw_hotspots(
+    draw: ImageDraw.ImageDraw,
+    box: tuple[int, int, int, int],
+    heat: np.ndarray,
+    count: int = 9,
+) -> None:
     x0, y0, x1, y1 = box
     side = heat.shape[0]
     flat = heat.ravel()
@@ -211,7 +286,10 @@ def draw_hotspots(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], hea
     chosen: list[int] = []
     for idx in np.argsort(flat)[::-1]:
         r, c = divmod(int(idx), side)
-        if all(abs(r - divmod(j, side)[0]) + abs(c - divmod(j, side)[1]) >= 3 for j in chosen):
+        if all(
+            abs(r - divmod(j, side)[0]) + abs(c - divmod(j, side)[1]) >= 3
+            for j in chosen
+        ):
             chosen.append(int(idx))
             if len(chosen) == count:
                 break
@@ -220,12 +298,26 @@ def draw_hotspots(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], hea
         cx = round(x0 + (c + 0.5) * (x1 - x0) / side)
         cy = round(y0 + (r + 0.5) * (y1 - y0) / side)
         rad = 11 if rank <= 3 else 8
-        draw.ellipse((cx - rad, cy - rad, cx + rad, cy + rad), outline=PALETTE["amber"], width=3)
+        draw.ellipse(
+            (cx - rad, cy - rad, cx + rad, cy + rad), outline=PALETTE["amber"], width=3
+        )
         if rank <= 5:
-            draw.text((cx + 10, cy - 16), str(rank), fill=PALETTE["amber"], font=font(16, True))
+            draw.text(
+                (cx + 10, cy - 16),
+                str(rank),
+                fill=PALETTE["amber"],
+                font=font(16, True),
+            )
 
 
-def text_block(draw: ImageDraw.ImageDraw, xy: tuple[int, int], lines: Iterable[str], fill: tuple[int, int, int], size: int = 20, gap: int = 8) -> None:
+def text_block(
+    draw: ImageDraw.ImageDraw,
+    xy: tuple[int, int],
+    lines: Iterable[str],
+    fill: tuple[int, int, int],
+    size: int = 20,
+    gap: int = 8,
+) -> None:
     x, y = xy
     f = font(size)
     for line in lines:
@@ -263,7 +355,9 @@ def render() -> None:
         early_ratio=early_ratio,
         mid_answer_delta=mid_delta,
         late_answer_delta=late_delta,
-        image_grid_thw=np.array(summary["processor_meta"]["image_grid_thw"][0], dtype=np.int32),
+        image_grid_thw=np.array(
+            summary["processor_meta"]["image_grid_thw"][0], dtype=np.int32
+        ),
     )
     (OUT_DIR / "token_grid_summary.json").write_text(
         json.dumps(
@@ -272,7 +366,9 @@ def render() -> None:
                 "image_grid_thw": summary["processor_meta"]["image_grid_thw"][0],
                 "image_tokens": int(summary["image_tokens"]),
                 "rendered_token_grid": [side, side],
-                "patch_merge": int(summary["processor_meta"]["image_grid_thw"][0][1] // side),
+                "patch_merge": int(
+                    summary["processor_meta"]["image_grid_thw"][0][1] // side
+                ),
                 "answer_over_random_delta": float(summary["answer_over_random_delta"]),
                 "question": summary["question"]["q"],
                 "answer_text": summary["question"]["answer_text"],
@@ -291,11 +387,20 @@ def render() -> None:
     gd.ellipse((-320, -240, 960, 780), fill=(255, 80, 66, 34))
     gd.ellipse((920, -120, 2350, 1100), fill=(75, 218, 255, 30))
     gd.ellipse((760, 860, 1810, 1760), fill=(255, 194, 72, 18))
-    canvas = Image.alpha_composite(canvas.convert("RGBA"), glow.filter(ImageFilter.GaussianBlur(95))).convert("RGB")
+    canvas = Image.alpha_composite(
+        canvas.convert("RGBA"), glow.filter(ImageFilter.GaussianBlur(95))
+    ).convert("RGB")
     draw = ImageDraw.Draw(canvas)
 
-    draw.text((64, 48), "SNAPCOMPACT TOKEN FIELD", fill=PALETTE["amber"], font=font(24, True))
-    draw.text((64, 86), "Where the hidden-state scar lands on the bitmap", fill=PALETTE["ink"], font=font(62, True))
+    draw.text(
+        (64, 48), "SNAPCOMPACT TOKEN FIELD", fill=PALETTE["amber"], font=font(24, True)
+    )
+    draw.text(
+        (64, 86),
+        "Where the hidden-state scar lands on the bitmap",
+        fill=PALETTE["ink"],
+        font=font(62, True),
+    )
     draw.text(
         (66, 164),
         "PaddleOCR-VL reports a 1×54×54 image patch grid; 729 hidden-state image tokens fold back to 27×27 spatial cells.",
@@ -305,7 +410,12 @@ def render() -> None:
 
     # Main spatial map.
     main_panel = (545, 225, 1455, 1340)
-    draw_panel(draw, main_panel, "answer-mask delta projected onto image tokens", "mean ||hidden(original) − hidden(answer-mask)|| across 19 layers")
+    draw_panel(
+        draw,
+        main_panel,
+        "answer-mask delta projected onto image tokens",
+        "mean ||hidden(original) − hidden(answer-mask)|| across 19 layers",
+    )
     map_box = (610, 330, 1390, 1110)
     projected = heat_overlay(original, answer_mean)
     pasted = paste_fit(canvas, projected, map_box, Image.Resampling.LANCZOS)
@@ -313,7 +423,13 @@ def render() -> None:
     overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     od = ImageDraw.Draw(overlay)
     draw_token_grid(od, pasted, side, (255, 255, 255))
-    bbox = answer_bbox(summary["question"]["answer_start"], summary["question"]["answer_end"], summary["geometry"]["cols"], 8, 13)
+    bbox = answer_bbox(
+        summary["question"]["answer_start"],
+        summary["question"]["answer_end"],
+        summary["geometry"]["cols"],
+        8,
+        13,
+    )
     sx = (pasted[2] - pasted[0]) / original.width
     sy = (pasted[3] - pasted[1]) / original.height
     answer_rect = (
@@ -326,8 +442,20 @@ def render() -> None:
     draw_hotspots(od, pasted, answer_mean)
     canvas = Image.alpha_composite(canvas.convert("RGBA"), overlay).convert("RGB")
     draw = ImageDraw.Draw(canvas)
-    label(draw, (pasted[0] + 18, pasted[1] + 18), "27×27 reconstructed image-token grid", PALETTE["cyan"], 19)
-    label(draw, (answer_rect[2] + 14, answer_rect[1] - 5), "erased answer text", PALETTE["red"], 18)
+    label(
+        draw,
+        (pasted[0] + 18, pasted[1] + 18),
+        "27×27 reconstructed image-token grid",
+        PALETTE["cyan"],
+        19,
+    )
+    label(
+        draw,
+        (answer_rect[2] + 14, answer_rect[1] - 5),
+        "erased answer text",
+        PALETTE["red"],
+        18,
+    )
     text_block(
         draw,
         (620, 1162),
@@ -344,13 +472,39 @@ def render() -> None:
     # Evidence crops.
     left = (64, 225, 505, 1340)
     draw_panel(draw, left, "bitmap intervention", "original crop vs. answer erased")
-    crop = crop_answer(original, summary["question"]["answer_start"], summary["question"]["answer_end"], summary["geometry"]["cols"], 8, 13)
-    mcrop = crop_answer(masked, summary["question"]["answer_start"], summary["question"]["answer_end"], summary["geometry"]["cols"], 8, 13)
+    crop = crop_answer(
+        original,
+        summary["question"]["answer_start"],
+        summary["question"]["answer_end"],
+        summary["geometry"]["cols"],
+        8,
+        13,
+    )
+    mcrop = crop_answer(
+        masked,
+        summary["question"]["answer_start"],
+        summary["question"]["answer_end"],
+        summary["geometry"]["cols"],
+        8,
+        13,
+    )
     draw.text((96, 332), "ORIGINAL", fill=PALETTE["cyan"], font=font(17, True))
-    draw.rounded_rectangle((94, 360, 475, 525), radius=16, fill=(240, 238, 226), outline=PALETTE["cyan"], width=3)
+    draw.rounded_rectangle(
+        (94, 360, 475, 525),
+        radius=16,
+        fill=(240, 238, 226),
+        outline=PALETTE["cyan"],
+        width=3,
+    )
     paste_fit(canvas, crop, (108, 374, 461, 511), Image.Resampling.NEAREST)
     draw.text((96, 572), "ANSWER MASK", fill=PALETTE["red"], font=font(17, True))
-    draw.rounded_rectangle((94, 600, 475, 765), radius=16, fill=(240, 238, 226), outline=PALETTE["red"], width=3)
+    draw.rounded_rectangle(
+        (94, 600, 475, 765),
+        radius=16,
+        fill=(240, 238, 226),
+        outline=PALETTE["red"],
+        width=3,
+    )
     paste_fit(canvas, mcrop, (108, 614, 461, 751), Image.Resampling.NEAREST)
     draw.text((96, 822), "source arrays", fill=PALETTE["muted"], font=font(17, True))
     text_block(
@@ -370,17 +524,59 @@ def render() -> None:
         21,
         8,
     )
-    draw.rounded_rectangle((96, 1110, 472, 1268), radius=18, fill=PALETTE["panel2"], outline=(38, 51, 64), width=1)
+    draw.rounded_rectangle(
+        (96, 1110, 472, 1268),
+        radius=18,
+        fill=PALETTE["panel2"],
+        outline=(38, 51, 64),
+        width=1,
+    )
     draw.text((118, 1132), "scar strength", fill=PALETTE["amber"], font=font(18, True))
-    draw.text((118, 1170), f"{summary['answer_over_random_delta']:.2f}×", fill=PALETTE["ink"], font=font(54, True))
-    draw.text((120, 1232), "answer-mask / random-mask mean delta", fill=PALETTE["muted"], font=font(17))
+    draw.text(
+        (118, 1170),
+        f"{summary['answer_over_random_delta']:.2f}×",
+        fill=PALETTE["ink"],
+        font=font(54, True),
+    )
+    draw.text(
+        (120, 1232),
+        "answer-mask / random-mask mean delta",
+        fill=PALETTE["muted"],
+        font=font(17),
+    )
 
     # Right analytical small multiples.
-    draw_micro_grid(canvas, ratio_mean, (1495, 225, 2136, 590), "ratio field", "mean answer_delta / random_delta")
-    draw_micro_grid(canvas, early_ratio, (1495, 620, 1810, 975), "early layers", "ratio, layers 0–3")
-    draw_micro_grid(canvas, mid_delta, (1820, 620, 2136, 975), "middle layers", "answer delta, layers 6–12")
-    draw_micro_grid(canvas, late_delta, (1495, 1005, 1810, 1340), "late layers", "answer delta, last 4")
-    draw_micro_grid(canvas, random_mean, (1820, 1005, 2136, 1340), "random control", "random-mask delta")
+    draw_micro_grid(
+        canvas,
+        ratio_mean,
+        (1495, 225, 2136, 590),
+        "ratio field",
+        "mean answer_delta / random_delta",
+    )
+    draw_micro_grid(
+        canvas, early_ratio, (1495, 620, 1810, 975), "early layers", "ratio, layers 0–3"
+    )
+    draw_micro_grid(
+        canvas,
+        mid_delta,
+        (1820, 620, 2136, 975),
+        "middle layers",
+        "answer delta, layers 6–12",
+    )
+    draw_micro_grid(
+        canvas,
+        late_delta,
+        (1495, 1005, 1810, 1340),
+        "late layers",
+        "answer delta, last 4",
+    )
+    draw_micro_grid(
+        canvas,
+        random_mean,
+        (1820, 1005, 2136, 1340),
+        "random control",
+        "random-mask delta",
+    )
 
     # Color legend.
     lx0, ly0, lx1, ly1 = 1530, 530, 2100, 552

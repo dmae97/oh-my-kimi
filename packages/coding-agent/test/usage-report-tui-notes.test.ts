@@ -1,14 +1,16 @@
 /**
- * Regression for #3268 (TUI aggregate path, command-controller.ts).
+ * Regression coverage for the TUI aggregate path in `command-controller.ts`.
  *
- * Two contracts that the CLI `formatUsageBreakdown` test cannot cover, because
- * the bug lives in the TUI cross-account grouping renderer `renderUsageReports`:
+ * Three contracts that the CLI `formatUsageBreakdown` test cannot cover,
+ * because the bug lives in the TUI cross-account grouping renderer
+ * `renderUsageReports`:
  *
  *  1. Provider-wide `UsageReport.notes` render ONCE above the per-account
  *     sections, not once per account/window.
  *  2. Identical per-limit notes from multiple accounts that fall in the same
- *     `label|windowId` group are de-duplicated (the `[...new Set(...)]` at the
- *     per-group note line). Without the dedup the note is bullet-joined N times.
+ *     `label|windowId` group are de-duplicated.
+ *  3. Wide terminals preserve organization suffixes that distinguish accounts
+ *     sharing an email address.
  */
 
 import { beforeAll, describe, expect, it } from "bun:test";
@@ -80,5 +82,60 @@ describe("renderUsageReports (#3268 TUI aggregate)", () => {
 		// Deduped: appears once on the group note line. Pre-fix `flatMap(...).join`
 		// would bullet-join it twice (one per account in the group).
 		expect(occurrences).toBe(1);
+	});
+
+	it("preserves organization suffixes when wide account columns can fit them", () => {
+		const now = Date.now();
+		const accountLimit = () => ({
+			...limit("5 Hour limit", "rolling-5h", 5 * HOUR, 0.3),
+			window: {
+				id: "rolling-5h",
+				label: "5 Hour limit",
+				durationMs: 5 * HOUR,
+				resetsAt: now + 2.5 * HOUR,
+			},
+		});
+		const reports: UsageReport[] = [
+			{
+				...report("anthropic", "rae@example.com", [accountLimit()]),
+				metadata: { email: "rae@example.com", orgId: "team-org", orgName: "Team Org" },
+			},
+			report("anthropic", "rae@example.com", [accountLimit()]),
+		];
+
+		const text = stripVTControlCharacters(renderUsageReports(reports, theme, now, 160));
+
+		expect(text).toContain("rae@example.com (Team Org)");
+	});
+});
+
+describe("renderUsageReports session marker (#5691 org-qualified identity)", () => {
+	it("suffixes the active org so same-email multi-org accounts are tellable apart", () => {
+		const email = "dev@example.test";
+		const reports: UsageReport[] = [
+			report("anthropic", email, [limit("Claude 7 Day", "weekly", 7 * 24 * HOUR, 0.4)]),
+		];
+		const text = stripVTControlCharacters(
+			renderUsageReports(reports, theme, Date.now(), 120, provider =>
+				provider === "anthropic" ? { email, orgId: "uuid-A", orgName: "Team Org" } : undefined,
+			),
+		);
+		const marker = text.split("\n").find(line => line.includes("in use by this session"));
+		expect(marker).toContain(`${email} (Team Org)`);
+	});
+
+	it("falls back to the bare base when the active identity carries no org", () => {
+		const email = "solo@example.test";
+		const reports: UsageReport[] = [
+			report("anthropic", email, [limit("Claude 7 Day", "weekly", 7 * 24 * HOUR, 0.4)]),
+		];
+		const text = stripVTControlCharacters(
+			renderUsageReports(reports, theme, Date.now(), 120, provider =>
+				provider === "anthropic" ? { email } : undefined,
+			),
+		);
+		const marker = text.split("\n").find(line => line.includes("in use by this session"));
+		expect(marker).toContain(email);
+		expect(marker).not.toContain("(");
 	});
 });

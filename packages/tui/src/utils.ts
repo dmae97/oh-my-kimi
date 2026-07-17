@@ -394,6 +394,7 @@ export function getWordNavKind(grapheme: string): WordNavKind {
 	const ch = firstCodePointChar(grapheme);
 	if (!ch) return "other";
 	if (WORD_NAV_RE_WHITESPACE.test(ch)) return "whitespace";
+	if (ch === "_") return "word";
 	if (WORD_NAV_RE_PUNCT.test(ch) || WORD_NAV_RE_SYMBOL.test(ch)) return "delimiter";
 	if (
 		WORD_NAV_RE_HAN.test(ch) ||
@@ -403,7 +404,7 @@ export function getWordNavKind(grapheme: string): WordNavKind {
 	) {
 		return "cjk";
 	}
-	if (ch === "_" || WORD_NAV_RE_LETTER.test(ch) || WORD_NAV_RE_NUMBER.test(ch)) return "word";
+	if (WORD_NAV_RE_LETTER.test(ch) || WORD_NAV_RE_NUMBER.test(ch)) return "word";
 	return "other";
 }
 

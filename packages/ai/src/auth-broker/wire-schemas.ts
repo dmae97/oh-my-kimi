@@ -32,6 +32,8 @@ export const oauthCredentialSchema = type({
 	"projectId?": "string",
 	"email?": "string",
 	"accountId?": "string",
+	"orgId?": "string",
+	"orgName?": "string",
 });
 
 /** OAuth credential as it appears in broker snapshots — refresh replaced with sentinel. */
@@ -45,12 +47,15 @@ export const remoteOauthCredentialSchema = type({
 	"projectId?": "string",
 	"email?": "string",
 	"accountId?": "string",
+	"orgId?": "string",
+	"orgName?": "string",
 });
 
 export const apiKeyCredentialSchema = type({
 	"+": "reject",
 	type: "'api_key'",
 	key: type("string").atLeastLength(1),
+	"source?": "'login'",
 });
 
 /** Discriminated union accepted on POST /v1/credential (writes). */
@@ -74,6 +79,7 @@ export const credentialBlockSnapshotSchema = type({
 	providerKey: type("string").atLeastLength(1),
 	blockScope: "string",
 	blockedUntilMs: "number",
+	"updatedAtMs?": "number",
 });
 
 export const snapshotEntrySchema = type({
@@ -253,6 +259,11 @@ export const credentialBlockResponseSchema = type({
 });
 
 export const credentialBlocksDeleteResponseSchema = type({
+	"+": "reject",
+	ok: "boolean",
+});
+
+export const usageStaleResponseSchema = type({
 	"+": "reject",
 	ok: "boolean",
 });

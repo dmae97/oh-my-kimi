@@ -27,12 +27,13 @@ export const EMPTY_COMPLETION_BASE_DELAY_MS = 500;
 const NON_WHITESPACE_RE = /\S/;
 
 /**
- * Whether a completed assistant message carries content worth delivering: a tool
- * call or any non-whitespace text. An empty/whitespace-only message — or one
- * that only ever produced thinking — is the "empty response" failure.
+ * Whether a completed assistant message carries content worth delivering: an
+ * image, tool call, or any non-whitespace text. An empty/whitespace-only message
+ * — or one that only ever produced thinking — is the "empty response" failure.
  */
 export function hasVisibleAssistantContent(message: AssistantMessage): boolean {
 	for (const block of message.content) {
+		if (block.type === "image") return true;
 		if (block.type === "toolCall") return true;
 		if (block.type === "text" && NON_WHITESPACE_RE.test(block.text)) return true;
 	}
@@ -49,6 +50,8 @@ function isMeaningfulCompletionEvent(event: AssistantMessageEvent): boolean {
 		case "text_end":
 		case "thinking_end":
 			return event.content.length > 0;
+		case "image_end":
+			return true;
 		case "toolcall_start":
 		case "toolcall_end":
 			return true;
@@ -109,17 +112,16 @@ export function withEmptyCompletionRetry<M, O extends EmptyCompletionRetryOption
 			}
 
 			// Retry only a genuinely degenerate completion: a normal stop that
-			// produced no visible content AND billed no output tokens (the flaky
-			// gateway signature — charged nothing, returned nothing). A stop that
-			// reports output tokens spent its budget somewhere (e.g. thinking) and
-			// is left alone.
+			// produced no visible content and reported no generated content tokens.
+			// Some providers count the terminal EOS as one output token, so a
+			// one-token invisible stop is still the same empty-completion failure.
 			const message = terminal?.type === "done" ? terminal.message : undefined;
 			const isRetryableEmpty =
 				!committed &&
 				message !== undefined &&
 				message.stopReason === "stop" &&
 				!message.errorMessage &&
-				(message.usage?.output ?? 0) <= 0 &&
+				(message.usage?.output ?? 0) <= 1 &&
 				!hasVisibleAssistantContent(message);
 
 			if (isRetryableEmpty && emptyAttempt < MAX_EMPTY_COMPLETION_RETRIES && !signal?.aborted) {

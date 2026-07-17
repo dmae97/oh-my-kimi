@@ -21,6 +21,13 @@ const variantConfigs: Record<NativeBuildVariant["name"], NativeBuildVariant> = {
 	},
 };
 
+/** Adds release-portability env required by native addon builds. */
+export function withPortableNativeBuildEnv(
+	env: Record<string, string | undefined>,
+): Record<string, string | undefined> {
+	return { ...env, PCRE2_SYS_STATIC: "1" };
+}
+
 function parseTargetVariants(): NativeBuildVariant[] {
 	const rawVariants = (Bun.env.TARGET_VARIANTS ?? "").trim();
 	if (!rawVariants) return [];
@@ -35,15 +42,17 @@ function parseTargetVariants(): NativeBuildVariant[] {
 }
 
 async function runNativeBuild(env: Record<string, string | undefined>, label: string): Promise<void> {
+	const buildEnv = withPortableNativeBuildEnv(env);
 	if (isDryRun) {
-		const variant = env.TARGET_VARIANT ? ` TARGET_VARIANT=${env.TARGET_VARIANT}` : "";
-		const rustflags = env.RUSTFLAGS ? ` RUSTFLAGS=${JSON.stringify(env.RUSTFLAGS)}` : "";
-		console.log(`DRY RUN bun --cwd=packages/natives run build [${label}]${variant}${rustflags}`);
+		const staticPcre = ` PCRE2_SYS_STATIC=${buildEnv.PCRE2_SYS_STATIC}`;
+		const variant = buildEnv.TARGET_VARIANT ? ` TARGET_VARIANT=${buildEnv.TARGET_VARIANT}` : "";
+		const rustflags = buildEnv.RUSTFLAGS ? ` RUSTFLAGS=${JSON.stringify(buildEnv.RUSTFLAGS)}` : "";
+		console.log(`DRY RUN bun --cwd=packages/natives run build [${label}]${staticPcre}${variant}${rustflags}`);
 		return;
 	}
 
 	console.log(`Building natives [${label}]...`);
-	await $`bun --cwd=packages/natives run build`.cwd(repoRoot).env(env);
+	await $`bun --cwd=packages/natives run build`.cwd(repoRoot).env(buildEnv);
 }
 
 async function main(): Promise<void> {
@@ -65,4 +74,4 @@ async function main(): Promise<void> {
 	}
 }
 
-await main();
+if (import.meta.main) await main();

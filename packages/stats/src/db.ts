@@ -32,6 +32,14 @@ type ModelCost = { input: number; output: number; cacheRead: number; cacheWrite:
 type UsageCost = Usage["cost"];
 type CostTokens = Pick<Usage, "input" | "output" | "cacheRead" | "cacheWrite">;
 
+const ZERO_USAGE_COST: UsageCost = {
+	input: 0,
+	output: 0,
+	cacheRead: 0,
+	cacheWrite: 0,
+	total: 0,
+};
+
 interface CostBackfillRow {
 	id: number;
 	provider: string;
@@ -46,7 +54,7 @@ let db: Database | null = null;
 
 const BACKFILL_COMPLETE = "complete";
 const BACKFILL_PENDING = "pending";
-const USER_MESSAGES_BACKFILL_KEY = "user_messages_v6";
+const USER_MESSAGES_BACKFILL_KEY = "user_messages_v8";
 const USER_MESSAGE_LINKS_REPAIR_KEY = "user_message_links_v1";
 const PRIORITY_PREMIUM_REQUESTS_BACKFILL_KEY = "premium_requests_priority_v1";
 const AGENT_TYPE_BACKFILL_KEY = "agent_type_v1";
@@ -206,6 +214,13 @@ export async function initDb(): Promise<Database> {
 	//             plus profanity dictionary expansion + word-boundary fix.
 	//   v4 -> v5: column `yelling_sentences` renamed to `yelling` to match
 	//             the other single-word signal columns.
+	//   v5 -> v6: dropped `git` from the profanity word list.
+	//   v6 -> v7: dropped dot runs from `anguish`, technical-collision and
+	//             opinion words from the profanity list; gated yelling on
+	//             multi-word caps and bare `no` on interjection use.
+	//   v7 -> v8: `no-op` compounds no longer count as negation; recovered
+	//             measured false negatives: `:(` emoticons -> anguish,
+	//             `why (would|did) you` -> blame, `makes no sense` -> negation.
 	const userMessageColumns = db.prepare("PRAGMA table_info(user_messages)").all() as {
 		name: string;
 	}[];
@@ -295,11 +310,14 @@ function calculateCatalogCost(provider: string, modelId: string, tokens: CostTok
 }
 
 function resolveStoredCost(stats: MessageStats): UsageCost {
-	if (stats.usage.cost.total !== 0) {
-		return stats.usage.cost;
+	// `usage.cost` was optional in older session files. Although current
+	// MessageStats requires it, parsed JSONL can still carry that legacy shape.
+	const storedCost: UsageCost | undefined = stats.usage.cost;
+	if (storedCost && storedCost.total !== 0) {
+		return storedCost;
 	}
 
-	return calculateCatalogCost(stats.provider, stats.model, stats.usage) ?? stats.usage.cost;
+	return calculateCatalogCost(stats.provider, stats.model, stats.usage) ?? storedCost ?? ZERO_USAGE_COST;
 }
 
 function backfillMissingCatalogCosts(database: Database): void {
@@ -814,15 +832,18 @@ export function getRecentRequests(limit = 100): MessageStats[] {
 	return (stmt.all(limit) as any[]).map(rowToMessageStats);
 }
 
-export function getRecentErrors(limit = 100): MessageStats[] {
+export function getRecentErrors(limit = 100, cutoff?: number | null): MessageStats[] {
 	if (!db) return [];
+	const hasCutoff = cutoff !== undefined && cutoff !== null;
 	const stmt = db.prepare(`
-		SELECT * FROM messages 
+		SELECT * FROM messages
 		WHERE stop_reason = 'error'
-		ORDER BY timestamp DESC 
+		${hasCutoff ? "AND timestamp >= ?" : ""}
+		ORDER BY timestamp DESC
 		LIMIT ?
 	`);
-	return (stmt.all(limit) as any[]).map(rowToMessageStats);
+	const rows = hasCutoff ? stmt.all(cutoff, limit) : stmt.all(limit);
+	return rows.map(rowToMessageStats);
 }
 
 export function getMessageById(id: number): MessageStats | null {
@@ -893,6 +914,21 @@ export function getCostTimeSeries(days = 90, cutoff?: number | null): CostTimeSe
  *   single-word signal columns (profanity, anguish, negation, ...).
  * - v6: dropped `git` from the profanity word list - it collided with the
  *   version-control tool name, so existing rows over-counted profanity.
+ * - v7: false-positive trim measured against the real corpus: dot runs
+ *   (`..`/`...`) no longer count as anguish; profanity list dropped
+ *   technical-collision words (`dummy`, `blast`, `knob`, `trash`, `crud`,
+ *   `garbage`, ...), opinion/dislike words (`useless`, `awful`, `hate`,
+ *   `meh`, ...) and moved `ugh`/`argh`/`grr` interjections to anguish;
+ *   yelling now requires multi-word caps (filenames like `AGENTS.md` no
+ *   longer fragment into all-caps sentences); bare leading `no` only
+ *   counts as negation when used as an interjection, not a determiner.
+ * - v8: `no-op`-style compounds no longer count as corrective negation
+ *   (hyphen after bare `no` only counts as a separator when it isn't
+ *   gluing a compound word), and three measured false-negative clusters
+ *   were recovered: sad emoticons (`:(`) score anguish, `why (would|did)
+ *   you` scores blame, `makes (no|zero) sense` scores negation. v7
+ *   shipped briefly without these, so any database that completed the v7
+ *   backfill needs one more re-derive.
  *
  * Existing `messages` rows are unaffected - `INSERT OR IGNORE` keeps them.
  */

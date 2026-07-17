@@ -26,6 +26,20 @@ describe("EvalTool timeout semantics", () => {
 		await disposeAllVmContexts();
 	});
 
+	it("disables the cell timeout when timeout is zero", async () => {
+		const tool = new EvalTool(makeSession());
+		const result = await tool.execute("call-unlimited-timeout", {
+			language: "js",
+			// This integration test must cross the former 1s watchdog boundary;
+			// fake timers do not drive the isolated JS worker's clock.
+			code: "await Bun.sleep(1250); print('completed');",
+			timeout: 0,
+		});
+
+		expect(result.content.some(block => block.type === "text" && block.text.includes("completed"))).toBe(true);
+		expect(result.details?.cells?.[0]?.status).toBe("complete");
+	});
+
 	it("bounds a compute cell (no agent/completion) by a plain wall-clock timeout", async () => {
 		const tool = new EvalTool(makeSession());
 		// 1s budget; the cell idles for 5s and emits no status, so nothing extends
@@ -47,5 +61,25 @@ describe("EvalTool timeout semantics", () => {
 
 		const cell = result.details?.cells?.[0];
 		expect(cell?.exitCode).toBeUndefined();
+	});
+
+	it("reports a dead JS worker instead of waiting for the cell timeout", async () => {
+		const tool = new EvalTool(makeSession());
+		const result = await tool.execute("call-worker-exit", {
+			language: "js",
+			code: "process.exit(0);",
+			timeout: 1,
+		});
+
+		const text = result.content
+			.filter((block): block is { type: "text"; text: string } => block.type === "text")
+			.map(block => block.text)
+			.join("\n");
+		expect(text).toContain("JS eval worker exited");
+		expect(text).not.toContain("timed out");
+
+		const cell = result.details?.cells?.[0];
+		expect(cell?.status).toBe("error");
+		expect(cell?.exitCode).toBe(1);
 	});
 });

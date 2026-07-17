@@ -74,7 +74,7 @@ export interface BenchRunSuccess {
 	ttftMs: number;
 	durationMs: number;
 	outputTokens: number;
-	/** Generation throughput measured over the post-first-token window. */
+	/** Output tokens/sec over the total request duration. */
 	tokensPerSecond: number;
 }
 
@@ -159,12 +159,14 @@ function isFirstTokenEvent(event: AssistantMessageEvent): boolean {
 		case "text_end":
 		case "thinking_end":
 			return event.content.length > 0;
+		case "image_end":
+			return true;
 		default:
 			return false;
 	}
 }
 
-/** Final message carries visible output — non-empty text/thinking or a tool call. */
+/** Final message carries visible output — non-empty text/thinking, an image, or a tool call. */
 function hasVisibleFinalContent(message: AssistantMessage): boolean {
 	return message.content.some(block => {
 		switch (block.type) {
@@ -172,6 +174,7 @@ function hasVisibleFinalContent(message: AssistantMessage): boolean {
 				return block.text.length > 0;
 			case "thinking":
 				return block.thinking.length > 0;
+			case "image":
 			case "redactedThinking":
 			case "toolCall":
 				return true;
@@ -179,23 +182,6 @@ function hasVisibleFinalContent(message: AssistantMessage): boolean {
 				return false;
 		}
 	});
-}
-
-/**
- * Tokens/s over the generation window (duration minus TTFT) so queue/prefill
- * latency does not dilute throughput. Falls back to total duration when the
- * response arrived as a single chunk (TTFT ~ duration).
- */
-export function computeTokensPerSecond(
-	outputTokens: number,
-	durationMs: number,
-	ttftMs: number,
-	deltaChunkCount: number,
-): number {
-	const decodeMs = durationMs - ttftMs;
-	// Fall back to total duration when the response arrived as a single chunk/non-streaming.
-	const windowMs = decodeMs > 0 && deltaChunkCount >= 2 ? decodeMs : durationMs;
-	return windowMs > 0 ? (outputTokens * 1000) / windowMs : 0;
 }
 
 interface BenchRequestOptions {
@@ -247,16 +233,9 @@ async function runBenchRequest(
 			headers: model.provider === "openrouter" ? { "X-OpenRouter-Cache": "false" } : undefined,
 		});
 		let message: AssistantMessage | undefined;
-		let deltaChunkCount = 0;
 		for await (const event of stream) {
 			if (firstTokenAt === undefined && isFirstTokenEvent(event)) {
 				firstTokenAt = now();
-			}
-			if (
-				(event.type === "text_delta" || event.type === "thinking_delta" || event.type === "toolcall_delta") &&
-				event.delta.length > 0
-			) {
-				deltaChunkCount++;
 			}
 			if (event.type === "error") {
 				return { ok: false, error: event.error.errorMessage ?? "request failed" };
@@ -291,7 +270,12 @@ async function runBenchRequest(
 			ttftMs,
 			durationMs,
 			outputTokens,
-			tokensPerSecond: computeTokensPerSecond(outputTokens, durationMs, ttftMs, deltaChunkCount),
+			// TPS over the TOTAL request duration, deliberately not the post-TTFT
+			// decode window: reasoning models can spend seconds generating hidden
+			// thinking tokens (counted in usage.output) before the first visible
+			// byte, so "duration - TTFT" inflates TPS several-fold on providers
+			// that buffer or hide reasoning (e.g. google vs google-vertex).
+			tokensPerSecond: durationMs > 0 ? (outputTokens * 1000) / durationMs : 0,
 		};
 	} catch (error) {
 		return { ok: false, error: getErrorMessage(error) };

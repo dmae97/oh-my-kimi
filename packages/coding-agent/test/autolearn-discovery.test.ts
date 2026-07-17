@@ -100,10 +100,47 @@ describe("managed-skills discovery", () => {
 		expect(dises[0]?.source).toBe("omp-managed:user");
 	});
 
-	it("defers a managed skill to an ENABLED authored skill hidden behind a disabled higher-priority one", async () => {
+	it("selects an enabled lower-priority authored skill when a disabled higher-priority provider has the same name (#4648)", async () => {
+		await writeSkill(path.join(tempHome, ".claude", "skills"), "fallback-authored", "Disabled claude.");
+		await writeSkill(path.join(tempHome, ".agents", "skills"), "fallback-authored", "Enabled agents.");
+		const { skills } = await loadSkills({
+			cwd: tempCwd,
+			enableClaudeUser: false,
+			enableClaudeProject: false,
+		});
+		const matches = skills.filter(s => s.name === "fallback-authored");
+		expect(matches).toHaveLength(1);
+		expect(matches[0]?.source).toBe("agents:user");
+	});
+
+	it("does not resurrect disabled home claude user skills as project skills when cwd is under home", async () => {
+		// No repo root marker is created in tempHome/work. A Claude home skill must
+		// stay user-scoped only even while project skills remain enabled by default.
+		await writeSkill(path.join(tempHome, ".claude", "skills"), "home-only", "Disabled claude home skill.");
+		await writeSkill(path.join(tempHome, ".agents", "skills"), "home-only", "Enabled agents fallback.");
+		const { skills } = await loadSkills({
+			cwd: tempCwd,
+			enableClaudeUser: false,
+		});
+		const matches = skills.filter(s => s.name === "home-only");
+		expect(matches).toHaveLength(1);
+		expect(matches[0]?.source).toBe("agents:user");
+		expect(skills.some(s => s.name === "home-only" && s.source === "claude:project")).toBe(false);
+	});
+
+	it("preserves provider priority when duplicate authored providers are both enabled (#4648)", async () => {
+		await writeSkill(path.join(tempHome, ".claude", "skills"), "priority-authored", "Enabled claude.");
+		await writeSkill(path.join(tempHome, ".agents", "skills"), "priority-authored", "Enabled agents.");
+		const { skills } = await loadSkills({ cwd: tempCwd });
+		const matches = skills.filter(s => s.name === "priority-authored");
+		expect(matches).toHaveLength(1);
+		expect(matches[0]?.source).toBe("claude:user");
+	});
+
+	it("keeps managed skills dead-last behind an enabled authored fallback hidden by a disabled duplicate (#4648)", async () => {
 		// claude (priority 80, fully disabled) shadows agents (70, enabled) at
-		// capability dedup; agents survives only in result.all. Managed must NOT mask
-		// the enabled authored name, so no omp-managed skill is surfaced here.
+		// capability dedup. loadSkills must recover the enabled authored agent skill
+		// from the pre-dedup superset and still keep managed dead-last.
 		await writeSkill(path.join(tempHome, ".claude", "skills"), "shadowed", "Disabled claude.");
 		await writeSkill(path.join(tempHome, ".agents", "skills"), "shadowed", "Enabled agents.");
 		await writeSkill(managedDir, "shadowed", "Managed shadowed.");
@@ -112,6 +149,9 @@ describe("managed-skills discovery", () => {
 			enableClaudeUser: false,
 			enableClaudeProject: false,
 		});
+		const shadowed = skills.filter(s => s.name === "shadowed");
+		expect(shadowed).toHaveLength(1);
+		expect(shadowed[0]?.source).toBe("agents:user");
 		expect(skills.some(s => s.name === "shadowed" && s.source === "omp-managed:user")).toBe(false);
 	});
 

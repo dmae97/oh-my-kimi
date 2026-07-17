@@ -111,8 +111,8 @@ export function createTelemetryExportConfig(
 	if (!isTelemetryExportEnabled()) return config;
 	return {
 		...config,
-		onChatUsage: event => {
-			config?.onChatUsage?.(event);
+		onChatUsage: async event => {
+			await config?.onChatUsage?.(event);
 			metricRecorder?.recordChatUsage(event);
 		},
 		onRunEnd: (summary, coverage) => {
@@ -335,11 +335,7 @@ class AgentMetricRecorder {
 
 		this.#runs.add(1, runAttrs);
 		if (summary.stepCount > 0) this.#steps.add(summary.stepCount, runAttrs);
-		if (summary.chats.total > 0) this.#chatCalls.add(summary.chats.total, runAttrs);
 		if (summary.chats.totalLatencyMs > 0) this.#chatDurationMs.record(summary.chats.totalLatencyMs, runAttrs);
-		if (summary.tools.total > 0) this.#toolCalls.add(summary.tools.total, runAttrs);
-		if (summary.tools.totalLatencyMs > 0) this.#toolDurationMs.record(summary.tools.totalLatencyMs, runAttrs);
-		if (summary.errors.total > 0) this.#errors.add(summary.errors.total, runAttrs);
 
 		for (const reason in summary.chats.byStopReason) {
 			const count = summary.chats.byStopReason[reason];
@@ -349,7 +345,6 @@ class AgentMetricRecorder {
 		for (const toolName in summary.tools.byName) {
 			const counters = summary.tools.byName[toolName];
 			const toolAttrs = metricAttributes({ ...runAttrs, "gen_ai.tool.name": toolName });
-			if (counters.total > 0) this.#toolCalls.add(counters.total, toolAttrs);
 			if (counters.totalLatencyMs > 0) this.#toolDurationMs.record(counters.totalLatencyMs, toolAttrs);
 			for (const status of TOOL_STATUSES) {
 				const count = counters[status];

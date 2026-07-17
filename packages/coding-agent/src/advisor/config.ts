@@ -12,9 +12,10 @@ import { collectConfigCandidates } from "./watchdog";
  * with an optional `:level` thinking suffix (e.g. `x-ai/grok-code-fast:high`),
  * resolved exactly like any other model override; `tools` is a subset of
  * `BUILTIN_TOOL_NAMES` — any built-in name, including mutating tools such as
- * `edit`/`write`/`bash` (the advisor is a full agent). Omitted or empty falls
- * back to the default `read`/`grep`/`glob` subset. `instructions` is the
- * advisor's specialization, appended to the shared baseline.
+ * `edit`/`write`/`bash` (the advisor is a full agent). Omitted falls back to
+ * the default `read`/`grep`/`glob` subset; an explicit empty list grants no
+ * tools. `instructions` is the advisor's specialization, appended to the shared
+ * baseline.
  */
 export interface AdvisorConfig {
 	name: string;
@@ -59,17 +60,47 @@ export function slugifyAdvisorName(name: string): string {
 	return slug || "advisor";
 }
 
+const UUID_V7_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const ADVISOR_PROVIDER_SESSION_KEY_SEPARATOR = "\u0000";
+
+/**
+ * Returns a stable provider-facing UUIDv7 for one advisor within one primary session.
+ *
+ * Codex treats `session_id`/`conversation_id` as a UUID-shaped routing identity,
+ * so advisor labels such as `-advisor` stay local-only.
+ */
+export function getOrCreateAdvisorProviderSessionId(
+	ids: Map<string, string>,
+	primarySessionId: string | undefined,
+	slug: string,
+	randomSessionId: () => string = () => Bun.randomUUIDv7(),
+): string | undefined {
+	if (!primarySessionId) return undefined;
+	const key = `${primarySessionId}${ADVISOR_PROVIDER_SESSION_KEY_SEPARATOR}${slug}`;
+	const existing = ids.get(key);
+	if (existing) return existing;
+
+	const next = randomSessionId();
+	if (!UUID_V7_PATTERN.test(next)) {
+		throw new Error("Advisor provider session id generator returned a non-UUIDv7 value");
+	}
+	ids.set(key, next);
+	return next;
+}
+
 /** Built tool names, for validating an advisor's `tools` list. */
 const KNOWN_TOOL_NAMES = new Set<string>(BUILTIN_TOOL_NAMES);
 
 /**
  * Keep only valid tool names from an advisor's `tools` list, dropping unknowns
  * with a warning. The advisor is a full agent, so any built tool may be granted;
- * the runtime further filters to what's actually available this session. An empty
- * result (or no list) means "use the default subset" (read/grep/glob).
+ * the runtime further filters to what's actually available this session.
+ * `undefined` means "use the default subset" (read/grep/glob); only an explicit
+ * raw empty list means "no tools".
  */
 function filterAdvisorTools(tools: string[] | undefined, sourcePath: string): string[] | undefined {
-	if (!tools || tools.length === 0) return undefined;
+	if (tools === undefined) return undefined;
+	if (tools.length === 0) return [];
 	// Normalize legacy aliases (search→grep, find→glob) and dedupe before validating.
 	const filtered = normalizeToolNames(tools).filter(name => {
 		if (KNOWN_TOOL_NAMES.has(name)) return true;
@@ -210,7 +241,7 @@ export async function loadWatchdogConfigFile(filePath: string): Promise<Watchdog
 		advisors: (result.advisors ?? []).map(a => ({
 			name: a.name,
 			model: a.model?.trim() || undefined,
-			tools: a.tools?.length ? [...a.tools] : undefined,
+			tools: a.tools === undefined ? undefined : [...a.tools],
 			instructions: a.instructions?.trim() ? a.instructions : undefined,
 		})),
 	};
@@ -229,7 +260,7 @@ export function serializeWatchdogConfig(doc: WatchdogConfigDoc): string {
 		out.advisors = doc.advisors.map(a => {
 			const entry: AdvisorConfig = { name: a.name };
 			if (a.model?.trim()) entry.model = a.model;
-			if (a.tools?.length) entry.tools = [...a.tools];
+			if (a.tools !== undefined) entry.tools = [...a.tools];
 			if (a.instructions?.trim()) entry.instructions = a.instructions;
 			return entry;
 		});

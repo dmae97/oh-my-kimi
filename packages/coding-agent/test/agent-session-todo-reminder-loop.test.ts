@@ -31,10 +31,10 @@ describe("AgentSession todo reminder self-continuation suppression", () => {
 	let firstReminderPromise: Promise<void>;
 	let resolveFirstReminder: () => void;
 
-	function textOnlyAssistantMessage(): AssistantMessage {
+	function textOnlyAssistantMessage(text = "paused at your instruction"): AssistantMessage {
 		return {
 			role: "assistant",
-			content: [{ type: "text", text: "paused at your instruction" }],
+			content: [{ type: "text", text }],
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: "claude-sonnet-4-5",
@@ -51,8 +51,8 @@ describe("AgentSession todo reminder self-continuation suppression", () => {
 		};
 	}
 
-	function emitTextOnlyStop(): void {
-		const msg = textOnlyAssistantMessage();
+	function emitTextOnlyStop(text?: string): void {
+		const msg = textOnlyAssistantMessage(text);
 		session.agent.emitExternalEvent({ type: "message_end", message: msg });
 		session.agent.emitExternalEvent({ type: "agent_end", messages: [msg] });
 	}
@@ -93,6 +93,18 @@ describe("AgentSession todo reminder self-continuation suppression", () => {
 		});
 	}
 
+	function todoReminderTranscriptEntry() {
+		return sessionManager.getBranch().find(entry => {
+			if (entry.type !== "message" || entry.message.role !== "developer") return false;
+			const { content } = entry.message;
+			if (!Array.isArray(content)) return false;
+			return content.some(
+				(item): item is TextContent =>
+					item.type === "text" && item.text.includes("You stopped with 2 incomplete todo item(s):"),
+			);
+		});
+	}
+
 	beforeEach(async () => {
 		tempDir = TempDir.createSync("@pi-todo-reminder-loop-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
@@ -119,7 +131,7 @@ describe("AgentSession todo reminder self-continuation suppression", () => {
 				"compaction.enabled": false,
 				"todo.enabled": true,
 				"todo.reminders": true,
-				"todo.reminders.max": 3,
+				"todo.remindersMax": 3,
 			}),
 			modelRegistry,
 		});
@@ -159,16 +171,57 @@ describe("AgentSession todo reminder self-continuation suppression", () => {
 		await withTimeout(firstReminderPromise, 1000, "todo_reminder never fired");
 		expect(reminderAttempts).toEqual([1]);
 
-		const reminderEntry = sessionManager.getBranch().find(entry => {
-			if (entry.type !== "message" || entry.message.role !== "developer") return false;
-			const { content } = entry.message;
-			if (!Array.isArray(content)) return false;
-			return content.some(
-				(item): item is TextContent =>
-					item.type === "text" && item.text.includes("You stopped with 2 incomplete todo item(s):"),
-			);
-		});
+		const reminderEntry = todoReminderTranscriptEntry();
 		expect(reminderEntry?.type).toBe("message");
+	});
+
+	it("does not remind or continue when the assistant yields with a user-facing question", async () => {
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+
+		emitTextOnlyStop("I need your feedback before continuing. Which trade-off should I optimize for?");
+		await session.waitForIdle();
+
+		expect(reminderAttempts).toEqual([]);
+		expect(todoReminderTranscriptEntry()).toBeUndefined();
+		expect(continueSpy).not.toHaveBeenCalled();
+	});
+
+	it("still reminds when the assistant answers its own prompt-shaped question", async () => {
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+
+		emitTextOnlyStop(
+			"Which configuration should this use?\nUse the existing default; the remaining todo items still need work.",
+		);
+		await withTimeout(firstReminderPromise, 1000, "todo_reminder never fired");
+		await session.waitForIdle();
+
+		expect(reminderAttempts).toEqual([1]);
+		expect(todoReminderTranscriptEntry()).toBeDefined();
+		expect(continueSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("still reminds and continues when ordinary prose contains answer", async () => {
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+
+		emitTextOnlyStop("Final answer: I summarized the work completed so far, but the todo items remain open.");
+		await withTimeout(firstReminderPromise, 1000, "todo_reminder never fired");
+		await session.waitForIdle();
+
+		expect(reminderAttempts).toEqual([1]);
+		expect(todoReminderTranscriptEntry()).toBeDefined();
+		expect(continueSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("still reminds and continues when TypeScript optional syntax appears in the assistant tail", async () => {
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+
+		emitTextOnlyStop("Tail note: the interface includes foo?: string, but the todo items remain open.");
+		await withTimeout(firstReminderPromise, 1000, "todo_reminder never fired");
+		await session.waitForIdle();
+
+		expect(reminderAttempts).toEqual([1]);
+		expect(todoReminderTranscriptEntry()).toBeDefined();
+		expect(continueSpy).toHaveBeenCalledTimes(1);
 	});
 
 	it("fires exactly one reminder per user pause when the agent only acknowledges", async () => {

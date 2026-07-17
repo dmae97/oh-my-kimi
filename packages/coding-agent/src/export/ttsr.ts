@@ -8,7 +8,7 @@
 import * as path from "node:path";
 import { AstMatchStrictness, astMatch } from "@oh-my-pi/pi-natives";
 import { logger } from "@oh-my-pi/pi-utils";
-import type { Rule } from "../capability/rule";
+import { compileRuleCondition, type Rule } from "../capability/rule";
 import type { TtsrSettings } from "../config/settings";
 
 export type TtsrMatchSource = "text" | "thinking" | "tool";
@@ -77,6 +77,8 @@ export class TtsrManager {
 	/** Last snapshot evaluated for AST conditions, keyed by stream key, to dedupe matcher runs. */
 	readonly #lastAstSnapshots = new Map<string, string>();
 	#messageCount = 0;
+	#canMatchText = false;
+	#canMatchThinking = false;
 
 	constructor(settings?: TtsrSettings) {
 		this.#settings = { ...DEFAULT_SETTINGS, ...settings };
@@ -101,7 +103,7 @@ export class TtsrManager {
 		const compiled: RegExp[] = [];
 		for (const pattern of rule.condition ?? []) {
 			try {
-				compiled.push(new RegExp(pattern));
+				compiled.push(compileRuleCondition(pattern));
 			} catch (error) {
 				logger.warn("TTSR condition has invalid regex pattern, skipping condition", {
 					ruleName: rule.name,
@@ -329,6 +331,8 @@ export class TtsrManager {
 			scope,
 			globalPathGlobs,
 		});
+		if (scope.allowText) this.#canMatchText = true;
+		if (scope.allowThinking) this.#canMatchThinking = true;
 
 		logger.debug("TTSR rule registered", {
 			ruleName: rule.name,
@@ -348,6 +352,12 @@ export class TtsrManager {
 	 * assistant prose, thinking text, and unrelated tool argument streams.
 	 */
 	checkDelta(delta: string, context: TtsrMatchContext): Rule[] {
+		if (context.source === "text" && !this.#canMatchText) {
+			return [];
+		}
+		if (context.source === "thinking" && !this.#canMatchThinking) {
+			return [];
+		}
 		const bufferKey = this.#bufferKey(context);
 		const nextBuffer = `${this.#buffers.get(bufferKey) ?? ""}${delta}`;
 		this.#buffers.set(bufferKey, nextBuffer);
@@ -447,9 +457,6 @@ export class TtsrManager {
 				strictness: AstMatchStrictness.Smart,
 				limit: 1,
 			});
-			if (result.parseErrors && result.parseErrors.length > 0) {
-				logger.debug("TTSR ast match reported parse errors", { parseErrors: result.parseErrors });
-			}
 			return result.totalMatches > 0;
 		} catch (error) {
 			logger.warn("TTSR ast match failed, treating as no match", {

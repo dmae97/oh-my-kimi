@@ -42,9 +42,13 @@ PALETTE = {
 
 def font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     candidates = [
-        "/System/Library/Fonts/Supplemental/Arial Bold.ttf" if bold else "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf"
+        if bold
+        else "/System/Library/Fonts/Supplemental/Arial.ttf",
         "/System/Library/Fonts/Supplemental/Helvetica.ttc",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        if bold
+        else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     ]
     for path in candidates:
         if path and Path(path).exists():
@@ -52,7 +56,9 @@ def font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.Im
     return ImageFont.load_default()
 
 
-def mix(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tuple[int, int, int]:
+def mix(
+    a: tuple[int, int, int], b: tuple[int, int, int], t: float
+) -> tuple[int, int, int]:
     t = max(0.0, min(1.0, t))
     return tuple(round(a[i] + (b[i] - a[i]) * t) for i in range(3))
 
@@ -80,12 +86,23 @@ def quantile_norm(values: np.ndarray, q: float = 0.98) -> np.ndarray:
     return np.clip(values / scale, 0.0, 1.0)
 
 
-def rounded_panel(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], title: str | None = None, subtitle: str | None = None) -> None:
-    draw.rounded_rectangle(box, radius=24, fill=PALETTE["panel"], outline=(34, 48, 61), width=1)
+def rounded_panel(
+    draw: ImageDraw.ImageDraw,
+    box: tuple[int, int, int, int],
+    title: str | None = None,
+    subtitle: str | None = None,
+) -> None:
+    draw.rounded_rectangle(
+        box, radius=24, fill=PALETTE["panel"], outline=(34, 48, 61), width=1
+    )
     if title:
-        draw.text((box[0] + 24, box[1] + 18), title, fill=PALETTE["ink"], font=font(28, True))
+        draw.text(
+            (box[0] + 24, box[1] + 18), title, fill=PALETTE["ink"], font=font(28, True)
+        )
     if subtitle:
-        draw.text((box[0] + 24, box[1] + 54), subtitle, fill=PALETTE["muted"], font=font(16))
+        draw.text(
+            (box[0] + 24, box[1] + 54), subtitle, fill=PALETTE["muted"], font=font(16)
+        )
 
 
 def token_boxes(side: int, grid: int) -> list[tuple[int, int, int, int]]:
@@ -100,7 +117,9 @@ def token_boxes(side: int, grid: int) -> list[tuple[int, int, int, int]]:
     return boxes
 
 
-def intersect_area(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> float:
+def intersect_area(
+    a: tuple[float, float, float, float], b: tuple[float, float, float, float]
+) -> float:
     x0 = max(a[0], b[0])
     y0 = max(a[1], b[1])
     x1 = min(a[2], b[2])
@@ -108,7 +127,9 @@ def intersect_area(a: tuple[float, float, float, float], b: tuple[float, float, 
     return max(0.0, x1 - x0) * max(0.0, y1 - y0)
 
 
-def answer_bbox(start: int, end: int, cols: int, adv: int, pitch: int) -> tuple[int, int, int, int]:
+def answer_bbox(
+    start: int, end: int, cols: int, adv: int, pitch: int
+) -> tuple[int, int, int, int]:
     row0, col0 = divmod(start, cols)
     row1, col1 = divmod(max(start, end - 1), cols)
     x0 = max(0, col0 * adv)
@@ -118,7 +139,16 @@ def answer_bbox(start: int, end: int, cols: int, adv: int, pitch: int) -> tuple[
     return x0, y0, x1, y1
 
 
-def draw_text_wrapped(draw: ImageDraw.ImageDraw, xy: tuple[int, int], text: str, width: int, fill: tuple[int, int, int], size: int, bold: bool = False, line_gap: int = 4) -> int:
+def draw_text_wrapped(
+    draw: ImageDraw.ImageDraw,
+    xy: tuple[int, int],
+    text: str,
+    width: int,
+    fill: tuple[int, int, int],
+    size: int,
+    bold: bool = False,
+    line_gap: int = 4,
+) -> int:
     words = text.split()
     lines: list[str] = []
     current = ""
@@ -143,7 +173,9 @@ def paste_shadowed(canvas: Image.Image, img: Image.Image, xy: tuple[int, int]) -
     shadow = Image.new("RGBA", img.size, (0, 0, 0, 0))
     alpha = Image.new("L", img.size, 180)
     shadow.putalpha(alpha)
-    canvas.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(12)), (xy[0] + 8, xy[1] + 10))
+    canvas.alpha_composite(
+        shadow.filter(ImageFilter.GaussianBlur(12)), (xy[0] + 8, xy[1] + 10)
+    )
     canvas.alpha_composite(img, xy)
 
 
@@ -175,7 +207,9 @@ def draw_activation_overlay(
 
     for idx in top_tokens:
         box = boxes[int(idx)]
-        draw.rounded_rectangle(box, radius=3, outline=PALETTE["amber"] + (235,), width=3)
+        draw.rounded_rectangle(
+            box, radius=3, outline=PALETTE["amber"] + (235,), width=3
+        )
     for idx in answer_tokens:
         box = boxes[int(idx)]
         draw.rounded_rectangle(box, radius=4, outline=PALETTE["cyan"] + (245,), width=4)
@@ -183,13 +217,34 @@ def draw_activation_overlay(
     glow = Image.new("RGBA", composite.size, (0, 0, 0, 0))
     gd = ImageDraw.Draw(glow)
     for w, a in ((16, 46), (9, 80), (4, 235)):
-        gd.rounded_rectangle((bbox[0] - 8, bbox[1] - 7, bbox[2] + 8, bbox[3] + 8), radius=8, outline=PALETTE["red"] + (a,), width=w)
-    composite = Image.alpha_composite(composite, glow.filter(ImageFilter.GaussianBlur(4)))
+        gd.rounded_rectangle(
+            (bbox[0] - 8, bbox[1] - 7, bbox[2] + 8, bbox[3] + 8),
+            radius=8,
+            outline=PALETTE["red"] + (a,),
+            width=w,
+        )
+    composite = Image.alpha_composite(
+        composite, glow.filter(ImageFilter.GaussianBlur(4))
+    )
     draw = ImageDraw.Draw(composite)
-    draw.rounded_rectangle((bbox[0] - 8, bbox[1] - 7, bbox[2] + 8, bbox[3] + 8), radius=8, outline=PALETTE["red"] + (255,), width=3)
+    draw.rounded_rectangle(
+        (bbox[0] - 8, bbox[1] - 7, bbox[2] + 8, bbox[3] + 8),
+        radius=8,
+        outline=PALETTE["red"] + (255,),
+        width=3,
+    )
 
-    mask_delta = Image.blend(original.convert("RGB"), answer_mask.convert("RGB"), 0.42).convert("RGBA")
-    crop = mask_delta.crop((max(0, bbox[0] - 76), max(0, bbox[1] - 42), min(side, bbox[2] + 154), min(side, bbox[3] + 48)))
+    mask_delta = Image.blend(
+        original.convert("RGB"), answer_mask.convert("RGB"), 0.42
+    ).convert("RGBA")
+    crop = mask_delta.crop(
+        (
+            max(0, bbox[0] - 76),
+            max(0, bbox[1] - 42),
+            min(side, bbox[2] + 154),
+            min(side, bbox[3] + 48),
+        )
+    )
     crop = crop.resize((crop.width * 3, crop.height * 3), Image.Resampling.NEAREST)
     crop_draw = ImageDraw.Draw(crop)
     scale = 3
@@ -197,10 +252,20 @@ def draw_activation_overlay(
     cy0 = (bbox[1] - max(0, bbox[1] - 42)) * scale
     cx1 = (bbox[2] - max(0, bbox[0] - 76)) * scale
     cy1 = (bbox[3] - max(0, bbox[1] - 42)) * scale
-    crop_draw.rounded_rectangle((cx0 - 4, cy0 - 4, cx1 + 4, cy1 + 4), radius=8, outline=PALETTE["red"] + (255,), width=5)
+    crop_draw.rounded_rectangle(
+        (cx0 - 4, cy0 - 4, cx1 + 4, cy1 + 4),
+        radius=8,
+        outline=PALETTE["red"] + (255,),
+        width=5,
+    )
     composite.alpha_composite(crop, (side - crop.width - 20, 20))
     draw = ImageDraw.Draw(composite)
-    draw.text((side - crop.width - 16, 20 + crop.height + 8), "answer glyph crop: original → masked", fill=PALETTE["ink"] + (235,), font=font(18, True))
+    draw.text(
+        (side - crop.width - 16, 20 + crop.height + 8),
+        "answer glyph crop: original → masked",
+        fill=PALETTE["ink"] + (235,),
+        font=font(18, True),
+    )
     return composite
 
 
@@ -212,31 +277,72 @@ def draw_layer_bars(
     answer_region_layer: np.ndarray,
     ratio_layer: np.ndarray,
 ) -> None:
-    rounded_panel(draw, box, "layer-by-layer scar", "red = answer mask, green = equal random mask, cyan = answer glyph tokens")
+    rounded_panel(
+        draw,
+        box,
+        "layer-by-layer scar",
+        "red = answer mask, green = equal random mask, cyan = answer glyph tokens",
+    )
     x0, y0, x1, y1 = box
     chart = (x0 + 74, y0 + 103, x1 - 34, y1 - 72)
     rows = answer_layer.size
     row_h = (chart[3] - chart[1]) / rows
-    scale = float(np.quantile(np.concatenate([answer_layer, random_layer, answer_region_layer]), 0.96))
+    scale = float(
+        np.quantile(
+            np.concatenate([answer_layer, random_layer, answer_region_layer]), 0.96
+        )
+    )
     scale = max(scale, 1e-6)
     for i in range(rows):
         y = chart[1] + i * row_h
-        draw.text((x0 + 28, round(y + row_h * 0.18)), f"L{i:02d}", fill=PALETTE["muted"], font=font(12))
+        draw.text(
+            (x0 + 28, round(y + row_h * 0.18)),
+            f"L{i:02d}",
+            fill=PALETTE["muted"],
+            font=font(12),
+        )
         max_w = chart[2] - chart[0]
         aw = round(max_w * min(1.0, float(answer_layer[i]) / scale))
         rw = round(max_w * min(1.0, float(random_layer[i]) / scale))
         gw = round(max_w * min(1.0, float(answer_region_layer[i]) / scale))
         yy = round(y)
-        draw.rounded_rectangle((chart[0], yy + 2, chart[0] + aw, yy + 8), radius=3, fill=PALETTE["red"])
-        draw.rounded_rectangle((chart[0], yy + 11, chart[0] + rw, yy + 17), radius=3, fill=PALETTE["green"])
-        draw.rounded_rectangle((chart[0], yy + 20, chart[0] + gw, yy + 27), radius=3, fill=PALETTE["cyan"])
+        draw.rounded_rectangle(
+            (chart[0], yy + 2, chart[0] + aw, yy + 8), radius=3, fill=PALETTE["red"]
+        )
+        draw.rounded_rectangle(
+            (chart[0], yy + 11, chart[0] + rw, yy + 17), radius=3, fill=PALETTE["green"]
+        )
+        draw.rounded_rectangle(
+            (chart[0], yy + 20, chart[0] + gw, yy + 27), radius=3, fill=PALETTE["cyan"]
+        )
         ratio = float(ratio_layer[i])
-        draw.text((chart[2] - 58, yy + 8), f"{ratio:4.1f}×", fill=PALETTE["amber"], font=font(13, True))
-    draw.text((chart[0], y1 - 45), "Mean delta per decoder layer. Ratio labels compare answer-mask vs random-mask deltas.", fill=PALETTE["muted"], font=font(14))
+        draw.text(
+            (chart[2] - 58, yy + 8),
+            f"{ratio:4.1f}×",
+            fill=PALETTE["amber"],
+            font=font(13, True),
+        )
+    draw.text(
+        (chart[0], y1 - 45),
+        "Mean delta per decoder layer. Ratio labels compare answer-mask vs random-mask deltas.",
+        fill=PALETTE["muted"],
+        font=font(14),
+    )
 
 
-def draw_scar_strip(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], ratio_norm: np.ndarray, answer_tokens: list[int], top_tokens: list[int]) -> None:
-    rounded_panel(draw, box, "token scar matrix", "decoder layers × image tokens; vertical lines locate answer glyphs and top scar bins")
+def draw_scar_strip(
+    draw: ImageDraw.ImageDraw,
+    box: tuple[int, int, int, int],
+    ratio_norm: np.ndarray,
+    answer_tokens: list[int],
+    top_tokens: list[int],
+) -> None:
+    rounded_panel(
+        draw,
+        box,
+        "token scar matrix",
+        "decoder layers × image tokens; vertical lines locate answer glyphs and top scar bins",
+    )
     x0, y0, x1, y1 = box
     hx0, hy0, hx1, hy1 = x0 + 58, y0 + 90, x1 - 28, y1 - 54
     rows, cols = ratio_norm.shape
@@ -258,10 +364,19 @@ def draw_scar_strip(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], r
     for r in range(0, rows, 4):
         y = round(hy0 + (r + 0.5) * ch)
         draw.text((x0 + 22, y - 7), str(r), fill=PALETTE["muted"], font=font(12))
-    draw.text((hx0, y1 - 32), "image-token sequence →", fill=PALETTE["muted"], font=font(13))
+    draw.text(
+        (hx0, y1 - 32), "image-token sequence →", fill=PALETTE["muted"], font=font(13)
+    )
 
 
-def draw_top_token_table(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], top_tokens: list[int], ratio_mean: np.ndarray, answer_mean: np.ndarray, grid: int) -> None:
+def draw_top_token_table(
+    draw: ImageDraw.ImageDraw,
+    box: tuple[int, int, int, int],
+    top_tokens: list[int],
+    ratio_mean: np.ndarray,
+    answer_mean: np.ndarray,
+    grid: int,
+) -> None:
     rounded_panel(draw, box, "highest-scar token bins", "actual heatmaps.npz token IDs")
     x0, y0, _, y1 = box
     y = y0 + 90
@@ -270,12 +385,28 @@ def draw_top_token_table(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, in
     bar_scale = max(1e-6, float(np.quantile(answer_mean, 0.98)))
     for rank, tok in enumerate(top_tokens[:max_rows], start=1):
         r, c = divmod(tok, grid)
-        draw.text((x0 + 28, y), f"{rank:02d}", fill=PALETTE["amber"], font=font(13, True))
-        draw.text((x0 + 68, y), f"token {tok:03d}", fill=PALETTE["ink"], font=font(14, True))
-        draw.text((x0 + 164, y), f"grid r{r:02d} c{c:02d}", fill=PALETTE["muted"], font=font(13))
-        draw.text((x0 + 292, y), f"ratio {ratio_mean[tok]:.2f}×", fill=PALETTE["cyan"], font=font(13, True))
+        draw.text(
+            (x0 + 28, y), f"{rank:02d}", fill=PALETTE["amber"], font=font(13, True)
+        )
+        draw.text(
+            (x0 + 68, y), f"token {tok:03d}", fill=PALETTE["ink"], font=font(14, True)
+        )
+        draw.text(
+            (x0 + 164, y),
+            f"grid r{r:02d} c{c:02d}",
+            fill=PALETTE["muted"],
+            font=font(13),
+        )
+        draw.text(
+            (x0 + 292, y),
+            f"ratio {ratio_mean[tok]:.2f}×",
+            fill=PALETTE["cyan"],
+            font=font(13, True),
+        )
         bar_w = round(112 * min(1.0, float(answer_mean[tok]) / bar_scale))
-        draw.rounded_rectangle((x0 + 408, y + 4, x0 + 408 + bar_w, y + 14), radius=4, fill=PALETTE["red"])
+        draw.rounded_rectangle(
+            (x0 + 408, y + 4, x0 + 408 + bar_w, y + 14), radius=4, fill=PALETTE["red"]
+        )
         y += row_gap
 
 
@@ -303,24 +434,39 @@ def render(source: Path, out_dir: Path) -> None:
     grid = int(round(math.sqrt(token_count)))
     boxes = token_boxes(original.width, grid)
     answer_area = (bbox[0], bbox[1], bbox[2], bbox[3])
-    answer_tokens = [i for i, b in enumerate(boxes) if intersect_area(answer_area, b) > 0]
+    answer_tokens = [
+        i for i, b in enumerate(boxes) if intersect_area(answer_area, b) > 0
+    ]
     if not answer_tokens:
         center_x = (bbox[0] + bbox[2]) / 2
         center_y = (bbox[1] + bbox[3]) / 2
-        answer_tokens = [min(token_count - 1, max(0, int(center_y / original.height * grid) * grid + int(center_x / original.width * grid)))]
+        answer_tokens = [
+            min(
+                token_count - 1,
+                max(
+                    0,
+                    int(center_y / original.height * grid) * grid
+                    + int(center_x / original.width * grid),
+                ),
+            )
+        ]
 
     ratio_mean = ratio.mean(axis=0)
     answer_mean = answer_delta.mean(axis=0)
     token_score = quantile_norm(ratio_mean, 0.985)
     answer_set = set(answer_tokens)
-    top_tokens = [int(i) for i in np.argsort(ratio_mean)[::-1] if int(i) not in answer_set][:24]
+    top_tokens = [
+        int(i) for i in np.argsort(ratio_mean)[::-1] if int(i) not in answer_set
+    ][:24]
     answer_region_layer = answer_delta[:, answer_tokens].mean(axis=1)
     answer_layer = answer_delta.mean(axis=1)
     random_layer = random_delta.mean(axis=1)
     ratio_layer = answer_layer / np.maximum(random_layer, 1e-6)
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    overlay = draw_activation_overlay(original, answer_mask, token_score, top_tokens[:18], answer_tokens, bbox)
+    overlay = draw_activation_overlay(
+        original, answer_mask, token_score, top_tokens[:18], answer_tokens, bbox
+    )
     overlay = overlay.resize((760, 760), Image.Resampling.LANCZOS)
 
     W, H = 1900, 1260
@@ -336,20 +482,55 @@ def render(source: Path, out_dir: Path) -> None:
     canvas = Image.alpha_composite(canvas, glow.filter(ImageFilter.GaussianBlur(78)))
     draw = ImageDraw.Draw(canvas)
 
-    draw.text((64, 42), "SNAPCOMPACT GLYPH MATRIX", fill=PALETTE["amber"], font=font(22, True))
-    draw.text((64, 78), "The answer glyphs leave a hidden activation scar", fill=PALETTE["ink"], font=font(56, True))
+    draw.text(
+        (64, 42), "SNAPCOMPACT GLYPH MATRIX", fill=PALETTE["amber"], font=font(22, True)
+    )
+    draw.text(
+        (64, 78),
+        "The answer glyphs leave a hidden activation scar",
+        fill=PALETTE["ink"],
+        font=font(56, True),
+    )
     subtitle = "Original dense text bitmap, overlaid with answer/random activation ratios from 19 decoder layers × 729 image tokens."
     draw.text((68, 145), subtitle, fill=PALETTE["muted"], font=font(22))
 
-    rounded_panel(draw, (52, 205, 862, 1066), "visible glyphs ↔ hidden tokens", "red box = actual answer cells; cyan = intersecting image tokens; amber = top scar bins")
+    rounded_panel(
+        draw,
+        (52, 205, 862, 1066),
+        "visible glyphs ↔ hidden tokens",
+        "red box = actual answer cells; cyan = intersecting image tokens; amber = top scar bins",
+    )
     paste_shadowed(canvas, overlay, (78, 282))
-    draw.text((82, 1085), f"Question: {q['q']}", fill=PALETTE["ink"], font=font(21, True))
-    draw.text((82, 1120), f"Gold answer: {q['answer_text']}  ·  cells {q['answer_start']}–{q['answer_end'] - 1}", fill=PALETTE["amber"], font=font(24, True))
-    draw.text((82, 1160), f"Answer/random mean delta: {summary['answer_over_random_delta']:.2f}×", fill=PALETTE["cyan"], font=font(22, True))
+    draw.text(
+        (82, 1085), f"Question: {q['q']}", fill=PALETTE["ink"], font=font(21, True)
+    )
+    draw.text(
+        (82, 1120),
+        f"Gold answer: {q['answer_text']}  ·  cells {q['answer_start']}–{q['answer_end'] - 1}",
+        fill=PALETTE["amber"],
+        font=font(24, True),
+    )
+    draw.text(
+        (82, 1160),
+        f"Answer/random mean delta: {summary['answer_over_random_delta']:.2f}×",
+        fill=PALETTE["cyan"],
+        font=font(22, True),
+    )
 
-    draw_layer_bars(draw, (900, 205, 1838, 628), answer_layer, random_layer, answer_region_layer, ratio_layer)
-    draw_scar_strip(draw, (900, 662, 1838, 930), ratio_norm_binned, answer_tokens, top_tokens)
-    draw_top_token_table(draw, (900, 964, 1838, 1196), top_tokens, ratio_mean, answer_mean, grid)
+    draw_layer_bars(
+        draw,
+        (900, 205, 1838, 628),
+        answer_layer,
+        random_layer,
+        answer_region_layer,
+        ratio_layer,
+    )
+    draw_scar_strip(
+        draw, (900, 662, 1838, 930), ratio_norm_binned, answer_tokens, top_tokens
+    )
+    draw_top_token_table(
+        draw, (900, 964, 1838, 1196), top_tokens, ratio_mean, answer_mean, grid
+    )
 
     for i in range(240):
         draw.rectangle((1568 + i, 156, 1569 + i, 174), fill=heat_color(i / 239))
@@ -363,7 +544,13 @@ def render(source: Path, out_dir: Path) -> None:
     source_data = {
         "source": str(source),
         "question": q,
-        "geometry": {"text_cols": cols, "text_rows": rows, "glyph_adv": adv, "glyph_pitch": pitch, "image_token_grid": [grid, grid]},
+        "geometry": {
+            "text_cols": cols,
+            "text_rows": rows,
+            "glyph_adv": adv,
+            "glyph_pitch": pitch,
+            "image_token_grid": [grid, grid],
+        },
         "answer_bbox_pixels": list(map(int, bbox)),
         "answer_image_tokens": [int(x) for x in answer_tokens],
         "top_scar_tokens": [

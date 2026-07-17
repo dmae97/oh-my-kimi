@@ -132,14 +132,14 @@ function BehaviorSummaryPanel({
 const METRIC_OPTIONS = [
 	{ value: "yelling", label: "CAPS", title: "Yelling (CAPS)" },
 	{ value: "profanity", label: "Profanity", title: "Profanity" },
-	{ value: "anguish", label: "Anguish", title: "Anguish (!!!, nooo, dude, ..)" },
-	{ value: "negation", label: "Negation", title: "Negation (no/nope/wrong)" },
+	{ value: "anguish", label: "Anguish", title: "Anguish (!!!, nooo, ugh, dude, ':(')" },
+	{ value: "negation", label: "Negation", title: "Negation (no/nope/wrong, makes no sense)" },
 	{
 		value: "repetition",
 		label: "Repetition",
 		title: "Repetition (i meant, still doesnt)",
 	},
-	{ value: "blame", label: "Blame", title: "Blame (you didnt, stop X-ing)" },
+	{ value: "blame", label: "Blame", title: "Blame (you didnt, why did you, stop X-ing)" },
 	{
 		value: "frustration",
 		label: "Frustration",

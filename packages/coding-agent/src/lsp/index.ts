@@ -18,10 +18,12 @@ import { ToolAbortError, ToolError, throwIfAborted } from "../tools/tool-errors"
 import { clampTimeout } from "../tools/tool-timeouts";
 import {
 	ensureFileOpen,
+	FileChangeType,
 	getActiveClients,
 	getOrCreateClient,
 	type LspServerStatus,
 	notifySaved,
+	notifyWorkspaceWatchedFiles,
 	refreshFile,
 	sendNotification,
 	sendRequest,
@@ -571,8 +573,79 @@ interface ProjectType {
 	description: string;
 }
 
+/** Convert a `go.work` use directory into the package pattern `go build` needs. */
+function goWorkspaceBuildPattern(diskPath: string): string | null {
+	const trimmed = diskPath.trim();
+	if (!trimmed) return null;
+
+	const isAbsolute = path.isAbsolute(trimmed) || path.win32.isAbsolute(trimmed);
+	const normalized = trimmed.replaceAll("\\", "/").replace(/\/+$/, "");
+	const dir = normalized || ".";
+	if (dir === ".") return "./...";
+	if (dir.endsWith("/...")) return dir;
+	if (isAbsolute || dir.startsWith("./") || dir.startsWith("../")) return `${dir}/...`;
+	return `./${dir}/...`;
+}
+
+/** Parse `go work edit -json` output into per-module package patterns. */
+function parseGoWorkspaceBuildPatterns(output: string): string[] {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(output);
+	} catch {
+		return [];
+	}
+
+	if (!parsed || typeof parsed !== "object" || !("Use" in parsed) || !Array.isArray(parsed.Use)) return [];
+
+	const patterns = new Set<string>();
+	for (const entry of parsed.Use) {
+		if (!entry || typeof entry !== "object" || !("DiskPath" in entry) || typeof entry.DiskPath !== "string") {
+			continue;
+		}
+		const pattern = goWorkspaceBuildPattern(entry.DiskPath);
+		if (pattern) patterns.add(pattern);
+	}
+	return [...patterns];
+}
+
+/** Resolve the `go build` command for a `go.work` workspace. */
+async function resolveGoWorkspaceDiagnosticsCommand(cwd: string, signal?: AbortSignal): Promise<string[]> {
+	const fallback = ["go", "build", "./..."];
+	try {
+		const proc = Bun.spawn(["go", "work", "edit", "-json"], {
+			cwd,
+			stdout: "pipe",
+			stderr: "pipe",
+			windowsHide: true,
+		});
+		const abortHandler = () => {
+			proc.kill();
+		};
+		if (signal) {
+			signal.addEventListener("abort", abortHandler, { once: true });
+		}
+
+		try {
+			const [stdout] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+			const exitCode = await proc.exited;
+			throwIfAborted(signal);
+			if (exitCode !== 0) return fallback;
+			const patterns = parseGoWorkspaceBuildPatterns(stdout);
+			return patterns.length > 0 ? ["go", "build", ...patterns] : fallback;
+		} finally {
+			signal?.removeEventListener("abort", abortHandler);
+		}
+	} catch {
+		if (signal?.aborted) {
+			throw new ToolAbortError();
+		}
+		return fallback;
+	}
+}
+
 /** Detect project type from root markers */
-function detectProjectType(cwd: string): ProjectType {
+async function detectProjectType(cwd: string, signal?: AbortSignal): Promise<ProjectType> {
 	// Check for Rust (Cargo.toml)
 	if (fs.existsSync(path.join(cwd, "Cargo.toml"))) {
 		return { type: "rust", command: ["cargo", "check", "--message-format=short"], description: "Rust (cargo check)" };
@@ -581,6 +654,15 @@ function detectProjectType(cwd: string): ProjectType {
 	// Check for TypeScript (tsconfig.json)
 	if (fs.existsSync(path.join(cwd, "tsconfig.json"))) {
 		return { type: "typescript", command: ["npx", "tsc", "--noEmit"], description: "TypeScript (tsc --noEmit)" };
+	}
+
+	// Check for Go workspaces before single-module Go projects.
+	if (fs.existsSync(path.join(cwd, "go.work"))) {
+		return {
+			type: "go",
+			command: await resolveGoWorkspaceDiagnosticsCommand(cwd, signal),
+			description: "Go workspace (go build)",
+		};
 	}
 
 	// Check for Go (go.mod)
@@ -602,47 +684,52 @@ async function runWorkspaceDiagnostics(
 	signal?: AbortSignal,
 ): Promise<{ output: string; projectType: ProjectType }> {
 	throwIfAborted(signal);
-	const projectType = detectProjectType(cwd);
+	const projectType = await detectProjectType(cwd, signal);
 	if (!projectType.command) {
 		return {
-			output: `Cannot detect project type. Supported: Rust (Cargo.toml), TypeScript (tsconfig.json), Go (go.mod), Python (pyproject.toml)`,
+			output: `Cannot detect project type. Supported: Rust (Cargo.toml), TypeScript (tsconfig.json), Go (go.work/go.mod), Python (pyproject.toml)`,
 			projectType,
 		};
 	}
-	const proc = Bun.spawn(projectType.command, {
-		cwd,
-		stdout: "pipe",
-		stderr: "pipe",
-		windowsHide: true,
-	});
-	const abortHandler = () => {
-		proc.kill();
-	};
-	if (signal) {
-		signal.addEventListener("abort", abortHandler, { once: true });
-	}
-
 	try {
-		const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
-		await proc.exited;
-		throwIfAborted(signal);
-		const combined = (stdout + stderr).trim();
-		if (!combined) {
-			return { output: "No issues found", projectType };
+		const proc = Bun.spawn(projectType.command, {
+			cwd,
+			stdout: "pipe",
+			stderr: "pipe",
+			windowsHide: true,
+		});
+		const abortHandler = () => {
+			proc.kill();
+		};
+		if (signal) {
+			signal.addEventListener("abort", abortHandler, { once: true });
 		}
-		// Limit output length
-		const lines = combined.split("\n");
-		if (lines.length > 50) {
-			return { output: `${lines.slice(0, 50).join("\n")}\n[…${lines.length - 50}ln elided…]`, projectType };
+
+		try {
+			const [stdout, stderr] = await Promise.all([
+				new Response(proc.stdout).text(),
+				new Response(proc.stderr).text(),
+			]);
+			await proc.exited;
+			throwIfAborted(signal);
+			const combined = (stdout + stderr).trim();
+			if (!combined) {
+				return { output: "No issues found", projectType };
+			}
+			// Limit output length
+			const lines = combined.split("\n");
+			if (lines.length > 50) {
+				return { output: `${lines.slice(0, 50).join("\n")}\n[…${lines.length - 50}ln elided…]`, projectType };
+			}
+			return { output: combined, projectType };
+		} finally {
+			signal?.removeEventListener("abort", abortHandler);
 		}
-		return { output: combined, projectType };
 	} catch (e) {
 		if (signal?.aborted) {
 			throw new ToolAbortError();
 		}
 		return { output: `Failed to run ${projectType.command.join(" ")}: ${e}`, projectType };
-	} finally {
-		signal?.removeEventListener("abort", abortHandler);
 	}
 }
 
@@ -946,6 +1033,7 @@ interface PendingWritethrough {
 	dst: string;
 	content: string;
 	file?: BunFile;
+	changeType: FileChangeType;
 }
 
 interface LspWritethroughBatchRequest {
@@ -1139,6 +1227,7 @@ async function runLspWritethrough(
 	content: string,
 	cwd: string,
 	options: ResolvedWritethroughOptions,
+	changeType: FileChangeType,
 	signal?: AbortSignal,
 	file?: BunFile,
 	deferred?: {
@@ -1147,16 +1236,42 @@ async function runLspWritethrough(
 	},
 ): Promise<FileDiagnosticsResult | undefined> {
 	const { enableFormat, enableDiagnostics } = options;
-	const config = getConfig(cwd);
-	const servers = getServersForFile(config, dst);
-	if (servers.length === 0) {
-		return writethroughNoop(dst, content, signal, file);
-	}
-	const { lspServers, customLinterServers } = splitServers(servers);
 
 	let finalContent = content;
 	const writeContent = async (value: string) => (file ? file.write(value) : Bun.write(dst, value));
 	const getWritePromise = once(() => writeContent(finalContent));
+	let writeNotified = false;
+	const notifyWriteCommitted = async (notifySignal: AbortSignal | undefined = signal) => {
+		if (writeNotified) return;
+		writeNotified = true;
+		try {
+			await notifyWorkspaceWatchedFiles(cwd, [{ filePath: dst, type: changeType }], notifySignal);
+		} catch (error) {
+			if (notifySignal?.aborted && !signal?.aborted) {
+				// The operation budget died mid-notify while the caller is still
+				// live: allow the post-write retry below to re-announce with the
+				// caller's signal (didChangeWatchedFiles is idempotent).
+				writeNotified = false;
+				return;
+			}
+			throw error;
+		}
+	};
+	if (!enableFormat && !enableDiagnostics) {
+		await getWritePromise();
+		await notifyWriteCommitted();
+		return undefined;
+	}
+
+	const config = getConfig(cwd);
+	const servers = getServersForFile(config, dst);
+
+	if (servers.length === 0) {
+		await getWritePromise();
+		await notifyWriteCommitted();
+		return undefined;
+	}
+	const { lspServers, customLinterServers } = splitServers(servers);
 	const useCustomFormatter = enableFormat && customLinterServers.length > 0;
 
 	// Capture diagnostic versions BEFORE syncing to detect stale diagnostics
@@ -1169,6 +1284,7 @@ async function runLspWritethrough(
 	let diagnostics: FileDiagnosticsResult | undefined;
 	let timedOut = false;
 	let synced = false;
+	let operationSignal: AbortSignal | undefined;
 	try {
 		const timeoutSignal = AbortSignal.timeout(5_000);
 		timeoutSignal.addEventListener(
@@ -1178,7 +1294,7 @@ async function runLspWritethrough(
 			},
 			{ once: true },
 		);
-		const operationSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+		operationSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 		await untilAborted(operationSignal, async () => {
 			if (useCustomFormatter) {
 				// Custom linters (e.g. Biome CLI) require on-disk input.
@@ -1186,6 +1302,7 @@ async function runLspWritethrough(
 				finalContent = await formatContent(dst, content, cwd, customLinterServers, operationSignal);
 				formatter = finalContent !== content ? FileFormatResult.FORMATTED : FileFormatResult.UNCHANGED;
 				await writeContent(finalContent);
+				await notifyWriteCommitted(operationSignal);
 				await syncFileContent(dst, finalContent, cwd, lspServers, operationSignal);
 			} else {
 				// 1. Sync original content to LSP servers
@@ -1204,6 +1321,7 @@ async function runLspWritethrough(
 
 				// 4. Write to disk
 				await getWritePromise();
+				await notifyWriteCommitted(operationSignal);
 			}
 
 			if (enableDiagnostics) {
@@ -1232,6 +1350,10 @@ async function runLspWritethrough(
 			}
 		}
 		await getWritePromise();
+		// The write above committed even though the operation budget elapsed:
+		// announce it on the caller's signal — the dead `operationSignal` would
+		// abort the notify before it ever reaches the server.
+		await notifyWriteCommitted();
 	}
 
 	if (synced && enableDiagnostics) {
@@ -1279,7 +1401,16 @@ async function flushWritethroughBatch(
 				onDeferredDiagnostics: bundle.onDeferredDiagnostics,
 				signal: bundle.signal,
 			} as const);
-		const diag = await runLspWritethrough(entry.dst, entry.content, cwd, options, signal, entry.file, deferredInner);
+		const diag = await runLspWritethrough(
+			entry.dst,
+			entry.content,
+			cwd,
+			options,
+			entry.changeType,
+			signal,
+			entry.file,
+			deferredInner,
+		);
 		bundle?.finalize(diag);
 		results.push(diag);
 	}
@@ -1293,9 +1424,6 @@ export function createLspWritethrough(cwd: string, options?: WritethroughOptions
 		enableDiagnostics: options?.enableDiagnostics ?? false,
 		transformDiagnostics: options?.transformDiagnostics,
 	};
-	if (!resolvedOptions.enableFormat && !resolvedOptions.enableDiagnostics) {
-		return writethroughNoop;
-	}
 	return async (
 		dst: string,
 		content: string,
@@ -1304,6 +1432,7 @@ export function createLspWritethrough(cwd: string, options?: WritethroughOptions
 		batch?: LspWritethroughBatchRequest,
 		getDeferred?: (dst: string) => WritethroughDeferredHandle | undefined,
 	) => {
+		const changeType = (await Bun.file(dst).exists()) ? FileChangeType.Changed : FileChangeType.Created;
 		if (!batch) {
 			const bundle = getDeferred?.(dst);
 			const deferredInner =
@@ -1312,13 +1441,22 @@ export function createLspWritethrough(cwd: string, options?: WritethroughOptions
 					onDeferredDiagnostics: bundle.onDeferredDiagnostics,
 					signal: bundle.signal,
 				} as const);
-			const diagnostics = await runLspWritethrough(dst, content, cwd, resolvedOptions, signal, file, deferredInner);
+			const diagnostics = await runLspWritethrough(
+				dst,
+				content,
+				cwd,
+				resolvedOptions,
+				changeType,
+				signal,
+				file,
+				deferredInner,
+			);
 			bundle?.finalize(diagnostics);
 			return diagnostics;
 		}
 
 		const state = getOrCreateWritethroughBatch(batch.id, resolvedOptions);
-		state.entries.set(dst, { dst, content, file });
+		state.entries.set(dst, { dst, content, file, changeType });
 
 		if (!batch.flush) {
 			await writethroughNoop(dst, content, signal, file);

@@ -27,4 +27,15 @@ describe("Container.dispose", () => {
 		outer.dispose();
 		expect(leafDisposed).toBe(1);
 	});
+
+	it("disposeChildren disposes children and detaches them", () => {
+		let disposed = 0;
+		const container = new Container();
+		container.addChild(inert(() => disposed++));
+
+		container.disposeChildren();
+
+		expect(disposed).toBe(1);
+		expect(container.children).toEqual([]);
+	});
 });

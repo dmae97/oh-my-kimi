@@ -21,6 +21,9 @@ const BACKOFF_BASE_MS = 1_000;
 const BACKOFF_MAX_MS = 30_000;
 /** Max enveloped frames buffered while a reconnect is pending; overflow is dropped. */
 const MAX_PENDING_SENDS = 256;
+const WS_BACKPRESSURE_THRESHOLD = 64 * 1024;
+const WS_BACKPRESSURE_DRAIN_THRESHOLD = 32 * 1024;
+const WS_BACKPRESSURE_DRAIN_RETRY_MS = 25;
 
 export interface CollabSocketOptions {
 	/** wss://host[:port]/r/<roomId> — no query string. */
@@ -40,6 +43,7 @@ export class CollabSocket {
 	readonly #opts: CollabSocketOptions;
 	#ws: WebSocket | null = null;
 	#retryTimer: NodeJS.Timeout | undefined;
+	#backpressureDrainTimer: NodeJS.Timeout | undefined;
 	#attempt = 0;
 	/** Terminal state: intentional close or fatal failure. Cleared by connect(). */
 	#closed = false;
@@ -72,28 +76,84 @@ export class CollabSocket {
 					logger.debug("collab: dropping frame, socket closed", { t: frame.t });
 					return;
 				}
+				const openWs = this.#ws;
+				if (openWs && openWs.readyState === WebSocket.OPEN) this.#drainPendingSends(openWs);
 				const sealed = await seal(this.#opts.key, frame);
 				const envelope = packEnvelope(targetPeer, sealed);
 				const ws = this.#ws;
 				if (ws && ws.readyState === WebSocket.OPEN) {
+					if (this.#pendingSends.length > 0) {
+						this.#enqueuePendingSend(envelope, frame.t);
+						if (ws.bufferedAmount < WS_BACKPRESSURE_DRAIN_THRESHOLD) {
+							this.#drainPendingSends(ws);
+						} else {
+							this.#scheduleBackpressureDrain(ws);
+						}
+						return;
+					}
+					if (ws.bufferedAmount >= WS_BACKPRESSURE_THRESHOLD) {
+						this.#enqueuePendingSend(envelope, frame.t);
+						this.#scheduleBackpressureDrain(ws);
+						return;
+					}
 					ws.send(envelope);
 					return;
 				}
-				if (this.#pendingSends.length >= MAX_PENDING_SENDS) {
-					logger.debug("collab: dropping frame, reconnect buffer full", { t: frame.t });
-					return;
-				}
-				this.#pendingSends.push(envelope);
+				this.#enqueuePendingSend(envelope, frame.t);
 			})
 			.catch((err: unknown) => {
 				logger.debug("collab: send failed", { error: String(err) });
 			});
 	}
 
+	#enqueuePendingSend(envelope: Uint8Array, frameType: CollabFrame["t"]): void {
+		if (this.#pendingSends.length >= MAX_PENDING_SENDS) {
+			logger.debug("collab: dropping frame, reconnect buffer full", { t: frameType });
+			return;
+		}
+		this.#pendingSends.push(envelope);
+	}
+
+	#drainPendingSends(ws: WebSocket): void {
+		while (
+			this.#pendingSends.length > 0 &&
+			ws.readyState === WebSocket.OPEN &&
+			ws.bufferedAmount < WS_BACKPRESSURE_DRAIN_THRESHOLD
+		) {
+			const envelope = this.#pendingSends.shift();
+			if (!envelope) return;
+			ws.send(envelope);
+		}
+	}
+
+	#scheduleBackpressureDrain(ws: WebSocket): void {
+		if (this.#backpressureDrainTimer !== undefined) return;
+		this.#backpressureDrainTimer = setTimeout(() => {
+			this.#backpressureDrainTimer = undefined;
+			this.#sendChain = this.#sendChain
+				.then(async () => {
+					if (this.#closed || this.#ws !== ws || ws.readyState !== WebSocket.OPEN) return;
+					this.#drainPendingSends(ws);
+					if (this.#pendingSends.length > 0) this.#scheduleBackpressureDrain(ws);
+				})
+				.catch((err: unknown) => {
+					logger.debug("collab: backpressure drain failed", { error: String(err) });
+				});
+		}, WS_BACKPRESSURE_DRAIN_RETRY_MS);
+	}
+
+	#clearBackpressureDrain(): void {
+		if (this.#backpressureDrainTimer !== undefined) {
+			clearTimeout(this.#backpressureDrainTimer);
+			this.#backpressureDrainTimer = undefined;
+		}
+	}
+
 	/** Intentional close: clears any retry timer, suppresses reconnect. A later connect() starts fresh. */
 	close(): void {
 		const hadActivity = this.#ws !== null || this.#retryTimer !== undefined;
 		this.#clearRetry();
+		this.#clearBackpressureDrain();
 		const wasClosed = this.#closed;
 		this.#closed = true;
 		this.#pendingSends.length = 0;
@@ -110,14 +170,17 @@ export class CollabSocket {
 	}
 
 	#openSocket(): void {
+		this.#clearBackpressureDrain();
 		const ws = new WebSocket(`${this.#opts.wsUrl}?role=${this.#opts.role}`);
 		ws.binaryType = "arraybuffer";
 		this.#ws = ws;
 		ws.onopen = () => {
 			if (this.#ws !== ws) return;
 			this.#attempt = 0;
-			for (const envelope of this.#pendingSends) ws.send(envelope);
-			this.#pendingSends.length = 0;
+			if (this.#pendingSends.length > 0) {
+				this.#drainPendingSends(ws);
+				if (this.#pendingSends.length > 0) this.#scheduleBackpressureDrain(ws);
+			}
 			this.onOpen?.();
 		};
 		ws.onmessage = (event: MessageEvent) => {
@@ -129,6 +192,7 @@ export class CollabSocket {
 		};
 		ws.onclose = (event: CloseEvent) => {
 			if (this.#ws !== ws) return;
+			this.#clearBackpressureDrain();
 			this.#ws = null;
 			this.#handleClose(event.code, event.reason);
 		};
@@ -167,6 +231,7 @@ export class CollabSocket {
 
 	#handleClose(code: number, reason: string): void {
 		if (this.#closed) return;
+		this.#clearBackpressureDrain();
 		const fatalReason = FATAL_CLOSE_REASONS[code];
 		if (fatalReason !== undefined) {
 			this.#closed = true;
@@ -186,6 +251,7 @@ export class CollabSocket {
 		this.#pendingSends.length = 0;
 		const ws = this.#ws;
 		this.#ws = null;
+		this.#clearBackpressureDrain();
 		if (ws) {
 			try {
 				ws.close(1000);

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { BeamMemory } from "@oh-my-pi/pi-mnemopi/core/beam";
+import { storeFactStrings } from "@oh-my-pi/pi-mnemopi/core/beam/consolidate";
 
 type TestBeam = BeamMemory;
 
@@ -37,6 +38,15 @@ async function expectTopContains(beam: TestBeam, query: string, expected: string
 	const results = await beam.recall(query, 5, { queryTime: "2026-05-30T12:00:00.000Z" });
 	expect(results.length).toBeGreaterThan(0);
 	expect(results[0]?.content.toLowerCase()).toContain(expected.toLowerCase());
+}
+
+function bulletLinesUnder(context: string, heading: string): string[] {
+	const start = context.indexOf(heading);
+	if (start < 0) return [];
+	const rest = context.slice(start + heading.length);
+	const nextHeading = rest.search(/\n## /);
+	const section = nextHeading >= 0 ? rest.slice(0, nextHeading) : rest;
+	return section.split("\n").filter(line => line.startsWith("- "));
 }
 
 describe("recall precision regressions", () => {
@@ -131,5 +141,54 @@ describe("recall precision regressions", () => {
 
 		expect(results.length).toBeGreaterThan(0);
 		expect(results[0]?.content).toContain("stable-cluster");
+	});
+
+	it("surfaces extracted flat facts proportionally and buckets each fact once", async () => {
+		const beam = makeBeam();
+		const facts = [
+			"redis cluster runs on port 6379",
+			"api-server depends on redis for session storage",
+			"redis eviction policy is allkeys-lru",
+			"redis maxmemory is set to 4gb",
+			"redis persistence uses append-only file",
+			"worker queues are backed by redis streams",
+			"redis sentinel handles failover",
+			"cache invalidation publishes to redis pubsub",
+		];
+		storeFactStrings(beam, facts, 0, "repro-source");
+
+		const results = await beam.recallEnhanced("redis", 20, { includeFacts: true });
+		const factContents = results.filter(result => result.tier === "fact").map(result => result.content);
+		expect(factContents.toSorted()).toEqual(facts.toSorted());
+
+		const context = beam.formatContext(results, "bullet");
+		expect(bulletLinesUnder(context, "## Top Facts")).toHaveLength(3);
+		expect(bulletLinesUnder(context, "## Supporting Context")).toHaveLength(5);
+		expect(context).not.toContain("## Recent Signals");
+		const bullets = context.split("\n").filter(line => line.startsWith("- "));
+		expect(new Set(bullets).size).toBe(bullets.length);
+	});
+
+	it("keeps small enhanced fact recalls filled and split into supporting context", async () => {
+		const beam = makeBeam();
+		const facts = ["redis alpha runs on port 6379", "redis beta handles failover"];
+		storeFactStrings(beam, facts, 0, "repro-source");
+
+		const results = await beam.recallEnhanced("redis", 2, { includeFacts: true });
+		const factContents = results.filter(result => result.tier === "fact").map(result => result.content);
+		expect(factContents.toSorted()).toEqual(facts.toSorted());
+
+		const context = beam.formatContext(results, "bullet");
+		expect(bulletLinesUnder(context, "## Top Facts")).toHaveLength(1);
+		expect(bulletLinesUnder(context, "## Supporting Context")).toHaveLength(1);
+		expect(context).not.toContain("## Recent Signals");
+	});
+
+	it("does not recall flat facts through storage-only fact/entity fields", () => {
+		const beam = makeBeam();
+		storeFactStrings(beam, ["redis cluster runs on port 6379"], 0, "repro-source");
+
+		expect(beam.factRecall("fact entity", 10)).toEqual([]);
+		expect(beam.factRecall("redis", 10).map(result => result.content)).toEqual(["redis cluster runs on port 6379"]);
 	});
 });

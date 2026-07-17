@@ -170,12 +170,16 @@ def run_page(model: str, cond: str, page: tuple[int, int], ctx: dict) -> list[di
     i, j = page
     start = offsets[i]
     end = offsets[j - 1] + len(paras[j - 1]["ctx"])
-    questions = squad.sample_chunk_questions(paras, offsets, start, end, args.qpc, args.seed)
+    questions = squad.sample_chunk_questions(
+        paras, offsets, start, end, args.qpc, args.seed
+    )
     if not questions:
         return []
     variant = cond.removeprefix("img-6x10-")
     lines = ctx["lines"][page]
-    page_key = sha8(cond, json.dumps([(p["title"], p["ctx"]) for p in paras[i:j]]), str(args.size))
+    page_key = sha8(
+        cond, json.dumps([(p["title"], p["ctx"]) for p in paras[i:j]]), str(args.size)
+    )
     png = CACHE / f"exp04-{variant}-{page_key}.png"
     if not png.exists() or png.stat().st_size == 0:
         tmp = png.with_suffix(".tmp.png")
@@ -188,18 +192,30 @@ def run_page(model: str, cond: str, page: tuple[int, int], ctx: dict) -> list[di
         {
             "role": "user",
             "content": [
-                {"text": load_prompt("exp04-qa-image.md").format(col_w=col_w, rows=rows)},
+                {
+                    "text": load_prompt("exp04-qa-image.md").format(
+                        col_w=col_w, rows=rows
+                    )
+                },
                 {"image_path": png},
                 {"text": q_block},
             ],
         }
     ]
     qa = cached(
-        model, "exp04-qa", {"messages": messages, "effort": args.effort},
+        model,
+        "exp04-qa",
+        {"messages": messages, "effort": args.effort},
         lambda: dict(
             zip(
                 ("text", "usage", "stop"),
-                llm_complete(keys, model, messages, max_tokens=args.max_tokens, effort=args.effort),
+                llm_complete(
+                    keys,
+                    model,
+                    messages,
+                    max_tokens=args.max_tokens,
+                    effort=args.effort,
+                ),
             )
         ),
         args.fresh,
@@ -232,8 +248,13 @@ def aggregate(records: list[dict], price_in: float, price_out: float) -> dict:
     mean_f1 = sum(f1s) / n
     se = (sum((x - mean_f1) ** 2 for x in f1s) / (n * (n - 1))) ** 0.5 if n > 1 else 0.0
     us = [u for r in records if "usage" in r for u in r["usage"]]
-    tok = {k: sum(u.get(k, 0) for u in us) for k in ("in", "out", "cache_w", "cache_r", "reasoning")}
-    cost_in = (tok["in"] + 1.25 * tok["cache_w"] + 0.1 * tok["cache_r"]) / 1e6 * price_in
+    tok = {
+        k: sum(u.get(k, 0) for u in us)
+        for k in ("in", "out", "cache_w", "cache_r", "reasoning")
+    }
+    cost_in = (
+        (tok["in"] + 1.25 * tok["cache_w"] + 0.1 * tok["cache_r"]) / 1e6 * price_in
+    )
     cost_out = tok["out"] / 1e6 * price_out
     return {
         "n": n,
@@ -260,7 +281,11 @@ def main() -> None:
     ap.add_argument("--max-tokens", type=int, default=32768)
     ap.add_argument("--effort", default=None)
     ap.add_argument("--fresh", action="store_true")
-    ap.add_argument("--render-only", action="store_true", help="render pages + capacity stats, no API")
+    ap.add_argument(
+        "--render-only",
+        action="store_true",
+        help="render pages + capacity stats, no API",
+    )
     ap.add_argument("--env", default="~/.env")
     args = ap.parse_args()
 
@@ -290,7 +315,9 @@ def main() -> None:
         flow, offsets = squad.build_flow(paras)
         pages = pack_pages(paras, col_w, max_lines)
         page_lines = {pg: layout_page(paras[pg[0] : pg[1]], col_w) for pg in pages}
-        page_chars = [offsets[j - 1] + len(paras[j - 1]["ctx"]) - offsets[i] for i, j in pages]
+        page_chars = [
+            offsets[j - 1] + len(paras[j - 1]["ctx"]) - offsets[i] for i, j in pages
+        ]
         capacity_stats[length] = {
             "pages": len(pages),
             "chars_per_page": page_chars,
@@ -300,15 +327,21 @@ def main() -> None:
             "grid_pages": -(-len(flow) // grid_cap),
         }
         ctx = {
-            "args": args, "paras": paras, "offsets": offsets, "keys": keys,
-            "length": length, "lines": page_lines,
+            "args": args,
+            "paras": paras,
+            "offsets": offsets,
+            "keys": keys,
+            "length": length,
+            "lines": page_lines,
         }
         for model in models:
             for cond in conditions:
                 for pg in pages:
                     tasks.append((model, cond, pg, ctx))
 
-    print(f"layout: {cols} cols -> 2 x {col_w} + gutter {GUTTER}; {max_lines} line slots/page")
+    print(
+        f"layout: {cols} cols -> 2 x {col_w} + gutter {GUTTER}; {max_lines} line slots/page"
+    )
     for length, st in capacity_stats.items():
         print(
             f"  len {length}: {st['pages']} doc pages (mean {st['mean_chars_page']} chars/page; "
@@ -322,7 +355,11 @@ def main() -> None:
                 variant = cond.removeprefix("img-6x10-")
                 i, j = pages[0]
                 lines = layout_page(paras[i:j], col_w)
-                key = sha8(cond, json.dumps([(p["title"], p["ctx"]) for p in paras[i:j]]), str(args.size))
+                key = sha8(
+                    cond,
+                    json.dumps([(p["title"], p["ctx"]) for p in paras[i:j]]),
+                    str(args.size),
+                )
                 png = CACHE / f"exp04-{variant}-{key}.png"
                 tmp = png.with_suffix(".tmp.png")
                 render_doc(lines, args.size, variant, CACHE).save(tmp)
@@ -348,12 +385,27 @@ def main() -> None:
     for model in models:
         for length in lengths:
             for cond in conditions:
-                sub = [r for r in records if r["model"] == model and r["length"] == length and r["cond"] == cond]
+                sub = [
+                    r
+                    for r in records
+                    if r["model"] == model
+                    and r["length"] == length
+                    and r["cond"] == cond
+                ]
                 if not sub:
                     continue
-                cells.append({"model": model, "length": length, "condition": cond, **aggregate(sub, *MODELS[model])})
+                cells.append(
+                    {
+                        "model": model,
+                        "length": length,
+                        "condition": cond,
+                        **aggregate(sub, *MODELS[model]),
+                    }
+                )
     (out_dir / "summary.json").write_text(
-        json.dumps({"args": vars(args), "capacity": capacity_stats, "cells": cells}, indent=1)
+        json.dumps(
+            {"args": vars(args), "capacity": capacity_stats, "cells": cells}, indent=1
+        )
     )
     import csv
 

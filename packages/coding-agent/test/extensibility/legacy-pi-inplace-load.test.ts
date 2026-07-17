@@ -60,6 +60,364 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 		expect(mod.html).toBe("<html>PLAN-UI</html>");
 	});
 
+	it("loads CommonJS helpers required by an ES module extension", async () => {
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "cjs-helper-ext", version: "1.0.0" }),
+			"config.js": 'module.exports = { value: "config-ok" };\n',
+			"index.js": [
+				'import { createRequire } from "node:module";',
+				"const require = createRequire(import.meta.url);",
+				'const { value } = require("./config.js");',
+				"export { value };",
+				"export default function (pi) { void pi; }",
+			].join("\n"),
+		});
+
+		const mod = (await loadLegacyPiModule(path.join(dir, "index.js"))) as { value: string };
+
+		expect(mod.value).toBe("config-ok");
+	});
+
+	it("loads a default import from linkedom's CommonJS canvas fallback", async () => {
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "linkedom-consumer", version: "1.0.0", type: "module" }),
+			"index.js": 'export { canvasValue } from "linkedom";\n',
+			"node_modules/linkedom/package.json": JSON.stringify({
+				name: "linkedom",
+				version: "0.18.12",
+				type: "module",
+				exports: "./index.js",
+			}),
+			"node_modules/linkedom/index.js": [
+				'import Canvas from "./commonjs/canvas.cjs";',
+				"export const canvasValue = Canvas.createCanvas();",
+			].join("\n"),
+			"node_modules/linkedom/commonjs/canvas.cjs": [
+				"try {",
+				'  module.exports = require("canvas");',
+				"} catch {",
+				'  module.exports = require("./canvas-shim.cjs");',
+				"}",
+			].join("\n"),
+			"node_modules/linkedom/commonjs/canvas-shim.cjs":
+				'module.exports = { createCanvas: () => "linkedom-canvas-shim" };\n',
+		});
+
+		const mod = await loadLegacyPiModule(path.join(dir, "index.js"));
+
+		expect(Reflect.get(Object(mod), "canvasValue")).toBe("linkedom-canvas-shim");
+	});
+
+	it("preserves named ESM imports from CommonJS helpers", async () => {
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "named-cjs-ext", version: "1.0.0", type: "module" }),
+			"index.js": [
+				'import { value } from "./helper.cjs";',
+				"export { value };",
+				"export default function (pi) { void pi; }",
+			].join("\n"),
+			"helper.cjs": 'module.exports = { value: "named-cjs-ok" };\n',
+		});
+
+		const mod = (await loadLegacyPiModule(path.join(dir, "index.js"))) as { value: string };
+
+		expect(mod.value).toBe("named-cjs-ok");
+	});
+
+	it("reads a lazy CommonJS helper at import time", async () => {
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "lazy-cjs-ext", version: "1.0.0", type: "module" }),
+			"index.js": [
+				'export const loadValue = () => import("./helper.cjs").then(mod => mod.default.value);',
+				"export default function (pi) { void pi; }",
+			].join("\n"),
+			"helper.cjs": 'module.exports = { value: "v1" };\n',
+		});
+		const helper = path.join(dir, "helper.cjs");
+		const mod = (await loadLegacyPiModule(path.join(dir, "index.js"))) as { loadValue(): Promise<string> };
+
+		await fs.writeFile(helper, 'module.exports = { value: "v2" };\n', "utf8");
+
+		expect(await mod.loadValue()).toBe("v2");
+	});
+
+	it("reloads an edited CommonJS helper imported from ESM", async () => {
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "cjs-reload-ext", version: "1.0.0", type: "module" }),
+			"index.js": [
+				'import helper from "./helper.cjs";',
+				"export const helperValue = helper.value;",
+				"export default function (pi) { void pi; }",
+			].join("\n"),
+			"helper.cjs": 'module.exports = { value: "v1" };\n',
+		});
+		const entry = path.join(dir, "index.js");
+		const helper = path.join(dir, "helper.cjs");
+
+		const first = await loadLegacyPiModule(entry);
+		expect(Reflect.get(Object(first), "helperValue")).toBe("v1");
+
+		const firstHelperStat = await fs.stat(helper);
+		await fs.writeFile(helper, 'module.exports = { value: "v2" };\n', "utf8");
+		const bumpedHelperMtime = new Date(Math.ceil(firstHelperStat.mtimeMs) + 2_000);
+		await fs.utimes(helper, bumpedHelperMtime, bumpedHelperMtime);
+
+		const second = await loadLegacyPiModule(entry);
+		expect(Reflect.get(Object(second), "helperValue")).toBe("v2");
+	});
+
+	it("returns module.exports when graph-owned CommonJS requires a sibling", async () => {
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "cjs-sibling-ext", version: "1.0.0", type: "module" }),
+			"index.js": [
+				'import primary from "./primary.cjs";',
+				'import sibling from "./sibling.cjs";',
+				"export const primaryValue = primary.value;",
+				"export const siblingValue = sibling.value;",
+				"export const sharesSiblingExports = primary.sibling === sibling;",
+				"export default function (pi) { void pi; }",
+			].join("\n"),
+			"primary.cjs": [
+				'const sibling = require("./sibling.cjs");',
+				"module.exports = { value: `primary:${sibling.value}`, sibling };",
+			].join("\n"),
+			"sibling.cjs": 'module.exports = { value: "sibling" };\n',
+		});
+
+		const mod = await loadLegacyPiModule(path.join(dir, "index.js"));
+
+		expect(Reflect.get(Object(mod), "primaryValue")).toBe("primary:sibling");
+		expect(Reflect.get(Object(mod), "siblingValue")).toBe("sibling");
+		expect(Reflect.get(Object(mod), "sharesSiblingExports")).toBe(true);
+	});
+
+	it("reloads an edited entry module without polluting fileURLToPath-derived paths", async () => {
+		const entrySource = (version: string): string =>
+			[
+				'import { readFileSync } from "node:fs";',
+				'import { fileURLToPath } from "node:url";',
+				'import * as path from "node:path";',
+				"export const entryPath = fileURLToPath(import.meta.url);",
+				"const here = path.dirname(entryPath);",
+				`export const version = ${JSON.stringify(version)};`,
+				'export const asset = readFileSync(path.join(here, "marker.txt"), "utf8");',
+				"export default function (pi) { void pi; }",
+			].join("\n");
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "mtime-reload-ext", version: "1.0.0" }),
+			"marker.txt": "asset-ok",
+			"index.ts": entrySource("v1"),
+		});
+		const entry = path.join(dir, "index.ts");
+		const expectedEntryPath = await fs.realpath(entry);
+
+		const first = (await loadLegacyPiModule(entry)) as { version: string; entryPath: string; asset: string };
+		expect(first.version).toBe("v1");
+		expect(first.entryPath).toBe(expectedEntryPath);
+		expect(first.asset).toBe("asset-ok");
+
+		const firstStat = await fs.stat(entry);
+		await fs.writeFile(entry, entrySource("v2"), "utf8");
+		const bumpedMtime = new Date(Math.ceil(firstStat.mtimeMs) + 2_000);
+		await fs.utimes(entry, bumpedMtime, bumpedMtime);
+
+		const second = (await loadLegacyPiModule(entry)) as { version: string; entryPath: string; asset: string };
+		expect(second.version).toBe("v2");
+		expect(second.entryPath).toBe(expectedEntryPath);
+		expect(second.entryPath.includes("?")).toBe(false);
+		expect(second.asset).toBe("asset-ok");
+	});
+
+	it("reloads an edited relative helper module on same-process re-import", async () => {
+		const entrySource = (version: string): string =>
+			[
+				'import { fileURLToPath } from "node:url";',
+				'import { H } from "./helper.ts";',
+				"export { H };",
+				"export const entryPath = fileURLToPath(import.meta.url);",
+				`export const entryVersion = ${JSON.stringify(version)};`,
+				"export default function (pi) { void pi; }",
+			].join("\n");
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "helper-mtime-reload-ext", version: "1.0.0" }),
+			"index.ts": entrySource("v1"),
+			"helper.ts": 'export const H = "v1";\n',
+		});
+		const entry = path.join(dir, "index.ts");
+		const helper = path.join(dir, "helper.ts");
+		const expectedEntryPath = await fs.realpath(entry);
+
+		const first = (await loadLegacyPiModule(entry)) as { entryVersion: string; H: string; entryPath: string };
+		expect(first.entryVersion).toBe("v1");
+		expect(first.H).toBe("v1");
+		expect(first.entryPath).toBe(expectedEntryPath);
+
+		const firstEntryStat = await fs.stat(entry);
+		const firstHelperStat = await fs.stat(helper);
+		await fs.writeFile(entry, entrySource("v2"), "utf8");
+		await fs.writeFile(helper, 'export const H = "v2";\n', "utf8");
+		const bumpedEntryMtime = new Date(Math.ceil(firstEntryStat.mtimeMs) + 2_000);
+		const bumpedHelperMtime = new Date(Math.ceil(firstHelperStat.mtimeMs) + 2_000);
+		await fs.utimes(entry, bumpedEntryMtime, bumpedEntryMtime);
+		await fs.utimes(helper, bumpedHelperMtime, bumpedHelperMtime);
+
+		const second = (await loadLegacyPiModule(entry)) as { entryVersion: string; H: string; entryPath: string };
+		expect(second.entryVersion).toBe("v2");
+		expect(second.H).toBe("v2");
+		expect(second.entryPath).toBe(expectedEntryPath);
+		expect(second.entryPath.includes("?")).toBe(false);
+	});
+
+	it("reloads edited children of an extension-local bare dependency", async () => {
+		const entrySource = (version: string): string =>
+			[
+				'import { depValue } from "localdep";',
+				"export { depValue };",
+				`export const entryVersion = ${JSON.stringify(version)};`,
+				"export default function (pi) { void pi; }",
+			].join("\n");
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "bare-dep-child-reload-ext", version: "1.0.0" }),
+			"node_modules/localdep/package.json": JSON.stringify({
+				name: "localdep",
+				version: "1.0.0",
+				type: "module",
+				main: "index.js",
+			}),
+			"node_modules/localdep/index.js": 'export { depValue } from "./helper.js";\n',
+			"node_modules/localdep/helper.js": 'export const depValue = "dep-v1";\n',
+			"index.ts": entrySource("v1"),
+		});
+		const entry = path.join(dir, "index.ts");
+		const helper = path.join(dir, "node_modules", "localdep", "helper.js");
+
+		const first = (await loadLegacyPiModule(entry)) as { entryVersion: string; depValue: string };
+		expect(first.entryVersion).toBe("v1");
+		expect(first.depValue).toBe("dep-v1");
+
+		const firstEntryStat = await fs.stat(entry);
+		const firstHelperStat = await fs.stat(helper);
+		await fs.writeFile(entry, entrySource("v2"), "utf8");
+		await fs.writeFile(helper, 'export const depValue = "dep-v2";\n', "utf8");
+		const bumpedEntryMtime = new Date(Math.ceil(firstEntryStat.mtimeMs) + 2_000);
+		const bumpedHelperMtime = new Date(Math.ceil(firstHelperStat.mtimeMs) + 2_000);
+		await fs.utimes(entry, bumpedEntryMtime, bumpedEntryMtime);
+		await fs.utimes(helper, bumpedHelperMtime, bumpedHelperMtime);
+
+		const second = (await loadLegacyPiModule(entry)) as { entryVersion: string; depValue: string };
+		expect(second.entryVersion).toBe("v2");
+		expect(second.depValue).toBe("dep-v2");
+	});
+
+	it("reloads edited children of an installed plugin's extension-local bare dependency", async () => {
+		const entrySource = (version: string): string =>
+			[
+				'import { depValue } from "localdep";',
+				"export { depValue };",
+				`export const entryVersion = ${JSON.stringify(version)};`,
+				"export default function (pi) { void pi; }",
+			].join("\n");
+		const dir = await writePackage({
+			"plugins/node_modules/installed-plugin/package.json": JSON.stringify({
+				name: "installed-plugin",
+				version: "1.0.0",
+			}),
+			"plugins/node_modules/installed-plugin/node_modules/localdep/package.json": JSON.stringify({
+				name: "localdep",
+				version: "1.0.0",
+				type: "module",
+				main: "index.js",
+			}),
+			"plugins/node_modules/installed-plugin/node_modules/localdep/index.js":
+				'export { depValue } from "./helper.js";\n',
+			"plugins/node_modules/installed-plugin/node_modules/localdep/helper.js": 'export const depValue = "dep-v1";\n',
+			"plugins/node_modules/installed-plugin/index.ts": entrySource("v1"),
+		});
+		const pluginRoot = path.join(dir, "plugins", "node_modules", "installed-plugin");
+		const entry = path.join(pluginRoot, "index.ts");
+		const helper = path.join(pluginRoot, "node_modules", "localdep", "helper.js");
+
+		const first = (await loadLegacyPiModule(entry)) as { entryVersion: string; depValue: string };
+		expect(first.entryVersion).toBe("v1");
+		expect(first.depValue).toBe("dep-v1");
+
+		const firstEntryStat = await fs.stat(entry);
+		const firstHelperStat = await fs.stat(helper);
+		await fs.writeFile(entry, entrySource("v2"), "utf8");
+		await fs.writeFile(helper, 'export const depValue = "dep-v2";\n', "utf8");
+		const bumpedEntryMtime = new Date(Math.ceil(firstEntryStat.mtimeMs) + 2_000);
+		const bumpedHelperMtime = new Date(Math.ceil(firstHelperStat.mtimeMs) + 2_000);
+		await fs.utimes(entry, bumpedEntryMtime, bumpedEntryMtime);
+		await fs.utimes(helper, bumpedHelperMtime, bumpedHelperMtime);
+
+		const second = (await loadLegacyPiModule(entry)) as { entryVersion: string; depValue: string };
+		expect(second.entryVersion).toBe("v2");
+		expect(second.depValue).toBe("dep-v2");
+	});
+
+	it("reloads modules added to the relative import graph after the first load", async () => {
+		const entrySource = (version: string, includeHelper: boolean): string =>
+			[
+				'import { fileURLToPath } from "node:url";',
+				includeHelper ? 'export { leafValue } from "./helper.ts";' : "",
+				"export const entryPath = fileURLToPath(import.meta.url);",
+				`export const entryVersion = ${JSON.stringify(version)};`,
+				"export default function (pi) { void pi; }",
+			]
+				.filter(Boolean)
+				.join("\n");
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "expanding-graph-reload-ext", version: "1.0.0" }),
+			"index.ts": entrySource("v1", false),
+		});
+		const entry = path.join(dir, "index.ts");
+		const helper = path.join(dir, "helper.ts");
+		const leaf = path.join(dir, "leaf.ts");
+		const expectedEntryPath = await fs.realpath(entry);
+
+		const first = (await loadLegacyPiModule(entry)) as { entryVersion: string; entryPath: string };
+		expect(first.entryVersion).toBe("v1");
+		expect(first.entryPath).toBe(expectedEntryPath);
+
+		const firstEntryStat = await fs.stat(entry);
+		const firstGraphMtime = new Date(Math.ceil(firstEntryStat.mtimeMs) + 2_000);
+		await fs.writeFile(entry, entrySource("v2", true), "utf8");
+		await fs.writeFile(helper, 'export { leafValue } from "./leaf.ts";\n', "utf8");
+		await fs.writeFile(leaf, 'export const leafValue = "leaf-v1";\n', "utf8");
+		await fs.utimes(entry, firstGraphMtime, firstGraphMtime);
+		await fs.utimes(helper, firstGraphMtime, firstGraphMtime);
+		await fs.utimes(leaf, firstGraphMtime, firstGraphMtime);
+
+		const second = (await loadLegacyPiModule(entry)) as {
+			entryVersion: string;
+			entryPath: string;
+			leafValue: string;
+		};
+		expect(second.entryVersion).toBe("v2");
+		expect(second.leafValue).toBe("leaf-v1");
+		expect(second.entryPath).toBe(expectedEntryPath);
+		expect(second.entryPath.includes("?")).toBe(false);
+
+		const secondEntryStat = await fs.stat(entry);
+		const secondLeafStat = await fs.stat(leaf);
+		await fs.writeFile(entry, entrySource("v3", true), "utf8");
+		await fs.writeFile(leaf, 'export const leafValue = "leaf-v2";\n', "utf8");
+		const bumpedEntryMtime = new Date(Math.ceil(secondEntryStat.mtimeMs) + 2_000);
+		const bumpedLeafMtime = new Date(Math.ceil(secondLeafStat.mtimeMs) + 2_000);
+		await fs.utimes(entry, bumpedEntryMtime, bumpedEntryMtime);
+		await fs.utimes(leaf, bumpedLeafMtime, bumpedLeafMtime);
+
+		const third = (await loadLegacyPiModule(entry)) as {
+			entryVersion: string;
+			entryPath: string;
+			leafValue: string;
+		};
+		expect(third.entryVersion).toBe("v3");
+		expect(third.leafValue).toBe("leaf-v2");
+		expect(third.entryPath).toBe(expectedEntryPath);
+		expect(third.entryPath.includes("?")).toBe(false);
+	});
+
 	it("resolves a .css sibling of a relatively-imported submodule", async () => {
 		const dir = await writePackage({
 			"package.json": JSON.stringify({ name: "multi-file-ext", version: "1.0.0" }),
@@ -79,6 +437,22 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 		// The submodule under sub/ also runs in place, so its sibling asset
 		// resolves relative to sub/ rather than a flattened mirror root.
 		expect(mod.css).toBe(".x{color:red}");
+	});
+
+	it("leaves JSON import-attribute targets on Bun's native loader", async () => {
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "json-import-ext", version: "1.0.0" }),
+			"prices.json": JSON.stringify({ input: 0.15 }),
+			"index.ts": [
+				'import prices from "./prices.json" with { type: "json" };',
+				"export const inputPrice = prices.input;",
+				"export default function (pi) { void pi; }",
+			].join("\n"),
+		});
+
+		const mod = (await loadLegacyPiModule(path.join(dir, "index.ts"))) as { inputPrice: number };
+
+		expect(mod.inputPrice).toBe(0.15);
 	});
 
 	it("loads the extension's own node_modules deps natively while remapping legacy pi imports", async () => {
@@ -275,6 +649,72 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 		expect(expectedEsmDepUrls.some(expected => rewritten.includes(expected))).toBe(true);
 		expect(expectedRootDepUrls.some(expected => rewritten.includes(expected))).toBe(true);
 		expect(rewritten).toContain('from "node:path"');
+	});
+
+	it("pins native-addon package requires to absolute extension paths", async () => {
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "native-require-ext", version: "1.0.0" }),
+			"node_modules/@fixture/native-platform/package.json": JSON.stringify({
+				name: "@fixture/native-platform",
+				version: "1.0.0",
+				main: "binding.node",
+			}),
+			"node_modules/@fixture/native-platform/binding.node": "native fixture",
+			"node_modules/plain-dep/package.json": JSON.stringify({
+				name: "plain-dep",
+				version: "1.0.0",
+				main: "index.js",
+			}),
+			"node_modules/plain-dep/index.js": "module.exports = {};",
+			"index.ts": "",
+		});
+		const importer = path.join(dir, "index.ts");
+		const rewritten = await __rewriteLegacyExtensionSourceForTests(
+			[
+				'const binding = require("@fixture/native-platform");',
+				'const plain = require("plain-dep");',
+				'const local = require("./local.node");',
+				"export { binding, plain, local };",
+			].join("\n"),
+			importer,
+		);
+
+		const addon = await fs.realpath(path.join(dir, "node_modules/@fixture/native-platform/binding.node"));
+		expect(rewritten).toContain(`require("${addon.replaceAll("\\", "/")}")`);
+		expect(rewritten).toContain('require("plain-dep")');
+		expect(rewritten).toContain('require("./local.node")');
+	});
+
+	it("preserves native-addon rewrites inside wrapped CommonJS dependencies", async () => {
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "native-cjs-consumer", version: "1.0.0", type: "module" }),
+			"index.js": [
+				'import loader from "native-loader";',
+				"export const loadSource = loader.load.toString();",
+				"export default function (pi) { void pi; }",
+			].join("\n"),
+			"node_modules/native-loader/package.json": JSON.stringify({
+				name: "native-loader",
+				version: "1.0.0",
+				main: "index.cjs",
+			}),
+			"node_modules/native-loader/index.cjs":
+				'module.exports = { load: () => require("@fixture/native-platform") };\n',
+			"node_modules/native-loader/node_modules/@fixture/native-platform/package.json": JSON.stringify({
+				name: "@fixture/native-platform",
+				version: "1.0.0",
+				main: "binding.node",
+			}),
+			"node_modules/native-loader/node_modules/@fixture/native-platform/binding.node": "native fixture",
+		});
+
+		const mod = await loadLegacyPiModule(path.join(dir, "index.js"));
+		const loadSource = Reflect.get(Object(mod), "loadSource");
+		const addon = await fs.realpath(
+			path.join(dir, "node_modules/native-loader/node_modules/@fixture/native-platform/binding.node"),
+		);
+
+		expect(loadSource).toContain(addon.replaceAll("\\", "/"));
 	});
 
 	it("remaps legacy pi-ai utils/oauth subpaths to registry OAuth exports", async () => {

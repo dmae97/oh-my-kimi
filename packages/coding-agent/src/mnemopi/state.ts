@@ -108,14 +108,52 @@ export interface MnemopiMemoryEditOptions {
 }
 
 export interface MnemopiMemoryEditResult {
-	status: "updated" | "deleted" | "invalidated" | "not_found";
+	status: "updated" | "deleted" | "invalidated" | "not_found" | "not_editable";
 	bank?: string;
-	store?: "working" | "episodic";
+	store?: MnemopiMemoryStore;
 }
 
+/** Which mnemopi table a resolved memory id lives in. `fact` rows are
+ * read-only projections of fact extraction (issue #4725): resolvable for
+ * reads, never editable. */
+export type MnemopiMemoryStore = "working" | "episodic" | "fact";
+
 interface MnemopiStoredMemoryRow {
+	id?: unknown;
+	content?: unknown;
+	source?: unknown;
+	timestamp?: unknown;
+	importance?: unknown;
+	veracity?: unknown;
+	created_at?: unknown;
 	memory_store?: unknown;
+	memory_type?: unknown;
 	session_id?: unknown;
+	metadata?: unknown;
+	metadata_json?: unknown;
+}
+
+/**
+ * Full-row lookup result produced by {@link MnemopiSessionState.getScopedMemory}.
+ * Mirrors the shape stored in mnemopi's working/episodic tables, tagged with
+ * the scoped bank that actually held the row so callers can render it with
+ * meaningful context.
+ */
+export interface MnemopiScopedMemoryHit {
+	bank: string;
+	store: MnemopiMemoryStore;
+	row: {
+		id: string;
+		content: string;
+		source: string | null;
+		timestamp: string | null;
+		importance: number | null;
+		veracity: string | null;
+		created_at: string | null;
+		session_id: string | null;
+		memory_type: string | null;
+		metadata: unknown;
+	};
 }
 
 type MnemopiRetentionMessage = { role: string; content: string };
@@ -201,6 +239,50 @@ export class MnemopiSessionState {
 		return this.scoped.retain;
 	}
 
+	/**
+	 * Read counterpart to {@link editScopedMemory}: fetch a memory row by id
+	 * from any bank this session recalls from (retain, recall, global). First
+	 * hit wins in the same order {@link editScopedMemory} would touch, so the
+	 * shape matches what an `update`/`forget`/`invalidate` on the same id will
+	 * see. Returns `null` when the id is not found anywhere in scope.
+	 *
+	 * Backs the coding-agent `memory://<id>` URL so agents can inspect the
+	 * FULL content of a recall preview (recall clips content — see
+	 * {@link RecallResult.truncated}) before issuing a wholesale
+	 * `memory_edit update` that would otherwise overwrite unseen bytes
+	 * (issue #4443).
+	 */
+	getScopedMemory(id: string): MnemopiScopedMemoryHit | null {
+		const targets = dedupeScopedTargets([
+			this.scoped.retain,
+			...this.scoped.recall,
+			...(this.scoped.global ? [this.scoped.global] : []),
+		]);
+		for (const target of targets) {
+			const raw = target.memory.get(id) as MnemopiStoredMemoryRow | null;
+			if (!raw) continue;
+			const store: MnemopiMemoryStore =
+				raw.memory_store === "episodic" || raw.memory_store === "fact" ? raw.memory_store : "working";
+			return {
+				bank: target.bank,
+				store,
+				row: {
+					id: typeof raw.id === "string" ? raw.id : id,
+					content: typeof raw.content === "string" ? raw.content : "",
+					source: typeof raw.source === "string" ? raw.source : null,
+					timestamp: typeof raw.timestamp === "string" ? raw.timestamp : null,
+					importance: typeof raw.importance === "number" ? raw.importance : null,
+					veracity: typeof raw.veracity === "string" ? raw.veracity : null,
+					created_at: typeof raw.created_at === "string" ? raw.created_at : null,
+					session_id: typeof raw.session_id === "string" ? raw.session_id : null,
+					memory_type: typeof raw.memory_type === "string" ? raw.memory_type : null,
+					metadata: raw.metadata ?? raw.metadata_json ?? null,
+				},
+			};
+		}
+		return null;
+	}
+
 	editScopedMemory(
 		op: MnemopiMemoryEditOperation,
 		id: string,
@@ -215,8 +297,16 @@ export class MnemopiSessionState {
 		for (const target of targets) {
 			const row = target.memory.get(id) as MnemopiStoredMemoryRow | null;
 			if (!row) continue;
-			const store: MnemopiMemoryEditResult["store"] = row.memory_store === "episodic" ? "episodic" : "working";
+			const store: MnemopiMemoryStore =
+				row.memory_store === "episodic" || row.memory_store === "fact" ? row.memory_store : "working";
 			const resultContext: Pick<MnemopiMemoryEditResult, "bank" | "store"> = { bank: target.bank, store };
+			if (store === "fact") {
+				// Facts are read-only: no memory_edit op mutates the facts
+				// table, so report that precisely instead of `not_found`
+				// (the id DID resolve — issue #4725).
+				ineligible ??= { status: "not_editable", ...resultContext };
+				continue;
+			}
 			if ((op === "update" || op === "forget") && store !== "working") {
 				ineligible ??= { status: "not_found", ...resultContext };
 				continue;

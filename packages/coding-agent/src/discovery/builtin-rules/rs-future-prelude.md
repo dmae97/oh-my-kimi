@@ -2,6 +2,7 @@
 description: Use Future not std::future::Future - it's in the prelude
 condition: "std::future::Future"
 scope: "tool:edit(*.rs), tool:write(*.rs)"
+interruptMode: never
 ---
 
 Use `Future` directly instead of `std::future::Future` in type positions.

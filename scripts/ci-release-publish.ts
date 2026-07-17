@@ -35,6 +35,7 @@ import {
 	generateNpmPackages,
 	LEAF_TARGETS,
 } from "../packages/natives/scripts/gen-npm-packages.ts";
+import { fixDtsExtensions } from "./fix-dts-extensions.ts";
 
 export interface PublishPackage {
 	dir: string;
@@ -161,6 +162,10 @@ async function preparePackage(pkg: PublishPackage): Promise<PackageManifest> {
 	for (const cfg of pkg.extraTypeConfigs ?? []) {
 		await $`bun x tsgo -p ${cfg}`.cwd(pkgDir);
 	}
+	// The declaration emit runs under `moduleResolution: "Bundler"`, so relative
+	// specifiers land extensionless — unresolvable for a `nodenext` consumer.
+	// Rewrite them to explicit `.js` so the published types resolve everywhere.
+	await fixDtsExtensions(path.join(pkgDir, "dist/types"));
 	return rewriteManifest(pkg, !isDryRun);
 }
 

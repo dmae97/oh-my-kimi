@@ -31,7 +31,16 @@ import squad  # noqa: E402
 from bdf import capacity, render  # noqa: E402
 from final import MODELS, aggregate, cached, session_frame  # noqa: E402
 from providers import llm_complete, load_env_key  # noqa: E402
-from run import CACHE, FONTS, QA_CACHE, RESULTS, TEXT_CHUNK, agent_prompt, load_prompt, sha8  # noqa: E402
+from run import (
+    CACHE,
+    FONTS,
+    QA_CACHE,
+    RESULTS,
+    TEXT_CHUNK,
+    agent_prompt,
+    load_prompt,
+    sha8,
+)  # noqa: E402
 
 L2_FONT, L2_VAR = "6x10", "sent"
 APX_FONT, APX_VAR = "5x8", "sent"
@@ -64,16 +73,28 @@ def render_pages(text: str, font: str, var: str, size: int) -> list[Path]:
     return pages
 
 
-def gen_summary(model: str, keys: dict, l3_text: str, max_tokens: int, fresh: bool) -> dict:
+def gen_summary(
+    model: str, keys: dict, l3_text: str, max_tokens: int, fresh: bool
+) -> dict:
     return cached(
-        model, "exp11-summary", {"chunk": l3_text},
+        model,
+        "exp11-summary",
+        {"chunk": l3_text},
         lambda: dict(
             zip(
                 ("text", "usage", "stop"),
                 llm_complete(
-                    keys, model,
+                    keys,
+                    model,
                     session_frame(l3_text)
-                    + [{"role": "user", "content": [{"text": agent_prompt("compaction-summary.md")}]}],
+                    + [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"text": agent_prompt("compaction-summary.md")}
+                            ],
+                        }
+                    ],
                     system=agent_prompt("summarization-system.md"),
                     max_tokens=max_tokens,
                 ),
@@ -83,7 +104,14 @@ def gen_summary(model: str, keys: dict, l3_text: str, max_tokens: int, fresh: bo
     )
 
 
-def context_blocks(cond: str, summary: str, l2_pages: list[Path], apx_pages: list[Path], l1_text: str, size: int) -> list[dict]:
+def context_blocks(
+    cond: str,
+    summary: str,
+    l2_pages: list[Path],
+    apx_pages: list[Path],
+    l1_text: str,
+    size: int,
+) -> list[dict]:
     cols, rows, _ = capacity(FONTS[L2_FONT], size)
     apx_note = ""
     if cond == "hier-appendix":
@@ -92,22 +120,37 @@ def context_blocks(cond: str, summary: str, l2_pages: list[Path], apx_pages: lis
     frame = load_prompt("exp11-qa-hier.md").format(
         appendix_note=apx_note, n_pages=len(l2_pages), cols=cols, rows=rows
     )
-    blocks: list[dict] = [{"text": frame}, {"text": f"TIER 3 — SUMMARY OF OLDEST THIRD:\n\n{summary}"}]
+    blocks: list[dict] = [
+        {"text": frame},
+        {"text": f"TIER 3 — SUMMARY OF OLDEST THIRD:\n\n{summary}"},
+    ]
     if cond == "hier-appendix":
         for i, p in enumerate(apx_pages):
-            blocks.append({"text": f"TIER 3 appendix image {i + 1}/{len(apx_pages)} (same oldest text as dense bitmap):"})
+            blocks.append(
+                {
+                    "text": f"TIER 3 appendix image {i + 1}/{len(apx_pages)} (same oldest text as dense bitmap):"
+                }
+            )
             blocks.append({"image_path": p})
     for i, p in enumerate(l2_pages):
-        blocks.append({"text": f"TIER 2 page {i + 1}/{len(l2_pages)} (middle third as bitmap):"})
+        blocks.append(
+            {"text": f"TIER 2 page {i + 1}/{len(l2_pages)} (middle third as bitmap):"}
+        )
         blocks.append({"image_path": p})
-    blocks.append({"text": f"TIER 1 — VERBATIM NEWEST THIRD:\n\n<reference>\n{l1_text}\n</reference>"})
+    blocks.append(
+        {
+            "text": f"TIER 1 — VERBATIM NEWEST THIRD:\n\n<reference>\n{l1_text}\n</reference>"
+        }
+    )
     return blocks
 
 
 def run_chunk(model: str, cond: str, start: int, end: int, cell: dict) -> list[dict]:
     """One QA call: shared hierarchical context + this chunk's question batch."""
     args, keys, flow = cell["args"], cell["keys"], cell["flow"]
-    questions = squad.sample_chunk_questions(cell["paras"], cell["offsets"], start, end, args.qpc, args.seed)
+    questions = squad.sample_chunk_questions(
+        cell["paras"], cell["offsets"], start, end, args.qpc, args.seed
+    )
     if not questions:
         return []
     q_block = "\n".join(f"{i + 1}. {q['q']}" for i, q in enumerate(questions))
@@ -118,11 +161,24 @@ def run_chunk(model: str, cond: str, start: int, end: int, cell: dict) -> list[d
         }
     ]
     qa = cached(
-        model, "exp11-qa", {"cond": cond, "length": cell["length"], "messages": messages, "effort": args.effort},
+        model,
+        "exp11-qa",
+        {
+            "cond": cond,
+            "length": cell["length"],
+            "messages": messages,
+            "effort": args.effort,
+        },
         lambda: dict(
             zip(
                 ("text", "usage", "stop"),
-                llm_complete(keys, model, messages, max_tokens=args.max_tokens, effort=args.effort),
+                llm_complete(
+                    keys,
+                    model,
+                    messages,
+                    max_tokens=args.max_tokens,
+                    effort=args.effort,
+                ),
             )
         ),
         args.fresh,
@@ -205,7 +261,11 @@ def main() -> None:
         b1, b2 = tier_bounds(offsets, len(flow))
         l3, l2, l1 = flow[:b1], flow[b1:b2], flow[b2:]
         l2_pages = render_pages(l2, L2_FONT, L2_VAR, args.size)
-        apx_pages = render_pages(l3, APX_FONT, APX_VAR, args.size) if "hier-appendix" in conditions else []
+        apx_pages = (
+            render_pages(l3, APX_FONT, APX_VAR, args.size)
+            if "hier-appendix" in conditions
+            else []
+        )
         print(
             f"length {length}: flow={len(flow)} chars, tiers L3={len(l3)} L2={len(l2)} L1={len(l1)}, "
             f"l2_pages={len(l2_pages)} apx_pages={len(apx_pages)}"
@@ -213,7 +273,9 @@ def main() -> None:
         for model in models:
             summ = gen_summary(model, keys, l3, args.max_tokens, args.fresh)
             if summ.get("stop") == "max_tokens":
-                raise SystemExit(f"summary truncated for {model} length {length}; raise --max-tokens")
+                raise SystemExit(
+                    f"summary truncated for {model} length {length}; raise --max-tokens"
+                )
             summary_usage[(model, length)] = summ["usage"]
             print(f"  summary[{model}]: {len(summ['text'])} chars")
             cells[(model, length)] = {
@@ -225,7 +287,9 @@ def main() -> None:
                 "length": length,
                 "bounds": (b1, b2),
                 "blocks": {
-                    cond: context_blocks(cond, summ["text"], l2_pages, apx_pages, l1, args.size)
+                    cond: context_blocks(
+                        cond, summ["text"], l2_pages, apx_pages, l1, args.size
+                    )
                     for cond in conditions
                 },
             }
@@ -234,7 +298,15 @@ def main() -> None:
     for (model, length), cell in cells.items():
         for cond in conditions:
             for start in range(0, len(cell["flow"]), TEXT_CHUNK):
-                tasks.append((model, cond, start, min(start + TEXT_CHUNK, len(cell["flow"])), cell))
+                tasks.append(
+                    (
+                        model,
+                        cond,
+                        start,
+                        min(start + TEXT_CHUNK, len(cell["flow"])),
+                        cell,
+                    )
+                )
     print(f"grid: {len(tasks)} QA tasks")
 
     records: list[dict] = []
@@ -252,7 +324,9 @@ def main() -> None:
     for r in records:
         key = (r["model"], r["length"], r["cond"])
         if key not in charged and "usage" in r:
-            r["usage"].append({"phase": "summarize", **summary_usage[(r["model"], r["length"])]})
+            r["usage"].append(
+                {"phase": "summarize", **summary_usage[(r["model"], r["length"])]}
+            )
             charged.add(key)
 
     with (out_dir / "records.jsonl").open("w") as fh:
@@ -263,16 +337,41 @@ def main() -> None:
     for model in models:
         for length in lengths:
             for cond in conditions:
-                sub = [r for r in records if r["model"] == model and r["length"] == length and r["cond"] == cond]
+                sub = [
+                    r
+                    for r in records
+                    if r["model"] == model
+                    and r["length"] == length
+                    and r["cond"] == cond
+                ]
                 if not sub:
                     continue
-                cell_rows.append({"model": model, "length": length, "condition": cond, **aggregate(sub, *MODELS[model])})
+                cell_rows.append(
+                    {
+                        "model": model,
+                        "length": length,
+                        "condition": cond,
+                        **aggregate(sub, *MODELS[model]),
+                    }
+                )
                 for tier in ("L3", "L2", "L1"):
                     tsub = [r for r in sub if r["tier"] == tier]
                     if tsub:
-                        tier_rows.append({"model": model, "length": length, "condition": cond, "tier": tier, **tier_stats(tsub)})
+                        tier_rows.append(
+                            {
+                                "model": model,
+                                "length": length,
+                                "condition": cond,
+                                "tier": tier,
+                                **tier_stats(tsub),
+                            }
+                        )
 
-    (out_dir / "summary.json").write_text(json.dumps({"args": vars(args), "cells": cell_rows, "tiers": tier_rows}, indent=1))
+    (out_dir / "summary.json").write_text(
+        json.dumps(
+            {"args": vars(args), "cells": cell_rows, "tiers": tier_rows}, indent=1
+        )
+    )
     with (out_dir / "matrix.csv").open("w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=list(cell_rows[0].keys()))
         w.writeheader()
@@ -294,7 +393,9 @@ def main() -> None:
             f"{t['model']:<24} {t['length']:>4} {t['condition']:<14} {t['tier']} n={t['n']:<3} "
             f"EM={t['em']:.3f} F1={t['f1']:.3f} ±{t['f1_se']:.3f} abst={t['abstained']}"
         )
-    print(f"\nresults -> {out_dir}/records.jsonl, matrix.csv, terciles.csv, summary.json")
+    print(
+        f"\nresults -> {out_dir}/records.jsonl, matrix.csv, terciles.csv, summary.json"
+    )
 
 
 if __name__ == "__main__":

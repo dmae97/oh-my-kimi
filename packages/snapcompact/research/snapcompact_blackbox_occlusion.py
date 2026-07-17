@@ -33,13 +33,17 @@ from bdf import capacity, render  # noqa: E402
 from run import CACHE, FONTS, load_prompt, sha8  # noqa: E402
 
 
-def sample_answer_questions(paras: list[dict], offsets: list[int], start: int, end: int, n: int, seed: int) -> list[dict]:
+def sample_answer_questions(
+    paras: list[dict], offsets: list[int], start: int, end: int, n: int, seed: int
+) -> list[dict]:
     """Sample questions like squad.sample_chunk_questions, preserving answer offsets."""
     rng = random.Random(seed * 1_000_003 + start)
     eligible = [
         i
         for i in range(len(offsets))
-        if offsets[i] >= start and offsets[i] + len(paras[i]["ctx"]) <= end and paras[i].get("qas")
+        if offsets[i] >= start
+        and offsets[i] + len(paras[i]["ctx"]) <= end
+        and paras[i].get("qas")
     ]
     if not eligible:
         return []
@@ -59,14 +63,25 @@ def sample_answer_questions(paras: list[dict], offsets: list[int], start: int, e
                 "golds": sorted({a["text"] for a in answers}),
                 "answer_text": answer["text"],
                 "answer_start": offsets[pi] - start + int(answer["answer_start"]),
-                "answer_end": offsets[pi] - start + int(answer["answer_start"]) + len(answer["text"]),
+                "answer_end": offsets[pi]
+                - start
+                + int(answer["answer_start"])
+                + len(answer["text"]),
                 "pos_rel": (offsets[pi] - start) / (end - start),
             }
         )
     return picked
 
 
-def mask_cells(img: Image.Image, start: int, end: int, cols: int, adv: int, pitch: int, fill: tuple[int, int, int]) -> Image.Image:
+def mask_cells(
+    img: Image.Image,
+    start: int,
+    end: int,
+    cols: int,
+    adv: int,
+    pitch: int,
+    fill: tuple[int, int, int],
+) -> Image.Image:
     out = img.copy()
     draw = ImageDraw.Draw(out)
     start = max(0, start)
@@ -84,7 +99,9 @@ def mask_cells(img: Image.Image, start: int, end: int, cols: int, adv: int, pitc
     return out
 
 
-def random_span(rng: random.Random, text_len: int, span_len: int, avoid_start: int, avoid_end: int) -> tuple[int, int]:
+def random_span(
+    rng: random.Random, text_len: int, span_len: int, avoid_start: int, avoid_end: int
+) -> tuple[int, int]:
     if text_len <= span_len:
         return 0, text_len
     for _ in range(100):
@@ -96,7 +113,15 @@ def random_span(rng: random.Random, text_len: int, span_len: int, avoid_start: i
     return start, min(text_len, start + span_len)
 
 
-def post_chat(endpoint: str, model: str, image_path: Path, prompt: str, max_tokens: int, cache_dir: Path, fresh: bool) -> tuple[str, dict]:
+def post_chat(
+    endpoint: str,
+    model: str,
+    image_path: Path,
+    prompt: str,
+    max_tokens: int,
+    cache_dir: Path,
+    fresh: bool,
+) -> tuple[str, dict]:
     payload_key = sha8(model, prompt, hashlib.sha1(image_path.read_bytes()).hexdigest())
     cache_path = cache_dir / f"{payload_key}.json"
     if cache_path.exists() and not fresh:
@@ -111,7 +136,10 @@ def post_chat(endpoint: str, model: str, image_path: Path, prompt: str, max_toke
                 "role": "user",
                 "content": [
                     {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{image_b64}"},
+                    },
                 ],
             }
         ],
@@ -147,19 +175,27 @@ def aggregate(records: list[dict]) -> dict:
             "em": sum(r["em"] for r in rows) / max(1, len(rows)),
             "f1": sum(r["f1"] for r in rows) / max(1, len(rows)),
             "abstained": sum(1 for r in rows if "unreadable" in r["answer"].lower()),
-            "prompt_tokens": sum((r.get("usage") or {}).get("prompt_tokens", 0) for r in rows),
-            "completion_tokens": sum((r.get("usage") or {}).get("completion_tokens", 0) for r in rows),
+            "prompt_tokens": sum(
+                (r.get("usage") or {}).get("prompt_tokens", 0) for r in rows
+            ),
+            "completion_tokens": sum(
+                (r.get("usage") or {}).get("completion_tokens", 0) for r in rows
+            ),
         }
     base = out["variants"].get("original", {}).get("f1", 0.0)
     out["drops"] = {
-        name: base - row["f1"] for name, row in out["variants"].items() if name != "original"
+        name: base - row["f1"]
+        for name, row in out["variants"].items()
+        if name != "original"
     }
     return out
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--endpoint", default="http://spark.internal:8000/v1/chat/completions")
+    ap.add_argument(
+        "--endpoint", default="http://spark.internal:8000/v1/chat/completions"
+    )
     ap.add_argument("--model", default="Qwen2.5-VL-7B-Instruct-NVFP4")
     ap.add_argument("--font", default="5x8", choices=sorted(FONTS))
     ap.add_argument("--variant", default="bw")
@@ -184,13 +220,17 @@ def main() -> None:
     paras = squad.load_paragraphs(CACHE)[: args.limit_paras]
     flow, offsets = squad.build_flow(paras)
     prompt_base = load_prompt("qa-image.md").format(cols=cols, rows=rows)
-    mask_fill = (255, 255, 255) if args.variant not in ("dark", "dark-sent") else (0, 0, 0)
+    mask_fill = (
+        (255, 255, 255) if args.variant not in ("dark", "dark-sent") else (0, 0, 0)
+    )
 
     tasks = []
     for start in range(0, len(flow), budget):
         end = min(start + budget, len(flow))
         chunk = flow[start:end]
-        questions = sample_answer_questions(paras, offsets, start, end, args.qpc, args.seed)
+        questions = sample_answer_questions(
+            paras, offsets, start, end, args.qpc, args.seed
+        )
         if questions:
             tasks.append((start, end, chunk, questions))
 
@@ -203,13 +243,25 @@ def main() -> None:
         for qi, q in enumerate(questions):
             span_len = max(1, q["answer_end"] - q["answer_start"])
             rng = random.Random(args.seed * 17 + start + qi)
-            rand_start, rand_end = random_span(rng, len(chunk), span_len, q["answer_start"], q["answer_end"])
+            rand_start, rand_end = random_span(
+                rng, len(chunk), span_len, q["answer_start"], q["answer_end"]
+            )
             answer_path = img_dir / f"chunk-{start}-q{qi}-answer-mask.png"
             random_path = img_dir / f"chunk-{start}-q{qi}-random-mask.png"
             if not answer_path.exists():
-                mask_cells(base_img, q["answer_start"], q["answer_end"], cols, cfg.adv, cfg.pitch, mask_fill).save(answer_path)
+                mask_cells(
+                    base_img,
+                    q["answer_start"],
+                    q["answer_end"],
+                    cols,
+                    cfg.adv,
+                    cfg.pitch,
+                    mask_fill,
+                ).save(answer_path)
             if not random_path.exists():
-                mask_cells(base_img, rand_start, rand_end, cols, cfg.adv, cfg.pitch, mask_fill).save(random_path)
+                mask_cells(
+                    base_img, rand_start, rand_end, cols, cfg.adv, cfg.pitch, mask_fill
+                ).save(random_path)
 
             prompt = (
                 f"{prompt_base}\n\nQuestion: {q['q']}\n"
@@ -221,7 +273,15 @@ def main() -> None:
                 ("answer_mask", answer_path),
                 ("random_mask", random_path),
             ):
-                answer, usage = post_chat(args.endpoint, args.model, path, prompt, args.max_tokens, cache_dir, args.fresh)
+                answer, usage = post_chat(
+                    args.endpoint,
+                    args.model,
+                    path,
+                    prompt,
+                    args.max_tokens,
+                    cache_dir,
+                    args.fresh,
+                )
                 records.append(
                     {
                         "chunk": start,
@@ -242,7 +302,10 @@ def main() -> None:
                         "usage": usage,
                     }
                 )
-                print(f"{len(records):04d} {variant_name:<11} f1={records[-1]['f1']:.3f} answer={answer[:80]!r}", flush=True)
+                print(
+                    f"{len(records):04d} {variant_name:<11} f1={records[-1]['f1']:.3f} answer={answer[:80]!r}",
+                    flush=True,
+                )
 
     summary = {
         "args": vars(args),

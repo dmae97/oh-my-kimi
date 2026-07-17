@@ -3,7 +3,13 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as url from "node:url";
-import { getBundledModel, getBundledModels } from "@oh-my-pi/pi-catalog/models";
+import {
+	calculateCost,
+	getBundledModel,
+	getBundledModels,
+	getBundledProviders,
+	modelsAreEqual,
+} from "@oh-my-pi/pi-catalog/models";
 import {
 	__resetLegacyPiResolutionCache,
 	installLegacyPiSpecifierShim,
@@ -122,6 +128,49 @@ describe("legacy-pi @(scope)/pi-ai root `Type` remap (issue #1437)", () => {
 			),
 		)) as { testGetModels: unknown };
 		expect(loaded.testGetModels).toBe(getBundledModels);
+	});
+
+	it("re-exports calculateCost from @oh-my-pi/pi-catalog/models (issue #4584)", async () => {
+		// `calculateCost` was moved from the `@oh-my-pi/pi-ai` barrel to
+		// `@oh-my-pi/pi-catalog/models` in the catalog split. Legacy extensions
+		// still import it from the pi-ai root, so the shim must bridge it back
+		// to the catalog implementation. The historical regression was a plain
+		// `SyntaxError: Export named 'calculateCost' not found in module
+		// '.../legacy-pi-ai-shim.ts'` at extension-validation time.
+		const loaded = (await loadLegacyPiModule(
+			await writeFixtureExtension(
+				'import { calculateCost } from "@oh-my-pi/pi-ai"; export const probe = calculateCost;',
+			),
+		)) as { probe: unknown };
+		expect(loaded.probe).toBe(calculateCost);
+	});
+
+	it("re-exports modelsAreEqual and getBundledProviders from @oh-my-pi/pi-catalog/models", async () => {
+		const loaded = (await loadLegacyPiModule(
+			await writeFixtureExtension(
+				[
+					'import { modelsAreEqual, getBundledProviders } from "@oh-my-pi/pi-ai";',
+					"export const eq = modelsAreEqual;",
+					"export const providers = getBundledProviders;",
+				].join("\n"),
+			),
+		)) as { eq: unknown; providers: unknown };
+		expect(loaded.eq).toBe(modelsAreEqual);
+		expect(loaded.providers).toBe(getBundledProviders);
+	});
+
+	it("re-exports getBundledModel and getBundledModels from @oh-my-pi/pi-catalog/models", async () => {
+		const loaded = (await loadLegacyPiModule(
+			await writeFixtureExtension(
+				[
+					'import { getBundledModel, getBundledModels } from "@oh-my-pi/pi-ai";',
+					"export const model = getBundledModel;",
+					"export const models = getBundledModels;",
+				].join("\n"),
+			),
+		)) as { model: unknown; models: unknown };
+		expect(loaded.model).toBe(getBundledModel);
+		expect(loaded.models).toBe(getBundledModels);
 	});
 
 	it("exports StringEnum as a schema builder with options support", async () => {

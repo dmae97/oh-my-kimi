@@ -57,6 +57,10 @@ function makeSession(sessionName = "Cache Session") {
 				output: 0,
 				cacheRead: 0,
 				cacheWrite: 0,
+				totalTokens: 0,
+				orchestrationInput: 0,
+				orchestrationOutput: 0,
+				orchestrationCacheRead: 0,
 				premiumRequests: 0,
 				cost: 0,
 			}),
@@ -123,7 +127,14 @@ describe("StatusLineComponent effective settings cache", () => {
 		expect(secondEffective.separator).toBe("slash");
 		expect(secondEffective.sessionAccent).toBe(false);
 		expect(secondEffective.segmentOptions.path?.maxLength).toBe(12);
-		expect(stripVTControlCharacters(component.getTopBorder(80).content)).toContain("Cache Session");
+		expect(
+			stripVTControlCharacters(
+				component
+					.getTopBorder(80)
+					.lines.map(line => line.content)
+					.join("\n"),
+			),
+		).toContain("Cache Session");
 		expect(component.render(80)).toEqual(["lint running"]);
 	});
 
@@ -153,7 +164,7 @@ describe("StatusLineComponent effective settings cache", () => {
 		const customComponent = makeComponent({ preset: "custom", leftSegments: [], rightSegments: [] });
 		expect(customComponent.getEffectiveSettingsForTest().leftSegments).toEqual([]);
 		expect(customComponent.getEffectiveSettingsForTest().rightSegments).toEqual([]);
-		expect(customComponent.getTopBorder(120)).toEqual({ content: "", width: 0 });
+		expect(customComponent.getTopBorder(120)).toEqual({ lines: [] });
 	});
 
 	it("surfaces active subagents even when custom segments omit subagents", () => {
@@ -161,7 +172,12 @@ describe("StatusLineComponent effective settings cache", () => {
 
 		component.setSubagentCount(2);
 
-		const content = stripVTControlCharacters(component.getTopBorder(120).content);
+		const content = stripVTControlCharacters(
+			component
+				.getTopBorder(120)
+				.lines.map(line => line.content)
+				.join("\n"),
+		);
 		expect(content).toContain("2 agents");
 		expect(content).not.toContain("running");
 	});
@@ -169,10 +185,22 @@ describe("StatusLineComponent effective settings cache", () => {
 	it("keeps plan and hook state dynamic without settings invalidation", () => {
 		const component = makeComponent({ preset: "custom", leftSegments: ["mode"], rightSegments: [] });
 		const effective = component.getEffectiveSettingsForTest();
-		expect(component.getTopBorder(80).content).toBe("");
+		expect(
+			component
+				.getTopBorder(80)
+				.lines.map(line => line.content)
+				.join("\n"),
+		).toBe("");
 
 		component.setPlanModeStatus({ enabled: true, paused: false });
-		expect(stripVTControlCharacters(component.getTopBorder(80).content)).toContain("Plan");
+		expect(
+			stripVTControlCharacters(
+				component
+					.getTopBorder(80)
+					.lines.map(line => line.content)
+					.join("\n"),
+			),
+		).toContain("Plan");
 		expect(component.getEffectiveSettingsForTest()).toBe(effective);
 
 		component.setHookStatus("hook", "hook running");
@@ -262,5 +290,15 @@ describe("StatusLineComponent effective settings cache", () => {
 			statusSpy.mockRestore();
 			headSpy.mockRestore();
 		}
+	});
+});
+
+describe("StatusLineComponent hook statuses", () => {
+	it("renders every keyed status on a deterministic line", () => {
+		const component = makeComponent({ showHookStatus: true });
+		component.setHookStatus("project-time", "$0.04 (dev)");
+		component.setHookStatus("ponytail", "Ponytail");
+
+		expect(component.render(8)).toEqual(["Ponytail", "$0.04 (…"]);
 	});
 });

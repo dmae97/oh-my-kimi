@@ -62,6 +62,9 @@ export const PREVIEW_LIMITS = {
 	DIFF_COLLAPSED_LINES: 40,
 } as const;
 
+/** Default number of terminal output rows shown before expansion. */
+export const DEFAULT_TERMINAL_PREVIEW_LINES = 10;
+
 /** Truncation lengths for different content types */
 export const TRUNCATE_LENGTHS = {
 	/** Short titles, labels */
@@ -669,7 +672,10 @@ export function truncateDiffByHunk(
 // Path Utilities
 // =============================================================================
 
-export function shortenPath(filePath: string, homeDir?: string): string {
+export function shortenPath(filePath: unknown, homeDir?: string): string {
+	if (typeof filePath !== "string") {
+		return "";
+	}
 	const home = homeDir ?? os.homedir();
 	if (home && filePath.startsWith(home)) {
 		const suffix = filePath.slice(home.length);

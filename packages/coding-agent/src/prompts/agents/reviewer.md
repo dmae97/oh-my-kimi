@@ -2,9 +2,8 @@
 name: reviewer
 description: "Code review specialist for quality/security analysis"
 tools: read, grep, glob, bash, lsp, web_search, ast_grep
-spawns: explore
-model: pi/slow
-thinking-level: high
+spawns: scout
+model: "@slow"
 output:
   properties:
     overall_correctness:

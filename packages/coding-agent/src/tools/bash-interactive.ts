@@ -19,6 +19,7 @@ import { OutputSink, type OutputSummary } from "../session/streaming-output";
 import { sanitizeWithOptionalSixelPassthrough } from "../utils/sixel";
 import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "./output-meta";
 import { formatStatusIcon, replaceTabs } from "./render-utils";
+import { readTerminalRows, styleTerminalRow } from "./terminal-output";
 
 export interface BashInteractiveResult extends OutputSummary {
 	exitCode: number | undefined;
@@ -225,14 +226,10 @@ class BashInteractiveOverlayComponent implements Component {
 
 	#readViewport(innerWidth: number, maxContentRows: number): string[] {
 		this.#terminal.resize(innerWidth, maxContentRows);
-		const buffer = this.#terminal.buffer.active;
-		const viewportY = buffer.viewportY;
-		const visibleLines: string[] = [];
-		for (let i = 0; i < maxContentRows; i++) {
-			const line = buffer.getLine(viewportY + i)?.translateToString(true) ?? "";
-			visibleLines.push(truncateToWidth(replaceTabs(sanitizeText(line)), innerWidth));
-		}
-		return visibleLines;
+		const viewportY = this.#terminal.buffer.active.viewportY;
+		return readTerminalRows(this.#terminal, viewportY, maxContentRows).map(line =>
+			truncateToWidth(styleTerminalRow(line, this.uiTheme.getFgAnsi("toolOutput")), innerWidth),
+		);
 	}
 	render(width: number): readonly string[] {
 		const safeWidth = Math.max(20, width);
@@ -300,7 +297,7 @@ export async function runInteractiveBashPty(
 	options: {
 		command: string;
 		cwd: string;
-		timeoutMs: number;
+		timeoutMs?: number;
 		signal?: AbortSignal;
 		env?: Record<string, string>;
 		artifactPath?: string;

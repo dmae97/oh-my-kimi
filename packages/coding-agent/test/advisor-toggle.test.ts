@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
@@ -6,9 +7,10 @@ import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { getProjectAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 
 describe("AgentSession advisor toggle", () => {
 	let sharedDir: TempDir;
@@ -22,6 +24,7 @@ describe("AgentSession advisor toggle", () => {
 		authStorage = await AuthStorage.create(path.join(sharedDir.path(), "testauth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 		authStorage.setRuntimeApiKey("openai", "test-key");
+		authStorage.setRuntimeApiKey("openrouter", "test-key");
 		modelRegistry = new ModelRegistry(authStorage);
 		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
 		const replacement = getBundledModel("openai", "gpt-4o-mini");
@@ -96,6 +99,89 @@ describe("AgentSession advisor toggle", () => {
 
 		expect(session.getAdvisorAgent()?.state.model.provider).toBe(replacementModel.provider);
 		expect(session.getAdvisorAgent()?.state.model.id).toBe(replacementModel.id);
+	});
+
+	it("refreshes the live advisor when the advisor role setting changes", () => {
+		session.settings.setModelRole("advisor", `${model.provider}/${model.id}`);
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		expect(session.getAdvisorAgent()?.state.model.provider).toBe(model.provider);
+		expect(session.getAdvisorAgent()?.state.model.id).toBe(model.id);
+
+		session.settings.setModelRole("advisor", `${replacementModel.provider}/${replacementModel.id}`);
+
+		expect(session.getAdvisorAgent()?.state.model.provider).toBe(replacementModel.provider);
+		expect(session.getAdvisorAgent()?.state.model.id).toBe(replacementModel.id);
+	});
+
+	it("refreshes the live advisor when only the advisor route changes", () => {
+		session.settings.setModelRole("advisor", "openrouter/z-ai/glm-4.7@cerebras");
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		expect(session.getAdvisorAgent()?.state.model.provider).toBe("openrouter");
+		expect(session.getAdvisorAgent()?.state.model.id).toBe("z-ai/glm-4.7");
+		expect(
+			(session.getAdvisorAgent()?.state.model.compat as { openRouterRouting?: { only?: string[] } } | undefined)
+				?.openRouterRouting?.only,
+		).toEqual(["cerebras"]);
+
+		session.settings.setModelRole("advisor", "openrouter/z-ai/glm-4.7@fireworks");
+
+		expect(session.getAdvisorAgent()?.state.model.provider).toBe("openrouter");
+		expect(session.getAdvisorAgent()?.state.model.id).toBe("z-ai/glm-4.7");
+		expect(
+			(session.getAdvisorAgent()?.state.model.compat as { openRouterRouting?: { only?: string[] } } | undefined)
+				?.openRouterRouting?.only,
+		).toEqual(["fireworks"]);
+	});
+
+	it("refreshes the live advisor after project model-role reloads", async () => {
+		const projectA = path.join(tempDir.path(), "project-a");
+		const projectB = path.join(tempDir.path(), "project-b");
+		const agentDir = path.join(tempDir.path(), "agent");
+		fs.mkdirSync(getProjectAgentDir(projectA), { recursive: true });
+		fs.mkdirSync(getProjectAgentDir(projectB), { recursive: true });
+		fs.mkdirSync(agentDir, { recursive: true });
+		await Bun.write(
+			path.join(getProjectAgentDir(projectA), "settings.json"),
+			JSON.stringify({ modelRoles: { advisor: `${model.provider}/${model.id}` } }),
+		);
+		await Bun.write(
+			path.join(getProjectAgentDir(projectB), "settings.json"),
+			JSON.stringify({ modelRoles: { advisor: `${replacementModel.provider}/${replacementModel.id}` } }),
+		);
+
+		const settings = await Settings.loadIsolated({
+			cwd: projectA,
+			agentDir,
+			overrides: { "compaction.enabled": false },
+		});
+		const customSession = new AgentSession({
+			agent: new Agent({
+				initialState: {
+					model,
+					systemPrompt: ["Test"],
+					tools: [],
+					messages: [],
+				},
+			}),
+			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
+			settings,
+			modelRegistry,
+			advisorTools: [],
+		});
+
+		try {
+			expect(customSession.setAdvisorEnabled(true)).toBe(true);
+			expect(customSession.getAdvisorAgent()?.state.model.provider).toBe(model.provider);
+			expect(customSession.getAdvisorAgent()?.state.model.id).toBe(model.id);
+
+			await settings.reloadForCwd(projectB);
+
+			expect(customSession.getAdvisorAgent()?.state.model.provider).toBe(replacementModel.provider);
+			expect(customSession.getAdvisorAgent()?.state.model.id).toBe(replacementModel.id);
+		} finally {
+			await customSession.dispose();
+			AgentStorage.resetInstance();
+		}
 	});
 
 	it("keeps explicit enable idempotent when the advisor config is unchanged", () => {

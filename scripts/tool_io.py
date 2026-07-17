@@ -134,7 +134,6 @@ class ReservoirSample[T]:
             self.items[index] = item
 
 
-
 def list_recent_session_files(config: ToolIOConfig) -> list[Path]:
     min_mtime = time.time() - config.since_days * 24 * 60 * 60
     candidates: list[tuple[float, Path]] = []
@@ -148,7 +147,6 @@ def list_recent_session_files(config: ToolIOConfig) -> list[Path]:
         candidates.append((stat.st_mtime, session_file))
     candidates.sort(key=lambda entry: entry[0], reverse=True)
     return [entry[1] for entry in candidates[: config.max_files]]
-
 
 
 def iter_tool_invocations(
@@ -183,7 +181,11 @@ def iter_tool_invocations(
                         continue
                     tool_name = _as_string(payload.get("name"))
                     tool_call_id = _as_string(payload.get("id"))
-                    if tool_name is None or tool_call_id is None or tool_name not in wanted:
+                    if (
+                        tool_name is None
+                        or tool_call_id is None
+                        or tool_name not in wanted
+                    ):
                         continue
                     arguments = _as_record(payload.get("arguments")) or {}
                     pending[tool_call_id] = ToolCall(
@@ -230,12 +232,10 @@ def iter_tool_invocations(
                 return
 
 
-
 def iter_results(stream: Iterable[ToolInvocation]) -> Iterator[ToolInvocation]:
     for invocation in stream:
         if invocation.has_result:
             yield invocation
-
 
 
 def iter_failed(stream: Iterable[ToolInvocation]) -> Iterator[ToolInvocation]:
@@ -244,12 +244,10 @@ def iter_failed(stream: Iterable[ToolInvocation]) -> Iterator[ToolInvocation]:
             yield invocation
 
 
-
 def iter_successful(stream: Iterable[ToolInvocation]) -> Iterator[ToolInvocation]:
     for invocation in stream:
         if invocation.has_result and not invocation.is_error:
             yield invocation
-
 
 
 def iter_with_diff(stream: Iterable[ToolInvocation]) -> Iterator[ToolInvocation]:
@@ -258,13 +256,13 @@ def iter_with_diff(stream: Iterable[ToolInvocation]) -> Iterator[ToolInvocation]
             yield invocation
 
 
-
-def iter_paths(stream: Iterable[ToolInvocation], *paths: str) -> Iterator[ToolInvocation]:
+def iter_paths(
+    stream: Iterable[ToolInvocation], *paths: str
+) -> Iterator[ToolInvocation]:
     wanted = set(paths)
     for invocation in stream:
         if invocation.path_hint in wanted:
             yield invocation
-
 
 
 def take(stream: Iterable[ToolInvocation], limit: int) -> Iterator[ToolInvocation]:
@@ -278,13 +276,13 @@ def take(stream: Iterable[ToolInvocation], limit: int) -> Iterator[ToolInvocatio
         remaining -= 1
 
 
-
-def sample_reservoir[T](stream: Iterable[T], size: int, seed: int | None = None) -> list[T]:
+def sample_reservoir[T](
+    stream: Iterable[T], size: int, seed: int | None = None
+) -> list[T]:
     sample: ReservoirSample[T] = ReservoirSample(size=size, rng=random.Random(seed))
     for item in stream:
         sample.add(item)
     return sample.items
-
 
 
 def extract_result_text(message: dict[str, Any] | None) -> str:
@@ -305,14 +303,12 @@ def extract_result_text(message: dict[str, Any] | None) -> str:
     return ""
 
 
-
 def extract_path(arguments: dict[str, Any]) -> str:
     for key in ("path", "file", "move"):
         value = arguments.get(key)
         if isinstance(value, str):
             return value
     return ""
-
 
 
 def _iter_session_entries(session_file: Path) -> Iterator[dict[str, Any]]:
@@ -330,7 +326,6 @@ def _iter_session_entries(session_file: Path) -> Iterator[dict[str, Any]]:
                 yield payload
 
 
-
 def _extract_thinking(content: list[Any]) -> str | None:
     for item in content:
         payload = _as_record(item)
@@ -342,7 +337,6 @@ def _extract_thinking(content: list[Any]) -> str | None:
         if thinking:
             return thinking
     return None
-
 
 
 def resolve_tool_names(*names_or_groups: str) -> tuple[str, ...]:
@@ -367,19 +361,16 @@ def _normalize_tool_names(tool_names: str | Iterable[str]) -> set[str]:
     return set(ordered)
 
 
-
 def _event_weight(invocation: ToolInvocation, limit_mode: LimitMode) -> int:
     if limit_mode == "calls":
         return 1
     return 2 if invocation.has_result else 1
 
 
-
 def _as_record(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
     return value
-
 
 
 def _as_string(value: Any) -> str | None:

@@ -3,7 +3,7 @@ import { Settings } from "../config/settings";
 import { OutputSink } from "../session/streaming-output";
 import type { ToolSession } from "../tools";
 import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../tools/output-meta";
-import { isEvalTimeoutControlEvent } from "./bridge-timeout";
+import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP, isEvalTimeoutControlEvent } from "./bridge-timeout";
 import type { JsStatusEvent } from "./js/shared/types";
 import type { KernelDisplayOutput } from "./py/display";
 import { registerPyToolBridge } from "./py/tool-bridge";
@@ -158,6 +158,77 @@ export async function waitForPromiseWithCancellation<T>(
 	return await resultPromise;
 }
 
+interface BridgeAbortShield {
+	signal: AbortSignal | undefined;
+	abortRequested: boolean;
+	timedOut: boolean;
+	handleStatus?: (event: JsStatusEvent) => void;
+	dispose?: () => void;
+}
+
+function createBridgeAbortShield(source: AbortSignal | undefined): BridgeAbortShield {
+	const shield: BridgeAbortShield = {
+		signal: undefined,
+		abortRequested: false,
+		timedOut: false,
+	};
+	if (!source) return shield;
+
+	const controller = new AbortController();
+	let pauseDepth = 0;
+	let abortReason: unknown;
+	let removeAbortListener: (() => void) | undefined;
+
+	const requestAbort = (reason: unknown): void => {
+		shield.abortRequested = true;
+		shield.timedOut =
+			shield.timedOut ||
+			(typeof DOMException !== "undefined" && reason instanceof DOMException
+				? reason.name === "TimeoutError"
+				: reason instanceof Error && reason.name === "TimeoutError");
+		abortReason = reason;
+		if (pauseDepth > 0 || controller.signal.aborted) return;
+		controller.abort(reason);
+	};
+
+	const onAbort = (): void => {
+		const reason = source.reason;
+		requestAbort(reason);
+	};
+
+	shield.signal = controller.signal;
+	shield.handleStatus = (event: JsStatusEvent): void => {
+		if (event.deferExternalAbort !== true) return;
+		if (event.op === EVAL_TIMEOUT_PAUSE_OP) {
+			pauseDepth++;
+			return;
+		}
+		if (event.op !== EVAL_TIMEOUT_RESUME_OP || pauseDepth === 0) return;
+		pauseDepth--;
+		if (shield.abortRequested && !controller.signal.aborted) controller.abort(abortReason);
+	};
+	shield.dispose = (): void => {
+		removeAbortListener?.();
+		removeAbortListener = undefined;
+	};
+
+	if (source.aborted) {
+		requestAbort(source.reason);
+	} else {
+		source.addEventListener("abort", onAbort, { once: true });
+		removeAbortListener = () => {
+			source.removeEventListener("abort", onAbort);
+		};
+		if (source.aborted) {
+			source.removeEventListener("abort", onAbort);
+			removeAbortListener = undefined;
+			requestAbort(source.reason);
+		}
+	}
+
+	return shield;
+}
+
 export function createCancelledKernelResult(output: string): KernelExecutionResult {
 	const outputBytes = Buffer.byteLength(output, "utf-8");
 	const outputLines = output.length > 0 ? 1 : 0;
@@ -304,9 +375,11 @@ export async function executeWithKernelBase<
 	const displayOutputs: KernelDisplayOutput[] = [];
 	const deadlineMs = (resolveDeadlineMs ?? getExecutionDeadlineMs)(options);
 	let executionTimeoutMs: number | undefined;
+	const abortShield = createBridgeAbortShield(options?.signal);
 
 	const collectDisplay = (output: KernelDisplayOutput): void => {
 		if (output.type === "status") {
+			abortShield.handleStatus?.(output.event);
 			options?.onStatus?.(output.event);
 			if (!isJulia && isEvalTimeoutControlEvent(output.event)) return;
 		}
@@ -320,8 +393,11 @@ export async function executeWithKernelBase<
 		options?.toolSession && options?.bridgeSessionId
 			? registerPyToolBridge(options.bridgeSessionId, runId, {
 					toolSession: options.toolSession,
-					signal: options.signal,
+					signal: abortShield.signal,
 					emitStatus,
+					abortRequested: () => {
+						return abortShield.abortRequested;
+					},
 				})
 			: null;
 
@@ -338,14 +414,15 @@ export async function executeWithKernelBase<
 			cwd: options?.cwd,
 			env: buildKernelEnvPatch(options ?? ({} as TOptions)),
 			id: runId,
-			signal: options?.signal,
+			signal: abortShield.signal,
 			timeoutMs: executionTimeoutMs,
 			onChunk: text => sink.push(text),
 			onDisplay: output => collectDisplay(output),
 		});
 
-		if (result.cancelled) {
-			const annotation = result.timedOut
+		if (result.cancelled || abortShield.abortRequested) {
+			const timedOut = result.timedOut || abortShield.timedOut;
+			const annotation = timedOut
 				? formatKernelTimeoutAnnotation(executionTimeoutMs ?? options?.idleTimeoutMs, result.kernelKilled ?? false)
 				: undefined;
 			const dumped = await sink.dump(annotation);
@@ -397,8 +474,8 @@ export async function executeWithKernelBase<
 			stdinRequested: false,
 		};
 	} catch (err) {
-		if (isCancellationError(err, cancelledErrorClass) || options?.signal?.aborted) {
-			const timedOut = isTimedOutCancellation(err, cancelledErrorClass, options?.signal);
+		if (isCancellationError(err, cancelledErrorClass) || abortShield.abortRequested || abortShield.signal?.aborted) {
+			const timedOut = abortShield.timedOut || isTimedOutCancellation(err, cancelledErrorClass, abortShield.signal);
 			const dumped = await sink.dump(
 				timedOut ? formatTimeoutAnnotation(executionTimeoutMs ?? options?.idleTimeoutMs) : undefined,
 			);
@@ -421,5 +498,6 @@ export async function executeWithKernelBase<
 		throw error;
 	} finally {
 		unregisterBridge?.();
+		abortShield.dispose?.();
 	}
 }

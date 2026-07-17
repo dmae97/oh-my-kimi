@@ -3,7 +3,7 @@ import { generateId, stableMemoryId } from "../../util/ids";
 import { aaakEncode } from "../aaak";
 import { REGEX_EXTRACTION_MAX_INPUT_CHARS } from "../entities";
 import { EpisodicGraph } from "../episodic-graph";
-import { heuristicExtractFacts } from "../extraction";
+import { type ExtractedFactCategories, heuristicExtractFacts } from "../extraction";
 import { clampVeracity } from "../veracity-consolidation";
 import { scheduleEmbedding } from "./helpers";
 import type { BeamMemoryState, BeamStats, JsonValue, MemoriaRetrieveResult, Metadata, SleepResult } from "./types";
@@ -292,7 +292,7 @@ function insertFactRows(
 function insertTimeline(
 	beam: BeamMemoryState,
 	messageIdx: number,
-	date: string,
+	date: string | null,
 	description: string,
 	sourceMemoryId: string | null,
 ): void {
@@ -325,6 +325,38 @@ function insertKg(
 		source: sourceMemoryId ?? "extraction",
 		confidence: 0.65,
 	});
+}
+
+function insertPreference(
+	beam: BeamMemoryState,
+	messageIdx: number,
+	preference: string,
+	topic: string | null,
+	sourceMemoryId: string | null,
+): void {
+	beam.db.run(
+		`INSERT INTO memoria_preferences (session_id, message_idx, preference, topic, evolution, context_snippet, source_memory_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		[sourceSession(beam), messageIdx, preference, topic, null, preference, sourceMemoryId],
+	);
+}
+
+function insertInstruction(
+	beam: BeamMemoryState,
+	messageIdx: number,
+	instruction: string,
+	context: string,
+	sourceMemoryId: string | null,
+): void {
+	beam.db.run(
+		`INSERT INTO memoria_instructions (session_id, message_idx, instruction, active, topic, context_snippet, source_memory_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		[sourceSession(beam), messageIdx, instruction, 1, null, context, sourceMemoryId],
+	);
+}
+
+function timelineDate(description: string): string | null {
+	return /\b\d{4}-\d{2}-\d{2}\b/.exec(description)?.[0] ?? null;
 }
 
 /**
@@ -458,33 +490,65 @@ export function detectLanguage(_beam: BeamMemoryState, text: string): string {
 	}
 	return spanish >= 3 ? "es" : "en";
 }
+type StoreFactStringOptions = {
+	routeHeuristicCategories?: boolean;
+};
+
 export function storeFactStrings(
 	beam: BeamMemoryState,
 	facts: readonly string[],
 	messageIdx = 0,
 	sourceMemoryId: string | null = null,
 	importance = 0.7,
+	options: StoreFactStringOptions = {},
 ): number {
+	const routeHeuristicCategories = options.routeHeuristicCategories ?? true;
 	let stored = 0;
 	for (const fact of facts) {
 		insertFactRows(beam, messageIdx, "entity", "fact", fact, fact, importance, sourceMemoryId);
 		stored++;
+		if (!routeHeuristicCategories) continue;
 		const pref = /^The user (prefers|dislikes) (.+)$/i.exec(fact);
 		if (pref?.[2]) {
-			beam.db.run(
-				`INSERT INTO memoria_preferences (session_id, message_idx, preference, topic, evolution, context_snippet, source_memory_id)
-				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-				[sourceSession(beam), messageIdx, fact, pref[2], null, fact, sourceMemoryId],
-			);
+			insertPreference(beam, messageIdx, fact, pref[2], sourceMemoryId);
 		}
 		const instruction = /^Instruction: (.+)$/i.exec(fact);
 		if (instruction?.[1]) {
-			beam.db.run(
-				`INSERT INTO memoria_instructions (session_id, message_idx, instruction, active, topic, context_snippet, source_memory_id)
-				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-				[sourceSession(beam), messageIdx, instruction[1], 1, null, fact, sourceMemoryId],
-			);
+			insertInstruction(beam, messageIdx, instruction[1], fact, sourceMemoryId);
 		}
+	}
+	return stored;
+}
+
+/** Store category-preserving LLM extraction output in MEMORIA and KG tables. */
+export function storeExtractedFactCategories(
+	beam: BeamMemoryState,
+	extracted: ExtractedFactCategories,
+	messageIdx = 0,
+	sourceMemoryId: string | null = null,
+	importance = 0.7,
+): number {
+	let stored = storeFactStrings(beam, extracted.facts, messageIdx, sourceMemoryId, importance);
+	stored += storeFactStrings(beam, extracted.instructions, messageIdx, sourceMemoryId, importance, {
+		routeHeuristicCategories: false,
+	});
+	stored += storeFactStrings(beam, extracted.preferences, messageIdx, sourceMemoryId, importance, {
+		routeHeuristicCategories: false,
+	});
+	stored += storeFactStrings(beam, extracted.timelines, messageIdx, sourceMemoryId, importance, {
+		routeHeuristicCategories: false,
+	});
+	for (const instruction of extracted.instructions) {
+		insertInstruction(beam, messageIdx, instruction, instruction, sourceMemoryId);
+	}
+	for (const preference of extracted.preferences) {
+		insertPreference(beam, messageIdx, preference, null, sourceMemoryId);
+	}
+	for (const timeline of extracted.timelines) {
+		insertTimeline(beam, messageIdx, timelineDate(timeline), timeline, sourceMemoryId);
+	}
+	for (const triple of extracted.kg) {
+		insertKg(beam, messageIdx, triple.subject, triple.predicate, triple.object, sourceMemoryId);
 	}
 	return stored;
 }

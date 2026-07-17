@@ -53,24 +53,37 @@ def to_chat(messages: list[dict]) -> list[dict]:
     return out
 
 
-def score(questions, answers, label: str, out_dir: Path | None = None, extra: dict | None = None):
+def score(
+    questions,
+    answers,
+    label: str,
+    out_dir: Path | None = None,
+    extra: dict | None = None,
+):
     rows = [
         {
-            "q": q["q"], "pos_rel": q["pos_rel"], "answer": a, "golds": q["golds"],
-            "em": squad.exact_match(a, q["golds"]), "f1": squad.f1(a, q["golds"]),
+            "q": q["q"],
+            "pos_rel": q["pos_rel"],
+            "answer": a,
+            "golds": q["golds"],
+            "em": squad.exact_match(a, q["golds"]),
+            "f1": squad.f1(a, q["golds"]),
             "abstained": "unreadable" in a.lower(),
         }
         for q, a in zip(questions, answers)
     ]
     n = len(rows)
     summary = {
-        "label": label, "n": n,
+        "label": label,
+        "n": n,
         "em": sum(r["em"] for r in rows) / n,
         "f1": sum(r["f1"] for r in rows) / n,
         "abst": sum(r["abstained"] for r in rows),
         **(extra or {}),
     }
-    print(f"{label:<34} n={n} f1={summary['f1']:.3f} em={summary['em']:.3f} abst={summary['abst']}")
+    print(
+        f"{label:<34} n={n} f1={summary['f1']:.3f} em={summary['em']:.3f} abst={summary['abst']}"
+    )
     if out_dir:
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "records.jsonl").write_text("\n".join(json.dumps(r) for r in rows))
@@ -80,7 +93,9 @@ def score(questions, answers, label: str, out_dir: Path | None = None, extra: di
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--route", required=True, choices=["openrouter", "zai", "rescore-cache"])
+    ap.add_argument(
+        "--route", required=True, choices=["openrouter", "zai", "rescore-cache"]
+    )
     ap.add_argument("--shape", default="8on16-bw")
     ap.add_argument("--chars", type=int, default=400_000)
     ap.add_argument("--questions", type=int, default=25)
@@ -92,7 +107,9 @@ def main() -> None:
     ap.add_argument("--env", default="~/.env")
     args = ap.parse_args()
 
-    pngs, batches = build_batches(args.shape, args.chars, args.questions, args.qpb, args.seed)
+    pngs, batches = build_batches(
+        args.shape, args.chars, args.questions, args.qpb, args.seed
+    )
     questions = [q for batch, _ in batches for q in batch]
 
     if args.route == "rescore-cache":
@@ -100,12 +117,20 @@ def main() -> None:
         answers = []
         for batch, messages in batches:
             payload = {"messages": messages, "effort": None}
-            key = sha8(args.model_or, "qa-mono-prod", json.dumps(payload, sort_keys=True, default=str))
+            key = sha8(
+                args.model_or,
+                "qa-mono-prod",
+                json.dumps(payload, sort_keys=True, default=str),
+            )
             path = QA_CACHE / f"{key}.json"
             text = json.loads(path.read_text())["text"] if path.exists() else ""
             answers.extend(parse_robust(text, len(batch)))
-        score(questions, answers, f"openrouter-cached-robust-{args.shape}",
-              RESULTS / f"diag-glm-or-robust-{args.shape}")
+        score(
+            questions,
+            answers,
+            f"openrouter-cached-robust-{args.shape}",
+            RESULTS / f"diag-glm-or-robust-{args.shape}",
+        )
         return
 
     keys = {
@@ -116,7 +141,9 @@ def main() -> None:
     def run_batch(item):
         batch, messages = item
         chat = to_chat(messages)
-        r = complete(args.route, keys, chat, args.model_or, args.model_zai, args.max_tokens)
+        r = complete(
+            args.route, keys, chat, args.model_or, args.model_zai, args.max_tokens
+        )
         if "http_error" in r:
             print(f"  HTTP {r['http_error']}: {r['body'][:200]}")
             return [""] * len(batch), {}
@@ -128,7 +155,9 @@ def main() -> None:
     tok_in = sum(u.get("prompt_tokens", 0) for _, u in results)
     tok_out = sum(u.get("completion_tokens", 0) for _, u in results)
     score(
-        questions, answers, f"{args.route}-{args.shape}-{len(pngs)}f",
+        questions,
+        answers,
+        f"{args.route}-{args.shape}-{len(pngs)}f",
         RESULTS / f"diag-glm-{args.route}-{args.shape}-{len(pngs)}f",
         {"imgs": len(pngs), "tok_in": tok_in, "tok_out": tok_out},
     )

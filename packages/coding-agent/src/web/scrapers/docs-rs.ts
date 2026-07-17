@@ -278,6 +278,17 @@ function findItemInModule(mod_: RustdocItem, name: string, index: Record<string,
 
 const DOCS_RS_CACHE_FILENAME = "rustdoc.json";
 
+/** Hard ceiling for decompressed rustdoc JSON: a 50 MB compressed payload can
+ *  expand far enough to block the event loop or OOM without a cap. Exceeding it
+ *  throws (RangeError), which the fetch path converts to a `null` result. */
+export const MAX_RUSTDOC_GUNZIP_BYTES = 256 * 1024 * 1024;
+
+/** Decompress a docs.rs rustdoc gzip payload with the output-size cap applied.
+ *  `maxOutputLength` is overridable only for tests exercising the cap contract. */
+export function gunzipRustdocJson(compressed: Buffer, maxOutputLength: number = MAX_RUSTDOC_GUNZIP_BYTES): string {
+	return gunzipSync(compressed, { maxOutputLength }).toString("utf-8");
+}
+
 function sanitizeCacheSegment(value: string): string {
 	return value.replace(/[^A-Za-z0-9._-]+/g, "_");
 }
@@ -399,7 +410,7 @@ export const handleDocsRs: SpecialHandler = async (
 		}
 
 		const compressed = Buffer.concat(chunks);
-		const jsonStr = gunzipSync(compressed).toString("utf-8");
+		const jsonStr = gunzipRustdocJson(compressed);
 		crate_ = tryParseJson<RustdocCrate>(jsonStr);
 		if (crate_?.index) {
 			await writeCachedRustdocCrate(target, jsonStr);

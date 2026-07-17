@@ -8,7 +8,7 @@ import {
 	SqliteAuthCredentialStore,
 	type StoredAuthCredential,
 } from "@oh-my-pi/pi-ai";
-import { getAgentDbPath, isRecord, logger } from "@oh-my-pi/pi-utils";
+import { AsyncDrain, getAgentDbPath, getStatsDbPath, isRecord, logger } from "@oh-my-pi/pi-utils";
 import type { RawSettings as Settings } from "../config/settings";
 
 /** Row shape for settings table queries */
@@ -23,8 +23,100 @@ type ModelUsageRow = {
 	last_used_at: number;
 };
 
-/** Bump when schema changes require migration */
-const SCHEMA_VERSION = 5;
+/** Row shape for model_perf table queries */
+type ModelPerfRow = {
+	model_key: string;
+	samples: number;
+	output_tokens: number;
+	gen_ms: number;
+	ttft_samples: number;
+	ttft_ms: number;
+};
+
+/** Row shape read from an `omp stats` messages table during backfill. */
+type StatsMessageRow = {
+	rowid: number;
+	timestamp: number;
+	provider: string;
+	model: string;
+	output_tokens: number;
+	duration: number;
+	ttft: number | null;
+};
+
+/** Per-model running sums accumulated during a backfill walk. */
+type PerfAccum = {
+	samples: number;
+	outputTokens: number;
+	genMs: number;
+	ttftSamples: number;
+	ttftMs: number;
+};
+
+/** One completed request's timing, folded into the per-model aggregates. */
+export interface ModelPerfSample {
+	/** Output tokens the provider reported for the turn. */
+	outputTokens: number;
+	/** Total request duration in milliseconds. */
+	durationMs: number;
+	/** Time to first token in milliseconds; omit when the provider did not report one. */
+	ttftMs?: number;
+}
+
+/** Validated, insert-ready model_perf sample (see {@link normalizeModelPerfSample}). */
+type ModelPerfInsert = {
+	modelKey: string;
+	outputTokens: number;
+	durationMs: number;
+	ttftSamples: 0 | 1;
+	ttftMs: number;
+};
+
+/** Recency-weighted per-model performance averages. */
+export interface ModelPerfStats {
+	/** Decayed sample count backing the averages. */
+	samples: number;
+	/** Average output tokens/sec over the total request duration. */
+	tps: number;
+	/** Average time-to-first-token in milliseconds; null when no sample reported one. */
+	ttftMs: number | null;
+}
+
+/**
+ * Decay threshold for model_perf running sums: once a model accumulates this
+ * many samples, each new sample first halves every aggregate, turning the
+ * plain average into a recency-weighted one (provider speeds drift over time).
+ */
+const MODEL_PERF_DECAY_AT = 256;
+/** meta-table marker set once historical stats.db rows have been imported into model_perf. */
+const MODEL_PERF_BACKFILL_KEY = "model_perf_backfill";
+/** Batch window for deferred model_perf writes; matches prompt-history's drain cadence. */
+const MODEL_PERF_FLUSH_DELAY_MS = 100;
+/** Backfill ignores stats.db history older than this; decay makes stale provider speeds worthless anyway. */
+const MODEL_PERF_BACKFILL_MAX_AGE_MS = 90 * 86_400_000;
+/** Rows fetched per synchronous backfill chunk — keeps per-chunk event-loop blocking under ~20ms even on cold I/O. */
+const MODEL_PERF_BACKFILL_CHUNK = 2048;
+/** Hard ceiling on rows scanned per backfill run, whatever the age cutoff admits — bounds total CPU on very high-volume databases (models only seen earlier than the newest N measurable rows get no backfill). */
+const MODEL_PERF_BACKFILL_MAX_ROWS = 250_000;
+
+/**
+ * Validates one request timing and shapes it for the model_perf upsert.
+ * Returns null for unmeasurable samples (no tokens, no duration). Out-of-range
+ * TTFT (>= duration) is bogus latency data; the sample still measures throughput.
+ */
+function normalizeModelPerfSample(modelKey: string, sample: ModelPerfSample): ModelPerfInsert | null {
+	const { outputTokens, durationMs } = sample;
+	if (!Number.isFinite(outputTokens) || outputTokens <= 0) return null;
+	if (!Number.isFinite(durationMs) || durationMs <= 0) return null;
+	const ttftMs =
+		sample.ttftMs !== undefined && Number.isFinite(sample.ttftMs) && sample.ttftMs > 0 && sample.ttftMs < durationMs
+			? sample.ttftMs
+			: undefined;
+	return { modelKey, outputTokens, durationMs, ttftSamples: ttftMs !== undefined ? 1 : 0, ttftMs: ttftMs ?? 0 };
+}
+
+/** Current agent.db schema version; bump when schema changes require migration. */
+export const SCHEMA_VERSION = 6;
 const SQLITE_NOW_EPOCH = "CAST(strftime('%s','now') AS INTEGER)";
 
 /** Singleton instances per database path */
@@ -42,9 +134,18 @@ export class AgentStorage {
 	#listSettingsStmt: Statement;
 	#upsertModelUsageStmt: Statement;
 	#listModelUsageStmt: Statement;
+	#upsertModelPerfStmt: Statement;
+	#listModelPerfStmt: Statement;
 	#modelUsageCache: string[] | null = null;
+	/** Only the real user db auto-imports stats.db history; custom paths (tests, embedding) opt in explicitly. */
+	#autoPerfBackfill: boolean;
+	/** One backfill *check* per process; the persistent gate is the meta marker. */
+	#perfBackfillChecked = false;
+	/** Coalesces per-turn perf samples into one deferred transaction off the turn's hot path. */
+	#perfDrain = new AsyncDrain<ModelPerfInsert>(MODEL_PERF_FLUSH_DELAY_MS);
 
 	private constructor(dbPath: string) {
+		this.#autoPerfBackfill = dbPath === getAgentDbPath();
 		this.#ensureDir(dbPath);
 		try {
 			this.#db = new Database(dbPath);
@@ -72,6 +173,22 @@ export class AgentStorage {
 		this.#listModelUsageStmt = this.#db.prepare(
 			"SELECT model_key, last_used_at FROM model_usage ORDER BY last_used_at DESC",
 		);
+		// Recency-weighted upsert: past MODEL_PERF_DECAY_AT samples, every new
+		// sample first halves the aggregates so old measurements fade out.
+		this.#upsertModelPerfStmt = this.#db.prepare(
+			`INSERT INTO model_perf (model_key, samples, output_tokens, gen_ms, ttft_samples, ttft_ms, updated_at)
+VALUES (?1, 1, ?2, ?3, ?4, ?5, ${SQLITE_NOW_EPOCH})
+ON CONFLICT(model_key) DO UPDATE SET
+	samples = (CASE WHEN model_perf.samples >= ${MODEL_PERF_DECAY_AT} THEN model_perf.samples / 2 ELSE model_perf.samples END) + 1,
+	output_tokens = (CASE WHEN model_perf.samples >= ${MODEL_PERF_DECAY_AT} THEN model_perf.output_tokens * 0.5 ELSE model_perf.output_tokens END) + excluded.output_tokens,
+	gen_ms = (CASE WHEN model_perf.samples >= ${MODEL_PERF_DECAY_AT} THEN model_perf.gen_ms * 0.5 ELSE model_perf.gen_ms END) + excluded.gen_ms,
+	ttft_samples = (CASE WHEN model_perf.samples >= ${MODEL_PERF_DECAY_AT} THEN model_perf.ttft_samples * 0.5 ELSE model_perf.ttft_samples END) + excluded.ttft_samples,
+	ttft_ms = (CASE WHEN model_perf.samples >= ${MODEL_PERF_DECAY_AT} THEN model_perf.ttft_ms * 0.5 ELSE model_perf.ttft_ms END) + excluded.ttft_ms,
+	updated_at = ${SQLITE_NOW_EPOCH}`,
+		);
+		this.#listModelPerfStmt = this.#db.prepare(
+			"SELECT model_key, samples, output_tokens, gen_ms, ttft_samples, ttft_ms FROM model_perf",
+		);
 	}
 
 	/**
@@ -91,6 +208,21 @@ PRAGMA synchronous=NORMAL;
 CREATE TABLE IF NOT EXISTS model_usage (
 	model_key TEXT PRIMARY KEY,
 	last_used_at INTEGER NOT NULL DEFAULT (${SQLITE_NOW_EPOCH})
+);
+
+CREATE TABLE IF NOT EXISTS model_perf (
+	model_key TEXT PRIMARY KEY,
+	samples REAL NOT NULL DEFAULT 0,
+	output_tokens REAL NOT NULL DEFAULT 0,
+	gen_ms REAL NOT NULL DEFAULT 0,
+	ttft_samples REAL NOT NULL DEFAULT 0,
+	ttft_ms REAL NOT NULL DEFAULT 0,
+	updated_at INTEGER NOT NULL DEFAULT (${SQLITE_NOW_EPOCH})
+);
+
+CREATE TABLE IF NOT EXISTS meta (
+	key TEXT PRIMARY KEY,
+	value TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);
@@ -175,6 +307,14 @@ CREATE TABLE settings (
 		if (fromVersion < 5) {
 			this.#migrateSchemaV4ToV5();
 		}
+		if (fromVersion < 6) {
+			// v5 → v6: TPS switched from the post-TTFT decode window to total
+			// request duration (hidden reasoning made decode-window rates bogus).
+			// Purge the old aggregates and re-arm the stats.db backfill so
+			// history is re-imported through the corrected fold.
+			this.#db.run("DELETE FROM model_perf");
+			this.#db.prepare("DELETE FROM meta WHERE key = ?").run(MODEL_PERF_BACKFILL_KEY);
+		}
 	}
 
 	#migrateSchemaV4ToV5(): void {
@@ -257,6 +397,8 @@ FROM model_usage_legacy
 		this.#listSettingsStmt.finalize();
 		this.#upsertModelUsageStmt.finalize();
 		this.#listModelUsageStmt.finalize();
+		this.#upsertModelPerfStmt.finalize();
+		this.#listModelPerfStmt.finalize();
 		// SqliteAuthCredentialStore.close() finalizes its own statements and
 		// closes the shared #db handle — must run after our statements finalize.
 		this.#authStore.close();
@@ -314,6 +456,191 @@ FROM model_usage_legacy
 		} catch (error) {
 			logger.warn("AgentStorage failed to get model usage order", { error: String(error) });
 			return [];
+		}
+	}
+
+	/**
+	 * Folds one completed request's timing into the model's perf aggregates.
+	 * TPS is measured over the total request duration — not the post-TTFT
+	 * decode window, which undercounts generation time (and so inflates the
+	 * rate) when reasoning tokens are generated before the first visible
+	 * token. Invalid samples (no tokens, no duration) are dropped.
+	 *
+	 * Deferred like prompt history: samples are batched and written in one
+	 * transaction after {@link MODEL_PERF_FLUSH_DELAY_MS}, keeping SQLite off
+	 * the turn-completion hot path. Fire-and-forget safe — flush failures are
+	 * logged, never thrown; await the returned promise only to observe the flush.
+	 * @param modelKey - Model key in "provider/modelId" format
+	 */
+	recordModelPerf(modelKey: string, sample: ModelPerfSample): Promise<void> {
+		const row = normalizeModelPerfSample(modelKey, sample);
+		if (!row) return Promise.resolve();
+		return this.#perfDrain.push(row, rows => this.#flushModelPerf(rows));
+	}
+
+	#flushModelPerf(rows: ModelPerfInsert[]): void {
+		// Kick the one-time history import too, so aggregates populate even if
+		// the user never opens /models. Additive merge makes ordering with live
+		// samples irrelevant.
+		this.#kickModelPerfBackfill();
+		try {
+			this.#db.transaction((batch: ModelPerfInsert[]) => {
+				for (const row of batch) this.#foldModelPerf(row);
+			})(rows);
+		} catch (error) {
+			logger.warn("AgentStorage failed to record model perf", { error: String(error) });
+		}
+	}
+
+	#foldModelPerf(row: ModelPerfInsert): void {
+		this.#upsertModelPerfStmt.run(row.modelKey, row.outputTokens, row.durationMs, row.ttftSamples, row.ttftMs);
+	}
+
+	/**
+	 * Returns recency-weighted TPS/TTFT averages for every model with recorded
+	 * requests, keyed by "provider/modelId". Read by the /models browser.
+	 * Also kicks the one-time background stats.db import; until it completes,
+	 * models without live samples are simply absent.
+	 */
+	getModelPerf(): Map<string, ModelPerfStats> {
+		this.#kickModelPerfBackfill();
+		const stats = new Map<string, ModelPerfStats>();
+		try {
+			for (const row of this.#listModelPerfStmt.all() as ModelPerfRow[]) {
+				if (row.gen_ms <= 0 || row.output_tokens <= 0) continue;
+				stats.set(row.model_key, {
+					samples: row.samples,
+					tps: (row.output_tokens * 1000) / row.gen_ms,
+					ttftMs: row.ttft_samples > 0 ? row.ttft_ms / row.ttft_samples : null,
+				});
+			}
+		} catch (error) {
+			logger.warn("AgentStorage failed to read model perf", { error: String(error) });
+		}
+		return stats;
+	}
+
+	/**
+	 * One-time, non-blocking import of historical request timings from the
+	 * `omp stats` database (`~/.omp/stats.db`) into model_perf. Fire-and-forget:
+	 * the walk runs in bounded chunks with event-loop yields between them
+	 * (bun:sqlite is synchronous — an unbounded scan here froze the TUI for
+	 * ~30s on multi-million-row stats databases), and the persistent meta
+	 * marker is only set on success so a crash or error retries next process.
+	 * A missing stats.db leaves the marker unset so a later `omp stats` run
+	 * still gets imported. No-op for non-default db paths.
+	 */
+	#kickModelPerfBackfill(): void {
+		if (!this.#autoPerfBackfill || this.#perfBackfillChecked) return;
+		this.#perfBackfillChecked = true;
+		try {
+			const marker = this.#db.prepare("SELECT value FROM meta WHERE key = ?").get(MODEL_PERF_BACKFILL_KEY);
+			if (marker) return;
+			const statsDbPath = getStatsDbPath();
+			if (!fs.existsSync(statsDbPath)) return;
+			void this.backfillModelPerfFromStats(statsDbPath)
+				.then(imported => {
+					this.#db
+						.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)")
+						.run(MODEL_PERF_BACKFILL_KEY, "complete");
+					logger.info("AgentStorage imported model perf history from stats.db", { imported });
+				})
+				.catch(error => {
+					logger.warn("AgentStorage model perf backfill failed", { error: String(error) });
+				});
+		} catch (error) {
+			logger.warn("AgentStorage model perf backfill failed", { error: String(error) });
+		}
+	}
+
+	/**
+	 * Imports recent measurable request rows from an `omp stats` database
+	 * (`messages` table) into the model_perf aggregates. Walks newest-first
+	 * over the timestamp index in {@link MODEL_PERF_BACKFILL_CHUNK}-row chunks,
+	 * yielding to the event loop between chunks, and keeps at most
+	 * {@link MODEL_PERF_DECAY_AT} rows per model within the
+	 * {@link MODEL_PERF_BACKFILL_MAX_AGE_MS} window — beyond either bound the
+	 * live decay would erase the contribution anyway. Errored turns are
+	 * excluded; aborted turns with reported usage count, matching live capture.
+	 * Sums land in one additive transaction at the end, so concurrent live
+	 * samples merge correctly regardless of order.
+	 * @param statsDbPath - Path to a stats.db file; opened read-only
+	 * @returns Number of rows folded in
+	 * @throws When the stats db cannot be opened or queried
+	 */
+	async backfillModelPerfFromStats(statsDbPath: string): Promise<number> {
+		const statsDb = new Database(statsDbPath, { readonly: true });
+		try {
+			statsDb.run("PRAGMA busy_timeout = 5000");
+			const select = statsDb.prepare(
+				`SELECT rowid, timestamp, provider, model, output_tokens, duration, ttft
+FROM messages
+WHERE (timestamp < ?1 OR (timestamp = ?1 AND rowid < ?2))
+	AND timestamp >= ?3
+	AND duration > 0 AND output_tokens > 0 AND stop_reason != 'error'
+ORDER BY timestamp DESC, rowid DESC
+LIMIT ?4`,
+			);
+			const cutoff = Date.now() - MODEL_PERF_BACKFILL_MAX_AGE_MS;
+			const sums = new Map<string, PerfAccum>();
+			let cursorTimestamp = Number.MAX_SAFE_INTEGER;
+			let cursorRowid = Number.MAX_SAFE_INTEGER;
+			let scanned = 0;
+			let imported = 0;
+			while (scanned < MODEL_PERF_BACKFILL_MAX_ROWS) {
+				const chunk = Math.min(MODEL_PERF_BACKFILL_CHUNK, MODEL_PERF_BACKFILL_MAX_ROWS - scanned);
+				const rows = select.all(cursorTimestamp, cursorRowid, cutoff, chunk) as StatsMessageRow[];
+				if (rows.length === 0) break;
+				scanned += rows.length;
+				const last = rows[rows.length - 1];
+				cursorTimestamp = last.timestamp;
+				cursorRowid = last.rowid;
+				for (const row of rows) {
+					const key = `${row.provider}/${row.model}`;
+					let accum = sums.get(key);
+					if (accum && accum.samples >= MODEL_PERF_DECAY_AT) continue;
+					const normalized = normalizeModelPerfSample(key, {
+						outputTokens: row.output_tokens,
+						durationMs: row.duration,
+						ttftMs: row.ttft ?? undefined,
+					});
+					if (!normalized) continue;
+					if (!accum) {
+						accum = { samples: 0, outputTokens: 0, genMs: 0, ttftSamples: 0, ttftMs: 0 };
+						sums.set(key, accum);
+					}
+					accum.samples += 1;
+					accum.outputTokens += normalized.outputTokens;
+					accum.genMs += normalized.durationMs;
+					accum.ttftSamples += normalized.ttftSamples;
+					accum.ttftMs += normalized.ttftMs;
+					imported++;
+				}
+				if (rows.length < chunk) break;
+				// Yield so a chunked walk never freezes the TUI (bun:sqlite is sync).
+				await Bun.sleep(0);
+			}
+			if (sums.size > 0) {
+				const upsert = this.#db.prepare(
+					`INSERT INTO model_perf (model_key, samples, output_tokens, gen_ms, ttft_samples, ttft_ms, updated_at)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ${SQLITE_NOW_EPOCH})
+ON CONFLICT(model_key) DO UPDATE SET
+	samples = model_perf.samples + excluded.samples,
+	output_tokens = model_perf.output_tokens + excluded.output_tokens,
+	gen_ms = model_perf.gen_ms + excluded.gen_ms,
+	ttft_samples = model_perf.ttft_samples + excluded.ttft_samples,
+	ttft_ms = model_perf.ttft_ms + excluded.ttft_ms,
+	updated_at = ${SQLITE_NOW_EPOCH}`,
+				);
+				this.#db.transaction(() => {
+					for (const [key, accum] of sums) {
+						upsert.run(key, accum.samples, accum.outputTokens, accum.genMs, accum.ttftSamples, accum.ttftMs);
+					}
+				})();
+			}
+			return imported;
+		} finally {
+			statsDb.close();
 		}
 	}
 

@@ -39,12 +39,48 @@ class Condition:
 
 
 CONDITIONS = [
-    Condition("base-8x13", FONTS["8x13"], "bw", 1, "baseline: glyphs straddle token cells on both axes"),
-    Condition("repeat2-color", FONTS["8x13"], "color", 2, "every line twice, consecutive rows in different hues"),
-    Condition("align-7x14", FontCfg("7x14a", "7x13", 7, 14), "bw", 1, "4 chars x 2 rows per token, no straddling"),
-    Condition("align-14x28", FontCfg("14x28a", "7x13", 14, 28, native=(7, 14)), "bw", 1, "2 chars x 1 row per token"),
-    Condition("align-28x28", FontCfg("28x28a", "8x13", 28, 28, native=(8, 13)), "bw", 1, "1 char per token"),
-    Condition("repeat2-align-14x28", FontCfg("14x28a", "7x13", 14, 28, native=(7, 14)), "color", 2, "aligned + repeated lines in hues"),
+    Condition(
+        "base-8x13",
+        FONTS["8x13"],
+        "bw",
+        1,
+        "baseline: glyphs straddle token cells on both axes",
+    ),
+    Condition(
+        "repeat2-color",
+        FONTS["8x13"],
+        "color",
+        2,
+        "every line twice, consecutive rows in different hues",
+    ),
+    Condition(
+        "align-7x14",
+        FontCfg("7x14a", "7x13", 7, 14),
+        "bw",
+        1,
+        "4 chars x 2 rows per token, no straddling",
+    ),
+    Condition(
+        "align-14x28",
+        FontCfg("14x28a", "7x13", 14, 28, native=(7, 14)),
+        "bw",
+        1,
+        "2 chars x 1 row per token",
+    ),
+    Condition(
+        "align-28x28",
+        FontCfg("28x28a", "8x13", 28, 28, native=(8, 13)),
+        "bw",
+        1,
+        "1 char per token",
+    ),
+    Condition(
+        "repeat2-align-14x28",
+        FontCfg("14x28a", "7x13", 14, 28, native=(7, 14)),
+        "color",
+        2,
+        "aligned + repeated lines in hues",
+    ),
 ]
 
 
@@ -66,7 +102,16 @@ def build_layout(chunk: str, cols: int, rows: int, repeat: int) -> tuple[str, in
     return "".join(out), usable
 
 
-def answer_token_indices(start: int, end: int, cols: int, adv: int, pitch: int, repeat: int, image_size: int, grid: int) -> list[int]:
+def answer_token_indices(
+    start: int,
+    end: int,
+    cols: int,
+    adv: int,
+    pitch: int,
+    repeat: int,
+    image_size: int,
+    grid: int,
+) -> list[int]:
     """Visual-token indices covering chars [start, end) under the layout."""
     indices: set[int] = set()
     for i in range(start, end):
@@ -98,7 +143,11 @@ def main() -> None:
     args = ap.parse_args()
 
     import torch
-    from transformers import AutoProcessor, AutoTokenizer, Qwen2_5_VLForConditionalGeneration
+    from transformers import (
+        AutoProcessor,
+        AutoTokenizer,
+        Qwen2_5_VLForConditionalGeneration,
+    )
 
     out_dir = HERE / "results" / args.out
     img_dir = out_dir / "images"
@@ -112,17 +161,34 @@ def main() -> None:
     paras = squad.load_paragraphs(CACHE)[: args.limit_paras]
     flow, offsets = squad.build_flow(paras)
     base_chunk = flow[: min(len(flow), base_budget)]
-    questions = sample_answer_questions(paras, offsets, 0, len(base_chunk), 24, args.seed)
+    questions = sample_answer_questions(
+        paras, offsets, 0, len(base_chunk), 24, args.seed
+    )
     q = questions[min(args.question_index, len(questions) - 1)]
-    print(f"question: {q['q']!r} answer: {q['answer_text']!r} @ {q['answer_start']}", flush=True)
+    print(
+        f"question: {q['q']!r} answer: {q['answer_text']!r} @ {q['answer_start']}",
+        flush=True,
+    )
 
     print(f"loading {args.model_dir}", flush=True)
-    processor = AutoProcessor.from_pretrained(args.model_dir, local_files_only=True, trust_remote_code=True, use_fast=False)
-    tokenizer = AutoTokenizer.from_pretrained(args.model_dir, local_files_only=True, trust_remote_code=True)
-    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(args.model_dir, local_files_only=True, trust_remote_code=True, dtype=torch.bfloat16, device_map="auto").eval()
+    processor = AutoProcessor.from_pretrained(
+        args.model_dir, local_files_only=True, trust_remote_code=True, use_fast=False
+    )
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.model_dir, local_files_only=True, trust_remote_code=True
+    )
+    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        args.model_dir,
+        local_files_only=True,
+        trust_remote_code=True,
+        dtype=torch.bfloat16,
+        device_map="auto",
+    ).eval()
     device = next(model.parameters()).device
     image_token_id = processor.tokenizer.convert_tokens_to_ids(processor.image_token)
-    answer_token_ids = tokenizer(q["answer_text"], add_special_tokens=False)["input_ids"]
+    answer_token_ids = tokenizer(q["answer_text"], add_special_tokens=False)[
+        "input_ids"
+    ]
     answer_id_set = set(answer_token_ids)
     answer_token_strs = [tokenizer.decode([t]) for t in answer_token_ids]
     norm = model.model.language_model.norm
@@ -138,21 +204,47 @@ def main() -> None:
         img = render(render_text, cond.cfg, CACHE, args.size, cond.variant)
         img.save(img_dir / f"{cond.name}.png")
 
-        prompt = load_prompt("qa-image.md").format(cols=cols, rows=rows) + f"\n\nQuestion: {q['q']}\nAnswer with only the shortest extractive answer."
-        messages = [{"role": "user", "content": [{"type": "image", "image": img}, {"type": "text", "text": prompt}]}]
-        templated = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        prompt = (
+            load_prompt("qa-image.md").format(cols=cols, rows=rows)
+            + f"\n\nQuestion: {q['q']}\nAnswer with only the shortest extractive answer."
+        )
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": img},
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ]
+        templated = processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
         batch = processor(images=img, text=templated, return_tensors="pt")
         ids = batch["input_ids"][0].tolist()
-        image_positions = [i for i, token_id in enumerate(ids) if token_id == image_token_id]
+        image_positions = [
+            i for i, token_id in enumerate(ids) if token_id == image_token_id
+        ]
         grid = int(round(len(image_positions) ** 0.5))
-        track = answer_token_indices(q["answer_start"], q["answer_end"], cols, cond.cfg.adv, cond.cfg.pitch, cond.repeat, args.size, grid)
+        track = answer_token_indices(
+            q["answer_start"],
+            q["answer_end"],
+            cols,
+            cond.cfg.adv,
+            cond.cfg.pitch,
+            cond.repeat,
+            args.size,
+            grid,
+        )
         track_positions = [image_positions[idx] for idx in track]
         batch = {k: (v.to(device) if hasattr(v, "to") else v) for k, v in batch.items()}
 
         with torch.no_grad():
             fwd = model(**batch, output_hidden_states=True, use_cache=False)
             generated = model.generate(**batch, max_new_tokens=16, do_sample=False)
-        answer_gen = processor.batch_decode(generated[:, batch["input_ids"].shape[1] :], skip_special_tokens=True)[0].strip()
+        answer_gen = processor.batch_decode(
+            generated[:, batch["input_ids"].shape[1] :], skip_special_tokens=True
+        )[0].strip()
 
         layers_data: list[dict[str, Any]] = []
         lock_on_layer: int | None = None
@@ -175,7 +267,11 @@ def main() -> None:
                         "top1_hit": bool(top1_hit),
                         "best_token_index": track[best_idx],
                         "best_token_top": [
-                            {"str": tokenizer.decode([int(ti[k])]), "p": round(float(tv[k]), 5)} for k in range(args.topk)
+                            {
+                                "str": tokenizer.decode([int(ti[k])]),
+                                "p": round(float(tv[k]), 5),
+                            }
+                            for k in range(args.topk)
                         ],
                     }
                 )
@@ -213,7 +309,12 @@ def main() -> None:
 
     summary = {
         "args": vars(args),
-        "question": {"q": q["q"], "answer_text": q["answer_text"], "answer_start": q["answer_start"], "answer_end": q["answer_end"]},
+        "question": {
+            "q": q["q"],
+            "answer_text": q["answer_text"],
+            "answer_start": q["answer_start"],
+            "answer_end": q["answer_end"],
+        },
         "answer_token_ids": answer_token_ids,
         "answer_token_strs": answer_token_strs,
         "conditions": conditions_out,

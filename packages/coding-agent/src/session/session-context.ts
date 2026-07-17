@@ -1,8 +1,58 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { coerceServiceTierByFamily, type ProviderPayload, type ServiceTierByFamily } from "@oh-my-pi/pi-ai";
 import * as snapcompact from "@oh-my-pi/snapcompact";
-import { createBranchSummaryMessage, createCompactionSummaryMessage, createCustomMessage } from "./messages";
+import {
+	createBranchSummaryMessage,
+	createCompactionSummaryMessage,
+	createCustomMessage,
+	isCustomMessageContent,
+	normalizeCustomMessagePayload,
+} from "./messages";
 import { type CompactionEntry, EPHEMERAL_MODEL_CHANGE_ROLE, type SessionEntry } from "./session-entries";
+
+// #4470 crash artifacts had legacy frames (no shape metadata) with 17 frames,
+// ~306k archive chars, and ~1.5M truncated chars. Current snapcompact frames
+// carry shape metadata; only legacy archives with frame payload risk get this
+// conservative LLM-payload guard, and transcript rendering remains intact.
+const LEGACY_SNAPCOMPACT_FRAME_COUNT_GUARD = 16;
+const LEGACY_SNAPCOMPACT_ARCHIVE_TEXT_GUARD = 250_000;
+const LEGACY_SNAPCOMPACT_TRUNCATED_CHARS_GUARD = 1_000_000;
+
+function hasLegacySnapcompactFrames(archive: snapcompact.Archive): boolean {
+	return archive.frames.some(frame => frame.font === undefined && frame.variant === undefined);
+}
+
+function hasCrashRiskSnapcompactFramePayload(archive: snapcompact.Archive): boolean {
+	return (
+		archive.frames.length >= LEGACY_SNAPCOMPACT_FRAME_COUNT_GUARD ||
+		snapcompact.frameDataBytes(archive.frames) >= snapcompact.FRAME_DATA_BYTES_BUDGET
+	);
+}
+
+function hasCrashRiskSnapcompactArchiveSize(archive: snapcompact.Archive): boolean {
+	return (
+		archive.frames.length >= LEGACY_SNAPCOMPACT_FRAME_COUNT_GUARD ||
+		archive.truncatedChars >= LEGACY_SNAPCOMPACT_TRUNCATED_CHARS_GUARD ||
+		(snapcompact.archiveSourceText(archive)?.length ?? 0) >= LEGACY_SNAPCOMPACT_ARCHIVE_TEXT_GUARD
+	);
+}
+
+function isCrashRiskLegacySnapcompactArchive(archive: snapcompact.Archive): boolean {
+	return (
+		hasLegacySnapcompactFrames(archive) &&
+		hasCrashRiskSnapcompactFramePayload(archive) &&
+		hasCrashRiskSnapcompactArchiveSize(archive)
+	);
+}
+
+function snapcompactHistoryBlockOptions(
+	archive: snapcompact.Archive,
+	options: BuildSessionContextOptions | undefined,
+): snapcompact.HistoryBlockOptions | undefined {
+	if (options?.transcript) return undefined;
+	if (isCrashRiskLegacySnapcompactArchive(archive)) return { maxFrameDataBytes: 0 };
+	return { maxFrameDataBytes: snapcompact.FRAME_DATA_BYTES_BUDGET };
+}
 
 export interface SessionContext {
 	messages: AgentMessage[];
@@ -14,10 +64,6 @@ export interface SessionContext {
 	models: Record<string, string>;
 	/** Names of TTSR rules that have been injected this session */
 	injectedTtsrRules: string[];
-	/** MCP tool names selected through discovery for this session branch. */
-	selectedMCPToolNames: string[];
-	/** Whether this branch contains an explicit persisted MCP selection entry. */
-	hasPersistedMCPToolSelection: boolean;
 	/** Active mode (e.g. "plan") or "none" if no special mode is active */
 	mode: string;
 	/** Mode-specific data from the last mode_change entry */
@@ -70,6 +116,25 @@ export interface BuildSessionContextOptions {
 	transcript?: boolean;
 	/** In transcript mode, elide entries replaced by the latest compaction. */
 	collapseCompactedHistory?: boolean;
+	/**
+	 * Transcript mode only: keep `toolCall` blocks that have no matching
+	 * `toolResult` on the path instead of stripping them. Pass this when the
+	 * session is mid-turn (a tool is still executing, its result not yet
+	 * persisted) so the rebuilt transcript renders the in-flight call as
+	 * pending; without it a focus/unfocus or overlay-close rebuild silently
+	 * hides the call the agent is still waiting on.
+	 */
+	keepDanglingToolCalls?: boolean;
+}
+
+/**
+ * Display-only marker set on transcript assistant messages whose dangling
+ * `toolCall` blocks were stripped (no paired result on the resolved path —
+ * failed/retried turns, results on sibling branches). The TUI renders a
+ * placeholder row from it so the turn's activity never silently vanishes.
+ */
+export interface StrippedToolCallsMarker {
+	strippedToolCalls?: number;
 }
 
 /**
@@ -82,10 +147,8 @@ function snapcompactHistoryBlocksForContext(
 	options: BuildSessionContextOptions | undefined,
 ) {
 	if (!archive) return undefined;
-	return snapcompact.historyBlocks(
-		archive,
-		options?.transcript ? undefined : { maxFrameDataBytes: snapcompact.FRAME_DATA_BYTES_BUDGET },
-	);
+	if (options?.transcript && options.collapseCompactedHistory) return undefined;
+	return snapcompact.historyBlocks(archive, snapcompactHistoryBlockOptions(archive, options));
 }
 
 export function buildSessionContext(
@@ -112,8 +175,6 @@ export function buildSessionContext(
 			serviceTier: undefined,
 			models: {},
 			injectedTtsrRules: [],
-			selectedMCPToolNames: [],
-			hasPersistedMCPToolSelection: false,
 			mode: "none",
 		};
 	}
@@ -132,8 +193,6 @@ export function buildSessionContext(
 			serviceTier: undefined,
 			models: {},
 			injectedTtsrRules: [],
-			selectedMCPToolNames: [],
-			hasPersistedMCPToolSelection: false,
 			mode: "none",
 		};
 	}
@@ -154,8 +213,6 @@ export function buildSessionContext(
 	const models: Record<string, string> = {};
 	let compaction: CompactionEntry | null = null;
 	const injectedTtsrRulesSet = new Set<string>();
-	let selectedMCPToolNames: string[] = [];
-	let hasPersistedMCPToolSelection = false;
 	let mode = "none";
 	let modeData: Record<string, unknown> | undefined;
 	// Track whether an explicit `model_change` with role="default" has been
@@ -198,9 +255,6 @@ export function buildSessionContext(
 			for (const ruleName of entry.injectedRules) {
 				injectedTtsrRulesSet.add(ruleName);
 			}
-		} else if (entry.type === "mcp_tool_selection") {
-			selectedMCPToolNames = [...entry.selectedToolNames];
-			hasPersistedMCPToolSelection = true;
 		} else if (entry.type === "mode_change") {
 			mode = entry.mode;
 			modeData = entry.data;
@@ -260,14 +314,17 @@ export function buildSessionContext(
 			}
 			pushMessage(entry.message);
 		} else if (entry.type === "custom_message") {
+			if (!isCustomMessageContent(entry.content)) return;
+			const normalized = normalizeCustomMessagePayload(entry);
+			const attribution = entry.attribution === undefined ? undefined : normalized.attribution;
 			pushMessage(
 				createCustomMessage(
-					entry.customType,
-					entry.content,
-					entry.display,
-					entry.details,
+					normalized.customType,
+					normalized.content,
+					normalized.display,
+					normalized.details,
 					entry.timestamp,
-					entry.attribution,
+					attribution,
 				),
 			);
 		} else if (entry.type === "branch_summary" && entry.summary) {
@@ -293,6 +350,7 @@ export function buildSessionContext(
 						undefined,
 						undefined,
 						snapcompactHistoryBlocksForContext(snapcompactArchive, options),
+						entry.warning,
 					),
 				);
 			} else {
@@ -325,6 +383,7 @@ export function buildSessionContext(
 			providerPayload,
 			undefined,
 			snapcompactHistoryBlocksForContext(snapcompactArchive, options),
+			compaction.warning,
 		);
 		// Agent context (non-transcript): summary first so the LLM sees the
 		// compacted context before recent messages.
@@ -395,34 +454,47 @@ export function buildSessionContext(
 	// plaintext to keep) and clear `thinking` signatures so the provider encoder
 	// downgrades them to plain text (verified accepted by the live API), preserving the
 	// visible reasoning while removing the immutability/invalid-signature hazard. Drop a
-	// turn left with no content. (Live turns never qualify: their results are persisted
-	// on the same path before any context rebuild.)
-	const pairedToolResultIds = new Set<string>();
-	for (const message of messages) {
-		if (message.role === "toolResult") pairedToolResultIds.add(message.toolCallId);
-	}
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const message = messages[i];
-		if (message.role !== "assistant") continue;
-		const hasDangling = message.content.some(
-			block => block.type === "toolCall" && !pairedToolResultIds.has(block.id),
-		);
-		if (!hasDangling) continue;
-		const normalized = message.content
-			.filter(
-				block =>
-					!(block.type === "toolCall" && !pairedToolResultIds.has(block.id)) && block.type !== "redactedThinking",
-			)
-			.map(block =>
-				block.type === "thinking" && block.thinkingSignature ? { ...block, thinkingSignature: undefined } : block,
-			);
-		if (normalized.length === 0) {
-			messages.splice(i, 1);
-			if (options?.transcript) {
-				cacheMissExplainedAt.splice(i, 1);
+	// turn left with no content. (Live turns only qualify mid-turn: a transcript rebuild
+	// while the tool still executes sees the persisted assistant turn without its result.
+	// Those callers pass `keepDanglingToolCalls` so the in-flight call stays visible as
+	// a pending block instead of vanishing from the chat.)
+	const keepDangling = options?.transcript === true && options.keepDanglingToolCalls === true;
+	if (!keepDangling) {
+		const pairedToolResultIds = new Set<string>();
+		for (const message of messages) {
+			if (message.role === "toolResult") pairedToolResultIds.add(message.toolCallId);
+		}
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const message = messages[i];
+			if (message.role !== "assistant") continue;
+			let strippedToolCalls = 0;
+			for (const block of message.content) {
+				if (block.type === "toolCall" && !pairedToolResultIds.has(block.id)) strippedToolCalls++;
 			}
-		} else {
-			messages[i] = { ...message, content: normalized };
+			if (strippedToolCalls === 0) continue;
+			const normalized = message.content
+				.filter(
+					block =>
+						!(block.type === "toolCall" && !pairedToolResultIds.has(block.id)) &&
+						block.type !== "redactedThinking",
+				)
+				.map(block =>
+					block.type === "thinking" && block.thinkingSignature
+						? { ...block, thinkingSignature: undefined }
+						: block,
+				);
+			if (normalized.length === 0 && !options?.transcript) {
+				messages.splice(i, 1);
+			} else {
+				const rewritten = { ...message, content: normalized };
+				if (options?.transcript) {
+					// Display transcript: keep the turn (even content-less) and mark
+					// how many calls were dropped so the TUI renders a placeholder
+					// row instead of silently erasing the turn's activity.
+					(rewritten as AgentMessage & StrippedToolCallsMarker).strippedToolCalls = strippedToolCalls;
+				}
+				messages[i] = rewritten;
+			}
 		}
 	}
 
@@ -434,8 +506,6 @@ export function buildSessionContext(
 		serviceTier,
 		models,
 		injectedTtsrRules,
-		selectedMCPToolNames,
-		hasPersistedMCPToolSelection,
 		mode,
 		modeData,
 	};

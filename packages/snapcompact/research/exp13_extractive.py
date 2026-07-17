@@ -64,7 +64,12 @@ def cached(model: str, tag: str, payload: object, fn, fresh: bool) -> dict:
 
 def session_frame(chunk_text: str) -> list[dict]:
     return [
-        {"role": "user", "content": [{"text": load_prompt("session-frame.md").format(context=chunk_text)}]},
+        {
+            "role": "user",
+            "content": [
+                {"text": load_prompt("session-frame.md").format(context=chunk_text)}
+            ],
+        },
         {"role": "assistant", "content": [{"text": ACK}]},
     ]
 
@@ -75,8 +80,16 @@ def gold_survives(golds: list[str], extraction_norm: str) -> bool:
 
 def run_cell_chunk(model: str, start: int, end: int, ctx: dict) -> list[dict]:
     """One (model, chunk) unit: extract verbatim spans, QA over the extraction, score."""
-    args, flow, paras, offsets, keys = ctx["args"], ctx["flow"], ctx["paras"], ctx["offsets"], ctx["keys"]
-    questions = squad.sample_chunk_questions(paras, offsets, start, end, args.qpc, args.seed)
+    args, flow, paras, offsets, keys = (
+        ctx["args"],
+        ctx["flow"],
+        ctx["paras"],
+        ctx["offsets"],
+        ctx["keys"],
+    )
+    questions = squad.sample_chunk_questions(
+        paras, offsets, start, end, args.qpc, args.seed
+    )
     if not questions:
         return []
     chunk_text = flow[start:end]
@@ -85,13 +98,17 @@ def run_cell_chunk(model: str, start: int, end: int, ctx: dict) -> list[dict]:
 
     extract_prompt = load_prompt("exp13-extract.md").format(budget=args.budget)
     gen = cached(
-        model, "exp13-extract", {"chunk": chunk_text, "budget": args.budget, "effort": args.extract_effort},
+        model,
+        "exp13-extract",
+        {"chunk": chunk_text, "budget": args.budget, "effort": args.extract_effort},
         lambda: dict(
             zip(
                 ("text", "usage", "stop"),
                 llm_complete(
-                    keys, model,
-                    session_frame(chunk_text) + [{"role": "user", "content": [{"text": extract_prompt}]}],
+                    keys,
+                    model,
+                    session_frame(chunk_text)
+                    + [{"role": "user", "content": [{"text": extract_prompt}]}],
                     max_tokens=args.extract_max_tokens,
                     effort=args.extract_effort,
                 ),
@@ -106,11 +123,16 @@ def run_cell_chunk(model: str, start: int, end: int, ctx: dict) -> list[dict]:
     messages = [
         {
             "role": "user",
-            "content": [{"text": load_prompt("qa-text.md").format(context=extraction)}, {"text": q_block}],
+            "content": [
+                {"text": load_prompt("qa-text.md").format(context=extraction)},
+                {"text": q_block},
+            ],
         }
     ]
     qa = cached(
-        model, "exp13-qa", {"messages": messages},
+        model,
+        "exp13-qa",
+        {"messages": messages},
         lambda: dict(
             zip(
                 ("text", "usage", "stop"),
@@ -150,8 +172,13 @@ def aggregate(records: list[dict], price_in: float, price_out: float) -> dict:
     mean_f1 = sum(f1s) / n
     se = (sum((x - mean_f1) ** 2 for x in f1s) / (n * (n - 1))) ** 0.5 if n > 1 else 0.0
     us = [u for r in records if "usage" in r for u in r["usage"]]
-    tok = {k: sum(u.get(k, 0) for u in us) for k in ("in", "out", "cache_w", "cache_r", "reasoning")}
-    cost_in = (tok["in"] + 1.25 * tok["cache_w"] + 0.1 * tok["cache_r"]) / 1e6 * price_in
+    tok = {
+        k: sum(u.get(k, 0) for u in us)
+        for k in ("in", "out", "cache_w", "cache_r", "reasoning")
+    }
+    cost_in = (
+        (tok["in"] + 1.25 * tok["cache_w"] + 0.1 * tok["cache_r"]) / 1e6 * price_in
+    )
     cost_out = tok["out"] / 1e6 * price_out
     return {
         "n": n,
@@ -174,11 +201,19 @@ def main() -> None:
     ap.add_argument("--lengths", default="50,150,250")
     ap.add_argument("--qpc", type=int, default=30)
     ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--budget", type=int, default=8000, help="max extraction chars per chunk")
-    ap.add_argument("--max-tokens", type=int, default=32768, help="QA max tokens")
-    ap.add_argument("--extract-max-tokens", type=int, default=16384, help="extraction max tokens (budget+slack)")
     ap.add_argument(
-        "--extract-effort", default="low",
+        "--budget", type=int, default=8000, help="max extraction chars per chunk"
+    )
+    ap.add_argument("--max-tokens", type=int, default=32768, help="QA max tokens")
+    ap.add_argument(
+        "--extract-max-tokens",
+        type=int,
+        default=16384,
+        help="extraction max tokens (budget+slack)",
+    )
+    ap.add_argument(
+        "--extract-effort",
+        default="low",
         help="reasoning effort for the extraction call only; verbatim copying needs no deliberation "
         "(default-effort gemini burns ~16k reasoning tokens verifying quotes and truncates)",
     )
@@ -209,11 +244,20 @@ def main() -> None:
     for length in lengths:
         paras = all_paras[:length]
         flow, offsets = squad.build_flow(paras)
-        ctx = {"args": args, "flow": flow, "paras": paras, "offsets": offsets, "keys": keys, "length": length}
+        ctx = {
+            "args": args,
+            "flow": flow,
+            "paras": paras,
+            "offsets": offsets,
+            "keys": keys,
+            "length": length,
+        }
         for model in models:
             for start in range(0, len(flow), TEXT_CHUNK):
                 tasks.append((model, start, min(start + TEXT_CHUNK, len(flow)), ctx))
-    print(f"grid: {len(models)} models x {len(lengths)} lengths x 1 condition = {len(tasks)} chunk tasks")
+    print(
+        f"grid: {len(models)} models x {len(lengths)} lengths x 1 condition = {len(tasks)} chunk tasks"
+    )
 
     records: list[dict] = []
     done = 0
@@ -234,8 +278,17 @@ def main() -> None:
             sub = [r for r in records if r["model"] == model and r["length"] == length]
             if not sub:
                 continue
-            cells.append({"model": model, "length": length, "condition": COND, **aggregate(sub, *MODELS[model])})
-    (out_dir / "summary.json").write_text(json.dumps({"args": vars(args), "cells": cells}, indent=1))
+            cells.append(
+                {
+                    "model": model,
+                    "length": length,
+                    "condition": COND,
+                    **aggregate(sub, *MODELS[model]),
+                }
+            )
+    (out_dir / "summary.json").write_text(
+        json.dumps({"args": vars(args), "cells": cells}, indent=1)
+    )
     with (out_dir / "matrix.csv").open("w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=list(cells[0].keys()))
         writer.writeheader()
@@ -251,5 +304,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-

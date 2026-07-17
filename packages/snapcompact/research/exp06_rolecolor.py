@@ -60,7 +60,10 @@ FONT = FONTS["6x10"]
 ROLES = ("user", "assistant", "tool")
 TAGS = {"user": "user", "assistant": "asst", "tool": "tool"}  # all "[xxxx] " = 7 chars
 ROLE_HUES = {"user": 0.62, "assistant": 0.33, "tool": 0.02}
-ROLE_RGB = {r: tuple(int(c * 255) for c in colorsys.hls_to_rgb(h, 0.27, 0.90)) for r, h in ROLE_HUES.items()}
+ROLE_RGB = {
+    r: tuple(int(c * 255) for c in colorsys.hls_to_rgb(h, 0.27, 0.90))
+    for r, h in ROLE_HUES.items()
+}
 _WHITE = (255, 255, 255)
 
 ENCODING = {
@@ -76,7 +79,10 @@ ENCODING = {
         "no role information. Use your best guess."
     ),
 }
-QA_PROMPT = {"img-6x10-role": "exp06-qa-image.md", "img-6x10-tagbw": "exp06-qa-image-tag.md"}
+QA_PROMPT = {
+    "img-6x10-role": "exp06-qa-image.md",
+    "img-6x10-tagbw": "exp06-qa-image-tag.md",
+}
 
 
 def assign_roles(n: int, seed: int) -> list[str]:
@@ -104,10 +110,16 @@ def build_chunks(paras: list[dict], budget: int) -> list[tuple[int, int]]:
     return chunks
 
 
-def sample_questions(paras: list[dict], offsets: list[int], start: int, end: int, n: int, seed: int) -> list[dict]:
+def sample_questions(
+    paras: list[dict], offsets: list[int], start: int, end: int, n: int, seed: int
+) -> list[dict]:
     """squad.sample_chunk_questions with the source passage index recorded (same rng sequence)."""
     rng = random.Random(seed * 1_000_003 + start)
-    eligible = [i for i in range(len(offsets)) if offsets[i] >= start and offsets[i] + len(paras[i]["ctx"]) <= end]
+    eligible = [
+        i
+        for i in range(len(offsets))
+        if offsets[i] >= start and offsets[i] + len(paras[i]["ctx"]) <= end
+    ]
     if not eligible:
         return []
     n = min(n, len(eligible))
@@ -127,7 +139,9 @@ def sample_questions(paras: list[dict], offsets: list[int], start: int, end: int
     return picked
 
 
-def render_role(text: str, colors: list[tuple[int, int, int]], size: int) -> Image.Image:
+def render_role(
+    text: str, colors: list[tuple[int, int, int]], size: int
+) -> Image.Image:
     """bdf.render() copy, simplified: white background, per-character glyph color."""
     glyphs, font_ascent = parse_bdf(ensure_font(FONT, CACHE))
     ascent = FONT.ascent if FONT.ascent is not None else font_ascent
@@ -168,7 +182,11 @@ def chunk_carriers(paras: list[dict], roles: list[str], a: int, b: int) -> dict:
         plain_parts.append(seg)
         colors.extend([ROLE_RGB[roles[i]]] * len(seg))
         tagged_parts.append(f"[{TAGS[roles[i]]}] {seg}")
-    return {"plain": "".join(plain_parts), "colors": colors, "tagged": "".join(tagged_parts)}
+    return {
+        "plain": "".join(plain_parts),
+        "colors": colors,
+        "tagged": "".join(tagged_parts),
+    }
 
 
 def atomic_png(png: Path, make) -> Path:
@@ -201,7 +219,9 @@ def norm_role(answer: str) -> str:
     return a
 
 
-def run_cell(model: str, cond: str, length: int, ci: int, chunk: dict, args, keys) -> list[dict]:
+def run_cell(
+    model: str, cond: str, length: int, ci: int, chunk: dict, args, keys
+) -> list[dict]:
     """One (model, cond, chunk): content QA (role/tagbw only) + provenance QA."""
     questions, car = chunk["questions"], chunk["car"]
     if not questions:
@@ -224,9 +244,14 @@ def run_cell(model: str, cond: str, length: int, ci: int, chunk: dict, args, key
             }
         ]
         qa = cached(
-            model, "exp06-qa", {"cond": cond, "messages": messages},
+            model,
+            "exp06-qa",
+            {"cond": cond, "messages": messages},
             lambda: dict(
-                zip(("text", "usage", "stop"), llm_complete(keys, model, messages, max_tokens=args.max_tokens))
+                zip(
+                    ("text", "usage", "stop"),
+                    llm_complete(keys, model, messages, max_tokens=args.max_tokens),
+                )
             ),
             args.fresh,
         )
@@ -237,16 +262,25 @@ def run_cell(model: str, cond: str, length: int, ci: int, chunk: dict, args, key
         {
             "role": "user",
             "content": [
-                {"text": load_prompt("exp06-prov-image.md").format(cols=cols, rows=rows, encoding=ENCODING[cond])},
+                {
+                    "text": load_prompt("exp06-prov-image.md").format(
+                        cols=cols, rows=rows, encoding=ENCODING[cond]
+                    )
+                },
                 {"image_path": png},
                 {"text": q_block},
             ],
         }
     ]
     prov = cached(
-        model, "exp06-prov", {"cond": cond, "messages": prov_messages},
+        model,
+        "exp06-prov",
+        {"cond": cond, "messages": prov_messages},
         lambda: dict(
-            zip(("text", "usage", "stop"), llm_complete(keys, model, prov_messages, max_tokens=args.max_tokens))
+            zip(
+                ("text", "usage", "stop"),
+                llm_complete(keys, model, prov_messages, max_tokens=args.max_tokens),
+            )
         ),
         args.fresh,
     )
@@ -279,10 +313,17 @@ def run_cell(model: str, cond: str, length: int, ci: int, chunk: dict, args, key
     return records
 
 
-def phase_cost(records: list[dict], phase: str, price_in: float, price_out: float) -> tuple[dict, float]:
+def phase_cost(
+    records: list[dict], phase: str, price_in: float, price_out: float
+) -> tuple[dict, float]:
     us = [u for r in records if "usage" in r for u in r["usage"] if u["phase"] == phase]
-    tok = {k: sum(u.get(k, 0) for u in us) for k in ("in", "out", "cache_w", "cache_r", "reasoning")}
-    cost = (tok["in"] + 1.25 * tok["cache_w"] + 0.1 * tok["cache_r"]) / 1e6 * price_in + tok["out"] / 1e6 * price_out
+    tok = {
+        k: sum(u.get(k, 0) for u in us)
+        for k in ("in", "out", "cache_w", "cache_r", "reasoning")
+    }
+    cost = (
+        tok["in"] + 1.25 * tok["cache_w"] + 0.1 * tok["cache_r"]
+    ) / 1e6 * price_in + tok["out"] / 1e6 * price_out
     return tok, cost
 
 
@@ -291,7 +332,11 @@ def aggregate(records: list[dict], price_in: float, price_out: float) -> dict:
     f1s = [r["f1"] for r in records if r["f1"] is not None]
     if f1s:
         mean_f1 = sum(f1s) / len(f1s)
-        se = (sum((x - mean_f1) ** 2 for x in f1s) / (len(f1s) * (len(f1s) - 1))) ** 0.5 if len(f1s) > 1 else 0.0
+        se = (
+            (sum((x - mean_f1) ** 2 for x in f1s) / (len(f1s) * (len(f1s) - 1))) ** 0.5
+            if len(f1s) > 1
+            else 0.0
+        )
         em = sum(r["em"] for r in records if r["em"] is not None) / len(f1s)
         abstained = sum(r["abstained"] for r in records if r["abstained"] is not None)
     else:
@@ -353,25 +398,35 @@ def main() -> None:
         for ci, (a, b) in enumerate(build_chunks(paras, budget)):
             start, end = offsets[a], offsets[b - 1] + len(paras[b - 1]["ctx"])
             chunk = {
-                "questions": sample_questions(paras, offsets, start, end, args.qpc, args.seed),
+                "questions": sample_questions(
+                    paras, offsets, start, end, args.qpc, args.seed
+                ),
                 "car": chunk_carriers(paras, roles, a, b),
                 "roles": roles,
             }
             for model in models:
                 for cond in conditions:
                     tasks.append((model, cond, length, ci, chunk))
-    print(f"grid: {len(models)} models x {len(lengths)} lengths x {len(conditions)} conditions = {len(tasks)} cells")
+    print(
+        f"grid: {len(models)} models x {len(lengths)} lengths x {len(conditions)} conditions = {len(tasks)} cells"
+    )
 
     records: list[dict] = []
     failed = 0
     with ThreadPoolExecutor(args.workers) as pool:
-        futures = [pool.submit(run_cell, m, c, ln, ci, ch, args, keys) for m, c, ln, ci, ch in tasks]
+        futures = [
+            pool.submit(run_cell, m, c, ln, ci, ch, args, keys)
+            for m, c, ln, ci, ch in tasks
+        ]
         for done, (fut, t) in enumerate(zip(futures, tasks), 1):
             try:
                 records.extend(fut.result())
             except Exception as err:  # noqa: BLE001 -- partial results still get written; rerun resumes from cache
                 failed += 1
-                print(f"  FAIL {t[0]} {t[1]} len={t[2]} chunk={t[3]}: {type(err).__name__}: {err}", flush=True)
+                print(
+                    f"  FAIL {t[0]} {t[1]} len={t[2]} chunk={t[3]}: {type(err).__name__}: {err}",
+                    flush=True,
+                )
             print(f"  {done}/{len(tasks)} cells", flush=True)
 
     with (out_dir / "records.jsonl").open("w") as fh:
@@ -382,10 +437,25 @@ def main() -> None:
     for model in models:
         for length in lengths:
             for cond in conditions:
-                sub = [r for r in records if r["model"] == model and r["length"] == length and r["cond"] == cond]
+                sub = [
+                    r
+                    for r in records
+                    if r["model"] == model
+                    and r["length"] == length
+                    and r["cond"] == cond
+                ]
                 if sub:
-                    cells.append({"model": model, "length": length, "condition": cond, **aggregate(sub, *MODELS[model])})
-    (out_dir / "summary.json").write_text(json.dumps({"args": vars(args), "cells": cells}, indent=1))
+                    cells.append(
+                        {
+                            "model": model,
+                            "length": length,
+                            "condition": cond,
+                            **aggregate(sub, *MODELS[model]),
+                        }
+                    )
+    (out_dir / "summary.json").write_text(
+        json.dumps({"args": vars(args), "cells": cells}, indent=1)
+    )
     with (out_dir / "matrix.csv").open("w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=list(cells[0].keys()))
         writer.writeheader()
@@ -399,7 +469,13 @@ def main() -> None:
             row = f"{cond:<18}"
             for model in models:
                 cell = next(
-                    (c for c in cells if c["model"] == model and c["length"] == length and c["condition"] == cond),
+                    (
+                        c
+                        for c in cells
+                        if c["model"] == model
+                        and c["length"] == length
+                        and c["condition"] == cond
+                    ),
                     None,
                 )
                 if cell:
