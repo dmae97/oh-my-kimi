@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [17.0.2] - 2026-07-17
+
 ### Added
 
 - Added a structured log sink API (`registerLogSink`, `LogEvent`, `LogLevel`) to the centralized logger, enabling out-of-band consumers (such as OpenTelemetry) to receive log events without affecting local file or console logging.

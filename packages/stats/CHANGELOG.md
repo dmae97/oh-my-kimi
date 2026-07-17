@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [17.0.2] - 2026-07-17
+
 ### Fixed
 
 - Fixed the Recent Errors list to honor the selected dashboard time range before returning the newest 50 failures.

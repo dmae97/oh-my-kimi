@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [17.0.2] - 2026-07-17
+
 ### Added
 
 - Added a fullscreen overlay mouse-tracking opt-out to allow selection-first dialogs to preserve native terminal text selection.

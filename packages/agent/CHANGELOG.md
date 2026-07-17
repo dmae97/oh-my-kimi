@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [17.0.2] - 2026-07-17
+
 ### Fixed
 
 - Improved error visibility in interactive clients by surfacing provider stream failures through the assistant message lifecycle, preventing silent loading spinners.

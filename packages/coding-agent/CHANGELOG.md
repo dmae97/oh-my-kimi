@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [17.0.2] - 2026-07-17
+
 ### Added
 
 - Added native Warp CLI-agent events for rich session status, tool approvals, and completion notifications.
