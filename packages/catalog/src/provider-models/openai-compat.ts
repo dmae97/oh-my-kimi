@@ -1,3 +1,4 @@
+import * as logger from "@oh-my-pi/pi-utils/logger";
 import {
 	fetchOpenAICompatibleModels,
 	type OpenAICompatibleModelMapperContext,
@@ -3267,16 +3268,41 @@ type LiteLLMRichEndpointModel<TApi extends Api> = {
 	hasToolMetadata: boolean;
 	hasSupportedOpenAIParams: boolean;
 };
+type LiteLLMRichEndpointFailure = {
+	endpoint: string;
+	reason: "http-status" | "invalid-json" | "network-error";
+	status?: number;
+	error?: unknown;
+};
+type LiteLLMRichEndpointResult<TApi extends Api> =
+	| { models: LiteLLMRichEndpointModel<TApi>[]; incompleteVisionMetadata: boolean }
+	| { failure: LiteLLMRichEndpointFailure };
 
 const LITELLM_RICH_ENDPOINTS = ["/model_group/info", "/v2/model/info", "/model/info", "/v1/model/info"] as const;
 export const OPENAI_COMPAT_DISCOVERY_DEFAULT_CONTEXT_WINDOW = 128_000;
 export const OPENAI_COMPAT_DISCOVERY_DEFAULT_MAX_TOKENS = 32_768;
 const UNKNOWN_PROXY_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as const;
+const warnedLiteLLMMetadataBases = new Set<string>();
 const LITELLM_UNUSABLE_SENTINEL_IDS: Record<string, true> = {
 	"all-team-models": true,
 	"all-proxy-models": true,
 	"no-default-models": true,
 };
+function warnLiteLLMMetadataFallback(managementBaseUrl: string, failure: LiteLLMRichEndpointFailure): void {
+	if (warnedLiteLLMMetadataBases.has(managementBaseUrl)) {
+		return;
+	}
+	warnedLiteLLMMetadataBases.add(managementBaseUrl);
+	logger.warn("LiteLLM rich model metadata unavailable; falling back to /v1/models", {
+		endpoint: `${managementBaseUrl}${failure.endpoint}`,
+		status: failure.status ?? "unavailable",
+		reason: failure.reason,
+		...(failure.status === 403
+			? { requiredPermission: "Grant this LiteLLM key access to the model metadata endpoints" }
+			: {}),
+		...(failure.error !== undefined ? { error: failure.error } : {}),
+	});
+}
 
 export function normalizeLiteLLMManagementBaseUrl(baseUrl: string): string {
 	const trimmed = baseUrl.trim().replace(/\/+$/g, "");
@@ -3499,7 +3525,7 @@ async function fetchLiteLLMRichEndpoint<TApi extends Api>(
 	managementBaseUrl: string,
 	runtimeBaseUrl: string,
 	signal?: AbortSignal,
-): Promise<{ models: LiteLLMRichEndpointModel<TApi>[]; incompleteVisionMetadata: boolean } | null> {
+): Promise<LiteLLMRichEndpointResult<TApi> | null> {
 	const fetchImpl = discoveryFetch(options.fetch);
 	const requestHeaders: Record<string, string> = {
 		Accept: "application/json",
@@ -3515,17 +3541,17 @@ async function fetchLiteLLMRichEndpoint<TApi extends Api>(
 			headers: requestHeaders,
 			signal,
 		});
-	} catch {
-		return null;
+	} catch (error) {
+		return { failure: { endpoint, reason: "network-error", error } };
 	}
 	if (!response.ok) {
-		return null;
+		return response.status === 404 ? null : { failure: { endpoint, reason: "http-status", status: response.status } };
 	}
 	let payload: unknown;
 	try {
 		payload = await response.json();
-	} catch {
-		return null;
+	} catch (error) {
+		return { failure: { endpoint, reason: "invalid-json", status: response.status, error } };
 	}
 	const entries = extractLiteLLMRichEntries(payload);
 	if (!entries || entries.length === 0) {
@@ -3576,9 +3602,16 @@ export async function fetchLiteLLMRichModels<TApi extends Api>(
 	}
 	const fetchModels = async (signal?: AbortSignal): Promise<ModelSpec<TApi>[] | null> => {
 		const deduped = new Map<string, LiteLLMRichEndpointModel<TApi>>();
+		let metadataFailure: LiteLLMRichEndpointFailure | undefined;
 		for (const endpoint of LITELLM_RICH_ENDPOINTS) {
 			const result = await fetchLiteLLMRichEndpoint(endpoint, options, managementBaseUrl, runtimeBaseUrl, signal);
 			if (!result) {
+				continue;
+			}
+			if ("failure" in result) {
+				if (!metadataFailure || (metadataFailure.status !== 403 && result.failure.status === 403)) {
+					metadataFailure = result.failure;
+				}
 				continue;
 			}
 			const hadPriorModels = deduped.size > 0;
@@ -3619,6 +3652,9 @@ export async function fetchLiteLLMRichModels<TApi extends Api>(
 			}
 		}
 		if (deduped.size === 0) {
+			if (metadataFailure) {
+				warnLiteLLMMetadataFallback(managementBaseUrl, metadataFailure);
+			}
 			return null;
 		}
 		return Array.from(deduped.values())

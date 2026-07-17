@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
 import { fetchLiteLLMRichModels, litellmModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
 import type { FetchImpl } from "@oh-my-pi/pi-catalog/types";
+import * as logger from "@oh-my-pi/pi-utils/logger";
 
 const ORIGINAL_LITELLM_BASE_URL = Bun.env.LITELLM_BASE_URL;
 const MODELS_DEV_URL = "https://models.dev/api.json";
@@ -236,6 +237,58 @@ describe("LiteLLM provider discovery", () => {
 			},
 			supportsTools: true,
 		});
+	});
+
+	test("warns once when forbidden rich metadata forces /v1/models fallback", async () => {
+		const fetchMock = vi.fn(async (input: string | URL | Request) => {
+			const url = inputUrl(input);
+			if (url === MODELS_DEV_URL) {
+				return Response.json({});
+			}
+			if (url === "http://forbidden:4000/v1/models") {
+				return Response.json({ data: [{ id: "hosted_vllm/private-model" }] });
+			}
+			return new Response("Forbidden", { status: 403 });
+		}) as FetchImpl;
+		const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+		const options = litellmModelManagerOptions({
+			apiKey: "sk-restricted",
+			baseUrl: "http://forbidden:4000/v1",
+			fetch: fetchMock,
+		});
+
+		const models = await options.fetchDynamicModels?.();
+		await options.fetchDynamicModels?.();
+
+		expect(models?.[0]).toMatchObject({
+			id: "hosted_vllm/private-model",
+			contextWindow: null,
+			maxTokens: null,
+		});
+		expect(warnSpy).toHaveBeenCalledTimes(1);
+		expect(warnSpy).toHaveBeenCalledWith(
+			"LiteLLM rich model metadata unavailable; falling back to /v1/models",
+			expect.objectContaining({
+				endpoint: "http://forbidden:4000/model_group/info",
+				status: 403,
+				reason: "http-status",
+			}),
+		);
+	});
+
+	test("treats missing rich metadata endpoints as absent without warning", async () => {
+		const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+
+		const models = await fetchLiteLLMRichModels({
+			api: "openai-completions",
+			provider: "litellm",
+			apiKey: "sk-restricted",
+			baseUrl: "http://missing:4000/v1",
+			fetch: async () => new Response("Not Found", { status: 404 }),
+		});
+
+		expect(models).toBeNull();
+		expect(warnSpy).not.toHaveBeenCalled();
 	});
 
 	test("enriches LiteLLM rich models missing from models.dev with bundled reasoning metadata", async () => {
