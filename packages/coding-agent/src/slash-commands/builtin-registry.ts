@@ -2321,6 +2321,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "quit",
+		aliases: ["q"],
 		description: "Quit the application",
 		handleTui: shutdownHandlerTui,
 	},

@@ -864,6 +864,23 @@ describe("trySyncSlashCompletion", () => {
 		expect(result!.items[0]?.value).toBe("providers");
 	});
 
+	it("prefers an exact alias over an earlier same-prefix command (/q -> quit, not queue)", () => {
+		const provider = new CombinedAutocompleteProvider(
+			[
+				{ name: "queue", description: "Queue a message for after the agent yields" },
+				{ name: "quit", aliases: ["q"], description: "Quit the application" },
+			],
+			"/tmp",
+		);
+		const result = provider.trySyncSlashCompletion("/q");
+		expect(result).not.toBeNull();
+		// The sync-completion path applies items[0] on Enter. Even though `queue`
+		// is registered first and shares the `q` prefix, the exact `q` alias on
+		// `quit` must win (score 1000 > 900) so /q + Enter dispatches the `q`
+		// alias, which resolves to `quit` (#5335).
+		expect(result!.items[0]?.value).toBe("q");
+	});
+
 	it("uses aliases when completing slash command arguments", async () => {
 		const provider = new CombinedAutocompleteProvider(
 			[
