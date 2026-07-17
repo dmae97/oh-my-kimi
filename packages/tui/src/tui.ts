@@ -87,6 +87,8 @@ const CURSOR_END_NO_SYNC = "";
 // native text selection.
 const MOUSE_TRACKING_ON = "\x1b[?1000h\x1b[?1003h\x1b[?1006h";
 const MOUSE_TRACKING_OFF = "\x1b[?1006l\x1b[?1003l\x1b[?1000l";
+const ALT_SCREEN_ENTER = "\x1b[?1049h";
+const ALT_SCREEN_EXIT = "\x1b[?1049l";
 
 type InputListenerResult = { consume?: boolean; data?: string } | undefined;
 type InputListener = (data: string) => InputListenerResult;
@@ -1079,6 +1081,11 @@ export class TUI extends Container {
 	// `#fullRedrawCount`: these never enter native scrollback and exist only for
 	// the lifetime of the drag. Exposed for tests/diagnostics.
 	#resizeViewportPaintCount = 0;
+	// During a live resize drag the terminal's normal buffer may reflow full-width
+	// rows before our repaint lands. Borrow the alternate screen for throwaway
+	// resize frames so width changes truncate the transient viewport instead of
+	// pushing wrapped fragments into native scrollback.
+	#resizeAltActive = false;
 	#stopped = false;
 	// Always-on event-loop lag probe. The high default threshold keeps it quiet;
 	// it only logs `ui.loop-blocked` (with the current loop phase) when a frame
@@ -1747,6 +1754,11 @@ export class TUI extends Container {
 	}
 
 	stop(): void {
+		// Leave the resize alt buffer first so the teardown cursor math below runs
+		// against the restored normal screen (which #previousLines still describes).
+		if (this.#resizeAltActive) {
+			this.terminal.write(this.#leaveResizeAltSequence());
+		}
 		if (this.#altActive || this.#pendingAltExit) {
 			const mouseExit = this.#altMouseTrackingActive ? MOUSE_TRACKING_OFF : "";
 			const exitSequence = this.#pendingAltExit || `${mouseExit}${this.#keyboardEnhancementExit()}\x1b[?1049l`;
@@ -3494,7 +3506,7 @@ export class TUI extends Container {
 				paintCursorPos = paint.cursorPos;
 			}
 		}
-		let buffer = this.#paintBeginSequence + options.leadingSequence + purgeSequence;
+		let buffer = this.#paintBeginSequence + this.#leaveResizeAltSequence() + options.leadingSequence + purgeSequence;
 		if (options.clearScrollback) {
 			// Clear native history without blanking the live viewport first. The
 			// replay below rewrites every visible row from home, including blanks,
@@ -3694,15 +3706,34 @@ export class TUI extends Container {
 		return this.terminal.kittyEnableSequence ? "\x1b[<u" : "";
 	}
 
+	#enterResizeAltSequence(): string {
+		if (this.#resizeAltActive || this.#altActive) return "";
+		this.#resizeAltActive = true;
+		setAltScreenActive(true);
+		this.#forgetHardwareCursorState();
+		this.#recordHardwareCursorHidden();
+		return `${ALT_SCREEN_ENTER}${this.#keyboardEnhancementEnter()}`;
+	}
+
+	#leaveResizeAltSequence(): string {
+		if (!this.#resizeAltActive) return "";
+		const enhancementExit = this.#keyboardEnhancementExit();
+		this.#resizeAltActive = false;
+		setAltScreenActive(false);
+		this.#forgetHardwareCursorState();
+		return `${enhancementExit}${ALT_SCREEN_EXIT}`;
+	}
+
 	/**
-	 * Emit a throwaway viewport repaint for the resize fast path as an in-place
-	 * per-row overwrite. Switching buffers exposes the saved normal screen before
-	 * the authoritative settle paint on terminals without effective DEC 2026,
-	 * which is the resize flicker this fast path exists to avoid. The normal
-	 * screen is therefore rewritten directly; history is rebuilt once at settle.
+	 * Emit a throwaway viewport repaint for the resize fast path as an alternate-
+	 * screen per-row overwrite. The normal buffer may reflow full-width rows on a
+	 * width change before the app can repaint; keeping the drag on the alternate
+	 * screen makes those transient resizes truncate instead of pushing wrapped
+	 * fragments into native scrollback. Normal-screen history is rebuilt once at
+	 * settle via `#emitFullPaint`.
 	 */
 	#emitResizeViewport(window: readonly string[], height: number, contentRows: number, width: number): void {
-		let buffer = `${this.#paintBeginSequence}\x1b[H`;
+		let buffer = `${this.#paintBeginSequence + this.#enterResizeAltSequence()}\x1b[H`;
 		for (let r = 0; r < height; r++) {
 			if (r > 0) buffer += "\r\n";
 			buffer += this.#lineRewriteSequence(window[r] ?? "", width);

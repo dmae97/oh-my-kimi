@@ -21,8 +21,9 @@ const NO_MULTIPLEXER_ENV: Record<string, string | undefined> = {
 	TMUX: undefined,
 	STY: undefined,
 	ZELLIJ: undefined,
-	// Pin terminal identity so resize classification is deterministic even when
-	// the suite runs inside Warp (which takes the debounced in-place path below).
+	// Pin terminal identity so the alt-screen fast-path assertions below are
+	// deterministic even when the suite runs inside Warp (which otherwise takes
+	// the in-place path — see the Warp describe block at the bottom).
 	TERM_PROGRAM: undefined,
 	PI_TUI_RESIZE_IN_PLACE: undefined,
 };
@@ -301,7 +302,7 @@ describe("non-multiplexer resize viewport fast path", () => {
 				tui.start();
 				await scheduler.flushImmediates(term);
 
-				// One drag SIGWINCH enters the viewport-only fast path.
+				// One drag SIGWINCH enters the fast path and borrows the alt screen.
 				term.resize(60, 10);
 				await scheduler.flushImmediates(term);
 				expect(tui.resizeViewportActive).toBe(true);
@@ -313,13 +314,15 @@ describe("non-multiplexer resize viewport fast path", () => {
 				// A live block keeps animating mid-drag: a spinner tick / streamed
 				// token fires an ordinary (non-forced) render before the 120ms settle
 				// elapses. It must stay on the viewport fast path. Without the guard it
-				// falls through to an authoritative full paint and erases/replays the
-				// whole transcript for one frame before the next resize event.
+				// falls through to the geometry-rebuild full paint, which leaves the
+				// borrowed alternate screen (ALT_SCREEN_EXIT) and erases native
+				// scrollback (ED3) to repaint the whole transcript on the normal screen
+				// for one frame — the flash — before the next SIGWINCH hides it again.
 				tui.requestRender();
 				await scheduler.flushOrdinaryRenders(term);
 
-				// Still mid-drag: a viewport-only paint, no authoritative full redraw,
-				// no scrollback erase, and no terminal buffer switch.
+				// Still mid-drag, still on the alternate screen: a viewport-only paint,
+				// no authoritative full redraw, no scrollback erase, no alt-screen exit.
 				expect(tui.resizeViewportActive).toBe(true);
 				expect(tui.resizeViewportPaints).toBeGreaterThan(baselinePaints);
 				expect(tui.fullRedraws).toBe(baselineFull);
@@ -405,7 +408,7 @@ describe("non-multiplexer resize viewport fast path", () => {
 		});
 	});
 
-	it("repaints the normal screen during width drags without switching buffers", async () => {
+	it("uses the alternate screen during width-drag frames so terminal reflow cannot show wrapped fragments", async () => {
 		await withEnvPatch(NO_MULTIPLEXER_ENV, async () => {
 			const term = new VirtualTerminal(40, 10, 1000);
 			const scheduler = new DeferScheduler();
@@ -422,16 +425,17 @@ describe("non-multiplexer resize viewport fast path", () => {
 
 				const writes = captureWrites(term);
 
-				// The resize handler rewrites the new-width viewport synchronously on
-				// the normal buffer. Borrowing the alternate buffer exposes the saved
-				// pre-TUI screen when the drag settles on terminals without DEC 2026.
+				// Shrinking full-width normal-screen rows makes Ghostty reflow them
+				// into wrapped fragments before the app writes again. The resize
+				// handler must synchronously switch to the alternate screen and
+				// repaint the new-width viewport in that same write.
 				term.resize(20, 10);
 				await term.flush();
 
 				expect(tui.resizeViewportActive).toBe(true);
 				expect(tui.resizeViewportPaints).toBe(1);
 				const drag = writes.join("");
-				expect(drag).not.toContain(ALT_SCREEN_ENTER);
+				expect(drag).toContain(ALT_SCREEN_ENTER);
 				expect(drag).not.toContain("\x1b[2J");
 				expect(drag).not.toContain("\x1b[3J");
 				expect(visible(term)).toEqual(expected);
@@ -440,8 +444,8 @@ describe("non-multiplexer resize viewport fast path", () => {
 				await scheduler.flushAll(term);
 
 				const settle = writes.slice(dragWrites).join("");
-				expect(settle).not.toContain(ALT_SCREEN_EXIT);
-				expect(settle).toContain("\x1b[3J");
+				expect(settle).toContain(ALT_SCREEN_EXIT);
+				expect(settle.indexOf(ALT_SCREEN_EXIT)).toBeLessThan(settle.indexOf("\x1b[3J"));
 				expect(visible(term)).toEqual(expected);
 			} finally {
 				tui.stop();
@@ -464,10 +468,11 @@ describe("non-multiplexer resize viewport fast path", () => {
 
 				expect(tui.resizeViewportActive).toBe(true);
 				const drag = writes.join("");
-				// The drag frame performs per-row self-clearing rewrites directly on
-				// the normal screen. It must not clear/replay or switch buffers, because
-				// either transition is visible on terminals without synchronized output.
-				expect(drag).not.toContain(ALT_SCREEN_ENTER);
+				// The drag frame borrows the alternate screen and performs per-row
+				// self-clearing rewrites there. It must not clear/replay the normal
+				// screen, so even terminals that expose resize reflow between app
+				// writes cannot show a blanked normal-screen frame.
+				expect(drag).toContain(ALT_SCREEN_ENTER);
 				expect(drag).not.toContain("\x1b[2J");
 				expect(drag).not.toContain("\x1b[3J");
 				expect(drag).toContain("\x1b[H");
@@ -544,7 +549,7 @@ describe("resize repaints in place on terminals that re-report size on alt-scree
 		});
 	});
 
-	it("PI_TUI_RESIZE_IN_PLACE=0 opts Warp into the viewport-only fast path", async () => {
+	it("PI_TUI_RESIZE_IN_PLACE=0 opts Warp back into the alt-screen fast path", async () => {
 		await withEnvPatch({ ...WARP_ENV, PI_TUI_RESIZE_IN_PLACE: "0" }, async () => {
 			const term = new VirtualTerminal(40, 10, 1000);
 			const { tui, scheduler } = makeTui(term);
@@ -557,7 +562,7 @@ describe("resize repaints in place on terminals that re-report size on alt-scree
 				await scheduler.flushImmediates(term);
 
 				expect(tui.resizeViewportActive).toBe(true);
-				expect(writes.join("")).not.toContain(ALT_SCREEN_ENTER);
+				expect(writes.join("")).toContain(ALT_SCREEN_ENTER);
 			} finally {
 				tui.stop();
 			}

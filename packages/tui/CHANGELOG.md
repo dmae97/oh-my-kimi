@@ -11,6 +11,7 @@
 
 - Fixed Enter accepting a mid-prompt `/skill:<name>` autocomplete from submitting and clearing the draft; acceptance now inserts the skill token and leaves the prompt open ([#4773](https://github.com/can1357/oh-my-pi/issues/4773)).
 - Fixed Markdown rendering turning local file paths into HTTP links when a `www.` or `http(s)://`/`ftp://` sequence was glued to a preceding character (e.g. `~/meta/www.share/blog/index.dj`); extended autolinks now require a valid GFM left boundary (start of line, whitespace, or one of `*_~(`) ([#5652](https://github.com/can1357/oh-my-pi/issues/5652)).
+- Restored the alternate-screen borrow for non-multiplexer resize drag frames: v17.0.1 rewrote the normal buffer in place per SIGWINCH, letting the terminal's own width reflow push wrapped fragments into native scrollback mid-drag. Throwaway drag frames paint on the alt buffer again and the settled authoritative replay fuses the buffer exit into its destructive paint, keeping the [#5319](https://github.com/can1357/oh-my-pi/issues/5319) overlay-exit flicker fix intact.
 
 ## [17.0.1] - 2026-07-16
 
