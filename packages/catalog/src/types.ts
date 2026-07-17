@@ -318,11 +318,13 @@ export interface OpenAICompat {
 	 * standard JSON Schema constructs with HTTP 400.
 	 *
 	 * `"grammar"` triggers grammar-sampler normalization (widen bare boolean
-	 * `true`/`{}` subschemas into a value-accepting union of primitives, strip
-	 * boolean `additionalProperties`/`unevaluatedProperties`) because
-	 * grammar-constrained backends (llama.cpp, LM Studio, vLLM) build a GBNF
-	 * grammar from the JSON Schema and 400 with `Unrecognized schema: true` on a
-	 * bare boolean subschema (issue #5914).
+	 * `true`/`{}` subschemas in genuine subschema slots into a value-accepting
+	 * union of primitives) because grammar-constrained backends (llama.cpp, LM
+	 * Studio, vLLM) build a GBNF grammar from the JSON Schema and 400 with
+	 * `Unrecognized schema: true` on a bare boolean subschema (issue #5914).
+	 * Boolean `additionalProperties`/`unevaluatedProperties` are preserved — the
+	 * grammar converter reads them as closed/open-object semantics, and
+	 * `additionalProperties: false` pins the strict object shape.
 	 *
 	 * Default: auto-detected (`"moonshot-mfjs"` on api.moonshot.ai /
 	 * api.kimi.com, `"grammar"` on local OpenAI-compatible backends). Set
