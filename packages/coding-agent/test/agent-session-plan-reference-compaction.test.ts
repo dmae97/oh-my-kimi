@@ -209,6 +209,29 @@ describe("AgentSession approved-plan reference re-injection after compaction (is
 		fs.writeFileSync(resolved, content);
 	}
 
+	/**
+	 * Post-compaction auto-continuation only runs while real work remains
+	 * (#5715): a terminal text answer with no queued work or active goal no
+	 * longer opens a synthetic primary turn. Give the session an active goal so
+	 * the continuation — the vehicle this regression rides on — still fires.
+	 */
+	function activateOngoingGoal(session: AgentSession, id: string): void {
+		const now = Date.now();
+		session.setGoalModeState({
+			enabled: true,
+			mode: "active",
+			goal: {
+				id,
+				objective: "finish the ongoing work",
+				status: "active",
+				tokensUsed: 0,
+				timeUsedSeconds: 0,
+				createdAt: now,
+				updatedAt: now,
+			},
+		});
+	}
+
 	it("re-injects the approved plan reference on the auto-continuation turn", async () => {
 		const { session, sessionManager, observedCalls, waitForCall } = await createHarness();
 
@@ -221,6 +244,7 @@ describe("AgentSession approved-plan reference re-injection after compaction (is
 		session.setPlanReferencePath(planUrl);
 		session.markPlanReferenceSent();
 
+		activateOngoingGoal(session, "plan-ref-context-full");
 		stubCompaction();
 
 		// First executor turn: reference already sent, so it is NOT re-delivered here.
@@ -249,7 +273,7 @@ describe("AgentSession approved-plan reference re-injection after compaction (is
 
 		session.setPlanReferencePath(planUrl);
 		session.markPlanReferenceSent();
-
+		activateOngoingGoal(session, "plan-ref-snapcompact");
 		await session.prompt("continue executing the approved snapcompact plan");
 		const firstCall = observedCalls[0];
 		expect(firstCall).toBeDefined();
@@ -268,6 +292,7 @@ describe("AgentSession approved-plan reference re-injection after compaction (is
 	// default `local://PLAN.md` path has no file on disk.
 	it("does not inject a plan reference after compaction when no plan file exists", async () => {
 		const { session, waitForCall } = await createHarness();
+		activateOngoingGoal(session, "plan-ref-none");
 		stubCompaction();
 
 		await session.prompt("do some ordinary work");
