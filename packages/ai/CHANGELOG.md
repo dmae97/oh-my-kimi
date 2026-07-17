@@ -5,6 +5,7 @@
 ### Fixed
 
 - Automatically invalidate and rotate OAuth credentials when an "invalidated oauth token" error occurs
+- Classified HTTP 402 and `balance exhausted` quota responses as persistent usage limits, rotating multi-account requests to a sibling credential.
 
 ## [17.0.1] - 2026-07-16
 

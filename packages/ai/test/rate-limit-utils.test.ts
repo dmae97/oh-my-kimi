@@ -246,6 +246,7 @@ describe("isUsageLimitOutcome", () => {
 		expect(isUsageLimitOutcome(402, undefined)).toBe(true);
 		expect(isUsageLimitOutcome(402, "HTTP 402")).toBe(true);
 		expect(isUsageLimitOutcome(402, "A subscription is required for this endpoint")).toBe(false);
+		expect(isUsageLimit(new ProviderHttpError("HTTP 402", 402))).toBe(true);
 	});
 
 	it("does not rotate on auth/invalid-request statuses with unrelated bodies", () => {
