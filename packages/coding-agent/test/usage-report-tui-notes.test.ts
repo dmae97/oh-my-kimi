@@ -82,3 +82,34 @@ describe("renderUsageReports (#3268 TUI aggregate)", () => {
 		expect(occurrences).toBe(1);
 	});
 });
+
+describe("renderUsageReports session marker (#5691 org-qualified identity)", () => {
+	it("suffixes the active org so same-email multi-org accounts are tellable apart", () => {
+		const email = "dev@example.test";
+		const reports: UsageReport[] = [
+			report("anthropic", email, [limit("Claude 7 Day", "weekly", 7 * 24 * HOUR, 0.4)]),
+		];
+		const text = stripVTControlCharacters(
+			renderUsageReports(reports, theme, Date.now(), 120, provider =>
+				provider === "anthropic" ? { email, orgId: "uuid-A", orgName: "Team Org" } : undefined,
+			),
+		);
+		const marker = text.split("\n").find(line => line.includes("in use by this session"));
+		expect(marker).toContain(`${email} (Team Org)`);
+	});
+
+	it("falls back to the bare base when the active identity carries no org", () => {
+		const email = "solo@example.test";
+		const reports: UsageReport[] = [
+			report("anthropic", email, [limit("Claude 7 Day", "weekly", 7 * 24 * HOUR, 0.4)]),
+		];
+		const text = stripVTControlCharacters(
+			renderUsageReports(reports, theme, Date.now(), 120, provider =>
+				provider === "anthropic" ? { email } : undefined,
+			),
+		);
+		const marker = text.split("\n").find(line => line.includes("in use by this session"));
+		expect(marker).toContain(email);
+		expect(marker).not.toContain("(");
+	});
+});
