@@ -210,9 +210,6 @@ function normalizeResultOutput(result: BashResult | BashInteractiveResult): stri
 	return result.output || "";
 }
 
-function isInteractiveResult(result: BashResult | BashInteractiveResult): result is BashInteractiveResult {
-	return "timedOut" in result;
-}
 
 function normalizeBashEnv(env: Record<string, string> | undefined): Record<string, string> | undefined {
 	if (!env || Object.keys(env).length === 0) return undefined;
@@ -457,13 +454,14 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 		outputText: string,
 	): void {
 		if (result.cancelled) {
-			// executeBash output already carries a `[Command cancelled]` notice from
-			// the sink; PTY/bridge interactive output does not, so annotate it here.
+			// Local executor output already carries a leading `[Command cancelled]`
+			// notice from the sink; PTY/bridge output does not, so annotate only
+			// the latter.
 			const out = normalizeResultOutput(result);
-			const annotated = isInteractiveResult(result) && out ? `${out}\n\n[Command aborted]` : out;
+			const annotated = out.startsWith("[Command cancelled]") ? out : out ? `${out}\n\n[Command aborted]` : out;
 			throw new ToolError(annotated || "Command aborted");
 		}
-		if (isInteractiveResult(result) && result.timedOut) {
+		if (result.timedOut === true) {
 			const out = normalizeResultOutput(result);
 			const message =
 				timeoutSec === undefined ? "Command timed out" : `Command timed out after ${timeoutSec} seconds`;
@@ -531,7 +529,11 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 			details.timedOut = true;
 			const message =
 				timeoutSec === undefined ? "Command timed out" : `Command timed out after ${timeoutSec} seconds`;
-			outputLines.push("", `[${message}]`);
+			// executeBash has already emitted this leading sink notice. PTY output
+			// has not, so provide the LLM-facing annotation exactly once.
+			if (!normalizeResultOutput(result).startsWith(`[${message}]\n`)) {
+				outputLines.push("", `[${message}]`);
+			}
 			const timeoutOutputText = await enforceInlineByteCap(outputLines.join("\n"), {
 				saveArtifact: full => saveBashOriginalArtifact(this.session, full),
 			});
@@ -1020,12 +1022,8 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 								outputLines: current.output.length > 0 ? current.output.split("\n").length : 0,
 								outputBytes: current.output.length,
 							};
-							return this.#buildCompletedResult(timedOutResult, timeoutSec, {
-								requestedTimeoutSec,
-								notices: pendingNotices,
-								terminalId: handle.terminalId,
-								wallTimeMs: performance.now() - bridgeWallTimeStart,
-							});
+							this.#throwIfUnfinished(timedOutResult, timeoutSec, this.#formatResultOutput(timedOutResult));
+							throw new ToolError("Command timed out");
 						}
 
 						if (raced.kind === "exit") {
@@ -1139,10 +1137,13 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 			const isTimeout = result.timedOut === true;
 			if (!isTimeout) {
 				const out = normalizeResultOutput(result);
-				// PTY output carries no cancel/timeout notice of its own; annotate so
-				// the model can tell an abort from a plain failure.
-				const message =
-					isInteractiveResult(result) && out ? `${out}\n\n[Command aborted]` : out || "Command aborted";
+				// The local executor already prepends `[Command cancelled]`; PTY
+				// output does not, so preserve one cancellation notice in either case.
+				const message = out.startsWith("[Command cancelled]")
+					? out
+					: out
+						? `${out}\n\n[Command aborted]`
+						: "Command aborted";
 				if (signal?.aborted) {
 					throw new ToolAbortError(message);
 				}

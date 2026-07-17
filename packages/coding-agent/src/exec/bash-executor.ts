@@ -359,7 +359,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 			return {
 				exitCode: undefined,
 				cancelled: true,
-				timedOut: winner.kind === "timeout",
+				...(winner.kind === "timeout" ? { timedOut: true } : {}),
 				...(await sink.dump(
 					winner.kind === "timeout" && deadlineTimeoutMs !== undefined
 						? `Command timed out after ${Math.round(deadlineTimeoutMs / 1000)} seconds`
