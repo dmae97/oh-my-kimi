@@ -19,6 +19,10 @@
 - Fixed `read`/`write` not recognizing ZIP-based `.jar`/`.war`/`.ear`/`.apk` files as archives, so `read lib.jar:META-INF/MANIFEST.MF` failed with path-not-found ([#5808](https://github.com/can1357/oh-my-pi/issues/5808)).
 - Fixed legacy binary `.doc`/`.ppt`/`.xls`/`.rtf` being advertised as convertible in `read`, `fetch`, and CLI `@file` handling despite having no markit converter, which surfaced an `Unsupported format` error instead of falling through to normal file handling ([#5808](https://github.com/can1357/oh-my-pi/issues/5808)).
 - Fixed Kimi Code transport selection to follow live per-model protocol metadata by default while preserving explicit OpenAI and Anthropic overrides ([#5893](https://github.com/can1357/oh-my-pi/issues/5893)).
+- Fixed repeated edit-tool rejections from local models by recovering comma-separated ranges and malformed trailers, while clarifying canonical string input and `.=` syntax ([#5805](https://github.com/can1357/oh-my-pi/issues/5805)).
+- Fixed LSP diagnostics and edit-time diagnostics writethrough for pull-only servers that advertise `textDocument/diagnostic` statically or through dynamic registration ([#5825](https://github.com/can1357/oh-my-pi/issues/5825)).
+- Fixed local `!` command output concatenating carriage-return progress updates by preserving them as readable line boundaries ([#5845](https://github.com/can1357/oh-my-pi/issues/5845)).
+- Fixed `hub`/`irc` peer discovery after process-crash resume by restoring persisted subagents as parked peers before listing the roster ([#5864](https://github.com/can1357/oh-my-pi/issues/5864)).
 
 ## [17.0.2] - 2026-07-17
 
@@ -44,10 +48,6 @@
 
 ### Fixed
 
-- Fixed repeated edit-tool rejections from local models by recovering comma-separated ranges and malformed trailers, while clarifying canonical string input and `.=` syntax ([#5805](https://github.com/can1357/oh-my-pi/issues/5805)).
-- Fixed LSP diagnostics and edit-time diagnostics writethrough for pull-only servers that advertise `textDocument/diagnostic` statically or through dynamic registration ([#5825](https://github.com/can1357/oh-my-pi/issues/5825)).
-- Fixed local `!` command output concatenating carriage-return progress updates by preserving them as readable line boundaries ([#5845](https://github.com/can1357/oh-my-pi/issues/5845)).
-- Fixed `hub`/`irc` peer discovery after process-crash resume by restoring persisted subagents as parked peers before listing the roster ([#5864](https://github.com/can1357/oh-my-pi/issues/5864)).
 - Fixed loading issues for linked legacy extensions importing `DefaultPackageManager` or `linkedom`.
 - Fixed the advisor retrying terminal, non-retriable provider failures (e.g., blocked prompts), ensuring they fail immediately while transient failures still retry.
 - Fixed an issue where reassigning the `plan` role model mid-planning did not take effect until the next plan-mode entry; it now applies at the next turn boundary.
@@ -286,30 +286,6 @@
 ### Removed
 
 - Removed the unreliable Bing and Yahoo HTML-scraping web search providers
-## [16.4.8] - 2026-07-12
-### Added
-
-- Added invocation-specific schemas to task subagents and unified task/eval agent execution, including host-enforced read-only plan-mode agents ([#5279](https://github.com/can1357/oh-my-pi/issues/5279))
-
-### Fixed
-
-- Fixed compatibility of GNU-flavored shell builtins (such as stat, date, sed, mktemp, tail, find, base64, and ln) when invoked with macOS/BSD-style arguments.
-- Fixed subagent model and thinking level resolution to correctly respect the configured modelRoles.task selector instead of intermittently falling back to the parent session's model.
-- Fixed TUI rendering issues, including preventing macOS runtime diagnostics from painting into the viewport, bounding transcript retention in long sessions, and fixing scrollback repainting when collapsing history.
-- Fixed /tan and /fork clones failing to inherit or persist the parent session's prompt cache keys.
-- Fixed Python and JavaScript evaluation kernels suspending the CLI on subprocess foregrounding, deadlocking on non-serializable values, or losing in-flight subagent work during external aborts.
-- Fixed configured retry.fallbackChains failing to engage when encountering non-retryable provider errors.
-- Improved auto-compaction to automatically drop images and elide content when context is tight, and added persistent warning badges to the compaction divider when manual intervention is required.
-- Fixed the downshift plan nudge silently ending runs with no code written when the model answered with a text-only reply.
-- Fixed launch tool rendering and status reporting, including resolving contradictory readiness timeout messages and preventing backgrounded Bash blocks from continuing to repaint.
-- Fixed Advisor containment and timing issues, preventing hallucinated tool calls from contaminating later advice and ensuring late-arriving transcript deltas are coalesced before advisor calls.
-- Fixed omp update on npm-managed Windows installations to prevent downloaded release binaries from overwriting npm launchers.
-- Fixed --max-time duration values (e.g., 5s, 10m, 1h) being ignored instead of setting a session deadline.
-- Fixed omp plugin install --force failing with a dependency loop when replacing an existing pinned Git plugin source.
-- Fixed MCP tools receiving session image attachments as raw local:// URIs instead of resolving them to local filesystem paths.
-- Fixed Pyright LSP semantic requests hanging during startup.
-- Fixed Codex web search requests for GPT-5.6 Responses-Lite models.
-- Fixed custom model/provider configuration discovery to correctly load ~/.omp/agent/models.yaml when models.yml is absent.
 
 ## [16.5.0] - 2026-07-13
 
@@ -353,6 +329,32 @@
 
 - Removed the `--prewalk-boomerang` feature and its associated configuration setting.
 - Removed the unreliable Bing and Yahoo HTML-scraping web search providers.
+
+## [16.4.8] - 2026-07-12
+
+### Added
+
+- Added invocation-specific schemas to task subagents and unified task/eval agent execution, including host-enforced read-only plan-mode agents ([#5279](https://github.com/can1357/oh-my-pi/issues/5279))
+
+### Fixed
+
+- Fixed compatibility of GNU-flavored shell builtins (such as stat, date, sed, mktemp, tail, find, base64, and ln) when invoked with macOS/BSD-style arguments.
+- Fixed subagent model and thinking level resolution to correctly respect the configured modelRoles.task selector instead of intermittently falling back to the parent session's model.
+- Fixed TUI rendering issues, including preventing macOS runtime diagnostics from painting into the viewport, bounding transcript retention in long sessions, and fixing scrollback repainting when collapsing history.
+- Fixed /tan and /fork clones failing to inherit or persist the parent session's prompt cache keys.
+- Fixed Python and JavaScript evaluation kernels suspending the CLI on subprocess foregrounding, deadlocking on non-serializable values, or losing in-flight subagent work during external aborts.
+- Fixed configured retry.fallbackChains failing to engage when encountering non-retryable provider errors.
+- Improved auto-compaction to automatically drop images and elide content when context is tight, and added persistent warning badges to the compaction divider when manual intervention is required.
+- Fixed the downshift plan nudge silently ending runs with no code written when the model answered with a text-only reply.
+- Fixed launch tool rendering and status reporting, including resolving contradictory readiness timeout messages and preventing backgrounded Bash blocks from continuing to repaint.
+- Fixed Advisor containment and timing issues, preventing hallucinated tool calls from contaminating later advice and ensuring late-arriving transcript deltas are coalesced before advisor calls.
+- Fixed omp update on npm-managed Windows installations to prevent downloaded release binaries from overwriting npm launchers.
+- Fixed --max-time duration values (e.g., 5s, 10m, 1h) being ignored instead of setting a session deadline.
+- Fixed omp plugin install --force failing with a dependency loop when replacing an existing pinned Git plugin source.
+- Fixed MCP tools receiving session image attachments as raw local:// URIs instead of resolving them to local filesystem paths.
+- Fixed Pyright LSP semantic requests hanging during startup.
+- Fixed Codex web search requests for GPT-5.6 Responses-Lite models.
+- Fixed custom model/provider configuration discovery to correctly load ~/.omp/agent/models.yaml when models.yml is absent.
 
 ## [16.4.8] - 2026-07-12
 
