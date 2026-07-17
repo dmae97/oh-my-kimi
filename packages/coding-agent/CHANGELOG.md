@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `xd://` mount notices triggering unsolicited model turns by deferring hidden notices until the next user prompt.
+
 ## [17.0.2] - 2026-07-17
 
 ### Added
