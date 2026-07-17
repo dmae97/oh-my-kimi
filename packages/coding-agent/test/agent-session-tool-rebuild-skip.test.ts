@@ -549,4 +549,25 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 		expect(rebuildCount).toBe(1);
 		expect(noticeTexts().length).toBe(noticeCount);
 	});
+
+	it("keeps xd:// mount deltas model-visible without rendering them during quiet startup", async () => {
+		const { session } = newSession(async toolNames => `tools:${toolNames.join(",")}`, {
+			xdevRegistry: new XdevRegistry([]),
+		});
+		session.settings.set("startup.quiet", true);
+		const notices: string[] = [];
+		session.subscribe(event => {
+			if (event.type === "notice" && event.source === "xdev") notices.push(event.message);
+		});
+
+		const search = createMcpCustomTool("mcp__nucleus_search", "nucleus", "search", "Search nucleus");
+		await session.refreshMCPTools([search]);
+
+		expect(notices).toEqual([]);
+		expect(
+			session.agent
+				.peekSteeringQueue()
+				.some(message => message.role === "custom" && message.customType === "xdev-mount-notice"),
+		).toBe(true);
+	});
 });

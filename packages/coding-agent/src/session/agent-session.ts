@@ -6856,6 +6856,7 @@ export class AgentSession {
 			display: false,
 			timestamp: Date.now(),
 		});
+		if (this.settings.get("startup.quiet")) return;
 		const parts: string[] = [];
 		if (added.length > 0) parts.push(`mounted ${added.map(entry => entry.name).join(", ")}`);
 		if (removed.length > 0) parts.push(`unmounted ${removed.map(entry => entry.name).join(", ")}`);
