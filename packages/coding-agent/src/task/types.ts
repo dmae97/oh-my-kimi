@@ -7,6 +7,35 @@ import type { NestedRepoPatch } from "./worktree";
 
 /** Source of an agent definition */
 export type AgentSource = "bundled" | "user" | "project";
+/**
+ * Enforcement policy for a structured subagent output schema.
+ *
+ * `permissive` preserves legacy retry-budget overrides; `strict` turns every
+ * invalid final payload, including an exhausted retry override, into a failed
+ * `schema_violation` result.
+ */
+export type StructuredSubagentSchemaMode = "permissive" | "strict";
+
+/** Origin of the schema selected for a structured subagent invocation. */
+export type StructuredSubagentSchemaSource = "caller" | "agent" | "session" | "none";
+
+/** Final validation state of a structured subagent invocation. */
+export type StructuredSubagentValidationStatus = "valid" | "invalid" | "unavailable";
+
+/**
+ * Parsed structured completion and its schema-validation metadata.
+ *
+ * `data` is present whenever a payload could be assembled or parsed, even when
+ * strict validation rejects it. `error` explains unavailable or invalid
+ * validation without requiring consumers to parse presentation text.
+ */
+export interface StructuredSubagentOutput {
+	source: StructuredSubagentSchemaSource;
+	mode: StructuredSubagentSchemaMode;
+	status: StructuredSubagentValidationStatus;
+	data?: unknown;
+	error?: string;
+}
 
 const parseNumber = (value: string | undefined, defaultValue: number): number => {
 	if (value) {
@@ -81,12 +110,16 @@ export const taskItemSchema = type({
 	"name?": "string",
 	agent: "string = 'task'",
 	task: "string",
+	"outputSchema?": "unknown",
+	"schemaMode?": '"permissive" | "strict"',
 	"+": "delete",
 });
 const taskItemSchemaIsolated = type({
 	"name?": "string",
 	agent: "string = 'task'",
 	task: "string",
+	"outputSchema?": "unknown",
+	"schemaMode?": '"permissive" | "strict"',
 	"isolated?": "boolean",
 	"+": "delete",
 });
@@ -99,6 +132,10 @@ export interface TaskItem {
 	agent?: string;
 	/** The work; required by the schema. */
 	task?: string;
+	/** Caller-provided output schema; its presence overrides the selected agent's schema. */
+	outputSchema?: unknown;
+	/** Validation behavior for a caller-provided or inherited output schema. */
+	schemaMode?: "permissive" | "strict";
 	/** Run this spawn in an isolated worktree (batch form; flat form carries it top-level). */
 	isolated?: boolean;
 }
@@ -107,6 +144,8 @@ export const taskSchema = type({
 	"name?": "string",
 	agent: "string = 'task'",
 	task: "string",
+	"outputSchema?": "unknown",
+	"schemaMode?": '"permissive" | "strict"',
 	"isolated?": "boolean",
 	"+": "delete",
 });
@@ -114,6 +153,8 @@ const taskSchemaNoIsolation = type({
 	"name?": "string",
 	agent: "string = 'task'",
 	task: "string",
+	"outputSchema?": "unknown",
+	"schemaMode?": '"permissive" | "strict"',
 	"+": "delete",
 });
 const taskSchemaBatch = type({
@@ -156,6 +197,8 @@ function createTaskSchema(options: {
 				"name?": "string",
 				agent,
 				task: "string",
+				"outputSchema?": "unknown",
+				"schemaMode?": '"permissive" | "strict"',
 				"isolated?": "boolean",
 				"+": "delete",
 			});
@@ -169,6 +212,8 @@ function createTaskSchema(options: {
 			"name?": "string",
 			agent,
 			task: "string",
+			"outputSchema?": "unknown",
+			"schemaMode?": '"permissive" | "strict"',
 			"+": "delete",
 		});
 		return type.raw({
@@ -182,6 +227,8 @@ function createTaskSchema(options: {
 			"name?": "string",
 			agent,
 			task: "string",
+			"outputSchema?": "unknown",
+			"schemaMode?": '"permissive" | "strict"',
 			"isolated?": "boolean",
 			"+": "delete",
 		});
@@ -190,6 +237,8 @@ function createTaskSchema(options: {
 		"name?": "string",
 		agent,
 		task: "string",
+		"outputSchema?": "unknown",
+		"schemaMode?": '"permissive" | "strict"',
 		"+": "delete",
 	});
 }
@@ -231,6 +280,10 @@ export interface TaskParams {
 	agent?: string;
 	/** The work (flat form). */
 	task?: string;
+	/** Caller-provided output schema; its presence overrides the selected agent's schema. */
+	outputSchema?: unknown;
+	/** Validation behavior for a caller-provided or inherited output schema. */
+	schemaMode?: "permissive" | "strict";
 	/** Batch form (`task.batch`): one subagent per item. */
 	tasks?: TaskItem[];
 	/** Batch form: shared background prepended to every assignment; required by the batch schema. */
@@ -413,6 +466,11 @@ export interface SingleResult {
 	output: string;
 	stderr: string;
 	truncated: boolean;
+	/**
+	 * Parsed structured completion and validation metadata, when this invocation
+	 * selected an output schema or strict schema mode.
+	 */
+	structuredOutput?: StructuredSubagentOutput;
 	durationMs: number;
 	/** Cumulative input + output + cacheWrite tokens across all turns. Excludes cacheRead (re-reads cached context every turn, making cumulative sum misleading). */
 	tokens: number;

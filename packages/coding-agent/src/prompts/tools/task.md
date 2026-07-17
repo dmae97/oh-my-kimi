@@ -10,18 +10,22 @@ Agents marked BLOCKING run inline — results return in this call; non-blocking 
 
 # Inputs
 {{#if batchEnabled}}
-- `context`: Shared project state for the entire batch — don't duplicate into individual tasks.
-- `tasks[]`: Subagents to spawn.
-  - `name`: CamelCase ≤32 chars (auto-generated if omitted).
-  - `agent`: specialist type (optional).
-  - `task`: Complete, self-contained instructions — no one-liners, no missing acceptance criteria.
+- `context`: Shared project state, constraints, and contracts. Applies to the entire batch; do not duplicate this background into individual tasks.
+- `tasks[]`: Array of subagents to spawn.
+  - `name`: A stable CamelCase identifier (≤32 chars), used to address the agent (IRC, job ids). Generated automatically if omitted.
+  - `agent`: The agent type running this item (e.g. `scout`, `reviewer`). Omitting it gives you the general-purpose worker (`{{defaultAgent}}`) — NEVER pass that name explicitly. Only omit it after checking the agent list below and finding no specialist that fits.{{#if allowedAgentsText}} Current spawn policy allows: {{allowedAgentsText}}.{{/if}}
+  - `task`: Complete, self-contained instructions. One-liners or missing acceptance criteria are PROHIBITED.
+  - `outputSchema`: Invocation-specific JSON Schema. Overrides the selected agent and parent-session schemas.
+  - `schemaMode`: `"permissive"` (default) accepts a retry-exhausted invalid result with a warning; `"strict"` fails it.
 {{#if isolationEnabled}}
   - `isolated`: Run in dedicated worktree, return patches. Destroyed on completion, cannot be addressed afterward.
 {{/if}}
 {{else}}
-- `name`: CamelCase ≤32 chars (auto-generated if omitted).
-- `agent`: specialist type (optional).
-- `task`: Complete, self-contained instructions — no one-liners, no missing acceptance criteria.
+- `name`: A stable CamelCase identifier (≤32 chars), used to address the agent (IRC, job ids). Generated automatically if omitted.
+- `agent`: The agent type to spawn (e.g. `scout`, `reviewer`). Omitting it gives you the general-purpose worker (`{{defaultAgent}}`) — NEVER pass that name explicitly. Only omit it after checking the agent list below and finding no specialist that fits.{{#if allowedAgentsText}} Current spawn policy allows: {{allowedAgentsText}}.{{/if}}
+- `task`: Complete, self-contained instructions. One-liners or missing acceptance criteria are PROHIBITED.
+- `outputSchema`: Invocation-specific JSON Schema. Overrides the selected agent and parent-session schemas.
+- `schemaMode`: `"permissive"` (default) accepts a retry-exhausted invalid result with a warning; `"strict"` fails it.
 {{#if isolationEnabled}}
 - `isolated`: Run in dedicated worktree, return patches.
 {{/if}}

@@ -87,17 +87,19 @@ function formatCompatibilityIssues(
 }
 
 describe("builtin tool schemas provider compatibility", () => {
-	it("keeps task and todo strict-compatible for OpenAI-style providers", async () => {
-		const toolSchemas = await collectToolSchemas();
-		for (const toolName of ["task", "todo"]) {
-			const entry = toolSchemas.find(tool => tool.name === toolName);
-			expect(entry).toBeDefined();
-			if (!entry) {
-				continue;
-			}
-			const strictResult = adaptSchemaForStrict(entry.schema, true);
-			expect(strictResult.strict).toBe(true);
+	it("keeps todo strict and marks task non-strict for free-form output schemas", async () => {
+		const tools = await createTools(createTestSession());
+		const task = tools.find(tool => tool.name === "task");
+		const todo = tools.find(tool => tool.name === "todo");
+		expect(task).toBeDefined();
+		expect(todo).toBeDefined();
+		if (!task || !todo) {
+			return;
 		}
+
+		expect(task.strict).toBe(false);
+		expect(adaptSchemaForStrict(toolWireSchema(task), task.strict !== false).strict).toBe(false);
+		expect(adaptSchemaForStrict(toolWireSchema(todo), todo.strict !== false).strict).toBe(true);
 	});
 
 	it("keeps all builtin and hidden tool schemas valid after provider enforcement", async () => {

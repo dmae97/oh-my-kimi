@@ -53,6 +53,35 @@ describe("eval js agent() handle", () => {
 		expect(out).toBe("hello world");
 	});
 
+	it("keeps positional isolation controls stable while appending schemaMode", async () => {
+		let seenArgs: Record<string, unknown> | undefined;
+		const sandbox = loadPrelude(async (_name, args) => {
+			seenArgs = args as Record<string, unknown>;
+			return { text: '{"ok":true}', details: { agent: "task", id: "legacy", structured: false } };
+		});
+		const positionalAgent = sandbox.agent as (
+			prompt: string,
+			options?: unknown,
+			...rest: unknown[]
+		) => Promise<unknown>;
+		const schema = { type: "object", properties: { ok: { type: "boolean" } } };
+
+		await positionalAgent("scout", "reviewer", "p/model", "Legacy", schema, true, false, true, "strict");
+
+		expect(seenArgs).toEqual({
+			prompt: "scout",
+			agent: "reviewer",
+			model: "p/model",
+			label: "Legacy",
+			schema,
+			isolated: true,
+			apply: false,
+			merge: true,
+			schemaMode: "strict",
+			handle: false,
+		});
+	});
+
 	it("carries the parsed object under data when schema and handle combine", async () => {
 		const payload = JSON.stringify({ k: 1 });
 		const sandbox = loadPrelude(async () => ({

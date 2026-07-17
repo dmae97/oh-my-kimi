@@ -13,9 +13,9 @@ import type { ExecutorOptions } from "../../task/executor";
 import * as taskExecutor from "../../task/executor";
 import * as isolationRunner from "../../task/isolation-runner";
 import { AgentOutputManager } from "../../task/output-manager";
-import type { AgentDefinition, AgentProgress, SingleResult } from "../../task/types";
+import type { AgentDefinition, AgentProgress, SingleResult, StructuredSubagentOutput } from "../../task/types";
 import type { ToolSession } from "../../tools";
-import { EVAL_AGENT_MAX_DEPTH, runEvalAgent } from "../agent-bridge";
+import { runEvalAgent } from "../agent-bridge";
 import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP } from "../bridge-timeout";
 import { IdleTimeout } from "../idle-timeout";
 import { disposeAllVmContexts } from "../js/context-manager";
@@ -51,6 +51,7 @@ interface SessionOptions {
 	settings?: Settings;
 	outputManager?: AgentOutputManager;
 	planMode?: boolean;
+	outputSchema?: unknown;
 }
 
 function makeSession(options: SessionOptions = {}): ToolSession {
@@ -76,6 +77,7 @@ function makeSession(options: SessionOptions = {}): ToolSession {
 		getArtifactsDir: () => artifactsDir,
 		getSessionId: () => "test-session",
 		getEvalSessionId: () => "test-eval-session",
+		outputSchema: options.outputSchema,
 		getPlanModeState: options.planMode
 			? () =>
 					({
@@ -189,7 +191,7 @@ describe("runEvalAgent", () => {
 		);
 	});
 
-	it("enforces spawn restrictions and the eval recursion cap", async () => {
+	it("enforces shared spawn restrictions", async () => {
 		mockAgents();
 		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => singleResult(options));
 
@@ -199,9 +201,6 @@ describe("runEvalAgent", () => {
 		await expect(
 			runEvalAgent({ prompt: "hello", agent: "task" }, { session: makeSession({ spawns: "reviewer" }) }),
 		).rejects.toThrow("Allowed: reviewer");
-		await expect(
-			runEvalAgent({ prompt: "hello" }, { session: makeSession({ depth: EVAL_AGENT_MAX_DEPTH }) }),
-		).rejects.toThrow("maximum depth");
 		expect(runSpy).not.toHaveBeenCalled();
 	});
 
@@ -219,12 +218,10 @@ describe("runEvalAgent", () => {
 		expect(runSpy.mock.calls[0]?.[0].agent.name).toBe("reviewer");
 	});
 
-	it("honors task.maxRecursionDepth on top of the hard eval ceiling", async () => {
+	it("honors task.maxRecursionDepth without an eval-specific ceiling", async () => {
 		mockAgents();
 		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => singleResult(options));
 
-		// task.maxRecursionDepth=0 means "no spawning at all" — even depth 0 (the
-		// top-level agent) must be blocked, matching canSpawnAtDepth().
 		await expect(
 			runEvalAgent(
 				{ prompt: "hello" },
@@ -240,35 +237,38 @@ describe("runEvalAgent", () => {
 			),
 		).rejects.toThrow("maximum depth is 0");
 
-		// task.maxRecursionDepth=1 ("Single") lets the top spawn but a depth-1
-		// subagent cannot spawn further — even though the hard ceiling is 3.
-		await expect(
-			runEvalAgent(
-				{ prompt: "hello" },
-				{
-					session: makeSession({
-						depth: 1,
-						settings: Settings.isolated({
-							"async.enabled": false,
-							"task.isolation.mode": "none",
-							"task.maxRecursionDepth": 1,
-						}),
+		await runEvalAgent(
+			{ prompt: "hello" },
+			{
+				session: makeSession({
+					depth: 3,
+					settings: Settings.isolated({
+						"async.enabled": false,
+						"task.isolation.mode": "none",
+						"task.maxRecursionDepth": -1,
 					}),
-				},
-			),
-		).rejects.toThrow("maximum depth is 1");
-
-		expect(runSpy).not.toHaveBeenCalled();
+				}),
+			},
+		);
+		expect(runSpy).toHaveBeenCalledTimes(1);
 	});
 
-	it("throws instead of spawning from plan mode", async () => {
-		mockAgents();
+	it("runs plan-mode eval agents with an attenuated policy", async () => {
+		mockAgents([{ ...taskAgent, tools: ["ast_grep", "write"] }]);
 		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => singleResult(options));
 
-		await expect(runEvalAgent({ prompt: "hello" }, { session: makeSession({ planMode: true }) })).rejects.toThrow(
-			"unavailable in plan mode",
-		);
-		expect(runSpy).not.toHaveBeenCalled();
+		await expect(
+			runEvalAgent({ prompt: "hello" }, { session: makeSession({ planMode: true }) }),
+		).resolves.toMatchObject({
+			text: "ok",
+		});
+		expect(runSpy).toHaveBeenCalledTimes(1);
+		expect(runSpy.mock.calls[0]?.[0].agent.tools).toEqual(["read", "grep", "glob", "web_search", "ast_grep"]);
+		expect(runSpy.mock.calls[0]?.[0].agent.spawns).toBeUndefined();
+		await expect(
+			runEvalAgent({ prompt: "unsafe", isolated: true }, { session: makeSession({ planMode: true }) }),
+		).rejects.toThrow("isolation, apply, and merge controls are unavailable in plan mode");
+		expect(runSpy).toHaveBeenCalledTimes(1);
 	});
 
 	it("passes parent execution options and only sets outputSchema when schema is supplied", async () => {
@@ -310,8 +310,52 @@ describe("runEvalAgent", () => {
 		expect(secondOptions.outputSchema).toBeUndefined();
 		expect(secondOptions.outputSchemaOverridesAgent).toBeUndefined();
 	});
+	it("returns host-parsed data for caller, agent, and inherited schemas", async () => {
+		const agentSchema = { type: "object" };
+		const sessionSchema = { type: "object" };
+		const callerSchema = { type: "object" };
+		const frontmatterAgent = { ...reviewerAgent, name: "structured", output: agentSchema };
+		mockAgents([taskAgent, frontmatterAgent]);
+		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => {
+			const source = options.outputSchemaOverridesAgent
+				? "caller"
+				: options.agent.name === "structured"
+					? "agent"
+					: "session";
+			const structuredOutput: StructuredSubagentOutput = {
+				source,
+				mode: options.outputSchemaMode ?? "permissive",
+				status: "valid",
+				data: { source },
+			};
+			return singleResult(options, { output: "not JSON", structuredOutput });
+		});
 
-	it("forces LSP off for bridge subagents even when task.enableLsp is on", async () => {
+		const caller = await runEvalAgent(
+			{ prompt: "caller", schema: callerSchema, schemaMode: "strict" },
+			{ session: makeSession({ outputSchema: sessionSchema }) },
+		);
+		const frontmatter = await runEvalAgent(
+			{ prompt: "agent", agent: "structured" },
+			{ session: makeSession({ outputSchema: sessionSchema }) },
+		);
+		const inherited = await runEvalAgent(
+			{ prompt: "session" },
+			{ session: makeSession({ outputSchema: sessionSchema }) },
+		);
+
+		expect(caller.data).toEqual({ source: "caller" });
+		expect(caller.details).toMatchObject({ schemaSource: "caller", schemaMode: "strict", schemaStatus: "valid" });
+		expect(frontmatter.data).toEqual({ source: "agent" });
+		expect(inherited.data).toEqual({ source: "session" });
+		expect(runSpy.mock.calls.map(([options]) => options.outputSchema)).toEqual([
+			callerSchema,
+			agentSchema,
+			sessionSchema,
+		]);
+	});
+
+	it("inherits non-plan LSP and IRC policy for bridge subagents", async () => {
 		mockAgents();
 		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => singleResult(options));
 		// makeSession() defaults to enableLsp: true and task.enableLsp: true.
@@ -321,7 +365,8 @@ describe("runEvalAgent", () => {
 
 		const options = runSpy.mock.calls[0]?.[0];
 		if (!options) throw new Error("runSubprocess was not called");
-		expect(options.enableLsp).toBe(false);
+		expect(options.enableLsp).toBe(true);
+		expect(options.enableIrc).toBe(true);
 		expect(options.keepAlive).toBe(false);
 	});
 
@@ -485,16 +530,30 @@ describe("agent() through eval runtimes", () => {
 		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options =>
 			singleResult(options, {
 				output: options.outputSchema ? '{"ok":true,"n":3}' : "hello from agent",
+				...(options.outputSchema
+					? {
+							structuredOutput: {
+								source: "caller",
+								mode: options.outputSchemaMode ?? "permissive",
+								status: "valid",
+								data: { ok: true, n: 3 },
+							} satisfies StructuredSubagentOutput,
+						}
+					: {}),
 			}),
 		);
 
 		const result = await executeJs(
-			'const text = await agent("hi"); const data = await agent("json", { schema: { type: "object" } }); return JSON.stringify([text, data]);',
+			'const text = await agent("hi"); const data = await agent("json", { schema: { type: "object" } }); const node = await agent("handle", { schema: { type: "object" }, handle: true }); return JSON.stringify({ text, data, node });',
 			{ cwd: tempDir.path(), sessionId: sharedJsSessionId, session, sessionFile },
 		);
 
 		expect(result.exitCode).toBe(0);
-		expect(JSON.parse(result.output.trim())).toEqual(["hello from agent", { ok: true, n: 3 }]);
+		const output = JSON.parse(result.output.trim());
+		expect(output.text).toBe("hello from agent");
+		expect(output.data).toEqual({ ok: true, n: 3 });
+		expect(output.node.data).toEqual({ ok: true, n: 3 });
+		expect(output.node.handle).toBe(`agent://${output.node.id}`);
 	});
 
 	it("bounds JavaScript parallel() by the task.maxConcurrency setting while preserving order", async () => {
@@ -547,23 +606,43 @@ describe("agent() through eval runtimes", () => {
 		const { session, sessionFile, sessionId } = makeEvalSession(tempDir, "py-agent");
 		mockAgents();
 		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options =>
-			singleResult(options, { output: "hello from python" }),
+			singleResult(options, {
+				output: options.outputSchema ? "not JSON" : "hello from python",
+				...(options.outputSchema
+					? {
+							structuredOutput: {
+								source: "caller",
+								mode: options.outputSchemaMode ?? "permissive",
+								status: "valid",
+								data: { ok: true },
+							} satisfies StructuredSubagentOutput,
+						}
+					: {}),
+			}),
 		);
 
-		const result = await executePython('print(agent("hi"))', {
-			cwd: tempDir.path(),
-			sessionId,
-			sessionFile,
-			kernelMode: "per-call",
-			toolSession: session,
-		});
+		const result = await executePython(
+			'import json\nprint(agent("hi"))\nprint(json.dumps(agent("structured", schema={"type": "object"})))\nnode = agent("handle", schema={"type": "object"}, handle=True)\nprint(json.dumps({"data": node["data"], "handle": node["handle"], "id": node["id"]}))',
+			{
+				cwd: tempDir.path(),
+				sessionId,
+				sessionFile,
+				kernelMode: "per-call",
+				toolSession: session,
+			},
+		);
 		if (result.exitCode === undefined && result.cancelled) {
 			expect(result.output).toBe("");
 			return; // kernel unavailable in this environment
 		}
 
 		expect(result.exitCode).toBe(0);
-		expect(result.output.trim()).toBe("hello from python");
+		const lines = result.output.trim().split("\n");
+		expect(lines[0]).toBe("hello from python");
+		expect(JSON.parse(lines[1] ?? "")).toEqual({ ok: true });
+		const node = JSON.parse(lines[2] ?? "");
+		expect(node.data).toEqual({ ok: true });
+		expect(node.handle).toBe(`agent://${node.id}`);
 	});
 
 	it("bounds Python parallel() by the task.maxConcurrency setting while preserving order", async () => {
@@ -772,7 +851,11 @@ describe("agent() through eval runtimes", () => {
 
 	it("pauses the idle watchdog while a quiet agent() runs past the budget", async () => {
 		using tempDir = TempDir.createSync("@omp-eval-agent-timeout-pause-");
-		const { session } = makeEvalSession(tempDir, "js-agent-timeout-pause");
+		const { session } = makeEvalSession(
+			tempDir,
+			"js-agent-timeout-pause",
+			Settings.isolated({ "task.maxRuntimeMs": 1 }),
+		);
 		mockAgents();
 
 		// runSubprocess runs far past the eval timeout budget and emits NO progress
@@ -788,7 +871,9 @@ describe("agent() through eval runtimes", () => {
 		const inFlight = new Promise<void>(resolve => {
 			markInFlight = resolve;
 		});
+		let observedMaxRuntimeMs: number | undefined;
 		vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => {
+			observedMaxRuntimeMs = options.maxRuntimeMs;
 			markInFlight?.();
 			await released;
 			return singleResult(options, { output: "done" });
@@ -812,6 +897,7 @@ describe("agent() through eval runtimes", () => {
 
 		// The bridge paused the watchdog; the subprocess is now blocked in flight.
 		await inFlight;
+		expect(observedMaxRuntimeMs).toBe(0);
 		// Burn far more than the 20ms budget while paused: the watchdog stays armed-off.
 		vi.advanceTimersByTime(1_000);
 		expect(idle.signal.aborted).toBe(false);

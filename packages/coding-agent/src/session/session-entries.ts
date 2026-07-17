@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, MessageAttribution, ServiceTierByFamily, TextContent } from "@oh-my-pi/pi-ai";
+import type { StructuredSubagentSchemaMode } from "../task/types";
 
 export const CURRENT_SESSION_VERSION = 3;
 
@@ -164,8 +165,12 @@ export interface SessionInitEntry extends SessionEntryBase {
 	task: string;
 	/** Tools available to the agent */
 	tools: string[];
-	/** Output schema if structured output was requested */
+	/** Output schema if structured output was requested. */
 	outputSchema?: unknown;
+	/** Enforcement policy recorded with the output schema for faithful revival. */
+	outputSchemaMode?: StructuredSubagentSchemaMode;
+	/** Whether revival must retain only the explicitly persisted tool names. */
+	restrictToolNames?: boolean;
 	/** Spawn allowlist the subagent ran with ("" = none, "*" = any, else CSV); absent on pre-spawns files. */
 	spawns?: string;
 	/** The agent's `readSummarize` setting (`false` = read summarization disabled); absent uses the session default. */

@@ -79,9 +79,10 @@ export function createPersistedSubagentReviverFactory(
 			});
 			const artifactManager = ctx.session.sessionManager.getArtifactManager();
 			if (artifactManager) reopened.adoptArtifactManager(artifactManager);
-			// Reuse the parent's live MCP connections via proxy tools (no
-			// re-discovery), exactly as the executor does for live subagents.
-			const mcpManager = MCPManager.instance();
+			// A restricted persisted contract must not consult process-global MCP
+			// state: same-name MCP tools are untrusted capability sources.
+			const restrictToolNames = init.restrictToolNames === true;
+			const mcpManager = restrictToolNames ? undefined : MCPManager.instance();
 			const mcpProxyTools = mcpManager ? createMCPProxyTools(mcpManager) : [];
 			const { session } = await createAgentSession({
 				cwd: ctx.session.sessionManager.getCwd(),
@@ -99,16 +100,27 @@ export function createPersistedSubagentReviverFactory(
 				taskDepth,
 				toolNames: init.tools,
 				outputSchema: init.outputSchema,
+				outputSchemaMode: init.outputSchemaMode,
+				restrictToolNames: restrictToolNames || undefined,
 				requireYieldTool: true,
 				systemPrompt: () => [init.systemPrompt],
 				// Old files predate persisted spawns: deny re-spawning rather than let
 				// createAgentSession default to wildcard ("*").
 				spawns: init.spawns ?? "",
 				hasUI: false,
-				enableLsp: ctx.enableLsp,
-				enableMCP: !mcpManager,
-				mcpManager,
-				customTools: mcpProxyTools.length > 0 ? mcpProxyTools : undefined,
+				enableLsp: restrictToolNames ? false : ctx.enableLsp,
+				...(restrictToolNames
+					? {
+							enableIrc: false,
+							enableMCP: false,
+							preloadedExtensionPaths: [],
+							preloadedCustomToolPaths: [],
+						}
+					: {
+							enableMCP: !mcpManager,
+							mcpManager,
+							customTools: mcpProxyTools.length > 0 ? mcpProxyTools : undefined,
+						}),
 			});
 			// Clamp the active set to the persisted list: createAgentSession's
 			// `alwaysInclude` can re-add non-defaultInactive extension/custom tools
