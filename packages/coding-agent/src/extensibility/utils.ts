@@ -44,7 +44,7 @@ export function createNoOpUIContext(): HookUIContext {
 }
 
 /**
- * Raised by {@link withExitGuard} when a guarded callback synchronously
+ * Raised by {@link withHostGuard} when a guarded callback synchronously
  * attempts to terminate the host process. Callers catch this like any other
  * load-time failure so the extension/hook is skipped with a logged error
  * instead of taking the CLI down with it.
@@ -66,22 +66,46 @@ export class ExtensionExitError extends Error {
 
 type ExitAliasName = "process.exit" | "process.reallyExit";
 
-let exitGuardDepth = 0;
-let exitGuardOriginalProcessExit: typeof process.exit | null = null;
-let exitGuardOriginalReallyExit: typeof process.reallyExit | null = null;
+/**
+ * stdin events a loaded module must not be allowed to leave hijacked. A
+ * top-level `new StdioServerTransport()` (or a bare `process.stdin.resume()`)
+ * inside a `~/.claude/tools` MCP server attaches a `data` consumer and puts the
+ * shared stdin into flowing mode; Bun delivers one `data` event to that
+ * consumer and the TUI's own listener (attached later in `terminal.start()`)
+ * then never re-arms — every keypress after the first is swallowed (#5618).
+ */
+const HOST_GUARD_STDIN_EVENTS = ["data", "readable", "end", "close", "error"] as const;
+type StdinGuardEvent = (typeof HOST_GUARD_STDIN_EVENTS)[number];
+type StdinGuardListener = (...args: unknown[]) => void;
+
+let hostGuardDepth = 0;
+let hostGuardOriginalProcessExit: typeof process.exit | null = null;
+let hostGuardOriginalReallyExit: typeof process.reallyExit | null = null;
+let hostGuardStdinListeners: Record<StdinGuardEvent, StdinGuardListener[]> | null = null;
+let hostGuardStdinWasPaused = false;
+let hostGuardStdinWasRaw = false;
 
 /**
- * Run `fn` with hard-exit APIs patched so any synchronous attempt to terminate
- * the host raises {@link ExtensionExitError} instead. Restored in `finally`.
+ * Run `fn` with host-owned process state fenced off from third-party module
+ * evaluation, restored in `finally`. Guards the dynamic-import and
+ * factory-invocation sites that load extension / hook / tool / plugin modules
+ * from user directories (including Claude Code's `~/.claude/tools`, which OMP
+ * slurps wholesale). Two hazards are neutralized:
  *
- * Guards the dynamic-import and factory-invocation sites that load third-party
- * extension / hook modules — a `process.exit(0)` or `process.reallyExit(0)` in
- * a stranger's script (e.g. a Codex hook script that happens to live next to
- * OMP-shaped modules) would otherwise kill OMP during startup with no error
- * surface, since `try/catch` cannot intercept a synchronous exit.
+ * - **Hard exit.** `process.exit(0)` / `process.reallyExit(0)` in a stranger's
+ *   script (e.g. a CLI-shaped module with `main()` at the bottom) would kill
+ *   OMP during startup with no error surface, since `try/catch` cannot
+ *   intercept a synchronous exit. Both are patched to throw
+ *   {@link ExtensionExitError} instead.
+ * - **stdin hijack.** A module that attaches a stdin consumer at evaluation
+ *   time (an MCP `StdioServerTransport`, or a bare `resume()`) steals Bun's
+ *   single stdin reader, so the TUI goes permanently deaf after one keypress
+ *   (#5618). Any `data`/`readable`/`end`/`close`/`error` listener the module
+ *   adds is removed, and the stream's paused and raw-mode state is restored to
+ *   the pre-load snapshot.
  *
  * Nested and concurrent guard windows are safe: only the outermost guard
- * restores the real hard-exit APIs.
+ * snapshots and restores host state.
  */
 function guardedExit(alias: ExitAliasName): (code?: number | string) => never {
 	return (code?: number | string): never => {
@@ -89,29 +113,71 @@ function guardedExit(alias: ExitAliasName): (code?: number | string) => never {
 	};
 }
 
-export async function withExitGuard<T>(fn: () => Promise<T>): Promise<T> {
-	if (exitGuardDepth === 0) {
-		exitGuardOriginalProcessExit = process.exit;
+export async function withHostGuard<T>(fn: () => Promise<T>): Promise<T> {
+	if (hostGuardDepth === 0) {
+		hostGuardOriginalProcessExit = process.exit;
 		process.exit = guardedExit("process.exit") as typeof process.exit;
 
 		if (typeof process.reallyExit === "function") {
-			exitGuardOriginalReallyExit = process.reallyExit;
+			hostGuardOriginalReallyExit = process.reallyExit;
 			process.reallyExit = guardedExit("process.reallyExit") as typeof process.reallyExit;
 		}
+
+		const stdin = process.stdin;
+		hostGuardStdinWasPaused = stdin.isPaused();
+		hostGuardStdinWasRaw = stdin.isRaw ?? false;
+		const snapshot = {} as Record<StdinGuardEvent, StdinGuardListener[]>;
+		for (const event of HOST_GUARD_STDIN_EVENTS) {
+			snapshot[event] = stdin.rawListeners(event) as StdinGuardListener[];
+		}
+		hostGuardStdinListeners = snapshot;
 	}
-	exitGuardDepth++;
+	hostGuardDepth++;
 	try {
 		return await fn();
 	} finally {
-		exitGuardDepth--;
-		if (exitGuardDepth === 0) {
-			if (exitGuardOriginalProcessExit) {
-				process.exit = exitGuardOriginalProcessExit;
-				exitGuardOriginalProcessExit = null;
+		hostGuardDepth--;
+		if (hostGuardDepth === 0) {
+			if (hostGuardOriginalProcessExit) {
+				process.exit = hostGuardOriginalProcessExit;
+				hostGuardOriginalProcessExit = null;
 			}
-			if (exitGuardOriginalReallyExit) {
-				process.reallyExit = exitGuardOriginalReallyExit;
-				exitGuardOriginalReallyExit = null;
+			if (hostGuardOriginalReallyExit) {
+				process.reallyExit = hostGuardOriginalReallyExit;
+				hostGuardOriginalReallyExit = null;
+			}
+			if (hostGuardStdinListeners) {
+				const stdin = process.stdin;
+				for (const event of HOST_GUARD_STDIN_EVENTS) {
+					const before = hostGuardStdinListeners[event];
+					// Reconcile the stream back to the pre-load snapshot: drop any
+					// listener the module added, and reinstate any snapshot listener
+					// it removed (e.g. a factory calling `removeAllListeners("data")`
+					// would otherwise permanently strip ProcessTerminal's input
+					// handler, leaving the parent TUI deaf). removeAllListeners then
+					// re-adding in snapshot order restores both membership and order.
+					const current = stdin.rawListeners(event) as StdinGuardListener[];
+					const differs =
+						current.length !== before.length || current.some((listener, index) => listener !== before[index]);
+					if (!differs) continue;
+					stdin.removeAllListeners(event);
+					for (const listener of before) {
+						stdin.on(event, listener);
+					}
+				}
+				if (
+					stdin.isTTY &&
+					typeof stdin.setRawMode === "function" &&
+					(stdin.isRaw ?? false) !== hostGuardStdinWasRaw
+				) {
+					stdin.setRawMode(hostGuardStdinWasRaw);
+				}
+				if (hostGuardStdinWasPaused && !stdin.isPaused()) {
+					stdin.pause();
+				} else if (!hostGuardStdinWasPaused && stdin.isPaused()) {
+					stdin.resume();
+				}
+				hostGuardStdinListeners = null;
 			}
 		}
 	}
