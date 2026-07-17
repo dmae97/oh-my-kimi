@@ -1,4 +1,6 @@
 import { mkdirSync } from "node:fs";
+import * as fsp from "node:fs/promises";
+import * as nodePath from "node:path";
 import { type ApiKey, getOpenRouterHeaders, withAuth } from "@oh-my-pi/pi-ai";
 import { ProviderHttpError } from "@oh-my-pi/pi-ai/error";
 import { hostMatchesUrl } from "@oh-my-pi/pi-catalog/hosts";
@@ -62,12 +64,43 @@ const queryCache = new LRUCache<string, Vector>({ max: QUERY_CACHE_MAX });
 const providerIds = new WeakMap<object, number>();
 let nextProviderId = 1;
 
+/**
+ * Quarantine the exact ONNX file named by a "Protobuf parsing failed" init
+ * error. A truncated cached model blocks local embeddings forever: the
+ * downloader treats the existing file as complete, so every init re-parses
+ * the same broken bytes. The extracted path is error-message CONTENT, so it
+ * is only honored when it resolves inside the fastembed cache directory —
+ * never rename an arbitrary file a dependency happens to mention. Atomic
+ * rename; losing a concurrent-heal race (file already renamed/removed)
+ * still returns true because a retry is safe either way.
+ * @internal exported for tests
+ */
+export async function quarantineCorruptModelFile(message: string, cacheDir?: string): Promise<boolean> {
+	const match = /Load model from (.+?\.onnx) failed:.*Protobuf parsing failed/i.exec(message);
+	if (!match) return false;
+	const modelFile = nodePath.resolve(match[1]);
+	const cacheRoot = nodePath.resolve(cacheDir ?? getFastembedCacheDir());
+	if (!modelFile.startsWith(cacheRoot + nodePath.sep)) return false;
+	try {
+		await fsp.rename(modelFile, `${modelFile}.corrupt-${Date.now()}`);
+		logger.warn("mnemopi: quarantined corrupt local embedding model; retrying init", { modelFile });
+	} catch {
+		// Concurrent heal or vanished file: the single retry stays safe. A
+		// rename that failed with the file still in place just makes the
+		// retry surface the original error again.
+	}
+	return true;
+}
+
 async function defaultLocalModelInitializer(options: LocalModelInitOptions): Promise<LocalEmbeddingModel> {
 	const { FlagEmbedding } = await loadFastembed();
 	try {
 		return await FlagEmbedding.init(options);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : "";
+		if (/Protobuf parsing failed/i.test(message) && (await quarantineCorruptModelFile(message))) {
+			return FlagEmbedding.init(options);
+		}
 		if (
 			!/(?:Config file not found at .*config|Tokenizer file not found at .*tokenizer|Tokens map file not found at .*special_tokens_map)/u.test(
 				message,
