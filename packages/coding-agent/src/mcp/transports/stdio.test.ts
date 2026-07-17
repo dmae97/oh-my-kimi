@@ -295,6 +295,81 @@ describe.skipIf(process.platform === "win32")("terminateStdioProcess", () => {
 		}
 	}, 8000);
 
+	it("still reaps a SIGTERM-trapping grandchild after the detached leader exits cooperatively", async () => {
+		// Regression: the leader exiting within the SIGTERM grace window used to
+		// be treated as proof the whole process group was gone, so `close()`
+		// returned early and never delivered a group SIGKILL — leaving exactly
+		// the orphaned grandchild this change is meant to reap. Unlike the
+		// group-SIGKILL test above, the leader here does NOT trap SIGTERM, so
+		// it exits promptly on its own; only the grandchild ignores signals.
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-stdio-leader-exit-group-kill-"));
+		const grandchildScriptPath = path.join(tempDir, "grandchild.mjs");
+		const parentScriptPath = path.join(tempDir, "parent.mjs");
+		const grandchildPidPath = path.join(tempDir, "grandchild.pid");
+
+		await fs.writeFile(
+			grandchildScriptPath,
+			[
+				"import { writeFileSync } from 'node:fs';",
+				"process.on('SIGTERM', () => {});",
+				`writeFileSync(${JSON.stringify(grandchildPidPath)}, String(process.pid));`,
+				"setInterval(() => {}, 60_000);",
+			].join("\n"),
+		);
+		// No SIGTERM handler here: the default action (terminate) fires as soon
+		// as the group SIGTERM lands, well inside TERM_GRACE_MS.
+		await fs.writeFile(
+			parentScriptPath,
+			[
+				`Bun.spawn(["bun", "run", ${JSON.stringify(grandchildScriptPath)}], { stdout: "ignore", stderr: "ignore", stdin: "ignore" });`,
+				"setInterval(() => {}, 60_000);",
+			].join("\n"),
+		);
+
+		const proc = Bun.spawn(["bun", "run", parentScriptPath], {
+			stdin: "ignore",
+			stdout: "ignore",
+			stderr: "ignore",
+			detached: true,
+		});
+
+		try {
+			let grandchildPid: number | undefined;
+			for (let i = 0; i < 100 && grandchildPid === undefined; i++) {
+				try {
+					grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
+				} catch {
+					await Bun.sleep(20);
+				}
+			}
+			if (grandchildPid === undefined) throw new Error("grandchild never reported its pid");
+			expect(processExists(grandchildPid)).toBe(true);
+
+			const started = performance.now();
+			await terminateStdioProcess(proc, true);
+			await proc.exited;
+			const elapsedMs = performance.now() - started;
+
+			// The leader exits on the initial SIGTERM (no trap), so this must not
+			// block for the ~1s TERM grace window before sweeping the group.
+			expect(elapsedMs).toBeLessThan(700);
+
+			let grandchildAlive = processExists(grandchildPid);
+			for (let i = 0; i < 25 && grandchildAlive; i++) {
+				await Bun.sleep(20);
+				grandchildAlive = processExists(grandchildPid);
+			}
+			expect(grandchildAlive).toBe(false);
+		} finally {
+			try {
+				process.kill(-proc.pid, "SIGKILL");
+			} catch {
+				// Already gone.
+			}
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	}, 8000);
+
 	it("never attempts a process-group signal when the transport did not spawn detached", async () => {
 		const proc = Bun.spawn(["bun", "-e", "await Bun.sleep(60_000)"], {
 			stdin: "ignore",

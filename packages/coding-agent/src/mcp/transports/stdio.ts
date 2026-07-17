@@ -428,15 +428,25 @@ interface KillableSubprocess {
  * `lsp/client.ts`, which treats the same ambiguity (Bun documents
  * `Subprocess.exited` as resolve-only, but a settle either way means there is
  * nothing left to wait on).
+ *
+ * The timer is always cleared before returning — win or lose — so a process
+ * that exits promptly never leaves a dangling `timeoutMs` timer holding the
+ * event loop open behind it.
  */
 async function waitForProcessExit(exited: Promise<number>, timeoutMs: number): Promise<boolean> {
-	return await Promise.race([
-		exited.then(
-			() => true,
-			() => true,
-		),
-		Bun.sleep(timeoutMs).then(() => false),
-	]);
+	const { promise: timedOut, resolve: resolveTimedOut } = Promise.withResolvers<false>();
+	const timer = setTimeout(() => resolveTimedOut(false), timeoutMs);
+	try {
+		return await Promise.race([
+			exited.then(
+				() => true,
+				() => true,
+			),
+			timedOut,
+		]);
+	} finally {
+		clearTimeout(timer);
+	}
 }
 
 /** `true` when `error` is a Node errno exception carrying the given `code`. */
@@ -485,9 +495,13 @@ function signalStdioProcess(
 /**
  * Terminate an MCP stdio subprocess: SIGTERM (process-group when `detached`
  * on POSIX, direct child otherwise), wait up to `TERM_GRACE_MS` for a
- * cooperative exit, then escalate to SIGKILL and wait up to `KILL_GRACE_MS`
- * more before giving up. Every step is a no-op-safe signal against an
- * already-exited target, so repeat calls (idempotent `close()`) never throw.
+ * cooperative exit, then escalate to SIGKILL — waiting up to `KILL_GRACE_MS`
+ * more only when the leader itself hadn't already exited. A detached
+ * leader's cooperative exit does not prove the whole process group is gone
+ * (a grandchild can outlive it and ignore SIGTERM), so detached transports
+ * always fire the group SIGKILL sweep, even after a clean SIGTERM exit.
+ * Every step is a no-op-safe signal against an already-exited target, so
+ * repeat calls (idempotent `close()`) never throw.
  *
  * Exported so tests can exercise group-signal escalation with an explicit
  * `detached`/`platform` pair: `StdioTransport.connect()` derives `detached`
@@ -501,9 +515,19 @@ export async function terminateStdioProcess(
 	platform: NodeJS.Platform = process.platform,
 ): Promise<void> {
 	signalStdioProcess(proc, detached, "SIGTERM", platform);
-	if (await waitForProcessExit(proc.exited, TERM_GRACE_MS)) return;
+	const exitedOnTerm = await waitForProcessExit(proc.exited, TERM_GRACE_MS);
+	// A non-detached transport has no process group beyond the leader itself:
+	// once it exits, there is nothing left to signal. A detached transport's
+	// leader exiting is NOT proof the group is empty — a grandchild it spawned
+	// can still be alive and ignoring SIGTERM — so detached transports always
+	// fall through to the group SIGKILL, even on a cooperative leader exit.
+	if (exitedOnTerm && !detached) return;
 	signalStdioProcess(proc, detached, "SIGKILL", platform);
-	await waitForProcessExit(proc.exited, KILL_GRACE_MS);
+	// Once the leader has already exited there is no further `exited` signal
+	// to wait on for this call — the SIGKILL above is a fire-and-forget sweep
+	// for any surviving group members — so only block on the grace window
+	// when the leader itself is still the thing being escalated against.
+	if (!exitedOnTerm) await waitForProcessExit(proc.exited, KILL_GRACE_MS);
 }
 
 /**
