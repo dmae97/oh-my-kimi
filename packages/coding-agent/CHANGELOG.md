@@ -32,6 +32,9 @@
 ### Fixed
 
 - Fixed the fullscreen plan-review overlay staying visible until the approved execution turn finished, so after picking "Approve and keep context" (or any approve option) work proceeded underneath while the operator was stuck on the plan-review screen. The overlay is now hidden once execution begins — after the async transcript rebuild, before the blocking synthetic prompt is dispatched — instead of only after the whole turn returns ([#5688](https://github.com/can1357/oh-my-pi/issues/5688)).
+### Fixed
+
+- Fixed MCP tools repeatedly unmounting and remounting mid-session when server names have overlapping sanitized prefixes (e.g. `atlassian` alongside an imported `atlassian:atlassian`), and stale tools remaining registered after disconnecting a server with special characters in its name.
 
 ## [17.0.1] - 2026-07-16
 
