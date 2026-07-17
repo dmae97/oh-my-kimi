@@ -1332,6 +1332,33 @@ bar`,
 			terminalState.hyperlinks = originalHyperlinks;
 		});
 
+		function inspectHyperlinks(line: string): { visible: string; targets: Array<string | null> } {
+			let activeTarget: string | null = null;
+			let visible = "";
+			const targets: Array<string | null> = [];
+
+			for (let i = 0; i < line.length; ) {
+				if (line.startsWith("\x1b]8;;", i)) {
+					const terminator = line.indexOf("\x07", i + 5);
+					activeTarget = line.slice(i + 5, terminator) || null;
+					i = terminator + 1;
+					continue;
+				}
+				if (line.startsWith("\x1b[", i)) {
+					i += 2;
+					while (i < line.length && (line.charCodeAt(i) < 0x40 || line.charCodeAt(i) > 0x7e)) i++;
+					i++;
+					continue;
+				}
+
+				visible += line[i];
+				targets.push(activeTarget);
+				i++;
+			}
+
+			return { visible, targets };
+		}
+
 		it("should not duplicate URL for autolinked emails", () => {
 			const markdown = new Markdown("Contact user@example.com for help", 0, 0, defaultMarkdownTheme);
 
@@ -1364,24 +1391,107 @@ bar`,
 			expect(output.includes("\x1b]8;;\x07")).toBeTruthy();
 		});
 
-		it("should keep wrapped URLs inside a single OSC 8 hyperlink span", () => {
+		it("should balance the complete OSC 8 target around every wrapped URL fragment", () => {
+			const url = "https://example.com/really/long/path/that/will/wrap/on/narrow/width";
+			const markdown = new Markdown(`Visit ${url} for more`, 0, 0, defaultMarkdownTheme);
+
+			const lines = markdown.render(32);
+			const linkedLines = lines.filter(line => inspectHyperlinks(line).targets.includes(url));
+			expect(linkedLines.length).toBeGreaterThan(1);
+			for (const line of linkedLines) {
+				expect(line.split(`\x1b]8;;${url}\x07`)).toHaveLength(2);
+				expect(line.match(/\x1b\]8;;\x07/g)).toHaveLength(1);
+				expect(new Set(inspectHyperlinks(line).targets.filter(target => target !== null))).toEqual(new Set([url]));
+			}
+		});
+
+		it("should isolate wrapped OSC 8 links from adjacent table cells", () => {
+			const issueUrl = "https://github.com/can1357/oh-my-pi/issues/5860";
 			const markdown = new Markdown(
-				"Visit https://example.com/really/long/path/that/will/wrap/on/narrow/width for more",
+				`| Issue | Title |
+|---|---|
+| [#5860](${issueUrl}) | feat(extensions): expose live service-tier state (/fast) to extensions |`,
 				0,
 				0,
 				defaultMarkdownTheme,
 			);
 
-			const lines = markdown.render(32);
-			expect(lines.length).toBeGreaterThan(1);
-			const output = lines.join("\n");
-			const openMatches =
-				output.match(
-					/\x1b\]8;;https:\/\/example\.com\/really\/long\/path\/that\/will\/wrap\/on\/narrow\/width\x07/g,
-				) || [];
-			const closeMatches = output.match(/\x1b\]8;;\x07/g) || [];
-			expect(openMatches.length).toBe(1);
-			expect(closeMatches.length).toBeGreaterThan(0);
+			const lines = markdown.render(80).map(inspectHyperlinks);
+			const issueRow = lines.find(line => line.visible.includes("#5860"));
+			expect(issueRow).toBeDefined();
+			if (!issueRow) throw new Error("Expected rendered issue row");
+
+			for (const line of lines) {
+				for (let i = 0; i < line.visible.length; i++) {
+					if (line.visible[i] === "|") expect(line.targets[i]).toBeNull();
+				}
+			}
+
+			const labelStart = issueRow.visible.indexOf("#5860");
+			const separator = issueRow.visible.indexOf("|", labelStart);
+			expect(issueRow.targets.slice(labelStart, labelStart + "#5860".length)).toEqual(
+				new Array("#5860".length).fill(issueUrl),
+			);
+			expect(issueRow.targets.slice(labelStart + "#5860".length, separator)).toEqual(
+				new Array(separator - labelStart - "#5860".length).fill(null),
+			);
+
+			const titleStart = issueRow.visible.indexOf("feat(extensions)");
+			expect(issueRow.targets.slice(titleStart, titleStart + "feat(extensions)".length)).toEqual(
+				new Array("feat(extensions)".length).fill(null),
+			);
+
+			const linkedText = lines
+				.flatMap(line => [...line.visible].filter((_, index) => line.targets[index] === issueUrl))
+				.join("");
+			expect(linkedText).toContain("#5860");
+			expect(linkedText).toContain(issueUrl);
+			expect(new Set(lines.flatMap(line => line.targets).filter(target => target !== null))).toEqual(
+				new Set([issueUrl]),
+			);
+		});
+
+		it("should balance OSC 8 links across explicit newlines in a table cell", () => {
+			const issueUrl = "https://github.com/can1357/oh-my-pi/issues/5860";
+			const markdown = new Markdown(
+				`| Issue | Title |
+|---|---|
+| [first<br>second](${issueUrl}) | plain title cell |`,
+				0,
+				0,
+				defaultMarkdownTheme,
+			);
+
+			const lines = markdown.render(40).map(inspectHyperlinks);
+			const firstRow = lines.find(line => line.visible.includes("first"));
+			const secondRow = lines.find(line => line.visible.includes("second"));
+			expect(firstRow).toBeDefined();
+			expect(secondRow).toBeDefined();
+			if (!firstRow || !secondRow) throw new Error("Expected both wrapped label rows");
+
+			// No cell border or padding may carry the link on either physical row.
+			for (const line of lines) {
+				for (let i = 0; i < line.visible.length; i++) {
+					if (line.visible[i] === "|") expect(line.targets[i]).toBeNull();
+				}
+			}
+
+			// Both label fragments split by <br> must still target the full URL.
+			for (const [row, label] of [
+				[firstRow, "first"],
+				[secondRow, "second"],
+			] as const) {
+				const start = row.visible.indexOf(label);
+				expect(row.targets.slice(start, start + label.length)).toEqual(new Array(label.length).fill(issueUrl));
+				const separator = row.visible.indexOf("|", start);
+				expect(row.targets.slice(start + label.length, separator)).toEqual(
+					new Array(separator - start - label.length).fill(null),
+				);
+			}
+
+			expect(new Set(lines.flatMap(line => line.targets).filter(target => target !== null))).toEqual(
+				new Set([issueUrl]),
+			);
 		});
 
 		it("should show URL for explicit markdown links with different text", () => {
