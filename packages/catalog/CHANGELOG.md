@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Logged LiteLLM rich-metadata endpoint failures once with their endpoint and status before falling back to incomplete `/v1/models` data ([#5801](https://github.com/can1357/oh-my-pi/issues/5801)).
+
 ## [17.0.2] - 2026-07-17
 
 ### Changed
