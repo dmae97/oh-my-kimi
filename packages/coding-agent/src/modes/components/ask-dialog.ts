@@ -556,7 +556,7 @@ export class AskDialogComponent implements Component {
 		}
 		const isEnter = matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n";
 		const isSpace = matchesKey(keyData, "space") || keyData === " ";
-		if (!isEnter && !isSpace) return;
+		if (!isEnter && !(question.multi && isSpace)) return;
 		if (rowItem.kind === "other") {
 			void this.#promptForCustomInput(question, state, rowItem);
 			return;
