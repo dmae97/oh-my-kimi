@@ -59,6 +59,7 @@ import type { PrintModeOptions } from "./modes/print-mode";
 import { CURRENT_SETUP_VERSION } from "./modes/setup-version";
 import { initTheme, stopThemeWatcher } from "./modes/theme/theme";
 import type { SubmittedUserInput } from "./modes/types";
+import { createWarpEventBridgeExtension } from "./modes/warp-events";
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
 import {
 	type CreateAgentSessionOptions,
@@ -1407,6 +1408,10 @@ export async function runRootCommand(
 		// string-flag value such as `--target @notes.md` is the flag's value, not a
 		// file — and the same result is handed to createAgentSession via
 		// `preloadedExtensions` so the discovery work is not repeated.
+		if (isInteractive) {
+			sessionOptions.extensions = [...(sessionOptions.extensions ?? []), createWarpEventBridgeExtension()];
+		}
+
 		const eventBus = new EventBus();
 		const extensionsResult = await loadSessionExtensions(sessionOptions, cwd, settingsInstance, eventBus);
 		const extensionFlagSink: ExtensionFlagSink = {

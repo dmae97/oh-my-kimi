@@ -739,7 +739,7 @@ const COMPACTION_CHECK_NONE: CompactionCheckResult = {
 };
 const COMPACTION_CHECK_DEFERRED_HANDOFF: CompactionCheckResult = {
 	deferredHandoff: true,
-	continuationScheduled: true,
+	continuationScheduled: false,
 };
 const COMPACTION_CHECK_CONTINUATION: CompactionCheckResult = {
 	deferredHandoff: false,
@@ -4723,8 +4723,11 @@ export class AgentSession {
 		// Check auto-retry and auto-compaction after agent completes
 		if (event.type === "agent_end") {
 			const settledMessages = this.agent.state.messages;
-			const emitAgentEndNotification = async () => {
-				await this.#emitAgentEndNotification(settledMessages);
+			// TTSR retry work runs concurrently and clears the live flag before
+			// maintenance can emit agent_end, so preserve the state at settle entry.
+			const ttsrAbortPendingAtAgentEnd = this.#ttsrAbortPending;
+			const emitAgentEndNotification = async (options?: { willContinue?: boolean }) => {
+				await this.#emitAgentEndNotification(settledMessages, options);
 			};
 			const usage = this.getSessionStats().tokens;
 			await this.#goalRuntime.onAgentEnd({
@@ -4826,7 +4829,7 @@ export class AgentSession {
 			// active-goal threshold pre-empt below.
 			if (await this.#handleEmptyAssistantStop(msg)) {
 				maintenanceRoute("empty-stop-handled");
-				await emitAgentEndNotification();
+				await emitAgentEndNotification({ willContinue: true });
 				return;
 			}
 
@@ -4849,30 +4852,34 @@ export class AgentSession {
 						automaticContinuationBlocked: compactionResult.automaticContinuationBlocked === true,
 					});
 					this.#resolveRetry();
-					await emitAgentEndNotification();
+					await emitAgentEndNotification(
+						compactionResult.continuationScheduled ? { willContinue: true } : undefined,
+					);
 					return;
 				}
 			}
 
 			if (await this.#handleUnexpectedAssistantStop(msg)) {
 				maintenanceRoute("unexpected-stop-handled");
-				await emitAgentEndNotification();
+				await emitAgentEndNotification({ willContinue: true });
 				return;
 			}
 
 			if (this.#isRetryableReasonlessAbort(msg)) {
 				const didRetry = await this.#handleRetryableError(msg, { allowModelFallback: false });
 				if (didRetry) {
-					await emitAgentEndNotification();
+					await emitAgentEndNotification({ willContinue: true });
 					return;
 				}
 			}
 
-			// A deliberate abort should settle the current turn, not trigger queued continuations.
+			// A deliberate abort should settle the current turn, not trigger queued
+			// continuations — except TTSR self-repair, which already scheduled a
+			// hidden retry while #ttsrAbortPending is still true.
 			if (msg.stopReason === "aborted") {
 				this.#resolveRetry();
 				this.#resetSessionStopContinuationState();
-				await emitAgentEndNotification();
+				await emitAgentEndNotification(ttsrAbortPendingAtAgentEnd ? { willContinue: true } : undefined);
 				return;
 			}
 			// Fireworks Fast variants degrade to their base model on a failed turn —
@@ -4881,14 +4888,14 @@ export class AgentSession {
 			if (this.#isFireworksFastFallbackEligible(msg)) {
 				const didRetry = await this.#handleRetryableError(msg, { fireworksFastFallback: true });
 				if (didRetry) {
-					await emitAgentEndNotification();
+					await emitAgentEndNotification({ willContinue: true });
 					return;
 				}
 			}
 			if (this.#isRetryableError(msg)) {
 				const didRetry = await this.#handleRetryableError(msg);
 				if (didRetry) {
-					await emitAgentEndNotification();
+					await emitAgentEndNotification({ willContinue: true });
 					return;
 				}
 			} else if (this.#isHardErrorFallbackEligible(msg)) {
@@ -4899,7 +4906,7 @@ export class AgentSession {
 				// backoff-retry of the failing model) when no switch happens.
 				const didRetry = await this.#handleRetryableError(msg, { hardErrorFallback: true });
 				if (didRetry) {
-					await emitAgentEndNotification();
+					await emitAgentEndNotification({ willContinue: true });
 					return;
 				}
 			}
@@ -4938,22 +4945,22 @@ export class AgentSession {
 				compactionResult.continuationScheduled ||
 				compactionResult.automaticContinuationBlocked
 			) {
-				await emitAgentEndNotification();
+				await emitAgentEndNotification(compactionResult.continuationScheduled ? { willContinue: true } : undefined);
 				return;
 			}
 			if (msg.stopReason !== "error") {
 				if (this.#enforceRewindBeforeYield()) {
-					await emitAgentEndNotification();
+					await emitAgentEndNotification({ willContinue: true });
 					return;
 				}
 				const planModeContinuationScheduled = await this.#enforcePlanModeDecisionAtSettle();
 				if (planModeContinuationScheduled) {
-					await emitAgentEndNotification();
+					await emitAgentEndNotification({ willContinue: true });
 					return;
 				}
 				const todoContinuationScheduled = await this.#checkTodoCompletion(msg);
 				if (todoContinuationScheduled) {
-					await emitAgentEndNotification();
+					await emitAgentEndNotification({ willContinue: true });
 					return;
 				}
 			}
@@ -4963,11 +4970,11 @@ export class AgentSession {
 			// the session is fully idle (the todo reminder above defers the same
 			// way inside #checkTodoCompletion).
 			if (this.#hasPendingAsyncWake()) {
-				await emitAgentEndNotification();
+				await emitAgentEndNotification({ willContinue: true });
 				return;
 			}
-			await this.#emitSessionStopEvent(settledMessages, msg);
-			await emitAgentEndNotification();
+			const sessionStopWillContinue = await this.#emitSessionStopEvent(settledMessages, msg);
+			await emitAgentEndNotification(sessionStopWillContinue ? { willContinue: true } : undefined);
 		}
 	};
 
@@ -6215,15 +6222,22 @@ export class AgentSession {
 		return undefined;
 	}
 
-	async #emitAgentEndNotification(messages: AgentMessage[]): Promise<void> {
-		await this.#extensionRunner?.emit({ type: "agent_end", messages });
+	async #emitAgentEndNotification(messages: AgentMessage[], options?: { willContinue?: boolean }): Promise<void> {
+		await this.#extensionRunner?.emit({
+			type: "agent_end",
+			messages,
+			willContinue: options?.willContinue,
+		});
 	}
 
+	/** @returns true when a hidden session_stop continuation turn was scheduled. */
 	async #emitSessionStopEvent(
 		messages: AgentMessage[],
 		lastAssistantMessage = this.getLastAssistantMessage(),
-	): Promise<void> {
-		if (this.#agentKind === "sub" || !this.#extensionRunner?.hasHandlers("session_stop")) return;
+	): Promise<boolean> {
+		if (this.#agentKind === "sub" || !this.#extensionRunner?.hasHandlers("session_stop")) {
+			return false;
+		}
 		const generation = this.#promptGeneration;
 		const result = await this.#extensionRunner.emitSessionStop({
 			messages,
@@ -6235,12 +6249,12 @@ export class AgentSession {
 		});
 		if (this.#promptGeneration !== generation || this.#abortInProgress || this.#isDisposed) {
 			this.#resetSessionStopContinuationState();
-			return;
+			return false;
 		}
 		const additionalContext = this.#sessionStopContinuationContext(result);
 		if (!additionalContext) {
 			this.#resetSessionStopContinuationState();
-			return;
+			return false;
 		}
 		if (this.#sessionStopContinuationCount >= SESSION_STOP_CONTINUATION_CAP) {
 			logger.warn("session_stop continuation cap reached", {
@@ -6248,7 +6262,7 @@ export class AgentSession {
 				cap: SESSION_STOP_CONTINUATION_CAP,
 			});
 			this.#resetSessionStopContinuationState();
-			return;
+			return false;
 		}
 		this.#sessionStopContinuationCount++;
 		this.#sessionStopHookActive = true;
@@ -6263,6 +6277,7 @@ export class AgentSession {
 			},
 			true,
 		);
+		return true;
 	}
 
 	/** Emit extension events based on session events */
@@ -13508,7 +13523,10 @@ export class AgentSession {
 				},
 				{ generation },
 			);
-			return COMPACTION_CHECK_DEFERRED_HANDOFF;
+			return {
+				...COMPACTION_CHECK_DEFERRED_HANDOFF,
+				continuationScheduled: shouldAutoContinue,
+			};
 		}
 
 		// "overflow" forces context-full because the input itself is broken — a handoff

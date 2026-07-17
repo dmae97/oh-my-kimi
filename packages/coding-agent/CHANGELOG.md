@@ -7,6 +7,7 @@
 - Bash command timeouts now render with a warning (yellow) border instead of an error (red) border, reflecting that the timeout ran its course rather than the command failed. `isError` remains `true` on the result so the model still knows the command did not complete normally. The `timedOut` flag is now propagated from the bash executor to distinguish timeouts from user aborts.
 ### Added
 
+- Added native Warp CLI-agent events for rich session status, tool approvals, and completion notifications ([#5592](https://github.com/can1357/oh-my-pi/pull/5592) by [@metaphorics](https://github.com/metaphorics)).
 - `retry.fallbackChains` wildcards now support id-prefixed targets and keys: a chain entry like `"openrouter/google/*"` re-prefixes the failing model's bare id (`google-antigravity/gemini-x` → `openrouter/google/gemini-x`), a plain `"provider/*"` entry falling back *from* an aggregator strips the vendor prefix when the target provider only knows the bare id (`openrouter/google/x` → `google-vertex/x`), and an id-prefixed key (`"openrouter/google/*"`) scopes a chain to that provider's ids under the prefix.
 
 ### Changed
@@ -109,6 +110,10 @@
 - Fixed Bash internal URLs remaining unresolved when used as unquoted arguments inside command substitutions ([#5535](https://github.com/can1357/oh-my-pi/issues/5535)).
 - Fixed the built-in `fd` printing `fd: Broken pipe (os error 32)` when a downstream pipeline reader exited early (e.g. `fd … | head`); it now exits silently with 141 (128+SIGPIPE), matching real fd.
 - Fixed prewalk repeatedly continuing after a bash-only task such as `commit` had already completed ([#5551](https://github.com/can1357/oh-my-pi/issues/5551)).
+- Fixed the Bash tool hanging when in-process commands read process substitution operands such as `<(cmd)` ([#5557](https://github.com/can1357/oh-my-pi/issues/5557)).
+- Fixed `/share` and `/export` web views rendering inline Markdown inside list items as literal text ([#5567](https://github.com/can1357/oh-my-pi/issues/5567)).
+### Added
+
 - Fixed the Codex `config.toml` MCP importer dropping `cwd` and leaving relative `command` values unrooted, which broke the bundled Codex Computer Use server (`ENOENT` on spawn); relative `command`/`cwd` now resolve against the Codex config directory like the claude-plugins/omp-plugins providers ([#5561](https://github.com/can1357/oh-my-pi/issues/5561)).
 - Fixed streamed replace-mode edits with `ssh://` paths terminating the active prompt before normal tool dispatch ([#5552](https://github.com/can1357/oh-my-pi/issues/5552)).
 - Fixed concurrent provider OAuth refreshes from invalidating Anthropic's rotating refresh token, and prevented background usage probes from permanently disabling credentials after refresh failures ([#5396](https://github.com/can1357/oh-my-pi/issues/5396)).
