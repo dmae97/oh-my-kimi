@@ -544,6 +544,67 @@ describe("StdinBuffer", () => {
 		});
 	});
 
+	describe("Raw multiline paste burst (issue #5841)", () => {
+		let emittedPaste: string[] = [];
+
+		beforeEach(() => {
+			buffer = new StdinBuffer({ timeout: 10 });
+			emittedSequences = [];
+			buffer.on("data", (sequence: string) => {
+				emittedSequences.push(sequence);
+			});
+			emittedPaste = [];
+			buffer.on("paste", (data: string) => {
+				emittedPaste.push(data);
+			});
+		});
+
+		it("coalesces an unbracketed CR-delimited burst into one paste instead of per-line submits", () => {
+			// Codex desktop delivers Cmd+V without \x1b[200~…\x1b[201~ markers, so
+			// each interior CR would otherwise fire a submit and split the block.
+			processInput("line 1\rline 2\rline 3");
+			expect(emittedPaste).toEqual(["line 1\rline 2\rline 3"]);
+			expect(emittedSequences).toEqual([]);
+		});
+
+		it("coalesces an unbracketed LF-delimited burst too", () => {
+			processInput("line 1\nline 2\nline 3");
+			expect(emittedPaste).toEqual(["line 1\nline 2\nline 3"]);
+			expect(emittedSequences).toEqual([]);
+		});
+
+		it("leaves a lone Enter as a normal submit keypress", () => {
+			processInput("\r");
+			expect(emittedPaste).toEqual([]);
+			expect(emittedSequences).toEqual(["\r"]);
+		});
+
+		it("leaves typed text with a trailing Enter on the normal path", () => {
+			processInput("hello\r");
+			expect(emittedPaste).toEqual([]);
+			expect(emittedSequences).toEqual(["h", "e", "l", "l", "o", "\r"]);
+		});
+
+		it("does not coalesce a run of bare Enters", () => {
+			processInput("\r\r");
+			expect(emittedPaste).toEqual([]);
+			expect(emittedSequences).toEqual(["\r", "\r"]);
+		});
+
+		it("keeps a single-line burst on the per-character data path", () => {
+			processInput("hello world");
+			expect(emittedPaste).toEqual([]);
+			expect(emittedSequences.join("")).toBe("hello world");
+		});
+
+		it("does not treat an escape-bearing chunk as a raw burst", () => {
+			// A CSI arrow key next to a CR must keep its escape parsing.
+			processInput("\x1b[A\rx");
+			expect(emittedPaste).toEqual([]);
+			expect(emittedSequences).toEqual(["\x1b[A", "\r", "x"]);
+		});
+	});
+
 	describe("Paste Recovery", () => {
 		it("recovers from a lost end marker via the inactivity watchdog", async () => {
 			buffer = new StdinBuffer({ timeout: 10, pasteTimeout: 20 });

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed multiline pastes arriving without bracketed-paste markers (e.g. Cmd+V in the Codex desktop embedded terminal on macOS) being split into one submit per line: `StdinBuffer` now coalesces an ESC-free raw burst with interior CR/LF into a single paste event instead of per-key CR submits ([#5841](https://github.com/can1357/oh-my-pi/issues/5841)).
+
 ## [17.0.2] - 2026-07-17
 
 ### Added
