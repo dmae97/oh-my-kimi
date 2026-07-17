@@ -1734,6 +1734,21 @@ export function convertResponsesAssistantMessage<TApi extends Api>(
 	return outputItems;
 }
 
+const syntheticToolImageMessages = new WeakSet<object>();
+
+function insertResponsesToolOutput(messages: ResponseInput, output: ResponseInput[number]): void {
+	let index = messages.length;
+	while (index > 0) {
+		const previous = messages[index - 1];
+		if (typeof previous !== "object" || previous === null || !syntheticToolImageMessages.has(previous)) {
+			break;
+		}
+		index -= 1;
+	}
+	messages.splice(index, 0, output);
+}
+
+/** Appends one tool result while keeping consecutive outputs ahead of its synthetic image messages. */
 export function appendResponsesToolResultMessages<TApi extends Api>(
 	messages: ResponseInput,
 	toolResult: ToolResultMessage,
@@ -1780,13 +1795,13 @@ export function appendResponsesToolResultMessages<TApi extends Api>(
 		return;
 	}
 	if (supportsCustomToolCalls && customCallIds?.has(normalized.callId)) {
-		messages.push({
+		insertResponsesToolOutput(messages, {
 			type: "custom_tool_call_output",
 			call_id: normalized.callId,
 			output,
 		} as ResponseInput[number]);
 	} else {
-		messages.push({
+		insertResponsesToolOutput(messages, {
 			type: "function_call_output",
 			call_id: normalized.callId,
 			output,
@@ -1809,7 +1824,9 @@ export function appendResponsesToolResultMessages<TApi extends Api>(
 			} satisfies ResponseInputImage);
 		}
 	}
-	messages.push({ role: "user", content: contentParts });
+	const imageMessage = { role: "user", content: contentParts } satisfies ResponseInput[number];
+	syntheticToolImageMessages.add(imageMessage);
+	messages.push(imageMessage);
 }
 
 /**

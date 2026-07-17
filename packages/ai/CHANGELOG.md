@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed parallel Responses tool-result images interleaving synthetic user messages before all pending outputs, preventing strict OpenRouter/Moonshot backends from rejecting follow-up requests. ([#5850](https://github.com/can1357/oh-my-pi/issues/5850))
+
 ## [17.0.2] - 2026-07-17
 
 ### Fixed
