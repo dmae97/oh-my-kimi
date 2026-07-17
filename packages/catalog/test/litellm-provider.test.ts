@@ -126,7 +126,7 @@ describe("LiteLLM provider discovery", () => {
 		const models = await options.fetchDynamicModels?.();
 
 		expect(options.cacheProviderId).toBe(
-			`litellm:rich-v4:${Bun.hash("http://litellm.example:4100/v1").toString(36)}`,
+			`litellm:rich-v5:${Bun.hash("http://litellm.example:4100/v1").toString(36)}`,
 		);
 		expect(fetchMock).toHaveBeenCalledTimes(6);
 		expect(models).toHaveLength(1);
@@ -149,7 +149,7 @@ describe("LiteLLM provider discovery", () => {
 		const models = await options.fetchDynamicModels?.();
 
 		expect(options.cacheProviderId).toBe(
-			`litellm:rich-v4:${Bun.hash("http://litellm-config.example:4200/v1/").toString(36)}`,
+			`litellm:rich-v5:${Bun.hash("http://litellm-config.example:4200/v1/").toString(36)}`,
 		);
 		expect(fetchMock).toHaveBeenCalledTimes(6);
 		expect(models).toHaveLength(1);
@@ -304,6 +304,49 @@ describe("LiteLLM provider discovery", () => {
 
 		expect(models).toBeNull();
 		expect(warnSpy).not.toHaveBeenCalled();
+	});
+
+	test("maps LiteLLM per-token cost onto cost.input/output for models missing from models.dev", async () => {
+		const fetchMock = vi.fn(async (input: string | URL | Request) => {
+			const url = inputUrl(input);
+			if (url === MODELS_DEV_URL) {
+				return Response.json({});
+			}
+			if (url === "http://primary:4000/model_group/info") {
+				return Response.json({
+					data: [
+						{
+							model_group: "openrouter/acme/big",
+							model_name: "Acme Big",
+							max_input_tokens: 262_144,
+							max_output_tokens: 16_384,
+							input_cost_per_token: 0.000_005,
+							output_cost_per_token: 0.000_03,
+							cache_read_input_token_cost: 0.000_000_5,
+							supports_vision: true,
+						},
+					],
+				});
+			}
+			if (url === "http://primary:4000/v1/models") {
+				throw new Error("/v1/models should not be called when rich metadata succeeds");
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		}) as FetchImpl;
+		const options = litellmModelManagerOptions({
+			apiKey: "sk-rich",
+			baseUrl: "http://primary:4000/v1",
+			fetch: fetchMock,
+		});
+
+		const models = await options.fetchDynamicModels?.();
+
+		expect(models).toHaveLength(1);
+		expect(models?.[0]).toMatchObject({
+			id: "openrouter/acme/big",
+			contextWindow: 262_144,
+			cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+		});
 	});
 
 	test("enriches LiteLLM rich models missing from models.dev with bundled reasoning metadata", async () => {

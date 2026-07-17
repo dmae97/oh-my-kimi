@@ -3310,6 +3310,7 @@ type LiteLLMRichEndpointModel<TApi extends Api> = {
 	hasMaxTokens: boolean;
 	hasToolMetadata: boolean;
 	hasSupportedOpenAIParams: boolean;
+	hasCost: boolean;
 };
 type LiteLLMRichEndpointFailure = {
 	endpoint: string;
@@ -3434,6 +3435,32 @@ function getLiteLLMMetadataValue(entry: LiteLLMRichModelEntry, key: string): unk
 	return entry[key] ?? getLiteLLMModelInfo(entry)?.[key];
 }
 
+/** Per-million USD cost from a `*_per_token` LiteLLM field, or `undefined` when absent/non-positive. */
+function getLiteLLMPerMillionCost(entry: LiteLLMRichModelEntry, key: string): number | undefined {
+	const perToken = toNumber(getLiteLLMMetadataValue(entry, key));
+	return perToken !== undefined && perToken > 0 ? perToken * 1_000_000 : undefined;
+}
+
+/**
+ * Map LiteLLM's per-token pricing (`input_cost_per_token`, `output_cost_per_token`,
+ * cache costs) onto {@link ModelSpec.cost} in $/million tokens. Returns `undefined`
+ * when LiteLLM reports neither an input nor an output price so callers keep the
+ * bundled reference cost.
+ */
+function getLiteLLMCost(entry: LiteLLMRichModelEntry): ModelSpec<Api>["cost"] | undefined {
+	const input = getLiteLLMPerMillionCost(entry, "input_cost_per_token");
+	const output = getLiteLLMPerMillionCost(entry, "output_cost_per_token");
+	if (input === undefined && output === undefined) {
+		return undefined;
+	}
+	return {
+		input: input ?? 0,
+		output: output ?? 0,
+		cacheRead: getLiteLLMPerMillionCost(entry, "cache_read_input_token_cost") ?? 0,
+		cacheWrite: getLiteLLMPerMillionCost(entry, "cache_creation_input_token_cost") ?? 0,
+	};
+}
+
 function getLiteLLMRichModelId(entry: LiteLLMRichModelEntry): string | undefined {
 	return (
 		toNonEmptyString(entry.model_group) ??
@@ -3556,7 +3583,7 @@ function mapLiteLLMRichEntry<TApi extends Api>(
 					: (reference?.input ?? ["text"]),
 		reasoning: typeof supportsReasoning === "boolean" ? supportsReasoning : (reference?.reasoning ?? false),
 		thinking: reference?.thinking,
-		cost: reference?.cost ?? UNKNOWN_PROXY_COST,
+		cost: getLiteLLMCost(entry) ?? reference?.cost ?? UNKNOWN_PROXY_COST,
 		...(supportsTools !== undefined ? { supportsTools } : {}),
 		compat: compat as ModelSpec<TApi>["compat"],
 	};
@@ -3623,6 +3650,7 @@ async function fetchLiteLLMRichEndpoint<TApi extends Api>(
 					supportsFunctionCalling === false ||
 					supportedOpenAIParams !== undefined,
 				hasSupportedOpenAIParams: supportedOpenAIParams !== undefined,
+				hasCost: getLiteLLMCost(entry) !== undefined,
 			});
 		}
 	}
@@ -3685,6 +3713,7 @@ export async function fetchLiteLLMRichModels<TApi extends Api>(
 							? next.model.input
 							: existing.model.input,
 					reasoning: typeof next.supportsReasoning === "boolean" ? next.model.reasoning : existing.model.reasoning,
+					cost: next.hasCost ? next.model.cost : existing.model.cost,
 					compat: next.hasSupportedOpenAIParams ? next.model.compat : existing.model.compat,
 				};
 				if (next.hasToolMetadata) {
@@ -3726,13 +3755,13 @@ export function litellmModelManagerOptions(
 	const baseUrl = config?.baseUrl ?? Bun.env.LITELLM_BASE_URL ?? "http://localhost:4000/v1";
 	return {
 		providerId: "litellm",
-		// rich-v4 invalidates rows cached before LiteLLM ids gained bundled
-		// reference fallback and before discovery continued past `/model_group/info`
-		// when that endpoint omitted vision metadata. Earlier versions handled
-		// reseller usage-suffix stripping and placeholder-only `all-team-models`
-		// filtering; bump the version whenever the mappers below change, or warm
-		// authoritative caches keep serving pre-change rows for the full TTL.
-		cacheProviderId: `litellm:rich-v4:${Bun.hash(baseUrl).toString(36)}`,
+		// rich-v5 invalidates rows cached before rich metadata pricing was mapped.
+		// Earlier versions added bundled reference fallback, continued discovery
+		// past incomplete `/model_group/info`, stripped reseller usage suffixes,
+		// and filtered placeholder-only `all-team-models` rows. Bump the version
+		// whenever the mappers below change, or warm authoritative caches keep
+		// serving pre-change rows for the full TTL.
+		cacheProviderId: `litellm:rich-v5:${Bun.hash(baseUrl).toString(36)}`,
 		// litellm is a local-only proxy and is never bundled in models.json (that
 		// would leak the machine's localhost catalog). Prefer the proxy's richer
 		// management metadata, then enrich ids against models.dev with the bundled
