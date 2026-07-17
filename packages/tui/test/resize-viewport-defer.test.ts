@@ -21,6 +21,9 @@ const NO_MULTIPLEXER_ENV: Record<string, string | undefined> = {
 	TMUX: undefined,
 	STY: undefined,
 	ZELLIJ: undefined,
+	CMUX_WORKSPACE_ID: undefined,
+	CMUX_SURFACE_ID: undefined,
+	CMUX_REMOTE_TRANSPORT: undefined,
 	// Pin terminal identity so the alt-screen fast-path assertions below are
 	// deterministic even when the suite runs inside Warp (which otherwise takes
 	// the in-place path — see the Warp describe block at the bottom).
@@ -494,12 +497,18 @@ describe("non-multiplexer resize viewport fast path", () => {
 	});
 });
 
-describe("resize repaints in place on terminals that re-report size on alt-screen toggle (Warp)", () => {
+describe("resize repaints in place on sensitive terminal hosts", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 	});
 
 	const WARP_ENV: Record<string, string | undefined> = { ...NO_MULTIPLEXER_ENV, TERM_PROGRAM: "WarpTerminal" };
+	const CMUX_REMOTE_ENV: Record<string, string | undefined> = {
+		...NO_MULTIPLEXER_ENV,
+		TERM: "xterm-ghostty",
+		TERM_PROGRAM: "ghostty",
+		CMUX_REMOTE_TRANSPORT: "ws",
+	};
 
 	function makeTui(term: VirtualTerminal): { tui: TUI; blocks: CountingBlock[]; scheduler: DeferScheduler } {
 		const blocks = Array.from({ length: 15 }, (_v, i) => new CountingBlock([`b${i}-x`, `b${i}-y`]));
@@ -542,6 +551,31 @@ describe("resize repaints in place on terminals that re-report size on alt-scree
 				await scheduler.flushAll(term);
 				expect(eraseScrollbackCount(writes)).toBe(0);
 				expect(writes.join("")).not.toContain(ALT_SCREEN_ENTER);
+				expect(visible(term).at(-1)).toBe("b14-y");
+			} finally {
+				tui.stop();
+			}
+		});
+	});
+
+	it("never borrows the alternate screen in a native cmux SSH workspace", async () => {
+		await withEnvPatch(CMUX_REMOTE_ENV, async () => {
+			const term = new VirtualTerminal(40, 10, 1000);
+			const { tui, scheduler } = makeTui(term);
+			try {
+				tui.start();
+				await scheduler.flushImmediates(term);
+
+				const writes = captureWrites(term);
+				term.resize(60, 10);
+				await scheduler.flushImmediates(term);
+
+				expect(tui.resizeViewportActive).toBe(false);
+				expect(tui.resizeViewportPaints).toBe(0);
+				expect(writes.join("")).not.toContain(ALT_SCREEN_ENTER);
+
+				await scheduler.flushAll(term);
+				expect(eraseScrollbackCount(writes)).toBe(0);
 				expect(visible(term).at(-1)).toBe("b14-y");
 			} finally {
 				tui.stop();
