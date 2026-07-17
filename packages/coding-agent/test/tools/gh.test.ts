@@ -10,6 +10,7 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import {
 	buildSearchDateQualifier,
 	GithubTool,
+	getOrFetchPrDiff,
 	parsePrUnifiedDiff,
 	parseSearchDateBound,
 	resolveDefaultRepoMemoized,
@@ -272,6 +273,122 @@ describe("parsePrUnifiedDiff", () => {
 			deletions: 1,
 			changeType: "modified",
 		});
+	});
+});
+
+describe("getOrFetchPrDiff diff-too-large fallback", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	function http406(): Error {
+		return new Error(
+			"could not find pull request diff: HTTP 406: Sorry, the diff exceeded the maximum number of lines (20000)",
+		);
+	}
+
+	it("reassembles a unified diff from the per-file API when gh pr diff returns HTTP 406", async () => {
+		vi.spyOn(git.github, "text").mockRejectedValue(http406());
+		const jsonSpy = vi
+			.spyOn(git.github, "json")
+			.mockResolvedValueOnce({ changed_files: 2 } as never)
+			.mockResolvedValueOnce([
+				{
+					filename: "src/big.ts",
+					status: "modified",
+					additions: 2,
+					deletions: 1,
+					patch: "@@ -1,2 +1,3 @@\n-old\n+new one\n+new two",
+				},
+				{
+					filename: "src/added.ts",
+					status: "added",
+					additions: 1,
+					deletions: 0,
+					patch: "@@ -0,0 +1 @@\n+brand new",
+				},
+			] as unknown as never);
+
+		const result = await getOrFetchPrDiff({
+			cwd: "/tmp/test",
+			repo: "owner/repo",
+			number: 79,
+			cacheAuthKey: null,
+		});
+
+		expect(result.payload.files.map(f => f.path)).toEqual(["src/big.ts", "src/added.ts"]);
+		expect(result.payload.files[0]).toMatchObject({ additions: 2, deletions: 1, changeType: "modified" });
+		expect(result.payload.files[1]).toMatchObject({ additions: 1, deletions: 0, changeType: "added" });
+		// The reassembled diff parses through parsePrUnifiedDiff identically.
+		expect(result.payload.unified).toContain("diff --git a/src/big.ts b/src/big.ts");
+		expect(result.payload.unified).toContain("new file mode");
+		// The metadata lookup precedes the files endpoint.
+		expect(jsonSpy.mock.calls[1]?.[1]).toContain("/repos/owner/repo/pulls/79/files");
+	});
+
+	it("keeps files with omitted patches visible instead of dropping them", async () => {
+		vi.spyOn(git.github, "text").mockRejectedValue(http406());
+		vi.spyOn(git.github, "json")
+			.mockResolvedValueOnce({ changed_files: 1 } as never)
+			.mockResolvedValueOnce([
+				{ filename: "assets/logo.png", status: "modified", additions: 0, deletions: 0 },
+			] as unknown as never);
+
+		const result = await getOrFetchPrDiff({
+			cwd: "/tmp/test",
+			repo: "owner/repo",
+			number: 80,
+			cacheAuthKey: null,
+		});
+
+		expect(result.payload.files.map(f => f.path)).toEqual(["assets/logo.png"]);
+		expect(result.payload.unified).toContain("patch unavailable");
+	});
+
+	it("preserves paths containing a diff-header delimiter", async () => {
+		vi.spyOn(git.github, "text").mockRejectedValue(http406());
+		vi.spyOn(git.github, "json")
+			.mockResolvedValueOnce({ changed_files: 1 } as never)
+			.mockResolvedValueOnce([
+				{
+					filename: "dir b/file.ts",
+					status: "modified",
+					additions: 1,
+					deletions: 1,
+					patch: "@@ -1 +1 @@\n-old\n+new",
+				},
+			] as unknown as never);
+
+		const result = await getOrFetchPrDiff({
+			cwd: "/tmp/test",
+			repo: "owner/repo",
+			number: 83,
+			cacheAuthKey: null,
+		});
+
+		expect(result.payload.files[0]).toMatchObject({ path: "dir b/file.ts", additions: 1, deletions: 1 });
+		expect(result.payload.unified).toContain('diff --git "a/dir b/file.ts" "b/dir b/file.ts"');
+	});
+
+	it("rejects instead of silently reviewing a PR beyond the files API cap", async () => {
+		vi.spyOn(git.github, "text").mockRejectedValue(http406());
+		const jsonSpy = vi.spyOn(git.github, "json").mockResolvedValueOnce({ changed_files: 3001 } as never);
+
+		await expect(
+			getOrFetchPrDiff({ cwd: "/tmp/test", repo: "owner/repo", number: 82, cacheAuthKey: null }),
+		).rejects.toThrow("exceeding GitHub's 3000-file limit");
+		expect(jsonSpy.mock.calls).toHaveLength(1);
+		expect(jsonSpy.mock.calls[0]?.[1]).toContain("/repos/owner/repo/pulls/82");
+	});
+
+	it("propagates non-406 errors without hitting the files endpoint", async () => {
+		vi.spyOn(git.github, "text").mockRejectedValue(new Error("authentication required"));
+		const jsonSpy = vi.spyOn(git.github, "json");
+
+		await expect(
+			getOrFetchPrDiff({ cwd: "/tmp/test", repo: "owner/repo", number: 81, cacheAuthKey: null }),
+		).rejects.toThrow("authentication required");
+		expect(jsonSpy).not.toHaveBeenCalled();
 	});
 });
 

@@ -35,7 +35,6 @@ import { EnhancedPasteController } from "../../utils/enhanced-paste";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { ensureSupportedImageInput, ImageInputTooLargeError, loadImageInput } from "../../utils/image-loading";
 import { resizeImage } from "../../utils/image-resize";
-import { generateSessionTitle } from "../../utils/title-generator";
 
 /**
  * Slash commands that may carry secrets in their arguments should never be
@@ -392,7 +391,16 @@ export class InputController {
 		this.ctx.editor.onClear = () => this.handleCtrlC();
 		this.ctx.editor.setActionKeys("app.exit", this.ctx.keybindings.getKeys("app.exit"));
 		this.ctx.editor.setActionKeys("app.display.reset", this.ctx.keybindings.getKeys("app.display.reset"));
-		this.ctx.editor.onDisplayReset = () => this.ctx.ui.resetDisplay();
+		this.ctx.editor.onDisplayReset = () => {
+			// Explicit user gesture (Ctrl+L): re-query the terminal background once
+			// so a mid-session light/dark switch is picked up even on terminals
+			// without an end-to-end Mode 2031 notification path (#5352). The
+			// appearance callback re-evaluates the auto theme; the repaint below
+			// then renders the resolved palette. Bounded to one OSC 11 probe per
+			// gesture — no timers, no periodic polling.
+			this.ctx.ui.terminal.refreshAppearance?.();
+			this.ctx.ui.resetDisplay();
+		};
 		this.ctx.editor.onExit = () => this.handleCtrlD();
 		this.ctx.editor.setActionKeys("app.suspend", this.ctx.keybindings.getKeys("app.suspend"));
 		this.ctx.editor.onSuspend = () => this.handleCtrlZ();
@@ -821,16 +829,8 @@ export class InputController {
 			// chance, so titling defers past "hi" instead of latching onto it.
 			if (!this.ctx.sessionManager.getSessionName() && !$env.PI_NO_TITLE && !isLowSignalTitleInput(text)) {
 				this.#showTinyTitleDownloadProgress(this.ctx.settings.get("providers.tinyModel"));
-				const registry = this.ctx.session.modelRegistry;
-				generateSessionTitle(
-					text,
-					registry,
-					this.ctx.settings,
-					this.ctx.session.sessionId,
-					this.ctx.session.model,
-					provider => this.ctx.session.agent.metadataForProvider(provider),
-					this.ctx.session.titleSystemPrompt,
-				)
+				this.ctx.session
+					.generateTitle(text)
 					.then(async title => {
 						// Re-check: a concurrent attempt for an earlier message may have
 						// already named the session. Don't clobber it. Terminal title and

@@ -741,13 +741,16 @@ export function buildExtensionModuleItems(
  * Entry for an installed Claude Code plugin.
  */
 export interface ClaudePluginEntry {
-	scope: "user" | "project";
+	/** Claude registry scope; local entries are restricted to their project path. */
+	scope?: "user" | "project" | "local";
 	installPath: string;
 	version: string;
 	installedAt: string;
 	lastUpdated: string;
 	gitCommitSha?: string;
 	enabled?: boolean;
+	/** Project root recorded by Claude for a local installation. */
+	projectPath?: string;
 }
 
 /**
@@ -862,6 +865,14 @@ export async function resolveOrDefaultProjectRegistryPath(cwd: string): Promise<
 	return path.join(cwd, getConfigDirName(), "plugins", "installed_plugins.json");
 }
 
+async function canonicalClaudeProjectPath(projectPath: string): Promise<string | null> {
+	try {
+		return await fs.promises.realpath(path.resolve(projectPath));
+	} catch {
+		return null;
+	}
+}
+
 const pluginRootsCache = new Map<string, { roots: ClaudePluginRoot[]; warnings: string[] }>();
 
 const pluginCacheInvalidators = new Set<() => void>();
@@ -876,20 +887,23 @@ export function registerPluginCacheInvalidator(invalidator: () => void): void {
  * Reads ~/.claude/plugins/installed_plugins.json and ~/.omp/plugins/installed_plugins.json,
  * and optionally the nearest project-scoped registry resolved from `cwd`.
  *
- * Results are cached per `home:resolvedProjectPath` key to avoid repeated parsing.
+ * Results are cached per home, project registry, and canonical active project.
  */
 export async function listClaudePluginRoots(
 	home: string,
 	cwd?: string,
 ): Promise<{ roots: ClaudePluginRoot[]; warnings: string[] }> {
 	const resolvedProjectPath = cwd ? await resolveActiveProjectRegistryPath(cwd) : null;
-	const cacheKey = `${home}:${resolvedProjectPath ?? ""}`;
+	const projectRoot = resolvedProjectPath ? path.dirname(path.dirname(path.dirname(resolvedProjectPath))) : cwd;
+	const activeClaudeProjectPath = projectRoot ? await canonicalClaudeProjectPath(projectRoot) : null;
+	const cacheKey = `${home}:${resolvedProjectPath ?? ""}:${activeClaudeProjectPath ?? ""}`;
 	const cached = pluginRootsCache.get(cacheKey);
 	if (cached) return cached;
 
 	const roots: ClaudePluginRoot[] = [];
 	const warnings: string[] = [];
 	const projectRoots: ClaudePluginRoot[] = [];
+	const canonicalClaudeProjectPaths = new Map<string, string | null>();
 
 	// ── Claude Code registry ──────────────────────────────────────────────────
 	const registryPath = path.join(home, ".claude", "plugins", "installed_plugins.json");
@@ -921,6 +935,15 @@ export async function listClaudePluginRoots(
 						continue;
 					}
 					if (entry.enabled === false) continue;
+					if (entry.scope === "local") {
+						if (!entry.projectPath || !activeClaudeProjectPath) continue;
+						let entryProjectPath = canonicalClaudeProjectPaths.get(entry.projectPath);
+						if (entryProjectPath === undefined) {
+							entryProjectPath = await canonicalClaudeProjectPath(entry.projectPath);
+							canonicalClaudeProjectPaths.set(entry.projectPath, entryProjectPath);
+						}
+						if (entryProjectPath !== activeClaudeProjectPath) continue;
+					}
 
 					roots.push({
 						id: pluginId,
@@ -928,7 +951,7 @@ export async function listClaudePluginRoots(
 						plugin: pluginName,
 						version: entry.version || "unknown",
 						path: entry.installPath,
-						scope: entry.scope || "user",
+						scope: entry.scope === "local" ? "project" : entry.scope || "user",
 					});
 				}
 			}
@@ -976,7 +999,7 @@ export async function listClaudePluginRoots(
 						plugin: pluginName,
 						version: entry.version || "unknown",
 						path: entry.installPath,
-						scope: entry.scope || "user",
+						scope: entry.scope === "local" ? "project" : entry.scope || "user",
 					});
 				}
 			}

@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { CustomTool } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
 import {
 	type CreateAgentSessionOptions,
 	createAgentSession,
@@ -124,6 +125,41 @@ describe("createAgentSession defaultInactive tool activation", () => {
 		}
 	});
 
+	it("forwards built-in and external xd:// devices to Cursor provider contexts", async () => {
+		const tempDir = makeTempDir();
+		const cursorModel = getBundledModel("cursor", "composer-1.5");
+		if (!cursorModel) throw new Error("expected bundled Cursor model");
+		const { session } = await createAgentSession({
+			...baseOptions(tempDir),
+			model: cursorModel,
+		});
+		const externalMcpTool: CustomTool = {
+			name: "mcp__fixture_report",
+			label: "fixture/report",
+			description: "Report a fixture result.",
+			parameters: type({}),
+			strict: true,
+			mcpServerName: "fixture",
+			mcpToolName: "report",
+			async execute() {
+				return { content: [{ type: "text", text: "reported" }] };
+			},
+		};
+
+		try {
+			await session.refreshMCPTools([externalMcpTool]);
+			const deviceNames = session.getXdevToolEntries().map(entry => entry.name);
+			expect(deviceNames).toEqual(expect.arrayContaining(["ast_edit", "mcp__fixture_report"]));
+			expect(session.getActiveToolNames()).not.toContain("mcp__fixture_report");
+
+			const context = await session.agent.buildSideRequestContext([]);
+			const providerToolNames = context.tools?.map(tool => tool.name);
+			expect(providerToolNames).toEqual(expect.arrayContaining(["ast_edit", "mcp__fixture_report"]));
+		} finally {
+			await session.dispose();
+		}
+	});
+
 	it("allows explicitly requested defaultInactive extension tools into the initial active set", async () => {
 		const tempDir = makeTempDir();
 
@@ -135,8 +171,11 @@ describe("createAgentSession defaultInactive tool activation", () => {
 
 		try {
 			expect(session.getActiveToolNames()).toEqual(
-				expect.arrayContaining(["read", "default_active_tool", "default_inactive_tool"]),
+				expect.arrayContaining(["read", "default_inactive_tool", "write"]),
 			);
+			expect(session.getActiveToolNames()).not.toContain("default_active_tool");
+			expect(session.getXdevToolEntries().map(entry => entry.name)).toContain("default_active_tool");
+			expect(session.getXdevToolEntries().map(entry => entry.name)).not.toContain("default_inactive_tool");
 			expect(session.systemPrompt.join("\n")).toContain("default_inactive_tool");
 		} finally {
 			await session.dispose();
@@ -225,6 +264,36 @@ describe("createAgentSession defaultInactive tool activation", () => {
 		}
 	});
 
+	it("does not activate write merely because plan mode is available", async () => {
+		const tempDir = makeTempDir();
+		const { session } = await createAgentSession({
+			...baseOptions(tempDir),
+			toolNames: ["read"],
+		});
+
+		try {
+			await session.setActiveToolsByName(["read"]);
+			expect(session.getActiveToolNames()).not.toContain("write");
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	it("preserves write explicitly selected by a runtime caller", async () => {
+		const tempDir = makeTempDir();
+		const { session } = await createAgentSession({
+			...baseOptions(tempDir),
+			toolNames: ["read"],
+		});
+
+		try {
+			await session.setActiveToolsByName(["read", "write"]);
+			await session.refreshMCPTools([]);
+			expect(session.getActiveToolNames()).toContain("write");
+		} finally {
+			await session.dispose();
+		}
+	});
 	it("registers vibe tools only during explicit vibe activation", async () => {
 		const tempDir = makeTempDir();
 		const { session } = await createAgentSession(baseOptions(tempDir));

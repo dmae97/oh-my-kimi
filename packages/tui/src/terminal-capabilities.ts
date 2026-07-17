@@ -935,7 +935,7 @@ export function renderImage(
 	base64Data: string,
 	imageDimensions: ImageDimensions,
 	options: ImageRenderOptions = {},
-): { sequence?: string; lines?: string[]; rows: number; transmit?: string } | null {
+): { sequence?: string; lines?: string[]; columns: number; rows: number; transmit?: string } | null {
 	if (!TERMINAL.imageProtocol) {
 		return null;
 	}
@@ -964,7 +964,7 @@ export function renderImage(
 					columns: fit.columns,
 					rows: fit.rows,
 				});
-				return { lines, rows: fit.rows, transmit };
+				return { lines, columns: fit.columns, rows: fit.rows, transmit };
 			}
 			// Direct placement: re-emit only the tiny `a=p` on repaints.
 			const sequence = encodeKittyPlacement({
@@ -973,14 +973,14 @@ export function renderImage(
 				columns: fit.columns,
 				rows: fit.rows,
 			});
-			return { sequence, rows: fit.rows, transmit };
+			return { sequence, columns: fit.columns, rows: fit.rows, transmit };
 		}
 		// No stable id (e.g. no budget): self-contained transmit-and-display.
 		const sequence = encodeKitty(base64Data, {
 			columns: fit.columns,
 			rows: fit.rows,
 		});
-		return { sequence, rows: fit.rows };
+		return { sequence, columns: fit.columns, rows: fit.rows };
 	}
 
 	if (TERMINAL.imageProtocol === ImageProtocol.Sixel) {
@@ -1003,7 +1003,7 @@ export function renderImage(
 			const rows = Math.max(1, Math.ceil(targetHeightPx / cellDims.heightPx));
 			const decoded = new Uint8Array(Buffer.from(base64Data, "base64"));
 			const sequence = encodeSixel(decoded, targetWidthPx, targetHeightPx);
-			return { sequence, rows };
+			return { sequence, columns: fit.columns, rows };
 		} catch {
 			return null;
 		}
@@ -1014,7 +1014,7 @@ export function renderImage(
 			height: "auto",
 			preserveAspectRatio: options.preserveAspectRatio ?? true,
 		});
-		return { sequence, rows: fit.rows };
+		return { sequence, columns: fit.columns, rows: fit.rows };
 	}
 
 	return null;

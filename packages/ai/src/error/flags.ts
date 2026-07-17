@@ -7,7 +7,7 @@ import {
 	ProviderHttpError,
 	STREAM_ENVELOPE_ERROR_PREFIX,
 } from "./classes";
-import { isOpaqueStatusBody, matchesUsageLimitText, parseRateLimitReason } from "./rate-limit";
+import { isOpaqueStatusBody, isUsageLimitStatus, matchesUsageLimitText, parseRateLimitReason } from "./rate-limit";
 
 export const Flag = {
 	Class: 0x1000,
@@ -318,7 +318,7 @@ function classifyText(errorMessage: string | undefined, errorStatus: number | un
 		const cleanMessage = errorMessage;
 		const isOpaque = isOpaqueStatusBody(cleanMessage);
 
-		const isLimitStatus = statusClean === 429;
+		const isLimitStatus = isUsageLimitStatus(statusClean);
 		if (
 			matchesUsageLimitText(cleanMessage) ||
 			(isLimitStatus && (isOpaque || parseRateLimitReason(cleanMessage) === "QUOTA_EXHAUSTED"))

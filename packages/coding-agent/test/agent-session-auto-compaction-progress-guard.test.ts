@@ -151,6 +151,23 @@ describe("AgentSession auto-compaction progress guard", () => {
 		};
 	}
 
+	function activateOngoingGoal(id: string): void {
+		const now = Date.now();
+		session.setGoalModeState({
+			enabled: true,
+			mode: "active",
+			goal: {
+				id,
+				objective: "finish the ongoing work",
+				status: "active",
+				tokensUsed: 0,
+				timeUsedSeconds: 0,
+				createdAt: now,
+				updatedAt: now,
+			},
+		});
+	}
+
 	/** Build a context-overflow assistant turn (input exceeds the 200k window). */
 	function overflowAssistant(content = [{ type: "text" as const, text: "" }]) {
 		return {
@@ -389,9 +406,9 @@ describe("AgentSession auto-compaction progress guard", () => {
 		expect(noProgress.length).toBe(1);
 	});
 
-	it("auto-continues (no warning) when compaction creates headroom", async () => {
-		// The auto-continue path runs #scheduleAutoContinuePrompt → #promptWithMessage
-		// → agent.prompt. Stub both prompt and continue so no real agent loop runs.
+	it("does not auto-continue after compaction of a terminal text answer with no queued work", async () => {
+		// A successful threshold compaction must not reopen the primary loop after
+		// the model has already produced a terminal text answer.
 		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined as never);
 		vi.spyOn(session.agent, "continue").mockResolvedValue();
 		// Residual context drops well under the threshold: real reduction happened.
@@ -411,14 +428,37 @@ describe("AgentSession auto-compaction progress guard", () => {
 		await compactionDone;
 		await session.waitForIdle();
 
-		// Headroom was created, so the guard scheduled the agent-authored
-		// continuation prompt and stayed silent.
+		expect(promptSpy).not.toHaveBeenCalled();
+		const noProgress = notices.filter(n => n.source === NOTICE_SOURCE && n.message.includes(NO_PROGRESS_FRAGMENT));
+		expect(noProgress.length).toBe(0);
+	});
+
+	it("auto-continues after compaction while an active goal still needs work", async () => {
+		activateOngoingGoal("headroom");
+		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined as never);
+		vi.spyOn(session.agent, "continue").mockResolvedValue();
+		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: 1000, contextWindow: 200000, percent: 0.5 });
+
+		const notices = collectNotices();
+		const { promise: compactionDone, resolve: onCompactionDone } = Promise.withResolvers<void>();
+		session.subscribe(event => {
+			if (event.type === "auto_compaction_end") onCompactionDone();
+		});
+
+		const assistantMsg = highUsageAssistant();
+		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMsg] });
+
+		await compactionDone;
+		await session.waitForIdle();
+
 		expect(promptSpy).toHaveBeenCalledTimes(1);
 		const noProgress = notices.filter(n => n.source === NOTICE_SOURCE && n.message.includes(NO_PROGRESS_FRAGMENT));
 		expect(noProgress.length).toBe(0);
 	});
 
 	it("rebases the in-flight prompt snapshot so mid-run compaction is not misread as a dead-end", async () => {
+		activateOngoingGoal("in-flight-snapshot");
 		// Regression: the pending context snapshot is set once per prompt and
 		// lives for the whole run. A fresh compaction entry hides every earlier
 		// usage anchor from getContextBreakdown, which then fell back to the
@@ -1063,6 +1103,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 	}
 
 	it("auto-continues when residual sits at the recovery band but the trigger was already sub-band", async () => {
+		activateOngoingGoal("recovery-band");
 		// Regression for the #3412 review: when stale/tool-output pruning already
 		// dropped context under the recovery band BEFORE this pass, the trigger
 		// (postMaintenanceContextTokens) is itself sub-band. The old guard returned
@@ -1157,6 +1198,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 	});
 
 	it("auto-continues (no warning) when a shake rescue frees the oversized tail", async () => {
+		activateOngoingGoal("shake-rescue");
 		// The escalation contract: compaction cut at the only turn boundary but the
 		// kept tail (e.g. a huge tool result) still sits over the recovery band. The
 		// guard now runs an elide shake INSIDE that tail; once it frees enough, the
@@ -1241,6 +1283,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 	});
 
 	it("auto-continues (no warning) when the image-drop tier frees an image-only tail", async () => {
+		activateOngoingGoal("image-drop-rescue");
 		// Elide cannot touch image content (collectShakeRegions skips image-only
 		// tool results and user-message images), so the rescue's second tier drops
 		// attached images — the automated `/shake images` remedy — and re-tests

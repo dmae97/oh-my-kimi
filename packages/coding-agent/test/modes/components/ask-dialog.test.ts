@@ -75,6 +75,29 @@ describe("AskDialogComponent", () => {
 		});
 	});
 
+	it("single-question, single-select: Space does not submit the highlighted answer", () => {
+		const onSubmit = vi.fn();
+		const questions: ExtensionAskDialogQuestion[] = [
+			{
+				id: "q1",
+				question: "Choose one?",
+				options: [{ label: "Option A" }, { label: "Option B" }],
+			},
+		];
+		const component = new AskDialogComponent(questions, {
+			onSubmit,
+			onCancel: vi.fn(),
+			onPrompt: vi.fn(),
+		});
+
+		component.handleInput(SPACE);
+		expect(onSubmit).not.toHaveBeenCalled();
+
+		component.handleInput(ENTER);
+		expect(onSubmit).toHaveBeenCalledTimes(1);
+		expect(onSubmit.mock.calls[0][0].results[0].selectedOptions).toEqual(["Option A"]);
+	});
+
 	it("single-question, single-select: DOWN then Enter selects second option and submits", () => {
 		const onSubmit = vi.fn();
 		const onCancel = vi.fn();

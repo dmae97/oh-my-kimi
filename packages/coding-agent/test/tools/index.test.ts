@@ -148,6 +148,15 @@ describe("createTools", () => {
 		expect(names).toEqual(["read", "write"]);
 	});
 
+	it("creates an xd:// registry without remounting explicitly requested built-ins", async () => {
+		const session = createTestSession();
+		const tools = await createTools(session, ["read", "lsp"]);
+
+		expect(session.xdevRegistry).toBeDefined();
+		expect(session.xdevRegistry?.entries()).toEqual([]);
+		expect(tools.map(tool => tool.name)).toEqual(["read", "lsp"]);
+	});
+
 	it("lowercases requested tool subset", async () => {
 		const session = createTestSession();
 		const tools = await createTools(session, ["Read", "Write"]);
@@ -206,8 +215,14 @@ describe("createTools", () => {
 		const tools = await createTools(session);
 		expect(tools.map(t => t.name)).not.toContain("ask");
 
-		const requested = await createTools(session, ["ask", "read"]);
-		expect(requested.map(t => t.name)).toEqual(["read", "write"]);
+		const requested = await createTools(
+			createTestSession({
+				hasUI: true,
+				settings: createSettingsWithOverrides({ "ask.enabled": false }),
+			}),
+			["ask", "read"],
+		);
+		expect(requested.map(t => t.name)).toEqual(["read"]);
 	});
 
 	it("includes ask tool when ask.enabled is true and hasUI is true", async () => {
@@ -246,8 +261,8 @@ describe("createTools", () => {
 		expect(names).not.toContain("browser");
 		expect(names).not.toContain("inspect_image");
 
-		const requestedTools = await createTools(session, ["bash", "read"]);
-		expect(requestedTools.map(t => t.name)).toEqual(["read", "write"]);
+		const requestedTools = await createTools(createTestSession({ settings: session.settings }), ["bash", "read"]);
+		expect(requestedTools.map(t => t.name)).toEqual(["read"]);
 	});
 
 	it("auto-includes goal when goal mode is active", async () => {

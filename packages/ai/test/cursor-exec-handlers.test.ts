@@ -18,6 +18,7 @@ import {
 	type AgentRunRequest,
 	AgentServerMessageSchema,
 	ExecServerMessageSchema,
+	McpArgsSchema,
 	ReadArgsSchema,
 } from "@oh-my-pi/pi-catalog/discovery/cursor-gen/agent_pb";
 
@@ -434,6 +435,7 @@ function newBlockState(): BlockState {
 		get currentToolCall() {
 			return toolCall;
 		},
+		resolvedMcpToolCallIds: new Set(),
 		firstTokenTime: undefined,
 		setTextBlock: b => {
 			textBlock = b;
@@ -512,6 +514,60 @@ describe("Cursor exec local-work tracking (issue #4593)", () => {
 		expect(stream.hasPendingLocalWork).toBe(false);
 		// The read result went back out on the exec channel.
 		expect(written.length).toBe(1);
+	});
+
+	it("marks an MCP call as resolved before its streamed block arrives", async () => {
+		const output = cursorAssistantMessage();
+		const stream = new AssistantMessageEventStream();
+		const state = newBlockState();
+		const h2Request = { write: () => true } as unknown as Parameters<typeof handleServerMessage>[5];
+		const serverMsg = create(AgentServerMessageSchema, {
+			message: {
+				case: "execServerMessage",
+				value: create(ExecServerMessageSchema, {
+					id: 1,
+					execId: "exec-mcp-1",
+					message: {
+						case: "mcpArgs",
+						value: create(McpArgsSchema, {
+							name: "mcp__fixture_report",
+							toolName: "mcp__fixture_report",
+							toolCallId: "call-mcp-1",
+							providerIdentifier: "pi-agent",
+						}),
+					},
+				}),
+			},
+		});
+		const execHandlers: CursorExecHandlers = {
+			async mcp(args) {
+				return {
+					role: "toolResult",
+					toolCallId: args.toolCallId,
+					toolName: args.toolName,
+					content: [{ type: "text", text: "reported" }],
+					isError: false,
+					timestamp: 1,
+				};
+			},
+		};
+
+		await handleServerMessage(
+			serverMsg,
+			output,
+			stream,
+			state,
+			new Map(),
+			h2Request,
+			execHandlers,
+			undefined,
+			{
+				sawTokenDelta: false,
+			},
+			[],
+		);
+
+		expect(state.resolvedMcpToolCallIds.has("call-mcp-1")).toBe(true);
 	});
 
 	it("survives a local exec tool outliving the lazy idle budget end to end", async () => {

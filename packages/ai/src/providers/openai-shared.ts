@@ -1,6 +1,6 @@
 import type { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { toFirepassWireModelId, toFireworksWireModelId } from "@oh-my-pi/pi-catalog/fireworks-model-id";
-import { isGlm52ReasoningEffortModelId } from "@oh-my-pi/pi-catalog/identity";
+import { isGlm52ReasoningEffortModelId, isKimiK3ModelId } from "@oh-my-pi/pi-catalog/identity";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import type {
@@ -1025,16 +1025,24 @@ function isZaiReasoningEffortDialect(model: Model<"openai-completions">, compat:
 }
 
 /**
- * Output-token clamp for the Z.AI/GLM-5.2 reasoning dialect: these hosts accept
- * the full model window on reasoning turns, so clamp to the model cap. Returns
- * `undefined` for every other model, leaving {@link resolveOpenAIOutputTokenParam}
- * on its default `OPENAI_MAX_OUTPUT_TOKENS` clamp.
+ * Provider-specific Chat Completions output clamp.
+ *
+ * Most OpenAI-compatible endpoints retain the conservative 64k ceiling from
+ * {@link resolveOpenAIOutputTokenParam}. Z.AI/GLM-5.2 reasoning and native
+ * Moonshot K3 explicitly accept their full advertised model caps, so those
+ * routes clamp to `model.maxTokens` instead.
  */
-export function resolveZaiReasoningOutputClamp(
+export function resolveOpenAICompletionsOutputClamp(
 	model: Model<"openai-completions">,
 	compat: ResolvedOpenAICompat,
 ): number | undefined {
-	return isZaiReasoningEffortDialect(model, compat) ? (model.maxTokens ?? OPENAI_MAX_OUTPUT_TOKENS) : undefined;
+	if (isZaiReasoningEffortDialect(model, compat)) {
+		return model.maxTokens ?? OPENAI_MAX_OUTPUT_TOKENS;
+	}
+	if (model.provider === "moonshot" && isKimiK3ModelId(model.id)) {
+		return model.maxTokens ?? OPENAI_MAX_OUTPUT_TOKENS;
+	}
+	return undefined;
 }
 
 /**

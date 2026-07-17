@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Changed `EditorTopBorder` to expose ordered `lines` instead of one `content`/`width` pair, allowing the editor to frame every continuation row rather than truncate one oversized status row ([#5749](https://github.com/can1357/oh-my-pi/issues/5749)).
+
+### Added
+
+- Added a fullscreen overlay mouse-tracking opt-out so selection-first dialogs can preserve native terminal text selection ([#5711](https://github.com/can1357/oh-my-pi/issues/5711)).
+- Added an optional `Terminal.refreshAppearance()` that issues a single bounded OSC 11 background re-query through the existing query/DA1 pipeline, letting consumers refresh the detected dark/light appearance on an explicit user gesture without reintroducing periodic polling ([#5352](https://github.com/can1357/oh-my-pi/issues/5352))
+
+### Fixed
+
+- Fixed Enter accepting a mid-prompt `/skill:<name>` autocomplete from submitting and clearing the draft; acceptance now inserts the skill token and leaves the prompt open ([#4773](https://github.com/can1357/oh-my-pi/issues/4773)).
+- Fixed Markdown rendering turning local file paths into HTTP links when a `www.` or `http(s)://`/`ftp://` sequence was glued to a preceding character (e.g. `~/meta/www.share/blog/index.dj`); extended autolinks now require a valid GFM left boundary (start of line, whitespace, or one of `*_~(`) ([#5652](https://github.com/can1357/oh-my-pi/issues/5652)).
+- Fixed multi-row direct Kitty images being clipped or detached from their cells in native terminal scrollback ([#5669](https://github.com/can1357/oh-my-pi/pull/5669) by [@jeffscottward](https://github.com/jeffscottward)).
+
 ## [17.0.1] - 2026-07-16
 
 ### Added

@@ -1410,6 +1410,36 @@ bar`,
 				"Should show mailto URL in parentheses",
 			).toBeTruthy();
 		});
+
+		it("does not autolink www. glued to a path separator (issue #5652)", () => {
+			const filePath = "~/meta/www.share/blog/A5-memory-safety-type-system/index.dj";
+			const markdown = new Markdown(filePath, 0, 0, defaultMarkdownTheme);
+
+			const output = markdown.render(120).join("\n");
+			const plain = stripTerminalSequences(output);
+
+			// The bare path must render verbatim, with no injected `(http…)` URL.
+			expect(plain).toContain(filePath);
+			expect(plain.includes("http://www.share")).toBe(false);
+			// No OSC 8 hyperlink target should be emitted for the path.
+			expect(output.includes("\x1b]8;;http://www.share")).toBe(false);
+		});
+
+		it("does not autolink a scheme glued to preceding text", () => {
+			const text = "path/to/foohttp://bar.com/x";
+			const markdown = new Markdown(text, 0, 0, defaultMarkdownTheme);
+
+			const plain = stripTerminalSequences(markdown.render(120).join("\n"));
+			expect(plain).toContain(text);
+			expect(plain.includes("(http")).toBe(false);
+		});
+
+		it("still autolinks www. at a valid left boundary", () => {
+			const markdown = new Markdown("see www.example.com here", 0, 0, defaultMarkdownTheme);
+
+			const output = markdown.render(80).join("\n");
+			expect(output.includes("\x1b]8;;http://www.example.com\x07")).toBe(true);
+		});
 	});
 
 	describe("HTML-like tags in text", () => {

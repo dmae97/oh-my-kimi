@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `uv run --extra <package> pytest ...` bypassing native pytest minimization because the wrapper parser mistook the `--extra` value for the executable.
+- Fixed timed-out shell pipelines cancelling their output reader while the final stage was still flushing, which dropped captured output and could terminate Windows hosts during teardown. ([#5316](https://github.com/can1357/oh-my-pi/issues/5316))
+
 ## [17.0.1] - 2026-07-16
 
 ### Fixed

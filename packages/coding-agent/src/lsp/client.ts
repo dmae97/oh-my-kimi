@@ -428,7 +428,7 @@ async function handleConfigurationRequest(client: LspClient, message: LspJsonRpc
 	const items = params?.items ?? [];
 	const result = items.map(item => {
 		const section = item.section ?? "";
-		return client.config.settings?.[section] ?? {};
+		return client.config.settings?.[section] ?? null;
 	});
 	await sendResponse(client, message.id, result, "workspace/configuration");
 }

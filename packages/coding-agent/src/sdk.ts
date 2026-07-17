@@ -2,13 +2,21 @@ import {
 	Agent,
 	type AgentEvent,
 	type AgentMessage,
+	type AgentOptions,
 	type AgentTelemetryConfig,
 	type AgentTool,
 	AppendOnlyContextManager,
 	filterProviderReplayMessages,
 	type ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
-import type { Context, CredentialDisabledEvent, Message, Model, SimpleStreamOptions } from "@oh-my-pi/pi-ai";
+import type {
+	Context,
+	CredentialDisabledEvent,
+	Message,
+	Model,
+	ProviderSessionState,
+	SimpleStreamOptions,
+} from "@oh-my-pi/pi-ai";
 import type { Dialect } from "@oh-my-pi/pi-ai/dialect";
 import {
 	getOpenAICodexTransportDetails,
@@ -154,6 +162,7 @@ import {
 	createTools,
 	createVibeTools,
 	type DeferredDiagnosticsEntry,
+	defaultLoadModeForToolName,
 	discoverStartupLspServers,
 	EditTool,
 	EvalTool,
@@ -890,7 +899,7 @@ function customToolToDefinition(tool: CustomTool): ToolDefinition {
 		description: tool.description,
 		parameters: tool.parameters,
 		hidden: tool.hidden,
-		loadMode: tool.loadMode ?? "discoverable",
+		loadMode: defaultLoadModeForToolName(tool.name, tool.loadMode),
 		deferrable: tool.deferrable,
 		approval: typeof tool.approval === "function" ? tool.approval.bind(tool) : tool.approval,
 		mcpServerName: tool.mcpServerName,
@@ -1054,6 +1063,88 @@ function buildMCPPromptCommands(manager: MCPManager): LoadedCustomCommand[] {
 		}
 	}
 	return commands;
+}
+
+/** Dependencies used to construct an isolated auto-learn capture agent. */
+export interface AutoLearnCaptureRunnerOptions {
+	sourceAgent: Agent;
+	captureTools: AgentTool[];
+	createAgent: (options: AgentOptions) => Agent;
+	onPayload?: SimpleStreamOptions["onPayload"];
+	onResponse?: SimpleStreamOptions["onResponse"];
+	createSessionId?: () => string;
+}
+
+/** Build a private capture runner over a detached message snapshot and provider session. */
+export function createAutoLearnCaptureRunner(
+	options: AutoLearnCaptureRunnerOptions,
+): (content: string, signal?: AbortSignal) => Promise<void> {
+	return async (content, signal) => {
+		if (options.captureTools.length === 0 || signal?.aborted) return;
+		const captureModel = options.sourceAgent.state.model;
+		if (!captureModel) return;
+
+		const captureSessionId = options.createSessionId?.() ?? Bun.randomUUIDv7();
+		const captureProviderSessionState = new Map<string, ProviderSessionState>();
+		const captureMessages = options.sourceAgent.state.messages.map((message): AgentMessage => {
+			if (message.role === "assistant") {
+				return { ...message, responseId: undefined, providerPayload: undefined };
+			}
+			if (message.role === "user" || message.role === "developer") {
+				return { ...message, providerPayload: undefined };
+			}
+			return message;
+		});
+		const captureAgent = options.createAgent({
+			initialState: {
+				systemPrompt: [...options.sourceAgent.state.systemPrompt],
+				model: captureModel,
+				thinkingLevel: options.sourceAgent.state.thinkingLevel,
+				disableReasoning: options.sourceAgent.state.disableReasoning,
+				tools: options.captureTools,
+				messages: captureMessages,
+			},
+			sessionId: captureSessionId,
+			promptCacheKey: captureSessionId,
+			providerSessionState: captureProviderSessionState,
+			getApiKey: requestModel => options.sourceAgent.getApiKey?.(requestModel),
+			onPayload: options.onPayload,
+			onResponse: options.onResponse,
+		});
+		captureAgent.setMetadataResolver(provider => options.sourceAgent.metadataForProvider(provider));
+		const captureMessage: CustomMessage = {
+			role: "custom",
+			customType: "autolearn-nudge",
+			content,
+			display: false,
+			attribution: "agent",
+			timestamp: Date.now(),
+		};
+		const abortCapture = () => captureAgent.abort(signal?.reason);
+		signal?.addEventListener("abort", abortCapture, { once: true });
+		try {
+			if (signal?.aborted) {
+				abortCapture();
+				return;
+			}
+			await captureAgent.prompt(captureMessage);
+		} catch (error) {
+			if (!signal?.aborted) throw error;
+		} finally {
+			signal?.removeEventListener("abort", abortCapture);
+			for (const [providerKey, state] of captureProviderSessionState) {
+				try {
+					state.close();
+				} catch (error) {
+					logger.warn("Failed to close auto-learn capture provider state", {
+						providerKey,
+						error: String(error),
+					});
+				}
+			}
+			captureProviderSessionState.clear();
+		}
+	};
 }
 /**
  * Create an AgentSession with the specified options.
@@ -2247,31 +2338,50 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			builtInRegistryToolNames.delete("edit");
 		}
 
-		// Staged actions (tool previews, plan approval) resolve through `write`
-		// to the resolution devices (`xd://resolve`, `xd://reject`,
-		// `xd://propose`), so `write` must stay in the registry whenever any
-		// code path can stage one: a deferrable tool, or plan mode installing a
-		// plan-proposal handler (issue #1428). Dropping it on read-only sessions
-		// (e.g. plan-mode toolset `read`, `search`, `find`, `web_search`) leaves
-		// plan mode unable to exit through the intended path.
-		const hasDeferrableTools = Array.from(toolRegistry.values()).some(tool => tool.deferrable === true);
-		const hasXdevTools = (toolSession.xdevRegistry?.size ?? 0) > 0;
-		const planModeAvailable = settings.get("plan.enabled");
-		if ((hasDeferrableTools || hasXdevTools || planModeAvailable) && !toolRegistry.has("write")) {
-			const writeTool = await logger.time("createTools:write:session", BUILTIN_TOOLS.write, toolSession);
-			if (writeTool) {
+		let writeRegistration: Promise<boolean> | undefined;
+		const ensureWriteRegistered = (): Promise<boolean> => {
+			if (toolRegistry.has("write")) return Promise.resolve(builtInRegistryToolNames.has("write"));
+			writeRegistration ??= (async () => {
+				const writeTool = await logger.time("createTools:write:session", BUILTIN_TOOLS.write, toolSession);
+				if (!writeTool || toolRegistry.has("write")) return builtInRegistryToolNames.has("write");
 				toolRegistry.set(
 					writeTool.name,
 					new ExtensionToolWrapper(wrapToolWithMetaNotice(writeTool), extensionRunner) as Tool,
 				);
 				builtInRegistryToolNames.add(writeTool.name);
-			}
+				return true;
+			})().finally(() => {
+				writeRegistration = undefined;
+			});
+			return writeRegistration;
+		};
+
+		// Existing staged/device paths need write registered before active-set assembly.
+		// Deferred MCP also registers it now, but refresh activates it only after a server connects.
+		const hasDeferrableTools = Array.from(toolRegistry.values()).some(tool => tool.deferrable === true);
+		const hasXdevTools = (toolSession.xdevRegistry?.size ?? 0) > 0;
+		const planModeAvailable = settings.get("plan.enabled");
+		if (hasDeferrableTools || hasXdevTools || planModeAvailable || deferMCPDiscoveryForUI) {
+			await ensureWriteRegistered();
 		}
 
 		let cursorEventEmitter: ((event: AgentEvent) => void) | undefined;
+		// Built-in xd:// devices (ast_edit, debug, browser, lsp, web_search) are
+		// mounted in createTools BEFORE this loop wraps registry entries in
+		// ExtensionToolWrapper, so the registry holds them unwrapped. The normal
+		// `write xd://<tool>` path runs approval through the wrapped `write` tool's
+		// tier gate, but Cursor invokes advertised devices via `tool.execute()`
+		// directly — so wrap unwrapped devices here to keep the approval/deny/prompt
+		// gate. Dynamic mounts (custom/MCP) already come from the wrapped registry.
+		const resolveCursorDevice = (name: string): AgentTool | undefined => {
+			const device = toolSession.xdevRegistry?.get(name);
+			if (!device) return undefined;
+			return device instanceof ExtensionToolWrapper ? device : new ExtensionToolWrapper(device, extensionRunner);
+		};
 		const cursorExecHandlers = new CursorExecHandlers({
 			cwd,
 			tools: toolRegistry,
+			getTool: resolveCursorDevice,
 			getToolContext: () => toolContextStore.getContext(),
 			emitEvent: event => cursorEventEmitter?.(event),
 		});
@@ -2413,11 +2523,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 		const requestedToolNames = explicitlyRequestedToolNames ?? toolNamesFromRegistry;
 		const normalizedRequested = requestedToolNames.filter(name => toolRegistry.has(name));
-		const requestedToolNameSet = new Set(normalizedRequested);
 		const defaultInactiveToolNames = new Set(
 			registeredTools.filter(tool => tool.definition.defaultInactive).map(tool => tool.definition.name),
 		);
 		const requestedActiveToolNames = normalizedRequested.filter(name => name !== "goal");
+		const explicitlyRequestedToolNameSet = explicitlyRequestedToolNames
+			? new Set(explicitlyRequestedToolNames)
+			: undefined;
+		const xdevReadAvailable =
+			builtInRegistryToolNames.has("read") &&
+			(explicitlyRequestedToolNameSet === undefined || explicitlyRequestedToolNameSet.has("read"));
 		const initialRequestedActiveToolNames = options.toolNames
 			? requestedActiveToolNames
 			: requestedActiveToolNames.filter(name => !defaultInactiveToolNames.has(name));
@@ -2449,24 +2564,32 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		});
 		hasRegistered = true;
 
-		// Partition the initial enabled set for the xd:// transport: discoverable
-		// tools become mounted devices; the rest stay top-level. The registry
-		// already holds the built-in devices (mounted in createTools); this
-		// reconciles the initial dynamic mounts (image-gen, TTS, startup MCP,
-		// active extension tools) and drops them from the top-level names so they
-		// never ship a schema. Presentation only — selection already happened.
+		// Partition the initial enabled set for the xd:// transport: ambient
+		// discoverable tools become mounted devices, while explicitly requested
+		// tools keep their top-level presentation. The registry already holds the
+		// default-set built-in devices from createTools; this reconciles dynamic
+		// mounts (image-gen, TTS, startup MCP, active extension tools).
 		let initialMountedXdevToolNames: string[] = [];
 		if (toolSession.xdevRegistry) {
 			const topLevelToolNames: string[] = [];
 			const mountedTools: Tool[] = [];
 			for (const name of initialToolNames) {
 				const tool = toolRegistry.get(name);
-				if (tool && isMountableUnderXdev(tool)) mountedTools.push(tool);
+				const explicitlyRequested = explicitlyRequestedToolNameSet?.has(name) === true;
+				if (tool && xdevReadAvailable && !explicitlyRequested && isMountableUnderXdev(tool))
+					mountedTools.push(tool);
 				else topLevelToolNames.push(name);
 			}
-			toolSession.xdevRegistry.reconcile(mountedTools);
-			initialMountedXdevToolNames = mountedTools.map(tool => tool.name);
-			initialToolNames = topLevelToolNames;
+			const writeTransportAvailable = mountedTools.length === 0 || (await ensureWriteRegistered());
+			if (writeTransportAvailable) {
+				toolSession.xdevRegistry.reconcile(mountedTools);
+				initialMountedXdevToolNames = mountedTools.map(tool => tool.name);
+				initialToolNames = topLevelToolNames;
+				if (initialMountedXdevToolNames.length > 0 && !initialToolNames.includes("write"))
+					initialToolNames.push("write");
+			} else {
+				toolSession.xdevRegistry.reconcile([]);
+			}
 		}
 
 		setActiveToolNames(initialToolNames);
@@ -2551,6 +2674,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const initialTools = initialToolNames
 			.map(name => toolRegistry.get(name))
 			.filter((tool): tool is AgentTool => tool !== undefined);
+		const autoLearnCaptureTools = initialTools.filter(tool => tool.name === "manage_skill" || tool.name === "learn");
 
 		const openaiWebsocketSetting = settings.get("providers.openaiWebsockets") ?? "off";
 		const preferOpenAICodexWebsockets =
@@ -2577,6 +2701,17 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			settings,
 			createSettingsAwareStreamFn(settings),
 		);
+		const transformToolCallArguments = (args: Record<string, unknown>): Record<string, unknown> => {
+			let result = args;
+			const maxTimeout = settings.get("tools.maxTimeout");
+			if (maxTimeout > 0 && typeof result.timeout === "number") {
+				result = { ...result, timeout: Math.min(result.timeout, maxTimeout) };
+			}
+			if (obfuscator?.hasSecrets()) {
+				result = deobfuscateToolArguments(obfuscator, result);
+			}
+			return result;
+		};
 		agent = new Agent({
 			initialState: {
 				systemPrompt,
@@ -2629,17 +2764,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				return settingsAwareStreamFn(streamModel, context, streamOptions);
 			},
 			cursorExecHandlers,
-			transformToolCallArguments: (args, _toolName) => {
-				let result = args;
-				const maxTimeout = settings.get("tools.maxTimeout");
-				if (maxTimeout > 0 && typeof result.timeout === "number") {
-					result = { ...result, timeout: Math.min(result.timeout, maxTimeout) };
-				}
-				if (obfuscator?.hasSecrets()) {
-					result = deobfuscateToolArguments(obfuscator, result);
-				}
-				return result;
-			},
+			getCursorTools: () => [...(toolSession.xdevRegistry?.list() ?? [])],
+			transformToolCallArguments,
 			intentTracing: !!intentField,
 			pruneToolDescriptions: inlineToolDescriptors,
 			dialect: resolveDialect(settings.get("tools.format"), model),
@@ -2761,8 +2887,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			getXdevToolEntries: () => toolSession.xdevRegistry?.entries() ?? [],
 			xdevRegistry: toolSession.xdevRegistry,
 			initialMountedXdevToolNames,
-			requestedToolNames: requestedToolNameSet,
+			presentationPinnedToolNames: explicitlyRequestedToolNameSet,
 			setActiveToolNames,
+			ensureWriteRegistered,
 			getMcpServerInstructions: mcpManager
 				? () => {
 						const raw = mcpManager.getServerInstructions();
@@ -2922,8 +3049,56 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			});
 		};
 
-		// Auto-learn can immediately trigger a synthetic capture turn after the
-		// first real stop. When a memory backend is selected, install that backend's
+		const runAutoLearnCapture = createAutoLearnCaptureRunner({
+			sourceAgent: agent,
+			captureTools: autoLearnCaptureTools,
+			onPayload,
+			onResponse,
+			createAgent: captureOptions => {
+				const captureModel = captureOptions.initialState?.model;
+				const captureSessionId = captureOptions.sessionId;
+				if (!captureModel || !captureSessionId) throw new Error("Auto-learn capture identity is incomplete");
+				return new Agent({
+					...captureOptions,
+					cwd: sessionManager.getCwd(),
+					cwdResolver: () => sessionManager.getCwd(),
+					convertToLlm: convertToLlmFinal,
+					transformContext: async messages => wrapSteeringForModel(messages),
+					transformProviderContext: async (context, transformModel) => {
+						const transformed = obfuscator ? obfuscateProviderContext(obfuscator, context) : context;
+						return clampProviderContextImages(transformed, transformModel);
+					},
+					thinkingBudgets: agent.thinkingBudgets,
+					temperature: agent.temperature,
+					topP: agent.topP,
+					topK: agent.topK,
+					minP: agent.minP,
+					presencePenalty: agent.presencePenalty,
+					repetitionPenalty: agent.repetitionPenalty,
+					serviceTierResolver: agent.serviceTierResolver,
+					hideThinkingSummary: agent.hideThinkingSummary,
+					maxRetryDelayMs: agent.maxRetryDelayMs,
+					kimiApiFormat: settings.get("providers.kimiApiFormat") ?? "anthropic",
+					preferWebsockets: preferOpenAICodexWebsockets,
+					getToolContext: toolCall => toolContextStore.getContext(toolCall),
+					streamFn: settingsAwareStreamFn,
+					transformToolCallArguments,
+					intentTracing: !!intentField,
+					pruneToolDescriptions: inlineToolDescriptors,
+					dialect: resolveDialect(settings.get("tools.format"), captureModel),
+					abortOnFabricatedToolResult: settings.get("tools.abortOnFabricatedResult"),
+					appendOnlyContext: shouldEnableAppendOnlyContext(
+						settings.get("provider.appendOnlyContext"),
+						captureModel,
+					)
+						? new AppendOnlyContextManager()
+						: undefined,
+				});
+			},
+		});
+
+		// Auto-learn can immediately trigger a private capture after the first real
+		// stop. When a memory backend is selected, install that backend's
 		// per-session state first so the capture turn's `learn` tool observes the
 		// same initialized state as normal memory tools. Other sessions keep memory
 		// startup in the background to preserve the existing startup profile.
@@ -2938,7 +3113,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// reference is intentionally discarded (the listener retains it).
 		if (settings.get("autolearn.enabled") && taskDepth === 0) {
 			await logger.time("startMemoryStartupTask", startMemoryBackend);
-			new AutoLearnController({ session, settings });
+			new AutoLearnController({
+				session,
+				settings,
+				capture: content => session.runAutolearnCapture(signal => runAutoLearnCapture(content, signal)),
+			});
 		} else {
 			void logger.time("startMemoryStartupTask", startMemoryBackend);
 		}

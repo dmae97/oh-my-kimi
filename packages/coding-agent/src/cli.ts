@@ -338,7 +338,11 @@ export async function runCli(argv: string[]): Promise<void> {
 	// worker's parked initial messages as soon as the entry module's
 	// top-level evaluation finishes.
 	if (resolvedArgv[0]?.startsWith("__omp_worker_")) {
-		await runWorkerEntrypoint(resolvedArgv[0]);
+		const dispatched = await runWorkerEntrypoint(resolvedArgv[0]);
+		if (!dispatched) {
+			process.stderr.write(`Error: unknown worker selector: ${resolvedArgv[0]}\n`);
+			process.exitCode = 1;
+		}
 		return;
 	}
 

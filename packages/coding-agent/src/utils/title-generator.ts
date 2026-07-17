@@ -68,6 +68,7 @@ function getTitleModel(registry: ModelRegistry, settings: Settings, currentModel
  *   resolver instead of a pre-evaluated value ensures the metadata's account_uuid
  *   reflects the credential actually selected for this request.
  * @param customSystemPrompt Optional title-specific system prompt override
+ * @param signal Session-lifecycle cancellation for background title requests
  */
 export async function generateSessionTitle(
 	firstMessage: string,
@@ -77,6 +78,7 @@ export async function generateSessionTitle(
 	currentModel?: Model<Api>,
 	metadataResolver?: (provider: string) => Record<string, unknown> | undefined,
 	customSystemPrompt?: string,
+	signal?: AbortSignal,
 ): Promise<string | null> {
 	// Defer titling for greetings / acknowledgements / empty input. The default
 	// tiny title model can't reliably decline trivial input, so this happens
@@ -97,7 +99,7 @@ export async function generateSessionTitle(
 			sessionId,
 			currentModel,
 			metadataResolver,
-			undefined,
+			signal,
 			titleSystemPrompt,
 		);
 	}
@@ -117,9 +119,18 @@ export async function generateSessionTitle(
 		return null;
 	}
 	try {
-		const localTitle = titleSystemPrompt
-			? await tinyTitleClient.generate(tinyModel, firstMessage, { systemPrompt: titleSystemPrompt })
-			: await tinyTitleClient.generate(tinyModel, firstMessage);
+		let localTitle: string | null;
+		if (signal) {
+			localTitle = await tinyTitleClient.generate(
+				tinyModel,
+				firstMessage,
+				titleSystemPrompt ? { signal, systemPrompt: titleSystemPrompt } : { signal },
+			);
+		} else if (titleSystemPrompt) {
+			localTitle = await tinyTitleClient.generate(tinyModel, firstMessage, { systemPrompt: titleSystemPrompt });
+		} else {
+			localTitle = await tinyTitleClient.generate(tinyModel, firstMessage);
+		}
 		if (!localTitle) {
 			logger.warn("title-generator: local tiny model produced no title; skipping (no online fallback)", {
 				sessionId,

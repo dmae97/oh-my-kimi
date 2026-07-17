@@ -183,7 +183,10 @@ export class SelectorController {
 					getStatusLinePreview: () => {
 						// Return the rendered status line for inline preview
 						const availableWidth = this.ctx.editor.getTopBorderAvailableWidth(this.ctx.ui.terminal.columns);
-						return this.ctx.statusLine.getTopBorder(availableWidth).content;
+						return this.ctx.statusLine
+							.getTopBorder(availableWidth)
+							.lines.map(line => line.content)
+							.join("\n");
 					},
 					onPluginsChanged: async () => {
 						const projectPath = await resolveActiveProjectRegistryPath(this.ctx.sessionManager.getCwd());
@@ -746,7 +749,7 @@ export class SelectorController {
 								this.ctx.session.setThinkingLevel(AUTO_THINKING, true);
 							}
 							const roleInfo = getRoleInfo(role, settings);
-							this.ctx.showStatus(`${roleInfo?.name ?? role} model: ${selector ?? model.id}`);
+							this.ctx.showStatus(`${roleInfo?.tag ?? roleInfo?.name ?? role} model: ${selector ?? model.id}`);
 						}
 					} catch (error) {
 						this.ctx.showError(error instanceof Error ? error.message : String(error));
@@ -756,7 +759,9 @@ export class SelectorController {
 					try {
 						this.ctx.settings.setModelRole(role, undefined);
 						const roleInfo = getRoleInfo(role, settings);
-						this.ctx.showStatus(`${roleInfo?.name ?? role} role cleared — auto-selection applies`);
+						this.ctx.showStatus(
+							`${roleInfo?.tag ?? roleInfo?.name ?? role} role cleared — auto-selection applies`,
+						);
 					} catch (error) {
 						this.ctx.showError(error instanceof Error ? error.message : String(error));
 					}
@@ -773,8 +778,8 @@ export class SelectorController {
 						const roleInfo = getRoleInfo(role, settings);
 						this.ctx.showStatus(
 							chain.length > 0
-								? `${roleInfo?.name ?? role} fallbacks: ${chain.join(" → ")}`
-								: `${roleInfo?.name ?? role} fallbacks cleared`,
+								? `${roleInfo?.tag ?? roleInfo?.name ?? role} fallbacks: ${chain.join(" → ")}`
+								: `${roleInfo?.tag ?? roleInfo?.name ?? role} fallbacks cleared`,
 						);
 					} catch (error) {
 						this.ctx.showError(error instanceof Error ? error.message : String(error));
