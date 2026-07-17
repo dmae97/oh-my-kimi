@@ -560,13 +560,18 @@ async function waitForDiagnostics(
 ): Promise<Diagnostic[]> {
 	const { timeoutMs = 3000, signal, minVersion, expectedDocumentVersion, settleMs = DIAGNOSTICS_SETTLE_MS } = options;
 	const deadline = Date.now() + timeoutMs;
-	let pullPromise: Promise<Diagnostic[] | undefined> | undefined;
+	let pullAttempted = false;
+	let pullResultPromise: Promise<{ diagnostics: Diagnostic[] | undefined }> | undefined;
+	let pulled: Diagnostic[] | undefined;
 	let settledRef: PublishedDiagnostics | undefined;
 	let settledAt = 0;
 	while (Date.now() < deadline) {
 		throwIfAborted(signal);
-		if (!pullPromise && supportsDocumentDiagnostics(client)) {
-			pullPromise = requestDocumentDiagnostics(client, uri, signal, Math.max(1, deadline - Date.now()));
+		if (!pullAttempted && supportsDocumentDiagnostics(client)) {
+			pullAttempted = true;
+			pullResultPromise = requestDocumentDiagnostics(client, uri, signal, Math.max(1, deadline - Date.now())).then(
+				diagnostics => ({ diagnostics }),
+			);
 		}
 
 		const versionOk = minVersion === undefined || client.diagnosticsVersion > minVersion;
@@ -585,7 +590,18 @@ async function waitForDiagnostics(
 				return published.diagnostics;
 			}
 		}
-		await Bun.sleep(Math.min(DIAGNOSTICS_POLL_MS, Math.max(0, deadline - Date.now())));
+
+		const pollMs = Math.min(DIAGNOSTICS_POLL_MS, Math.max(0, deadline - Date.now()));
+		if (!pullResultPromise) {
+			await Bun.sleep(pollMs);
+			continue;
+		}
+		const pullResult = await Promise.race([pullResultPromise, Bun.sleep(pollMs).then(() => undefined)]);
+		if (pullResult) {
+			pullResultPromise = undefined;
+			pulled = pullResult.diagnostics;
+			if (pulled !== undefined) break;
+		}
 	}
 
 	const versionOk = minVersion === undefined || client.diagnosticsVersion > minVersion;
@@ -593,9 +609,9 @@ async function waitForDiagnostics(
 	if (published && versionOk) {
 		return published.diagnostics;
 	}
-	if (!pullPromise) return [];
-
-	const pulled = await pullPromise;
+	if (pullResultPromise) {
+		pulled = (await pullResultPromise).diagnostics;
+	}
 	throwIfAborted(signal);
 	if (pulled === undefined) return [];
 	client.diagnostics.set(uri, {
