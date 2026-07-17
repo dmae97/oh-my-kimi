@@ -739,7 +739,7 @@ const COMPACTION_CHECK_NONE: CompactionCheckResult = {
 };
 const COMPACTION_CHECK_DEFERRED_HANDOFF: CompactionCheckResult = {
 	deferredHandoff: true,
-	continuationScheduled: true,
+	continuationScheduled: false,
 };
 const COMPACTION_CHECK_CONTINUATION: CompactionCheckResult = {
 	deferredHandoff: false,
@@ -13521,7 +13521,10 @@ export class AgentSession {
 				},
 				{ generation },
 			);
-			return COMPACTION_CHECK_DEFERRED_HANDOFF;
+			return {
+				...COMPACTION_CHECK_DEFERRED_HANDOFF,
+				continuationScheduled: shouldAutoContinue,
+			};
 		}
 
 		// "overflow" forces context-full because the input itself is broken — a handoff
