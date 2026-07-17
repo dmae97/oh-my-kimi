@@ -1229,11 +1229,29 @@ function isRetryFallbackModelKey(key: string): boolean {
 }
 
 /**
- * A `provider/*` fallback-chain key: matches any active model of that provider,
- * so one entry covers every current and future model behind the provider.
+ * A wildcard fallback-chain key/entry: `provider/*` matches any model of that
+ * provider; an id-prefixed `provider/prefix/*` (e.g. `openrouter/google/*`)
+ * scopes it to ids under that prefix — aggregators namespace model ids by
+ * upstream vendor.
  */
 function isRetryFallbackWildcardKey(key: string): boolean {
 	return key.endsWith("/*");
+}
+
+/**
+ * Split a `…/*` wildcard key/entry into its provider and optional id prefix
+ * (`google-vertex/*` → provider only; `openrouter/google/*` → provider
+ * `openrouter`, prefix `google`). A template that names a known provider in
+ * full wins over the split, so provider ids containing `/` keep working.
+ */
+function parseRetryFallbackWildcard(
+	key: string,
+	isKnownProvider: (provider: string) => boolean,
+): { provider: string; idPrefix: string | undefined } {
+	const template = key.slice(0, -2);
+	const slash = template.indexOf("/");
+	if (slash < 0 || isKnownProvider(template)) return { provider: template, idPrefix: undefined };
+	return { provider: template.slice(0, slash), idPrefix: template.slice(slash + 1) };
 }
 
 function formatRetryFallbackSelector(model: Model, thinkingLevel: ThinkingLevel | undefined): string {
@@ -13851,6 +13869,11 @@ export class AgentSession {
 		return stopType === "refusal" || stopType === "sensitive";
 	}
 
+	/** True when any registered model belongs to `provider`. */
+	#hasProviderModels(provider: string): boolean {
+		return this.#modelRegistry.getAll().some(model => model.provider === provider);
+	}
+
 	#getRetryFallbackChains(): RetryFallbackChains {
 		const configuredChains = this.settings.get("retry.fallbackChains");
 		if (!configuredChains || typeof configuredChains !== "object") return {};
@@ -13881,8 +13904,8 @@ export class AgentSession {
 			const keyKind = isRetryFallbackModelKey(key) ? "model" : "role";
 			if (keyKind === "model") {
 				if (isRetryFallbackWildcardKey(key)) {
-					const provider = key.slice(0, -2);
-					if (!this.#modelRegistry.getAll().some(model => model.provider === provider)) {
+					const { provider } = parseRetryFallbackWildcard(key, p => this.#hasProviderModels(p));
+					if (!this.#hasProviderModels(provider)) {
 						const msg = `retry.fallbackChains wildcard key references unknown provider: ${key}`;
 						logger.warn(msg);
 						this.configWarnings.push(msg);
@@ -13914,8 +13937,8 @@ export class AgentSession {
 					continue;
 				}
 				if (isRetryFallbackWildcardKey(selectorStr)) {
-					const provider = selectorStr.slice(0, -2);
-					if (!this.#modelRegistry.getAll().some(model => model.provider === provider)) {
+					const { provider } = parseRetryFallbackWildcard(selectorStr, p => this.#hasProviderModels(p));
+					if (!this.#hasProviderModels(provider)) {
 						const msg = `Fallback chain for ${keyKind} '${key}' references unknown provider: ${selectorStr}`;
 						logger.warn(msg);
 						this.configWarnings.push(msg);
@@ -14006,9 +14029,22 @@ export class AgentSession {
 		for (const key of exactModelKeys) {
 			if (matchesCurrent(this.#getRetryFallbackPrimarySelector(key))) return key;
 		}
-		// 2. Provider wildcard (`provider/*`) — any active model of this provider.
-		const wildcardKey = `${parsedCurrent.provider}/*`;
-		if (Array.isArray(chains[wildcardKey])) return wildcardKey;
+		// 2. Provider wildcards — an id-prefixed key (`openrouter/google/*`)
+		//    beats the plain `provider/*` key for ids under its prefix.
+		let wildcardMatch: string | undefined;
+		let wildcardPrefixLength = -1;
+		for (const key in chains) {
+			if (!isRetryFallbackWildcardKey(key) || !Array.isArray(chains[key])) continue;
+			const { provider, idPrefix } = parseRetryFallbackWildcard(key, p => this.#hasProviderModels(p));
+			if (provider !== parsedCurrent.provider) continue;
+			if (idPrefix !== undefined && !parsedCurrent.id.startsWith(`${idPrefix}/`)) continue;
+			const prefixLength = idPrefix === undefined ? 0 : idPrefix.length;
+			if (prefixLength > wildcardPrefixLength) {
+				wildcardMatch = key;
+				wildcardPrefixLength = prefixLength;
+			}
+		}
+		if (wildcardMatch) return wildcardMatch;
 		// 3. Role keys — matched by the role's currently-assigned model.
 		for (const key of roleKeys) {
 			if (matchesCurrent(this.#getRetryFallbackPrimarySelector(key))) return key;
@@ -14027,9 +14063,11 @@ export class AgentSession {
 
 	/**
 	 * Parse one configured chain entry. A `provider/*` entry keeps the failing
-	 * model's id and swaps the provider (google-antigravity/x → google/x);
-	 * ids the target provider lacks are skipped by the candidate loop's
-	 * registry lookup.
+	 * model's id and swaps the provider (google-antigravity/x → google/x); an
+	 * id-prefixed `provider/prefix/*` entry re-prefixes the failing model's
+	 * bare id instead (openrouter/google/* : google-antigravity/x →
+	 * openrouter/google/x). Ids the target provider lacks are skipped by the
+	 * candidate loop's registry lookup.
 	 */
 	#parseRetryFallbackChainEntry(
 		entry: string,
@@ -14037,8 +14075,23 @@ export class AgentSession {
 	): RetryFallbackSelector | undefined {
 		if (isRetryFallbackWildcardKey(entry)) {
 			if (!current) return undefined;
-			const provider = entry.slice(0, -2);
-			return { raw: `${provider}/${current.id}`, provider, id: current.id, thinkingLevel: undefined };
+			const { provider, idPrefix } = parseRetryFallbackWildcard(entry, p => this.#hasProviderModels(p));
+			const bareId = current.id.slice(current.id.lastIndexOf("/") + 1);
+			let id: string;
+			if (idPrefix !== undefined) {
+				id = `${idPrefix}/${bareId}`;
+			} else if (
+				bareId !== current.id &&
+				!this.#modelRegistry.find(provider, current.id) &&
+				this.#modelRegistry.find(provider, bareId)
+			) {
+				// Aggregator → direct: the failing id carries a vendor prefix the
+				// target provider does not use (openrouter/google/x → google-vertex/x).
+				id = bareId;
+			} else {
+				id = current.id;
+			}
+			return { raw: `${provider}/${id}`, provider, id, thinkingLevel: undefined };
 		}
 		return parseRetryFallbackSelector(entry, this.#modelRegistry);
 	}
