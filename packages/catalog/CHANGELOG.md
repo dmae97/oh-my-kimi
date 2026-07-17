@@ -8,7 +8,7 @@
 
 ### Fixed
 
-- Fixed the model cache (`models.db`) serializing credential-bearing request headers (`Authorization`, `X-Api-Key`, `api-key`, `cookie`, `proxy-authorization`) written into a model's `headers` — e.g. a runtime/custom provider registered with an `apiKey` + `authHeader` baked `Authorization: Bearer <key>` into every discovered model, which then landed in plaintext SQLite. `writeModelCache` now strips these before persisting; credentials are re-derived on load from AuthStorage / provider config, so non-sensitive transport headers are preserved ([#5780](https://github.com/can1357/oh-my-pi/issues/5780)).
+- Fixed the model cache (`models.db`) serializing provider-defined request headers written into a model's `headers` — any custom name can carry a credential (for example `Authorization`, `X-Goog-Api-Key`, or `X-Access-Token`), so a denylist cannot make plaintext persistence safe. `writeModelCache` now omits all model headers; live headers are re-derived on load from AuthStorage / provider config. Cache schema v9 invalidates and securely deletes older header-bearing rows so their values do not remain recoverable in SQLite free pages ([#5780](https://github.com/can1357/oh-my-pi/issues/5780)).
 
 ## [17.0.1] - 2026-07-16
 

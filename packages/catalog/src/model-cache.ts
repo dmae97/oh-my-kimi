@@ -6,16 +6,18 @@ import { Database } from "bun:sqlite";
 import { getModelDbPath } from "@oh-my-pi/pi-utils";
 import type { Api, Model, ModelSpec } from "./types";
 
-// Rows persist ModelSpec JSON (sparse `compat`, never the resolved record);
-// the model manager rebuilds via `buildModel` on load. v8 invalidates Codex
-// discovery rows predating provider-native V2 compaction metadata; v7
-// invalidated rows predating the Antigravity Gemini budget-mode migration
-// (cached specs still carrying `thinking.mode: "google-level"` and the old
-// 3.5-flash effort routing); v6 invalidated rows that may contain the retired
-// unknown-limit sentinels (222222/8888); v5 invalidated rows predating
+// Rows persist ModelSpec JSON (sparse `compat`, never the resolved record).
+// Request headers are intentionally omitted: arbitrary provider-defined header
+// names can carry credentials, and live provider config/AuthStorage re-applies
+// them after cache load. v9 deletes rows that may contain persisted headers; v8
+// invalidated Codex discovery rows predating provider-native V2 compaction
+// metadata; v7 invalidated rows predating the Antigravity Gemini budget-mode
+// migration (cached specs still carrying `thinking.mode: "google-level"` and
+// the old 3.5-flash effort routing); v6 invalidated rows that may contain the
+// retired unknown-limit sentinels (222222/8888); v5 invalidated rows predating
 // effort-tier variant collapsing (raw `-low`/`-high`/`-thinking` member ids);
 // v4 dropped the pre-efforts ThinkingConfig shape.
-const CACHE_SCHEMA_VERSION = 8;
+const CACHE_SCHEMA_VERSION = 9;
 
 interface CacheRow {
 	provider_id: string;
@@ -52,6 +54,10 @@ function openDb(resolvedPath: string): Database {
 	// Install the busy handler BEFORE any lock-taking statement. See
 	// https://github.com/can1357/oh-my-pi/issues/2421.
 	db.run("PRAGMA busy_timeout = 3000");
+	// Schema invalidation can delete rows containing credentials written by old
+	// versions. Overwrite deleted SQLite cells instead of leaving their bytes in
+	// free pages where a raw scan of models.db can still recover them (#5780).
+	db.run("PRAGMA secure_delete = ON");
 	db.run("PRAGMA journal_mode = WAL");
 	db.run(`
 		CREATE TABLE IF NOT EXISTS model_cache (
@@ -143,33 +149,15 @@ export function readModelCache<TApi extends Api>(
 }
 
 /**
- * Request-auth header names that must never be persisted to the on-disk model
- * cache. Credentials are re-derived on load from AuthStorage / provider config
- * (`ModelRegistry.#applyProviderTransportOverride`), so caching them is both
- * redundant and a plaintext credential leak in `models.db` (issue #5780).
+ * Project a live model to cache-safe metadata.
+ *
+ * Headers are never persisted: custom/runtime providers may use arbitrary
+ * credential header names, so no name-based filter can be complete. Provider
+ * config and AuthStorage re-derive live headers after cache load.
  */
-const SENSITIVE_HEADER_NAMES: Record<string, true> = {
-	authorization: true,
-	"x-api-key": true,
-	"api-key": true,
-	cookie: true,
-	"proxy-authorization": true,
-};
-
-/**
- * Drop credential-bearing headers from a model spec before serialization. Keeps
- * non-sensitive transport headers (project ids, custom routing) intact.
- */
-function stripSensitiveHeaders<T extends { headers?: Record<string, string> }>(model: T): T {
-	const headers = model.headers;
-	if (!headers) return model;
-	let sanitized: Record<string, string> | undefined;
-	for (const key in headers) {
-		if (SENSITIVE_HEADER_NAMES[key.toLowerCase()]) continue;
-		sanitized ??= {};
-		sanitized[key] = headers[key];
-	}
-	return { ...model, headers: sanitized };
+function toCachedModelSpec<TApi extends Api>(model: Model<TApi>): ModelSpec<TApi> {
+	const { headers: _headers, compatConfig, ...rest } = model;
+	return { ...rest, compat: compatConfig };
 }
 
 export function writeModelCache<TApi extends Api>(
@@ -191,11 +179,7 @@ export function writeModelCache<TApi extends Api>(
 					updatedAt,
 					authoritative ? 1 : 0,
 					staticFingerprint,
-					JSON.stringify(
-						models.map(model =>
-							stripSensitiveHeaders({ ...model, compat: model.compatConfig, compatConfig: undefined }),
-						),
-					),
+					JSON.stringify(models.map(toCachedModelSpec)),
 				],
 			);
 		});
