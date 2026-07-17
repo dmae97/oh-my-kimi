@@ -1,4 +1,5 @@
 import type { ElementHandle, JSHandle, Page } from "puppeteer-core";
+import { ToolError } from "../../tool-errors";
 import ariaBundle from "./aria-snapshot.bundle.txt" with { type: "text" };
 // `aria-snapshot.bundle.txt` is a generated, committed artifact: Playwright's
 // injected ARIA-snapshot sources (pinned, Apache-2.0) bundled to a CJS module.
@@ -69,6 +70,29 @@ export async function resolveAriaRefHandle(page: Page, ref: string): Promise<Ele
 const ARIA_REF_PREFIXES = ["aria-ref=", "aria-ref/", "ariaref/"];
 
 /**
+ * Guard the selector funnels: `tab.click`/`type`/`fill`/`waitFor*`/`scrollIntoView`
+ * take string selectors only, but user `run` code routinely passes the ElementHandle
+ * from `tab.id(n)`/`tab.ref(...)` (or an un-awaited Promise of one) straight in.
+ * Without this the value reaches `.trim()`/`.startsWith()` and throws the opaque,
+ * minified `A.trim is not a function` instead of a recovery-naming ToolError.
+ */
+export function assertSelectorString(selector: unknown): asserts selector is string {
+	if (typeof selector === "string") return;
+	let kind: string;
+	if (selector !== null && typeof selector === "object") {
+		kind =
+			"then" in selector && typeof selector.then === "function" ? "a Promise (missing await?)" : "an ElementHandle";
+	} else {
+		kind = `a ${typeof selector}`;
+	}
+	throw new ToolError(
+		`Browser selector must be a string; got ${kind}. ` +
+			"tab.click/type/fill/waitFor take string selectors only — " +
+			'call the handle method directly (e.g. (await tab.id(n)).click()) or pass a string like "aria-ref=eN".',
+	);
+}
+
+/**
  * Recognize the explicit `[ref=eN]` selector forms and return the bare ref id,
  * else null. Accepts `aria-ref=e5` (Playwright-MCP style), `aria-ref/e5`, and
  * `ariaref/e5` — lets `tab.click("aria-ref=e5")` etc. act on snapshot refs. A
@@ -78,6 +102,7 @@ const ARIA_REF_PREFIXES = ["aria-ref=", "aria-ref/", "ariaref/"];
  * accepts a bare id directly.)
  */
 export function parseAriaRefSelector(selector: string): string | null {
+	assertSelectorString(selector);
 	const trimmed = selector.trim();
 	for (const prefix of ARIA_REF_PREFIXES) {
 		if (trimmed.startsWith(prefix)) {
