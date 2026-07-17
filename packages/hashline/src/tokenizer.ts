@@ -368,11 +368,14 @@ function scanHunkAnchor(line: string, start: number, end: number): TargetScan | 
 		if (next < end && line.charCodeAt(next) === CHAR_COLON) return null;
 		return { target: { kind: "delete_block", anchor: { line: anchor.line } }, nextIndex: next };
 	}
+	// `delete N.=M` — like `delete_block N`, takes no body and no trailing
+	// colon; a colon here falls through to contamination detection.
 	const deleteEnd = scanKeyword(line, cursor, end, HL_DELETE_KEYWORD);
 	if (deleteEnd !== null) {
 		const range = scanHeaderRange(line, deleteEnd, end, true);
 		if (range === null) return null;
-		const next = consumeOptionalColon(line, range.nextIndex, end);
+		const next = skipStrayDot(line, range.nextIndex, end);
+		if (next < end && line.charCodeAt(next) === CHAR_COLON) return null;
 		return { target: { kind: "delete", range: range.range }, nextIndex: next };
 	}
 	// `insert_after_block N:` — insert after the last line of the tree-sitter
