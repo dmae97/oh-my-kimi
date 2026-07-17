@@ -2242,6 +2242,15 @@ export class AgentSession {
 	 *  queue was consumed normally or a new turn already started. */
 	#drainStrandedQueuedMessages(): void {
 		if (this.#abortInProgress) return;
+		// Session transitions (newSession/`/new`, compact, model-switch, session-switch,
+		// dispose) call #disconnectFromAgent() BEFORE `await abort()`, so abort's own
+		// finally lands here with no listener attached. Auto-resuming now would snapshot
+		// the still-old context (the transition hasn't reached agent.reset() yet), start a
+		// stale provider turn that races the reset, and — once reconnected — append its
+		// output to the fresh session (issue #5800). A disconnected session never owns the
+		// queue: the transition does. Leave any queued steer/follow-up for the post-transition
+		// state (reset drops them; an explicit prompt flushes them).
+		if (this.#unsubscribeAgent === undefined) return;
 		// A concern steered into a resumed streaming run after a user interrupt can
 		// strand at the turn tail (steered past the loop's final boundary poll). While
 		// that interrupt's suppression is still in effect, reclaim such advisor steers
