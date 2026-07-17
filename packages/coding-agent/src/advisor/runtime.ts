@@ -692,10 +692,19 @@ export class AdvisorRuntime {
 					if (this.#epoch !== epoch) continue;
 					const failedMessages = this.agent.state.messages.slice(messageSnapshot);
 					const terminalFailure = this.#terminalAssistantFailure(messageSnapshot);
+					const terminalFailureId =
+						terminalFailure === undefined ? undefined : AIError.classifyMessage(terminalFailure);
 					const contextOverflow =
-						(terminalFailure !== undefined &&
-							AIError.is(AIError.classifyMessage(terminalFailure), AIError.Flag.ContextOverflow)) ||
+						(terminalFailureId !== undefined && AIError.is(terminalFailureId, AIError.Flag.ContextOverflow)) ||
 						AIError.is(AIError.classify(err), AIError.Flag.ContextOverflow);
+					// A terminal provider failure that is neither retriable nor an
+					// overflow (e.g. a blocked prompt) will fail identically on every
+					// retry — classify it before rollback so the batch is dropped after
+					// one attempt instead of burning the 3-attempt budget (#5468).
+					const terminalFailureRetriable =
+						terminalFailureId === undefined ||
+						AIError.retriable(terminalFailureId) ||
+						AIError.is(terminalFailureId, AIError.Flag.ContextOverflow);
 					this.#rollbackFailedTurn(messageSnapshot);
 					logger.debug("advisor turn failed", { err: String(err) });
 					let recovered = false;
@@ -727,7 +736,15 @@ export class AdvisorRuntime {
 						});
 						continue;
 					}
-					if (contextOverflow) {
+					if (!terminalFailureRetriable) {
+						logger.warn("advisor terminal failure is non-retriable; dropping bounded batch");
+						this.#notifyFailureOnce(err);
+						this.#consecutiveFailures = 0;
+						// The dropped batch may carry primary-context we never delivered; drop
+						// the seen-state too so queued raw deltas re-expand before delivery.
+						this.#clearSeenContext();
+						success = true;
+					} else if (contextOverflow) {
 						this.#clearAdvisorContextAtCurrentCursor();
 						if (contextWasFresh) {
 							// The bounded update cannot fit even with no advisor history. Drop
