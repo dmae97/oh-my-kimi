@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isEnoent, postmortem } from "@oh-my-pi/pi-utils";
+import { isEisdir, isEnoent, postmortem } from "@oh-my-pi/pi-utils";
 import { daemonRuntimeDir } from "./paths";
 
 const CLIENTS_DIR = "clients";
@@ -15,7 +15,7 @@ async function canonicalProjectDir(projectDir: string): Promise<string> {
 	try {
 		return await fs.realpath(resolved);
 	} catch (error) {
-		if (isEnoent(error)) return resolved;
+		if (isEnoent(error) || isEisdir(error)) return resolved;
 		throw error;
 	}
 }

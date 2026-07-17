@@ -44,6 +44,9 @@
 ### Fixed
 
 - Fixed the TUI usage panel truncating organization suffixes from same-email account labels even when the terminal has enough width ([#5701](https://github.com/can1357/oh-my-pi/issues/5701)).
+### Fixed
+
+- Fixed a startup crash on Windows when running from a drive root (e.g. `R:\`): `fs.realpath` throws `EISDIR` there, but `canonicalProjectDir` in `launch/presence.ts` and `launch/client.ts` only recovered `ENOENT`. It now also falls back to `path.resolve()` on `EISDIR` ([#5708](https://github.com/can1357/oh-my-pi/issues/5708) by [@ve3xone](https://github.com/ve3xone)).
 
 ## [17.0.1] - 2026-07-16
 
