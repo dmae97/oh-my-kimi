@@ -3246,6 +3246,25 @@ export class TUI extends Container {
 			}
 
 			const code = raw.charCodeAt(i);
+			if (code >= 0x20 && code <= 0x7e) {
+				// Printable-ASCII run: every char here is exactly one cell wide, so
+				// the run is copied with a single slice instead of a per-char
+				// slice + visibleWidth call. Stop conditions mirror the general
+				// path: width budget (cells), source budget (maxSourceLength).
+				if (output.length >= maxSourceLength) break;
+				const cap = i + Math.min(safeWidth - cells, maxSourceLength - output.length);
+				let j = i + 1;
+				while (j < raw.length && j < cap) {
+					const c = raw.charCodeAt(j);
+					if (c < 0x20 || c > 0x7e) break;
+					j++;
+				}
+				output += raw.slice(i, j);
+				cells += j - i;
+				i = j;
+				continue;
+			}
+
 			const next = code >= 0xd800 && code <= 0xdbff && i + 1 < raw.length ? i + 2 : i + 1;
 			const char = raw.slice(i, next);
 			const charWidth = visibleWidth(char);
