@@ -83,6 +83,9 @@
 ### Fixed
 
 - Fixed headless `omp -p` waiting indefinitely after a completed turn when final mnemopi consolidation stalls; print mode now applies the same bounded consolidation shutdown budget as interactive exit and reaps the embed worker ([#5753](https://github.com/can1357/oh-my-pi/issues/5753)).
+### Fixed
+
+- Fixed explicit-tool sessions bypassing `xd://` presentation for ambient discoverable custom and MCP tools, which sent their schemas top-level and could exceed provider tool limits or trigger schema-compatibility errors.
 
 ## [17.0.1] - 2026-07-16
 

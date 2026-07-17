@@ -171,8 +171,11 @@ describe("createAgentSession defaultInactive tool activation", () => {
 
 		try {
 			expect(session.getActiveToolNames()).toEqual(
-				expect.arrayContaining(["read", "default_active_tool", "default_inactive_tool"]),
+				expect.arrayContaining(["read", "default_inactive_tool", "write"]),
 			);
+			expect(session.getActiveToolNames()).not.toContain("default_active_tool");
+			expect(session.getXdevToolEntries().map(entry => entry.name)).toContain("default_active_tool");
+			expect(session.getXdevToolEntries().map(entry => entry.name)).not.toContain("default_inactive_tool");
 			expect(session.systemPrompt.join("\n")).toContain("default_inactive_tool");
 		} finally {
 			await session.dispose();
@@ -261,6 +264,36 @@ describe("createAgentSession defaultInactive tool activation", () => {
 		}
 	});
 
+	it("does not activate write merely because plan mode is available", async () => {
+		const tempDir = makeTempDir();
+		const { session } = await createAgentSession({
+			...baseOptions(tempDir),
+			toolNames: ["read"],
+		});
+
+		try {
+			await session.setActiveToolsByName(["read"]);
+			expect(session.getActiveToolNames()).not.toContain("write");
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	it("preserves write explicitly selected by a runtime caller", async () => {
+		const tempDir = makeTempDir();
+		const { session } = await createAgentSession({
+			...baseOptions(tempDir),
+			toolNames: ["read"],
+		});
+
+		try {
+			await session.setActiveToolsByName(["read", "write"]);
+			await session.refreshMCPTools([]);
+			expect(session.getActiveToolNames()).toContain("write");
+		} finally {
+			await session.dispose();
+		}
+	});
 	it("registers vibe tools only during explicit vibe activation", async () => {
 		const tempDir = makeTempDir();
 		const { session } = await createAgentSession(baseOptions(tempDir));

@@ -2181,20 +2181,23 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	async #clearTransientModeState(): Promise<void> {
 		if (this.planModeEnabled || this.planModePaused) {
-			if (this.#planModePreviousTools !== undefined) {
-				await this.session.setActiveToolsByName(this.#planModePreviousTools);
-			}
-			this.session.setPlanProposalHandler?.(null);
 			this.session.setPlanModeState(undefined);
-			this.planModeEnabled = false;
-			this.planModePaused = false;
-			this.planModePlanFilePath = undefined;
-			this.#planModePreviousTools = undefined;
-			this.#planModePreviousModelState = undefined;
-			this.#pendingModelSwitch = undefined;
-			this.#pendingPlanModelSwitch = false;
-			this.#planModeHasEntered = false;
-			this.#updatePlanModeStatus();
+try {
+				if (this.#planModePreviousTools !== undefined) {
+					await this.session.setActiveToolsByName(this.#planModePreviousTools);
+				}
+			} finally {
+				this.session.setPlanProposalHandler?.(null);
+				this.planModeEnabled = false;
+				this.planModePaused = false;
+				this.planModePlanFilePath = undefined;
+				this.#planModePreviousTools = undefined;
+				this.#planModePreviousModelState = undefined;
+				this.#pendingModelSwitch = undefined;
+				this.#pendingPlanModelSwitch = false;
+				this.#planModeHasEntered = false;
+				this.#updatePlanModeStatus();
+			}
 		}
 
 		if (this.goalModeEnabled || this.goalModePaused) {
@@ -2408,18 +2411,30 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 
-		const previousTools = this.#planModePreviousTools;
-		if (previousTools && previousTools.length > 0) {
-			await this.session.setActiveToolsByName(previousTools);
-		}
-		if (this.#planModePreviousModelState) {
-			if (!options?.deferModelRestore) {
-				await this.#restorePlanPreviousModel(this.#planModePreviousModelState);
+		const planModeState = this.session.getPlanModeState();
+		this.session.setPlanModeState(undefined);
+		try {
+			if (this.#planModePreviousTools !== undefined) {
+				await this.session.setActiveToolsByName(this.#planModePreviousTools);
 			}
-			this.#clearPendingPlanModelSwitch();
+if (this.#planModePreviousModelState) {
+				if (!options?.deferModelRestore) {
+					await this.#restorePlanPreviousModel(this.#planModePreviousModelState);
+				}
+				// If #applyPlanModeModel queued a deferred switch to the plan-role model
+				// (because the session was streaming on entry), drop it now: we are
+				// leaving plan mode, so flushing it on the next agent_end would land the
+				// session on the plan-role model after the user has exited plan mode
+				// (issue #816). This runs even when deferModelRestore is set
+				// (compact-approval path): otherwise the stale plan switch survives and
+				// flushPendingModelSwitch() later clobbers the restored/execution model.
+				this.#clearPendingPlanModelSwitch();
+			}
+		} catch (error) {
+			this.session.setPlanModeState(planModeState);
+			throw error;
 		}
 		this.session.setPlanProposalHandler?.(null);
-		this.session.setPlanModeState(undefined);
 		this.planModeEnabled = false;
 		// Suppress cache-miss marker on the next turn: plan exit changes the system
 		// prompt, which predictably invalidates the cache.

@@ -907,6 +907,8 @@ export interface AgentSessionConfig {
 	builtInToolNames?: Iterable<string>;
 	/** Update tool-session predicates that render guidance from the live active tool set. */
 	setActiveToolNames?: (names: Iterable<string>) => void;
+	/** Register the write transport lazily when runtime xdev mounts first need it. */
+	ensureWriteRegistered?: () => Promise<boolean>;
 	/** Current session pre-LLM message transform pipeline */
 	transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => AgentMessage[] | Promise<AgentMessage[]>;
 	/**
@@ -953,7 +955,8 @@ export interface AgentSessionConfig {
 	xdevRegistry?: XdevRegistry;
 	/** Discoverable tools mounted under `xd://` in the initial enabled set (startup partition in `sdk.ts`). */
 	initialMountedXdevToolNames?: string[];
-	requestedToolNames?: ReadonlySet<string>;
+	/** Explicit/effective names pinned top-level during runtime repartitioning. */
+	presentationPinnedToolNames?: ReadonlySet<string>;
 	/**
 	 * Optional accessor for live MCP server instructions. Read by the session's
 	 * `rebuildSystemPrompt`-skip optimization to detect server-side instruction
@@ -2031,8 +2034,10 @@ export class AgentSession {
 	#getLocalCalendarDate: () => string;
 	#getMcpServerInstructions: (() => Map<string, string> | undefined) | undefined;
 	#setActiveToolNames: ((names: Iterable<string>) => void) | undefined;
+	#ensureWriteRegistered: (() => Promise<boolean>) | undefined;
 	#disconnectOwnedMcpManager: (() => Promise<void>) | undefined;
-	#requestedToolNames: ReadonlySet<string> | undefined;
+	#presentationPinnedToolNames: ReadonlySet<string> | undefined;
+	#runtimeSelectedToolNames: ReadonlySet<string> | undefined;
 	#baseSystemPrompt: string[];
 	#baseSystemPromptBeforeMemoryPromotion: string[] | undefined;
 	/**
@@ -2523,12 +2528,17 @@ export class AgentSession {
 			readPlan: url => this.#readPlanYoloFile(url),
 			listPlanFiles: () => this.#listPlanYoloFiles(),
 		});
+		this.setPlanModeState(undefined);
 		const previousTools = this.#planYoloPreviousTools;
-		if (previousTools) {
-			await this.setActiveToolsByName(previousTools);
+		try {
+			if (previousTools) {
+				await this.setActiveToolsByName(previousTools);
+			}
+		} catch (error) {
+			this.setPlanModeState(state);
+			throw error;
 		}
 		this.setPlanProposalHandler(null);
-		this.setPlanModeState(undefined);
 		this.#planYolo = undefined;
 		this.#planYoloPreviousTools = undefined;
 		await this.setModelTemporary(planYolo.target, planYolo.thinkingLevel, { ephemeral: true });
@@ -2641,7 +2651,8 @@ export class AgentSession {
 		this.#toolRegistry = config.toolRegistry ?? new Map();
 		this.#createVibeTools = config.createVibeTools;
 		this.#builtInToolNames = new Set(config.builtInToolNames ?? []);
-		this.#requestedToolNames = config.requestedToolNames;
+		this.#presentationPinnedToolNames = config.presentationPinnedToolNames;
+		this.#ensureWriteRegistered = config.ensureWriteRegistered;
 		this.#transformContext = config.transformContext ?? (messages => messages);
 		this.#transformProviderContext = config.transformProviderContext;
 		this.#sideStreamFn = config.sideStreamFn ?? streamSimple;
@@ -6947,50 +6958,99 @@ this.#titleGenerationAbortController.abort();
 
 	async #applyActiveToolsByName(toolNames: string[]): Promise<void> {
 		toolNames = normalizeToolNames(toolNames);
+		const selectedTools = toolNames.flatMap(name => {
+			const tool = this.#toolRegistry.get(name);
+			return tool ? [{ name, tool }] : [];
+		});
+		const xdevReadAvailable = this.#builtInToolNames.has("read") && selectedTools.some(({ name }) => name === "read");
+		const isPresentationPinned = (name: string): boolean =>
+			this.#presentationPinnedToolNames?.has(name) === true || this.#runtimeSelectedToolNames?.has(name) === true;
+		const mountCandidates = selectedTools.filter(
+			({ name, tool }) =>
+				this.#xdevRegistry !== undefined &&
+				xdevReadAvailable &&
+				!isPresentationPinned(name) &&
+				isMountableUnderXdev(tool),
+		);
+
+		let builtInWriteAvailable = this.#builtInToolNames.has("write");
+		if (mountCandidates.length > 0 && !builtInWriteAvailable) {
+			builtInWriteAvailable = (await this.#ensureWriteRegistered?.()) === true;
+			if (builtInWriteAvailable) this.#builtInToolNames.add("write");
+		}
+		const mountNames = builtInWriteAvailable ? new Set(mountCandidates.map(({ name }) => name)) : new Set<string>();
 		const tools: AgentTool[] = [];
 		const validToolNames: string[] = [];
 		const mountedTools: AgentTool[] = [];
-		for (const name of toolNames) {
-			const tool = this.#toolRegistry.get(name);
-			if (!tool) continue;
-			// Discoverable tools are presented as `xd://` devices (kept out of the
-			// top-level schema) when the transport is active; everything else stays
-			// top-level. `loadMode` decides presentation only — selection is upstream.
-			if (this.#xdevRegistry && isMountableUnderXdev(tool)) {
-				mountedTools.push(tool);
+		for (const { name, tool } of selectedTools) {
+			if (mountNames.has(name)) {
+				mountedTools.push(this.#wrapToolForAcpPermission(tool));
 			} else {
 				tools.push(this.#wrapToolForAcpPermission(tool));
 				validToolNames.push(name);
 			}
 		}
-		// Reconcile the dynamic `xd://` mounts: newly-active discoverable tools are
-		// mounted, deactivated ones dropped (built-in devices are preserved). A
-		// removed or disconnected tool must not stay callable through a stale device.
+
+		const pinnedWrite = isPresentationPinned("write");
+		const activeDeferrableTool = tools.some(tool => tool.deferrable === true);
+		const transportNeeded = mountedTools.length > 0 || activeDeferrableTool || this.#planModeState?.enabled === true;
+		if (transportNeeded && !builtInWriteAvailable) {
+			builtInWriteAvailable = (await this.#ensureWriteRegistered?.()) === true;
+			if (builtInWriteAvailable) this.#builtInToolNames.add("write");
+		}
+		if (transportNeeded && builtInWriteAvailable) {
+			const write = this.#toolRegistry.get("write");
+			if (write && !validToolNames.includes("write")) {
+				tools.push(this.#wrapToolForAcpPermission(write));
+				validToolNames.push("write");
+			}
+		} else if (
+			!pinnedWrite &&
+			(this.#presentationPinnedToolNames !== undefined || this.#runtimeSelectedToolNames !== undefined)
+		) {
+			const writeNameIndex = validToolNames.indexOf("write");
+			if (writeNameIndex >= 0 && this.#builtInToolNames.has("write")) validToolNames.splice(writeNameIndex, 1);
+			const writeToolIndex = tools.findIndex(tool => tool.name === "write" && this.#builtInToolNames.has("write"));
+			if (writeToolIndex >= 0) tools.splice(writeToolIndex, 1);
+		}
+
 		const previousMounted = this.#mountedXdevToolNames;
+		const previousMountedTools = [...previousMounted].flatMap(name => {
+			const tool = this.#xdevRegistry?.get(name);
+			return tool ? [tool] : [];
+		});
+		const previousActiveToolNames = this.getActiveToolNames();
 		this.#mountedXdevToolNames = new Set(mountedTools.map(tool => tool.name));
 		this.#xdevRegistry?.reconcile(mountedTools);
-		this.#notifyXdevMountDelta(previousMounted);
 		this.#setActiveToolNames?.(validToolNames);
-		this.agent.setTools(tools);
 
-		// Rebuild base system prompt with new tool set, but only when the tool set
-		// actually changed. MCP servers can reconnect at arbitrary times and call
-		// `refreshMCPTools` -> `#applyActiveToolsByName` even though the resulting
-		// tool list is byte-identical. Skipping the rebuild keeps the system prompt
-		// stable, which is required for Anthropic prompt caching to keep hitting.
-		if (this.#rebuildSystemPrompt) {
-			const signature = this.#computeAppliedToolSignature(validToolNames, tools);
-			if (signature !== this.#lastAppliedToolSignature) {
-				if (this.#lastAppliedToolSignature !== undefined) {
-					this.#clearInheritedProviderPromptCacheKey();
+		let rebuiltSystemPrompt: string[] | undefined;
+		let rebuiltSignature: string | undefined;
+		try {
+			if (this.#rebuildSystemPrompt) {
+				const signature = this.#computeAppliedToolSignature(validToolNames, tools);
+				if (signature !== this.#lastAppliedToolSignature) {
+					const built = await this.#rebuildSystemPrompt(validToolNames, this.#toolRegistry);
+					rebuiltSystemPrompt = built.systemPrompt;
+					rebuiltSignature = signature;
 				}
-				const built = await this.#rebuildSystemPrompt(validToolNames, this.#toolRegistry);
-				this.#baseSystemPrompt = built.systemPrompt;
-				this.#baseSystemPromptBeforeMemoryPromotion = undefined;
-				this.agent.setSystemPrompt(this.#baseSystemPrompt);
-				this.#lastAppliedToolSignature = signature;
-				this.#promptModelKey = this.#currentPromptModelKey();
 			}
+		} catch (error) {
+			this.#mountedXdevToolNames = previousMounted;
+			this.#xdevRegistry?.reconcile(previousMountedTools);
+			this.#setActiveToolNames?.(previousActiveToolNames);
+			throw error;
+		}
+
+		this.#notifyXdevMountDelta(previousMounted);
+		this.agent.setTools(tools);
+		if (rebuiltSystemPrompt && rebuiltSignature) {
+			if (this.#lastAppliedToolSignature !== undefined) this.#clearInheritedProviderPromptCacheKey();
+			this.#baseSystemPrompt = rebuiltSystemPrompt;
+			this.#baseSystemPromptBeforeMemoryPromotion = undefined;
+			this.agent.setSystemPrompt(this.#baseSystemPrompt);
+			this.#lastAppliedToolSignature = rebuiltSignature;
+			this.#promptModelKey = this.#currentPromptModelKey();
 		}
 	}
 
@@ -7061,7 +7121,24 @@ this.#titleGenerationAbortController.abort();
 	 * Changes take effect before the next model call.
 	 */
 	async setActiveToolsByName(toolNames: string[]): Promise<void> {
-		await this.#applyActiveToolsByName(toolNames);
+		const mounted = this.#mountedXdevToolNames;
+		const normalized = normalizeToolNames(toolNames);
+		const transportWriteActive =
+			this.#builtInToolNames.has("write") &&
+			this.getActiveToolNames().includes("write") &&
+			this.#presentationPinnedToolNames?.has("write") !== true &&
+			this.#runtimeSelectedToolNames?.has("write") !== true &&
+			(mounted.size > 0 || this.#planModeState?.enabled === true);
+		const previousRuntimeSelectedToolNames = this.#runtimeSelectedToolNames;
+		this.#runtimeSelectedToolNames = new Set(
+			normalized.filter(name => !mounted.has(name) && !(name === "write" && transportWriteActive)),
+		);
+		try {
+			await this.#applyActiveToolsByName(normalized);
+		} catch (error) {
+			this.#runtimeSelectedToolNames = previousRuntimeSelectedToolNames;
+			throw error;
+		}
 	}
 
 	/** Rebuild the base system prompt using the current active tool set. */
@@ -7204,6 +7281,12 @@ this.#titleGenerationAbortController.abort();
 	 */
 	async refreshMCPTools(mcpTools: CustomTool[]): Promise<void> {
 		const existingNames = Array.from(this.#toolRegistry.keys());
+		const previousMcpTools = new Map(
+			existingNames.flatMap(name => {
+				const tool = this.#toolRegistry.get(name);
+				return isMCPToolName(name) && tool ? [[name, tool] as const] : [];
+			}),
+		);
 		for (const name of existingNames) {
 			if (isMCPToolName(name)) {
 				this.#toolRegistry.delete(name);
@@ -7231,10 +7314,18 @@ this.#titleGenerationAbortController.abort();
 			this.#toolRegistry.set(finalTool.name, finalTool);
 		}
 
-		// Every connected MCP tool is enabled; re-derive the active set from the
-		// current non-MCP tools plus all freshly registered MCP tools.
+		// Every connected MCP tool is selected; centralized repartitioning owns
+		// presentation pins and write-transport activation/removal.
 		const nextActive = [...new Set([...this.#getActiveNonMCPToolNames(), ...mcpTools.map(tool => tool.name)])];
-		await this.#applyActiveToolsByName(nextActive);
+		try {
+			await this.#applyActiveToolsByName(nextActive);
+		} catch (error) {
+			for (const name of this.#toolRegistry.keys()) {
+				if (isMCPToolName(name)) this.#toolRegistry.delete(name);
+			}
+			for (const [name, tool] of previousMcpTools) this.#toolRegistry.set(name, tool);
+			throw error;
+		}
 	}
 
 	/**
@@ -7255,6 +7346,12 @@ this.#titleGenerationAbortController.abort();
 
 		const previousRpcHostToolNames = new Set(this.#rpcHostToolNames);
 		const previousActiveToolNames = this.getEnabledToolNames();
+		const previousRpcHostTools = new Map(
+			[...previousRpcHostToolNames].flatMap(name => {
+				const tool = this.#toolRegistry.get(name);
+				return tool ? [[name, tool] as const] : [];
+			}),
+		);
 		for (const name of previousRpcHostToolNames) {
 			this.#toolRegistry.delete(name);
 		}
@@ -7276,9 +7373,16 @@ this.#titleGenerationAbortController.abort();
 		const autoActivatedRpcToolNames = rpcTools
 			.filter(tool => !tool.hidden && !previousRpcHostToolNames.has(tool.name))
 			.map(tool => tool.name);
-		await this.#applyActiveToolsByName(
-			Array.from(new Set([...activeNonRpcToolNames, ...preservedRpcToolNames, ...autoActivatedRpcToolNames])),
-		);
+		try {
+			await this.#applyActiveToolsByName(
+				Array.from(new Set([...activeNonRpcToolNames, ...preservedRpcToolNames, ...autoActivatedRpcToolNames])),
+			);
+		} catch (error) {
+			for (const name of this.#rpcHostToolNames) this.#toolRegistry.delete(name);
+			this.#rpcHostToolNames = previousRpcHostToolNames;
+			for (const [name, tool] of previousRpcHostTools) this.#toolRegistry.set(name, tool);
+			throw error;
+		}
 	}
 
 	/** Whether auto-compaction is currently running */
@@ -7606,6 +7710,11 @@ this.#titleGenerationAbortController.abort();
 			.filter((tool): tool is AgentTool => tool !== undefined)
 			.map(tool => this.#wrapToolForAcpPermission(tool));
 		this.agent.setTools(activeTools);
+		const mountedTools = [...this.#mountedXdevToolNames]
+			.map(name => this.#toolRegistry.get(name))
+			.filter((tool): tool is AgentTool => tool !== undefined)
+			.map(tool => this.#wrapToolForAcpPermission(tool));
+		this.#xdevRegistry?.reconcile(mountedTools);
 	}
 
 	#clearCheckpointRuntimeState(): void {
