@@ -579,36 +579,65 @@ describe("StdinBuffer", () => {
 			expect(emittedSequences).toEqual([]);
 		});
 
-		it("leaves a single Enter batched with a following keystroke on the normal path", () => {
+		it("coalesces one raw paste split across adjacent stdin reads", () => {
+			processInput("line 1\r");
+			expect(emittedPaste).toEqual([]);
+			expect(emittedSequences).toEqual([]);
+
+			processInput("line 2\rline 3");
+			expect(emittedPaste).toEqual(["line 1\rline 2\rline 3"]);
+			expect(emittedSequences).toEqual([]);
+		});
+
+		it("coalesces a paste whose first line was already delivered before a break-only read", () => {
+			processInput("line 1");
+			processInput("\r");
+			processInput("line 2\rline 3");
+
+			expect(emittedSequences.join("")).toBe("line 1");
+			expect(emittedPaste).toEqual(["\rline 2\rline 3"]);
+		});
+
+		it("leaves a single Enter batched with a following keystroke on the normal path", async () => {
 			// The event loop can batch one Enter plus the next typed char into a
 			// single stdin read; that is byte-identical to a two-line paste, so it
 			// must keep the Enter's submit rather than coalesce (PR #5843 review).
 			processInput("a\rb");
 			expect(emittedPaste).toEqual([]);
+			expect(emittedSequences).toEqual([]);
+			await waitUntil(() => emittedSequences.length === 3);
 			expect(emittedSequences).toEqual(["a", "\r", "b"]);
 		});
 
-		it("leaves a two-line burst on the normal path (one interior break is ambiguous)", () => {
+		it("leaves a two-line burst on the normal path (one interior break is ambiguous)", async () => {
 			processInput("foo\rbar");
 			expect(emittedPaste).toEqual([]);
+			expect(emittedSequences).toEqual([]);
+			await waitUntil(() => emittedSequences.length === 7);
 			expect(emittedSequences).toEqual(["f", "o", "o", "\r", "b", "a", "r"]);
 		});
 
-		it("leaves a lone Enter as a normal submit keypress", () => {
+		it("leaves a lone Enter as a normal submit keypress", async () => {
 			processInput("\r");
 			expect(emittedPaste).toEqual([]);
+			expect(emittedSequences).toEqual([]);
+			await waitUntil(() => emittedSequences.length === 1);
 			expect(emittedSequences).toEqual(["\r"]);
 		});
 
-		it("leaves typed text with a trailing Enter on the normal path", () => {
+		it("leaves typed text with a trailing Enter on the normal path", async () => {
 			processInput("hello\r");
 			expect(emittedPaste).toEqual([]);
+			expect(emittedSequences).toEqual([]);
+			await waitUntil(() => emittedSequences.length === 6);
 			expect(emittedSequences).toEqual(["h", "e", "l", "l", "o", "\r"]);
 		});
 
-		it("does not coalesce a run of bare Enters", () => {
+		it("does not coalesce a run of bare Enters", async () => {
 			processInput("\r\r");
 			expect(emittedPaste).toEqual([]);
+			expect(emittedSequences).toEqual([]);
+			await waitUntil(() => emittedSequences.length === 2);
 			expect(emittedSequences).toEqual(["\r", "\r"]);
 		});
 
