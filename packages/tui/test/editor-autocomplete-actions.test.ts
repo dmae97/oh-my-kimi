@@ -285,9 +285,9 @@ describe("Editor Enter handler sync slash completion", () => {
 		expect(editor.isShowingAutocomplete()).toBe(false);
 	});
 
-	it("accepts a bare mid-prompt skill slash with Enter and submits the completed prompt", async () => {
+	it("accepts a bare mid-prompt skill slash with Enter without submitting the draft", async () => {
 		const editor = createSkillEditor();
-		let submitted = "";
+		let submitted: string | undefined;
 		editor.onSubmit = text => {
 			submitted = text;
 		};
@@ -295,8 +295,8 @@ describe("Editor Enter handler sync slash completion", () => {
 		await openMidPromptSkillAutocomplete(editor, "run a ");
 		editor.handleInput("\r");
 
-		expect(submitted).toBe("run a /skill:security-scan");
-		expect(editor.getText()).toBe("");
+		expect(submitted).toBeUndefined();
+		expect(editor.getText()).toBe("run a /skill:security-scan ");
 	});
 
 	it("hides mid-prompt skill autocomplete immediately when Backspace removes the slash", async () => {
