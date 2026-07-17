@@ -119,10 +119,18 @@ export async function generateSessionTitle(
 		return null;
 	}
 	try {
-		const localTitle = await tinyTitleClient.generate(tinyModel, firstMessage, {
-			signal,
-			systemPrompt: titleSystemPrompt,
-		});
+		let localTitle: string | null;
+		if (signal) {
+			localTitle = await tinyTitleClient.generate(
+				tinyModel,
+				firstMessage,
+				titleSystemPrompt ? { signal, systemPrompt: titleSystemPrompt } : { signal },
+			);
+		} else if (titleSystemPrompt) {
+			localTitle = await tinyTitleClient.generate(tinyModel, firstMessage, { systemPrompt: titleSystemPrompt });
+		} else {
+			localTitle = await tinyTitleClient.generate(tinyModel, firstMessage);
+		}
 		if (!localTitle) {
 			logger.warn("title-generator: local tiny model produced no title; skipping (no online fallback)", {
 				sessionId,
