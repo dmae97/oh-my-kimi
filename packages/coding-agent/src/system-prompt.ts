@@ -730,7 +730,10 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	}
 	const toolRefs = Object.fromEntries(toolPromptNames.entries());
 	const xdevToolNames = new Set(xdevTools.map(mounted => mounted.name));
-	const inventoryToolNames = xdevToolNames.size === 0 ? toolNames : toolNames.filter(name => !xdevToolNames.has(name));
+	// A direct custom tool can share a name with a retained built-in device.
+	// Presence in both toolNames and tools proves it still has a top-level definition.
+	const inventoryToolNames =
+		xdevToolNames.size === 0 ? toolNames : toolNames.filter(name => tools?.has(name) || !xdevToolNames.has(name));
 	const toolInfo = inventoryToolNames.map(name => ({
 		name: toolPromptNames.get(name) ?? name,
 		internalName: name,
