@@ -8,6 +8,9 @@
 ### Fixed
 
 - Fixed linked legacy pi extensions failing to load when they import `DefaultPackageManager` or linkedom: the coding-agent compatibility shim now enumerates OMP extension paths with plugin metadata, and extension-graph CommonJS modules load through synchronous default-export bridges with linkedom's bundled canvas fallback. ([#5658](https://github.com/can1357/oh-my-pi/issues/5658))
+### Fixed
+
+- Fixed reassigning the `plan` role model mid-planning not taking effect on the active planning turn; the change now applies at the next turn boundary instead of only the next plan-mode entry ([#5657](https://github.com/can1357/oh-my-pi/issues/5657)).
 
 ## [17.0.1] - 2026-07-16
 
