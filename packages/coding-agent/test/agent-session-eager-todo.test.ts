@@ -7,7 +7,7 @@ import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream"
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AgentSession, type AgentSessionConfig } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -103,7 +103,10 @@ describe("AgentSession eager todo enforcement", () => {
 	let authStorage: AuthStorage | undefined;
 	const observedCalls: ObservedPromptCall[] = [];
 
-	async function createSession(settingsOverride: Record<string, unknown> = {}): Promise<void> {
+	async function createSession(
+		settingsOverride: Record<string, unknown> = {},
+		sessionOverride: Partial<AgentSessionConfig> = {},
+	): Promise<void> {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
 
@@ -183,17 +186,21 @@ describe("AgentSession eager todo enforcement", () => {
 			settings,
 			modelRegistry,
 			toolRegistry,
+			...sessionOverride,
 		});
 	}
 
-	async function recreateSession(settingsOverride: Record<string, unknown> = {}): Promise<void> {
+	async function recreateSession(
+		settingsOverride: Record<string, unknown> = {},
+		sessionOverride: Partial<AgentSessionConfig> = {},
+	): Promise<void> {
 		await session.dispose();
 		authStorage?.close();
 		authStorage = undefined;
 		streamCallCount = 0;
 		scriptedResponses = [];
 		observedCalls.length = 0;
-		await createSession(settingsOverride);
+		await createSession(settingsOverride, sessionOverride);
 	}
 
 	function waitForSessionName(expected: string): Promise<void> {
@@ -374,6 +381,33 @@ describe("AgentSession eager todo enforcement", () => {
 
 		expect(completeSimpleMock).not.toHaveBeenCalled();
 		expect(session.sessionManager.getSessionName()).toBe("Manual parser title");
+	});
+
+	it("does not refresh todo-init titles for headless subagent sessions", async () => {
+		// Issue #5910: subagent sessions (agentKind "sub") have no visible session
+		// title, so a todo-init replan refresh only wastes a tiny-model LLM call.
+		await recreateSession({ "title.refreshOnReplan": true }, { agentKind: "sub" });
+		await session.setSessionName("Old auto title", "auto");
+		const priorUser: AgentMessage = {
+			role: "user",
+			content: "rework parser diagnostics",
+			timestamp: Date.now() - 1,
+		};
+		session.agent.appendMessage(priorUser);
+		session.sessionManager.appendMessage(priorUser);
+		const completeSimpleMock = vi.spyOn(ai, "completeSimple");
+		scriptedResponses = [
+			createToolCallAssistantMessage("todo", {
+				op: "init",
+				list: [{ phase: "Parser", items: ["Replan parser diagnostics"] }],
+			}),
+			createAssistantMessage("todo initialized"),
+		];
+
+		await session.prompt("replan parser diagnostics");
+
+		expect(completeSimpleMock).not.toHaveBeenCalled();
+		expect(session.sessionManager.getSessionName()).toBe("Old auto title");
 	});
 
 	it("does not refresh todo-init titles when title refresh on replan is disabled", async () => {

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed subagent (task) sessions triggering an unnecessary tiny-model session-title generation call on `todo init`; headless subagent sessions have no operator-visible title and now skip the replan title refresh ([#5910](https://github.com/can1357/oh-my-pi/issues/5910)).
+
 ## [17.0.3] - 2026-07-17
 
 ### Changed

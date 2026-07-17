@@ -9574,6 +9574,11 @@ export class AgentSession {
 	}
 
 	#scheduleReplanTitleRefresh(): void {
+		// Subagent sessions have no operator-visible title — the tree shows their
+		// registry id and generated task label — so a todo-init replan refresh would
+		// only burn a tiny-model call whose result lands in JSONL and is never shown
+		// (issue #5910).
+		if (this.#agentKind === "sub") return;
 		if (this.#replanTitleRefreshInFlight) return;
 		if (!this.settings.get("title.refreshOnReplan")) return;
 		if (this.sessionManager.titleSource === "user") return;
