@@ -19,6 +19,9 @@
 ### Fixed
 
 - Fixed an issue where Windows PTY callers were forced through shell command re-quoting by supporting direct executable and argument launching.
+### Fixed
+
+- Fixed timed-out shell pipelines cancelling their output reader while the final stage was still flushing, which dropped captured output and could terminate Windows hosts during teardown. ([#5316](https://github.com/can1357/oh-my-pi/issues/5316))
 
 ## [16.4.6] - 2026-07-12
 

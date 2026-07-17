@@ -1034,6 +1034,42 @@ exit 64
 		expect(result.output).toContain("Command cancelled");
 		await expectMarkerNeverWritten(marker, release);
 	});
+	it("waits for native timeout teardown to flush piped output", async () => {
+		const realSetTimeout = globalThis.setTimeout;
+		vi.spyOn(globalThis, "setTimeout").mockImplementation(((handler: () => void, ms?: number, ...rest: unknown[]) =>
+			realSetTimeout(
+				handler,
+				ms === 1000 ? 5 : typeof ms === "number" && ms > 1000 ? 50 : ms,
+				...rest,
+			)) as typeof globalThis.setTimeout);
+
+		let nativeSignal: AbortSignal | undefined;
+		vi.spyOn(piNatives.Shell.prototype, "run").mockImplementation((options, onChunk) => {
+			if (options.signal instanceof AbortSignal) {
+				nativeSignal = options.signal;
+			}
+			const nativeResult = Promise.withResolvers<piNatives.ShellRunResult>();
+			realSetTimeout(() => {
+				onChunk?.(null, "flushed-during-timeout\n");
+				nativeResult.resolve({ exitCode: undefined, cancelled: false, timedOut: true });
+			}, 20);
+			return nativeResult.promise;
+		});
+		const abortSpy = vi.spyOn(piNatives.Shell.prototype, "abort").mockResolvedValue();
+
+		const result = await executeBash("producer | tail -5", {
+			cwd: tempDir,
+			timeout: 1000,
+			sessionKey: "native-timeout-flushes-pipeline",
+		});
+
+		expect(result.cancelled).toBe(true);
+		expect(result.output).toContain("flushed-during-timeout");
+		expect(result.output).toContain("Command timed out after 1 seconds");
+		expect(nativeSignal).toBeDefined();
+		expect(nativeSignal?.aborted).toBe(false);
+		expect(abortSpy).not.toHaveBeenCalled();
+	});
 });
 
 describe("executeBash :async: background retention", () => {
