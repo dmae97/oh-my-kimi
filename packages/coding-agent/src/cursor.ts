@@ -18,6 +18,7 @@ import { resolveToCwd } from "./tools/path-utils";
 
 interface CursorExecBridgeOptions {
 	cwd: string;
+	getCwd?: () => string;
 	tools: Map<string, AgentTool>;
 	getToolContext?: () => AgentToolContext | undefined;
 	emitEvent?: (event: AgentEvent) => void;
@@ -123,7 +124,7 @@ async function executeDelete(options: CursorExecBridgeOptions, pathArg: string, 
 
 	options.emitEvent?.({ type: "tool_execution_start", toolCallId, toolName, args: { path: pathArg } });
 
-	const absolutePath = resolveToCwd(pathArg, options.cwd);
+	const absolutePath = resolveToCwd(pathArg, options.getCwd?.() ?? options.cwd);
 	let isError = false;
 	let result: AgentToolResult<unknown>;
 

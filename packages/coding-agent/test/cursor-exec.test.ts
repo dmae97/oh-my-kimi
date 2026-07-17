@@ -330,4 +330,27 @@ describe("CursorExecHandlers native delete gating (issue #5680)", () => {
 		expect(result.isError).toBe(false);
 		expect(await Bun.file(target).exists()).toBe(false);
 	});
+
+	it("resolves native deletes through the live cwd resolver", async () => {
+		const movedCwd = path.join(cwd, "moved");
+		await fs.mkdir(movedCwd);
+		const originalTarget = path.join(cwd, "obsolete.txt");
+		const movedTarget = path.join(movedCwd, "obsolete.txt");
+		await Bun.write(originalTarget, "preserve me");
+		await Bun.write(movedTarget, "remove me");
+		let currentCwd = cwd;
+		const handlers = new CursorExecHandlers({
+			cwd,
+			getCwd: () => currentCwd,
+			tools: new Map(),
+			allowNativeDelete: true,
+		});
+
+		currentCwd = movedCwd;
+		const result = await handlers.delete(create(DeleteArgsSchema, { toolCallId: "call-del", path: "obsolete.txt" }));
+
+		expect(result.isError).toBe(false);
+		expect(await Bun.file(originalTarget).exists()).toBe(true);
+		expect(await Bun.file(movedTarget).exists()).toBe(false);
+	});
 });

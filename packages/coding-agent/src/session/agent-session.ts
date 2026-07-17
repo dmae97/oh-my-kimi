@@ -2984,6 +2984,7 @@ export class AgentSession {
 			if (advisorCanMutateFiles) availableAdvisorToolNames.add("delete");
 			const advisorCursorExecHandlers = new CursorExecHandlers({
 				cwd: this.sessionManager.getCwd(),
+				getCwd: () => this.sessionManager.getCwd(),
 				tools: advisorToolMap,
 				allowNativeDelete: advisorCanMutateFiles,
 			});
