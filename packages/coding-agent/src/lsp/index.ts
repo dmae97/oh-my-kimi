@@ -28,6 +28,7 @@ import {
 	sendNotification,
 	sendRequest,
 	setIdleTimeout,
+	supportsDocumentDiagnostics,
 	syncContent,
 	WARMUP_TIMEOUT_MS,
 	waitForProjectLoaded,
@@ -530,17 +531,49 @@ interface WaitForDiagnosticsOptions {
 	settleMs?: number;
 }
 
+function requestDocumentDiagnostics(
+	client: LspClient,
+	uri: string,
+	signal: AbortSignal | undefined,
+	timeoutMs: number,
+): Promise<Diagnostic[] | undefined> {
+	return sendRequest(client, "textDocument/diagnostic", { textDocument: { uri } }, signal, timeoutMs)
+		.then(report => {
+			if (!report || typeof report !== "object" || !("kind" in report) || report.kind !== "full") {
+				return undefined;
+			}
+			if (!("items" in report) || !Array.isArray(report.items)) return undefined;
+			return report.items;
+		})
+		.catch(err => {
+			if (!signal?.aborted) {
+				logger.debug("LSP document diagnostic pull failed", { server: client.name, uri, error: String(err) });
+			}
+			return undefined;
+		});
+}
+
 async function waitForDiagnostics(
 	client: LspClient,
 	uri: string,
 	options: WaitForDiagnosticsOptions = {},
 ): Promise<Diagnostic[]> {
 	const { timeoutMs = 3000, signal, minVersion, expectedDocumentVersion, settleMs = DIAGNOSTICS_SETTLE_MS } = options;
-	const start = Date.now();
+	const deadline = Date.now() + timeoutMs;
+	let pullAttempted = false;
+	let pullResultPromise: Promise<{ diagnostics: Diagnostic[] | undefined }> | undefined;
+	let pulled: Diagnostic[] | undefined;
 	let settledRef: PublishedDiagnostics | undefined;
 	let settledAt = 0;
-	while (Date.now() - start < timeoutMs) {
+	while (Date.now() < deadline) {
 		throwIfAborted(signal);
+		if (!pullAttempted && supportsDocumentDiagnostics(client)) {
+			pullAttempted = true;
+			pullResultPromise = requestDocumentDiagnostics(client, uri, signal, Math.max(1, deadline - Date.now())).then(
+				diagnostics => ({ diagnostics }),
+			);
+		}
+
 		const versionOk = minVersion === undefined || client.diagnosticsVersion > minVersion;
 		const published = client.diagnostics.get(uri);
 		if (published && versionOk) {
@@ -557,13 +590,36 @@ async function waitForDiagnostics(
 				return published.diagnostics;
 			}
 		}
-		await Bun.sleep(DIAGNOSTICS_POLL_MS);
+
+		const pollMs = Math.min(DIAGNOSTICS_POLL_MS, Math.max(0, deadline - Date.now()));
+		if (!pullResultPromise) {
+			await Bun.sleep(pollMs);
+			continue;
+		}
+		const pullResult = await Promise.race([pullResultPromise, Bun.sleep(pollMs).then(() => undefined)]);
+		if (pullResult) {
+			pullResultPromise = undefined;
+			pulled = pullResult.diagnostics;
+			if (pulled !== undefined) break;
+		}
 	}
+
 	const versionOk = minVersion === undefined || client.diagnosticsVersion > minVersion;
-	if (!versionOk) {
-		return [];
+	const published = client.diagnostics.get(uri);
+	if (published && versionOk) {
+		return published.diagnostics;
 	}
-	return client.diagnostics.get(uri)?.diagnostics ?? [];
+	if (pullResultPromise) {
+		pulled = (await pullResultPromise).diagnostics;
+	}
+	throwIfAborted(signal);
+	if (pulled === undefined) return [];
+	client.diagnostics.set(uri, {
+		diagnostics: pulled,
+		version: expectedDocumentVersion ?? client.openFiles.get(uri)?.version ?? null,
+	});
+	client.diagnosticsVersion += 1;
+	return pulled;
 }
 
 /** Project type detection result */
