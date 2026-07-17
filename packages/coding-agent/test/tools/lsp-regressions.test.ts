@@ -1184,6 +1184,103 @@ describe("lsp regressions", () => {
 		expect(resultText.replace(/\s+/g, " ")).toContain("too many arguments in call");
 	});
 
+	for (const dynamicRegistration of [false, true]) {
+		it(`reports pull diagnostics advertised through ${dynamicRegistration ? "dynamic registration" : "server capabilities"}`, async () => {
+			const tempDir = TempDir.createSync("@omp-lsp-pull-diags-");
+			try {
+				const targetFile = path.join(tempDir.path(), "target.ts");
+				await Bun.write(targetFile, "const broken: string = 42;\n");
+				const diagnostic: Diagnostic = {
+					message: "Type 'number' is not assignable to type 'string'.",
+					severity: 1,
+					code: 2322,
+					source: "ts",
+					range: {
+						start: { line: 0, character: 6 },
+						end: { line: 0, character: 12 },
+					},
+				};
+
+				const fakeServer = installFakeLsp((message, server) => {
+					if (message.method === "initialize") {
+						server.send({
+							jsonrpc: "2.0",
+							id: message.id,
+							result: { capabilities: dynamicRegistration ? {} : { diagnosticProvider: true } },
+						});
+						server.send({
+							jsonrpc: "2.0",
+							method: "$/progress",
+							params: { token: "workspace", value: { kind: "begin" } },
+						});
+						server.send({
+							jsonrpc: "2.0",
+							method: "$/progress",
+							params: { token: "workspace", value: { kind: "end" } },
+						});
+					} else if (dynamicRegistration && message.method === "initialized") {
+						server.send({
+							jsonrpc: "2.0",
+							id: "register-diagnostics",
+							method: "client/registerCapability",
+							params: {
+								registrations: [
+									{
+										id: "pull-diagnostics",
+										method: "textDocument/diagnostic",
+										registerOptions: {},
+									},
+								],
+							},
+						});
+					} else if (message.method === "textDocument/diagnostic") {
+						server.send({
+							jsonrpc: "2.0",
+							id: message.id,
+							result: { kind: "full", items: [diagnostic] },
+						});
+					} else if (message.method === "shutdown") {
+						server.send({ jsonrpc: "2.0", id: message.id, result: null });
+					} else if (message.method === "exit") {
+						server.exit(0);
+					}
+				});
+
+				const serverConfig: ServerConfig = {
+					command: "fake-lsp",
+					fileTypes: ["ts"],
+					rootMarkers: [],
+				};
+				vi.spyOn(lspConfig, "loadConfig").mockReturnValue({
+					servers: { "fake-lsp": serverConfig },
+					idleTimeoutMs: undefined,
+				});
+				vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["fake-lsp", serverConfig]]);
+
+				const tool = new LspTool({ cwd: tempDir.path() } as ToolSession);
+				const result = await tool.execute(`pull-diagnostics-${dynamicRegistration}`, {
+					action: "diagnostics",
+					file: targetFile,
+					timeout: 20,
+				});
+				const initialize = fakeServer.received.find(message => message.method === "initialize");
+
+				expect(initialize).toMatchObject({
+					params: {
+						capabilities: {
+							textDocument: { diagnostic: { dynamicRegistration: true } },
+						},
+					},
+				});
+				expect(fakeServer.received.map(message => message.method)).toContain("textDocument/diagnostic");
+				expect(textResult(result)).toContain("Type 'number' is not assignable to type 'string'.");
+			} finally {
+				await lspClient.shutdownAll();
+				tempDir.removeSync();
+			}
+		}, 15_000);
+	}
+
 	it("does not reuse stale file diagnostics after another URI publishes", async () => {
 		const tempDir = TempDir.createSync("@omp-lsp-stale-diags-");
 		try {
