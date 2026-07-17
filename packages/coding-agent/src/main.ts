@@ -17,6 +17,7 @@ import {
 	logger,
 	normalizePathForComparison,
 	postmortem,
+	setInteractiveHost,
 	setProjectDir,
 	VERSION,
 } from "@oh-my-pi/pi-utils";
@@ -1158,6 +1159,10 @@ export async function runRootCommand(
 	const pipedInput = isProtocolMode ? undefined : await logger.time("readPipedInput", readPipedInput);
 	const autoPrint = pipedInput !== undefined && !parsedArgs.print && parsedArgs.mode === undefined;
 	const isInteractive = !parsedArgs.print && !autoPrint && parsedArgs.mode === undefined;
+	// Only the interactive host renders a focusable Agent Hub / subagent session
+	// tree; declare it so headless subagent optimizations (e.g. skipping replan
+	// title refresh) can tell a focusable process from a print/RPC/eval one.
+	setInteractiveHost(isInteractive);
 
 	// Initialize discovery system with settings for provider persistence
 	logger.time("initializeWithSettings", initializeWithSettings, settingsInstance);

@@ -13,7 +13,7 @@ import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { TodoTool } from "@oh-my-pi/pi-coding-agent/tools";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { setInteractiveHost, TempDir } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
 import eagerTodoPrompt from "../src/prompts/system/eager-todo.md" with { type: "text" };
 import { createAssistantMessage } from "./helpers/agent-session-setup";
@@ -384,8 +384,9 @@ describe("AgentSession eager todo enforcement", () => {
 	});
 
 	it("does not refresh todo-init titles for headless subagent sessions", async () => {
-		// Issue #5910: subagent sessions (agentKind "sub") have no visible session
-		// title, so a todo-init replan refresh only wastes a tiny-model LLM call.
+		// Issue #5910: a subagent (agentKind "sub") in a non-interactive host has no
+		// operator-visible title, so a todo-init replan refresh only wastes a
+		// tiny-model LLM call. isInteractiveHost() defaults false under bun test.
 		await recreateSession({ "title.refreshOnReplan": true }, { agentKind: "sub" });
 		await session.setSessionName("Old auto title", "auto");
 		const priorUser: AgentMessage = {
@@ -408,6 +409,44 @@ describe("AgentSession eager todo enforcement", () => {
 
 		expect(completeSimpleMock).not.toHaveBeenCalled();
 		expect(session.sessionManager.getSessionName()).toBe("Old auto title");
+	});
+
+	it("refreshes todo-init titles for a subagent focusable in an interactive host", async () => {
+		// A live subagent selected from the Agent Hub renders its session name in
+		// the status line, so the interactive host must keep the replan refresh the
+		// user enabled — only headless hosts skip it (issue #5910 review follow-up).
+		const previousInteractiveHost = setInteractiveHost(true);
+		try {
+			await recreateSession({ "title.refreshOnReplan": true }, { agentKind: "sub" });
+			await session.setSessionName("Old auto title", "auto");
+			const priorUser: AgentMessage = {
+				role: "user",
+				content: "rework parser diagnostics",
+				timestamp: Date.now() - 1,
+			};
+			session.agent.appendMessage(priorUser);
+			session.sessionManager.appendMessage(priorUser);
+			const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
+				stopReason: "stop",
+				content: [{ type: "text", text: "<title>Parser diagnostics replan</title>" }],
+			} as never);
+			scriptedResponses = [
+				createToolCallAssistantMessage("todo", {
+					op: "init",
+					list: [{ phase: "Parser", items: ["Replan parser diagnostics"] }],
+				}),
+				createAssistantMessage("todo initialized"),
+			];
+
+			const titleApplied = waitForSessionName("Parser diagnostics replan");
+			await session.prompt("replan parser diagnostics");
+			await titleApplied;
+
+			expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+			expect(session.sessionManager.getSessionName()).toBe("Parser diagnostics replan");
+		} finally {
+			setInteractiveHost(previousInteractiveHost);
+		}
 	});
 
 	it("does not refresh todo-init titles when title refresh on replan is disabled", async () => {

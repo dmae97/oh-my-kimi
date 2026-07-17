@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed subagent (task) sessions triggering an unnecessary tiny-model session-title generation call on `todo init`; headless subagent sessions have no operator-visible title and now skip the replan title refresh ([#5910](https://github.com/can1357/oh-my-pi/issues/5910)).
+- Fixed subagent (task) sessions triggering an unnecessary tiny-model session-title generation call on `todo init`. Subagent sessions in a non-interactive host (print/RPC/ACP/eval/SDK/CI) have no operator-visible title and now skip the replan title refresh; interactive hosts keep it, since a live subagent focused from the Agent Hub renders its session name in the status line ([#5910](https://github.com/can1357/oh-my-pi/issues/5910)).
 
 ## [17.0.3] - 2026-07-17
 
