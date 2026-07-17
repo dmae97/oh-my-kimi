@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, vi } from "bun:test";
 import { resolvePredicateTimeout } from "@oh-my-pi/pi-coding-agent/tools/browser/run-cancellation";
 import {
 	dispatchScroll,
@@ -54,6 +54,19 @@ describe("browser scroll acknowledgement", () => {
 		await expect(dispatchScroll(() => Promise.reject(new Error("target closed")), 100)).rejects.toThrow(
 			"target closed",
 		);
+	});
+
+	it("cancels the acknowledgement deadline after a prompt dispatch", async () => {
+		vi.useFakeTimers();
+		try {
+			const timerCount = vi.getTimerCount();
+
+			await dispatchScroll(() => Promise.resolve());
+
+			expect(vi.getTimerCount()).toBe(timerCount);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
 

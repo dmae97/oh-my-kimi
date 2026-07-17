@@ -182,7 +182,14 @@ export async function dispatchScroll(
 	dispatch: () => Promise<void>,
 	ackTimeoutMs = SCROLL_ACK_TIMEOUT_MS,
 ): Promise<void> {
-	await Promise.race([dispatch(), Bun.sleep(ackTimeoutMs)]);
+	const deadline = Promise.withResolvers<void>();
+	const timer = setTimeout(() => deadline.resolve(), ackTimeoutMs);
+	timer.unref();
+	try {
+		await Promise.race([dispatch(), deadline.promise]);
+	} finally {
+		clearTimeout(timer);
+	}
 }
 
 /**
