@@ -5,6 +5,7 @@
 ### Fixed
 
 - Automatically invalidate and rotate OAuth credentials when an "invalidated oauth token" error occurs
+- Fixed auth-broker snapshot validation rejecting API keys stored via the `/login` flow (`credentials[N].credential.source must be removed`): the wire schema now accepts the `source: "login"` marker on `api_key` credentials, so gateway/broker setups serving login-sourced keys (e.g. custom hosts) work again.
 
 ## [17.0.1] - 2026-07-16
 

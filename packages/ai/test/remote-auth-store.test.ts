@@ -1033,6 +1033,18 @@ describe("RemoteAuthCredentialStore + AuthStorage integration", () => {
 		expect(clientStorage.get("kagi")).toEqual({ type: "api_key", key: "new-key" });
 		clientStorage.close();
 	});
+	test("snapshot with a login-sourced api_key passes client wire validation", async () => {
+		// Regression: keys stored via the /login flow carry `source: "login"`.
+		// exportSnapshot() forwards them verbatim; the client wire schema used
+		// to reject the field ("credentials[0].credential.source must be removed").
+		await serverStorage!.set("custom-host", { type: "api_key", key: "sk-custom", source: "login" });
+
+		const brokerClient = new AuthBrokerClient({ url: handle!.url, token });
+		const result = await brokerClient.fetchSnapshot();
+		if (result.status !== 200) throw new Error("expected snapshot");
+		const entry = result.snapshot.credentials.find(candidate => candidate.provider === "custom-host");
+		expect(entry?.credential).toEqual({ type: "api_key", key: "sk-custom", source: "login" });
+	});
 
 	test("client AuthStorage.remove disables every broker-side credential for the provider (logout)", async () => {
 		serverStore!.saveApiKey("kagi", "k1");
