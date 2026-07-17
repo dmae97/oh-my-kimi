@@ -96,11 +96,6 @@ interface ParsedApiLimitEntry {
 	displayName?: string;
 }
 
-type ClaudeUsagePayload = {
-	payload: ClaudeUsageResponse;
-	orgId?: string;
-};
-
 function parseIsoTime(value: string | undefined): number | undefined {
 	if (!value) return undefined;
 	const parsed = Date.parse(value);
@@ -178,22 +173,17 @@ function getNestedPayloadString(payload: Record<string, unknown>, key: string, n
 	return isRecord(nested) ? getPayloadString(nested, nestedKey) : undefined;
 }
 
-function extractUsageIdentity(payload: ClaudeUsageResponse, orgId?: string): { accountId?: string; email?: string } {
-	if (!isRecord(payload)) return { accountId: orgId };
+function extractUsageIdentity(payload: ClaudeUsageResponse): { accountId?: string; email?: string } {
+	if (!isRecord(payload)) return {};
 	const accountId =
 		getPayloadString(payload, "account_id") ??
 		getPayloadString(payload, "accountId") ??
 		getPayloadString(payload, "user_id") ??
 		getPayloadString(payload, "userId") ??
-		getPayloadString(payload, "org_id") ??
-		getPayloadString(payload, "orgId") ??
 		getNestedPayloadString(payload, "account", "uuid") ??
 		getNestedPayloadString(payload, "account", "id") ??
-		getNestedPayloadString(payload, "organization", "uuid") ??
-		getNestedPayloadString(payload, "organization", "id") ??
 		getNestedPayloadString(payload, "user", "uuid") ??
-		getNestedPayloadString(payload, "user", "id") ??
-		orgId;
+		getNestedPayloadString(payload, "user", "id");
 	const email =
 		getPayloadString(payload, "email") ??
 		getPayloadString(payload, "user_email") ??
@@ -263,16 +253,13 @@ async function fetchUsagePayload(
 	headers: Record<string, string>,
 	ctx: UsageFetchContext,
 	signal?: AbortSignal,
-): Promise<ClaudeUsagePayload | null> {
+): Promise<ClaudeUsageResponse | null> {
 	if (signal?.aborted) return null;
 
 	let lastPayload: ClaudeUsageResponse | null = null;
-	let lastOrgId: string | undefined;
 	for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
 		try {
 			const response = await ctx.fetch(url, { headers, signal });
-			const orgId = response.headers.get("anthropic-organization-id")?.trim() || undefined;
-			lastOrgId = orgId ?? lastOrgId;
 
 			if (!response.ok) {
 				const retryable = isRetryableStatus(response.status);
@@ -292,7 +279,7 @@ async function fetchUsagePayload(
 			if (isRecord(parsed)) {
 				const payload = parsed as ClaudeUsageResponse;
 				lastPayload = payload;
-				if (hasUsageData(payload)) return { payload, orgId };
+				if (hasUsageData(payload)) return payload;
 			}
 
 			ctx.logger?.warn("Claude usage response missing usage data", {
@@ -311,7 +298,7 @@ async function fetchUsagePayload(
 		}
 	}
 
-	return lastPayload ? { payload: lastPayload, orgId: lastOrgId } : null;
+	return lastPayload;
 }
 
 interface ClaudeProfile {
@@ -507,9 +494,8 @@ async function fetchClaudeUsage(params: UsageFetchParams, ctx: UsageFetchContext
 		authorization: `Bearer ${credential.accessToken}`,
 	};
 
-	const payloadResult = await fetchUsagePayload(url, headers, ctx, params.signal);
-	if (!payloadResult || !isRecord(payloadResult.payload)) return null;
-	const { payload, orgId } = payloadResult;
+	const payload = await fetchUsagePayload(url, headers, ctx, params.signal);
+	if (!payload || !isRecord(payload)) return null;
 
 	const apiLimitEntries = parseApiLimitEntries(payload.limits);
 	const fiveHour = parseBucket(payload.five_hour) ?? apiLimitEntries.find(entry => entry.kind === "session")?.bucket;
@@ -563,7 +549,7 @@ async function fetchClaudeUsage(params: UsageFetchParams, ctx: UsageFetchContext
 	].filter((limit): limit is UsageLimit => limit !== null);
 
 	if (limits.length === 0) return null;
-	const identity = extractUsageIdentity(payload, orgId);
+	const identity = extractUsageIdentity(payload);
 	let accountId = identity.accountId ?? credential.accountId;
 	let email = identity.email ?? credential.email;
 	if ((!accountId || !email) && !params.signal?.aborted) {
@@ -580,7 +566,7 @@ async function fetchClaudeUsage(params: UsageFetchParams, ctx: UsageFetchContext
 			endpoint: url,
 			...(accountId ? { accountId } : {}),
 			...(email ? { email } : {}),
-			...(orgId ? { orgId } : {}),
+			...(credential.orgId ? { orgId: credential.orgId } : {}),
 		},
 		raw: payload,
 	};
