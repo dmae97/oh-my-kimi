@@ -18,6 +18,7 @@ import { renderStatusLine, urlHyperlink } from "../tui";
 import { CachedOutputBlock, markFramedBlockComponent } from "../tui/output-block";
 import { webpExclusionForModel } from "../utils/image-loading";
 import { formatDimensionNote, resizeImage } from "../utils/image-resize";
+import { CONVERTIBLE_EXTENSIONS } from "../utils/markit";
 import { ensureTool } from "../utils/tools-manager";
 import { type ArchiveFormat, listArchiveRoot, sniffArchiveFormat } from "../utils/zip";
 import { extractWithParallel, findParallelApiKey, getParallelExtractContent } from "../web/parallel";
@@ -38,20 +39,16 @@ import { clampTimeout } from "./tool-timeouts";
 // =============================================================================
 
 const FETCH_DEFAULT_MAX_LINES = 300;
-// Convertible document types handled by markit.
+// MIME types markit can convert — one per registered converter (pdf, docx,
+// pptx, xlsx, epub). Legacy `application/msword`, `application/vnd.ms-*`, and
+// `application/rtf` are intentionally absent: markit has no converter for them.
 const CONVERTIBLE_MIMES = new Set([
 	"application/pdf",
-	"application/msword",
-	"application/vnd.ms-powerpoint",
-	"application/vnd.ms-excel",
 	"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 	"application/vnd.openxmlformats-officedocument.presentationml.presentation",
 	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-	"application/rtf",
 	"application/epub+zip",
 ]);
-
-const CONVERTIBLE_EXTENSIONS = new Set([".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".rtf", ".epub"]);
 
 const NOTEBOOK_MIMES = new Set(["application/x-ipynb+json"]);
 const NOTEBOOK_EXTENSIONS = new Set([".ipynb"]);

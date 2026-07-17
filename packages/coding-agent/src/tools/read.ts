@@ -62,7 +62,7 @@ import {
 	MAX_IMAGE_INPUT_BYTES,
 	webpExclusionForModel,
 } from "../utils/image-loading";
-import { convertFileWithMarkit } from "../utils/markit";
+import { CONVERTIBLE_EXTENSIONS, convertFileWithMarkit } from "../utils/markit";
 import { type ArchiveReader, formatArchiveEntryLines, openArchive, parseArchivePathCandidates } from "../utils/zip";
 import { buildDirectoryTree, type DirectoryTree } from "../workspace-tree";
 import {
@@ -150,9 +150,6 @@ function getSummaryParseCache(session: object): LRUCache<string, SummaryResult |
 	}
 	return cache;
 }
-
-// Document types converted to markdown via markit.
-const CONVERTIBLE_EXTENSIONS = new Set([".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".rtf", ".epub"]);
 
 const MAX_SUMMARY_BYTES = 2 * 1024 * 1024;
 const MAX_SUMMARY_LINES = 20_000;
