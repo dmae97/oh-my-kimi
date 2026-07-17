@@ -124,6 +124,44 @@ describe("listClaudePluginRoots", () => {
 		});
 	});
 
+	test("isolates local plugins to their canonical project", async () => {
+		const pluginsDir = path.join(tempDir, ".claude", "plugins");
+		const projectA = path.join(tempDir, "project-a");
+		const projectB = path.join(tempDir, "project-b");
+		const projectBAlias = path.join(tempDir, "project-b-alias");
+		const projectBSubdir = path.join(projectB, "packages", "app");
+		await Promise.all([
+			fs.mkdir(pluginsDir, { recursive: true }),
+			fs.mkdir(path.join(projectA, ".git"), { recursive: true }),
+			fs.mkdir(path.join(projectB, ".git"), { recursive: true }),
+			fs.mkdir(projectBSubdir, { recursive: true }),
+		]);
+		await fs.symlink(projectB, projectBAlias, "dir");
+
+		const entry = (scope: "user" | "local", installPath: string, projectPath?: string) => ({
+			scope,
+			installPath,
+			projectPath,
+			version: "1.0.0",
+			installedAt: "2025-01-01T00:00:00Z",
+			lastUpdated: "2025-01-01T00:00:00Z",
+		});
+		const registry = {
+			version: 2,
+			plugins: {
+				"user-plugin@market": [entry("user", "/plugins/user")],
+				"active-plugin@market": [entry("local", "/plugins/active", projectB)],
+				"foreign-plugin@market": [entry("local", "/plugins/foreign", projectA)],
+			},
+		};
+		await fs.writeFile(path.join(pluginsDir, "installed_plugins.json"), JSON.stringify(registry));
+
+		const result = await listClaudePluginRoots(tempDir, path.join(projectBAlias, "packages", "app"));
+
+		expect(result.roots.map(root => root.id)).toEqual(["user-plugin@market", "active-plugin@market"]);
+		expect(result.roots.find(root => root.id === "active-plugin@market")?.scope).toBe("project");
+	});
+
 	test("parses plugin with project scope", async () => {
 		const pluginsDir = path.join(tempDir, ".claude", "plugins");
 		await fs.mkdir(pluginsDir, { recursive: true });

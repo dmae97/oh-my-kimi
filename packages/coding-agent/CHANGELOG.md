@@ -77,6 +77,9 @@
 ### Fixed
 
 - Fixed the editor status line silently dropping lower-priority segments in narrow terminals; configured segments now flow onto continuation rows in priority order ([#5749](https://github.com/can1357/oh-my-pi/issues/5749)).
+### Fixed
+
+- Fixed Claude Code marketplace plugins with `scope: "local"` leaking skills, hooks, tools, commands, and MCP servers into unrelated projects ([#5750](https://github.com/can1357/oh-my-pi/issues/5750)).
 
 ## [17.0.1] - 2026-07-16
 
