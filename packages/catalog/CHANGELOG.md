@@ -6,6 +6,10 @@
 
 - Increased maxTokens from 32,768 to 65,536 for Kimi K2.7-Code models on Fireworks
 
+### Fixed
+
+- Fixed the model cache (`models.db`) serializing credential-bearing request headers (`Authorization`, `X-Api-Key`, `api-key`, `cookie`, `proxy-authorization`) written into a model's `headers` — e.g. a runtime/custom provider registered with an `apiKey` + `authHeader` baked `Authorization: Bearer <key>` into every discovered model, which then landed in plaintext SQLite. `writeModelCache` now strips these before persisting; credentials are re-derived on load from AuthStorage / provider config, so non-sensitive transport headers are preserved ([#5780](https://github.com/can1357/oh-my-pi/issues/5780)).
+
 ## [17.0.1] - 2026-07-16
 
 ### Added

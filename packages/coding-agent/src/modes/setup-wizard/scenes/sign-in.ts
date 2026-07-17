@@ -224,7 +224,9 @@ export class SignInTab implements SetupTab {
 				onManualCodeInput: () =>
 					this.#showPrompt({ message: "Paste the authorization code (or full redirect URL):" }),
 			});
-			await this.host.ctx.session.modelRegistry.refresh();
+			// Provider-scoped online refresh so the just-persisted credential re-runs
+			// discovery instead of reusing a fresh authoritative cache row (#5780).
+			await this.host.ctx.session.modelRegistry.refreshProvider(providerId, "online");
 			if (this.#disposed) return;
 			this.#statusLines = [
 				theme.fg("success", `${theme.status.success} Signed in to ${providerId}`),

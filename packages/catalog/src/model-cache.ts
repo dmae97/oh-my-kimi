@@ -142,6 +142,36 @@ export function readModelCache<TApi extends Api>(
 	}
 }
 
+/**
+ * Request-auth header names that must never be persisted to the on-disk model
+ * cache. Credentials are re-derived on load from AuthStorage / provider config
+ * (`ModelRegistry.#applyProviderTransportOverride`), so caching them is both
+ * redundant and a plaintext credential leak in `models.db` (issue #5780).
+ */
+const SENSITIVE_HEADER_NAMES: Record<string, true> = {
+	authorization: true,
+	"x-api-key": true,
+	"api-key": true,
+	cookie: true,
+	"proxy-authorization": true,
+};
+
+/**
+ * Drop credential-bearing headers from a model spec before serialization. Keeps
+ * non-sensitive transport headers (project ids, custom routing) intact.
+ */
+function stripSensitiveHeaders<T extends { headers?: Record<string, string> }>(model: T): T {
+	const headers = model.headers;
+	if (!headers) return model;
+	let sanitized: Record<string, string> | undefined;
+	for (const key in headers) {
+		if (SENSITIVE_HEADER_NAMES[key.toLowerCase()]) continue;
+		sanitized ??= {};
+		sanitized[key] = headers[key];
+	}
+	return { ...model, headers: sanitized };
+}
+
 export function writeModelCache<TApi extends Api>(
 	providerId: string,
 	updatedAt: number,
@@ -161,7 +191,11 @@ export function writeModelCache<TApi extends Api>(
 					updatedAt,
 					authoritative ? 1 : 0,
 					staticFingerprint,
-					JSON.stringify(models.map(model => ({ ...model, compat: model.compatConfig, compatConfig: undefined }))),
+					JSON.stringify(
+						models.map(model =>
+							stripSensitiveHeaders({ ...model, compat: model.compatConfig, compatConfig: undefined }),
+						),
+					),
 				],
 			);
 		});

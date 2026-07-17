@@ -75,4 +75,38 @@ describe("model cache migrations", () => {
 		expect(fresh?.models.map(model => model.id)).toEqual(["fresh-cloud-model"]);
 		expect(fresh?.staticFingerprint).toBe("static-v3");
 	});
+
+	it("strips credential-bearing headers before persisting, keeping other headers (#5780)", () => {
+		const model = buildModel({
+			id: "gated-model",
+			name: "Gated Model",
+			api: "openai-completions",
+			provider: "runtime-ext",
+			baseUrl: "https://ext.example.com/v1",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 4096,
+			maxTokens: 1024,
+			headers: {
+				Authorization: "Bearer super-secret-key-abc123",
+				"X-Api-Key": "another-secret",
+				"X-Project-Id": "proj-42",
+			},
+		});
+		writeModelCache("runtime-ext", Date.now(), [model], true, "static-v1", dbPath);
+
+		// The plaintext SQLite payload must not carry the credentials.
+		const raw = new Database(dbPath, { readonly: true });
+		const row = raw
+			.query<{ models: string }, []>("SELECT models FROM model_cache WHERE provider_id = 'runtime-ext'")
+			.get();
+		raw.close();
+		expect(row?.models.includes("super-secret-key-abc123")).toBe(false);
+		expect(row?.models.includes("another-secret")).toBe(false);
+
+		// Non-sensitive transport headers survive the round-trip; auth headers do not.
+		const cached = readModelCache<"openai-completions">("runtime-ext", TTL_MS, Date.now, dbPath);
+		expect(cached?.models[0]?.headers).toEqual({ "X-Project-Id": "proj-42" });
+	});
 });
