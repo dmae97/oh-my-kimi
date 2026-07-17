@@ -2226,7 +2226,8 @@ mod tests {
 
 		let mut env = HashMap::new();
 		env.insert("HOME".to_string(), home.to_string_lossy().to_string());
-		let config = ShellConfig { session_env: Some(env), snapshot_path: None, minimizer: None };
+		let config =
+			ShellConfig { session_env: Some(env), snapshot_path: None, minimizer: None };
 		let mut session = create_session(&config).await.expect("create_session");
 		session.shell.set_working_dir(cwd_str).expect("set cwd");
 
