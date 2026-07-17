@@ -31,6 +31,7 @@ const AUTOCOMPLETE_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
 const SLASH_COMMAND_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
 	minPrimaryColumnWidth: 12,
 	maxPrimaryColumnWidth: 32,
+	wrapDescription: true,
 	overflowSearch: false,
 };
 

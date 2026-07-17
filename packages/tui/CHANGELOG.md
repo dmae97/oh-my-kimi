@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Restored wrapped descriptions in the slash-command autocomplete picker so long skill descriptions remain readable at normal terminal widths ([#5848](https://github.com/can1357/oh-my-pi/issues/5848)).
+
 ## [17.0.2] - 2026-07-17
 
 ### Added
