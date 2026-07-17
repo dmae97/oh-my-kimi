@@ -50,8 +50,11 @@ export class HookEditorComponent extends Container implements Focusable {
 		this.addChild(new DynamicBorder());
 		this.addChild(new Spacer(1));
 
-		// Title
-		this.addChild(new Text(theme.fg("accent", title), 1, 0));
+		// Title. Prompt-style renders the borderless editor's `> ` gutter at
+		// column 0, so pad the title to match; hook-style keeps the 1-col indent
+		// that lines up with its bordered editor body (#5313).
+		const chromePadX = this.#promptStyle ? 0 : 1;
+		this.addChild(new Text(theme.fg("accent", title), chromePadX, 0));
 		this.addChild(new Spacer(1));
 
 		// Editor
@@ -72,7 +75,7 @@ export class HookEditorComponent extends Container implements Focusable {
 		const hint = this.#promptStyle
 			? "enter or ctrl+q submit  esc cancel  ctrl+g external editor"
 			: "ctrl+q/ctrl+enter submit  esc cancel  ctrl+g external editor";
-		this.addChild(new Text(theme.fg("dim", hint), 1, 0));
+		this.addChild(new Text(theme.fg("dim", hint), chromePadX, 0));
 
 		this.addChild(new Spacer(1));
 		this.addChild(new DynamicBorder());

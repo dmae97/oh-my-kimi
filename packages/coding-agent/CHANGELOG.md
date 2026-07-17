@@ -238,6 +238,10 @@
 - Fixed rendering, status display, and PTY control sequence formatting issues in the `launch` tool.
 - Fixed in-process shell builtins (including `stat`, `date`, `sed`, `mktemp`, `tail`, `find`, `base64`, and `ln`) to correctly detect and translate macOS/BSD-style arguments and flags, preventing failures caused by GNU-only assumptions.
 
+### Fixed
+
+- Fixed the ask tool's "Other" custom-input dialog rendering the title, options, and hint one column to the right of the `> ` input gutter; the prompt-style editor chrome now aligns to column 0 ([#5313](https://github.com/can1357/oh-my-pi/issues/5313))
+
 ### Removed
 
 - Removed the `--prewalk-boomerang` feature and its associated configuration setting.
