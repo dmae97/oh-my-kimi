@@ -336,20 +336,22 @@ describe("imageGenTool", () => {
 			requestUrl = input.toString();
 			return new Response(
 				`data: ${JSON.stringify({
-					candidates: [
-						{
-							content: {
-								parts: [
-									{
-										inlineData: {
-											data: Buffer.from("fallback-image").toString("base64"),
-											mimeType: "image/png",
+					response: {
+						candidates: [
+							{
+								content: {
+									parts: [
+										{
+											inlineData: {
+												data: Buffer.from("fallback-image").toString("base64"),
+												mimeType: "image/png",
+											},
 										},
-									},
-								],
+									],
+								},
 							},
-						},
-					],
+						],
+					},
 				})}\n\n`,
 				{ status: 200, headers: { "content-type": "text/event-stream" } },
 			);
