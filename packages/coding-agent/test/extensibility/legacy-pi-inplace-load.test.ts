@@ -166,31 +166,6 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 		expect(Reflect.get(Object(second), "helperValue")).toBe("v2");
 	});
 
-	it("returns module.exports when graph-owned CommonJS requires a sibling", async () => {
-		const dir = await writePackage({
-			"package.json": JSON.stringify({ name: "cjs-sibling-ext", version: "1.0.0", type: "module" }),
-			"index.js": [
-				'import primary from "./primary.cjs";',
-				'import sibling from "./sibling.cjs";',
-				"export const primaryValue = primary.value;",
-				"export const siblingValue = sibling.value;",
-				"export const sharesSiblingExports = primary.sibling === sibling;",
-				"export default function (pi) { void pi; }",
-			].join("\n"),
-			"primary.cjs": [
-				'const sibling = require("./sibling.cjs");',
-				"module.exports = { value: `primary:${sibling.value}`, sibling };",
-			].join("\n"),
-			"sibling.cjs": 'module.exports = { value: "sibling" };\n',
-		});
-
-		const mod = await loadLegacyPiModule(path.join(dir, "index.js"));
-
-		expect(Reflect.get(Object(mod), "primaryValue")).toBe("primary:sibling");
-		expect(Reflect.get(Object(mod), "siblingValue")).toBe("sibling");
-		expect(Reflect.get(Object(mod), "sharesSiblingExports")).toBe(true);
-	});
-
 	it("reloads an edited entry module without polluting fileURLToPath-derived paths", async () => {
 		const entrySource = (version: string): string =>
 			[

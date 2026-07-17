@@ -18,11 +18,8 @@
 
 - Changed Bash command timeouts to render with a warning (yellow) border instead of an error (red) border, while still indicating to the model that the command did not complete normally.
 - Made the hashline seen-line guard opt-in and off by default via `edit.enforceSeenLines`, and improved handling of column-clipped lines so single-line edits on long lines apply without a full-width re-read.
-- Changed the default `astGrep.enabled` setting to `false`.
-- Batched todo operations with real tool calls to prevent solo todo turns and extra round trips.
 - Changed bundled TTSR rules to warn without interrupting generation.
 - Renamed the system prompt's project-context section wrapper from `<context>` to `<repo-rules>` to prevent collisions with the `task` tool's `context` parameter.
-- Rendered `read xd://` calls in a compact grouped read view instead of a full tool-execution card.
 - Enriched `/advisor status` to show per-advisor status glyphs, model, spend breakdown, and quota window for every configured advisor (including disabled ones), replacing the previous single-advisor-only summary.
 
 ### Fixed
@@ -68,8 +65,6 @@
 - Fixed RPC mode (`--mode rpc`) crashing on non-JSON stdin lines; malformed lines are now reported as errors while the frame loop continues.
 - Fixed local llama.cpp Qwen-family models not honoring the `--thinking off` flag.
 - Documented the `ultrathink`, `orchestrate`, and `workflowz` magic keywords, including their effects, matching rules, and settings.
-- Fixed the Bash tool hanging when in-process commands read process substitution operands.
-- Fixed `/share` and `/export` web views rendering inline Markdown inside list items as literal text.
 - Fixed `/clear` autocomplete selecting `/autoresearch` and updated `/clear` to start a new session as an alias for `/new`.
 - Fixed `/review` aborting entirely when GitHub rejects a pull request's aggregate diff for exceeding the line limit by falling back to the paginated per-file endpoint.
 - Fixed `/q` + Enter running `/queue` instead of `/quit` by adding an explicit `q` alias to `/quit`.
