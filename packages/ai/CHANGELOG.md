@@ -8,6 +8,7 @@
 - Fixed auth-broker snapshot validation rejecting API keys stored via the `/login` flow (`credentials[N].credential.source must be removed`): the wire schema now accepts the `source: "login"` marker on `api_key` credentials, so gateway/broker setups serving login-sourced keys (e.g. custom hosts) work again.
 - Fixed leaked-thinking healing consuming a literal reasoning tag (e.g. `` `<think>` ``) inside a Markdown inline-code span or fenced code block as a reasoning boundary, which split the visible text into `text` + `thinking` blocks and corrupted the rendered Markdown ([#5665](https://github.com/can1357/oh-my-pi/issues/5665)).
 - Classified HTTP 402 and `balance exhausted` quota responses as persistent usage limits, rotating multi-account requests to a sibling credential.
+- Fixed `kimi-code` Anthropic-format requests ignoring custom provider base URLs ([#5722](https://github.com/can1357/oh-my-pi/issues/5722)).
 
 ## [17.0.1] - 2026-07-16
 
