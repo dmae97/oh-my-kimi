@@ -112,7 +112,7 @@ import {
 	promoteResponsesToolUseStopReason,
 	type SequentialCutoffSummaryState,
 } from "./openai-shared";
-import { transformMessages } from "./transform-messages";
+import { redactSensitiveInObject, transformMessages } from "./transform-messages";
 
 export interface OpenAICodexResponsesOptions extends StreamOptions {
 	reasoning?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -3954,13 +3954,14 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 				| Array<ResponseInput[number]>
 				| undefined;
 			if (historyItems) {
-				for (const item of historyItems) {
+				const redactedHistoryItems = redactSensitiveInObject(historyItems).result as Array<ResponseInput[number]>;
+				for (const item of redactedHistoryItems) {
 					const maybe = item as { type?: string; call_id?: string };
 					if (maybe.type === "custom_tool_call" && typeof maybe.call_id === "string") {
 						customCallIds.add(maybe.call_id);
 					}
 				}
-				messages.push(...historyItems);
+				messages.push(...redactedHistoryItems);
 				msgIndex += 1;
 				continue;
 			}
