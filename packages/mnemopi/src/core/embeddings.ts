@@ -104,22 +104,24 @@ const SIDECAR_ERROR_RE =
  * its subprocess; the in-process seam stays {@link setLocalModelInitializer}.
  */
 export async function defaultLocalModelInitializer(options: LocalModelInitOptions): Promise<LocalEmbeddingModel> {
+	const cacheDir = options.cacheDir ?? getFastembedCacheDir();
+	const initOptions = options.cacheDir === undefined ? { ...options, cacheDir } : options;
 	const { FlagEmbedding } = await loadFastembed();
 	const initWithSidecarHeal = async (): Promise<LocalEmbeddingModel> => {
 		try {
-			return await FlagEmbedding.init(options);
+			return await FlagEmbedding.init(initOptions);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : "";
 			if (!SIDECAR_ERROR_RE.test(message)) throw error;
-			if (!(await ensureFastembedModelSidecars(options.model, options.cacheDir))) throw error;
-			return FlagEmbedding.init(options);
+			if (!(await ensureFastembedModelSidecars(options.model, cacheDir))) throw error;
+			return FlagEmbedding.init(initOptions);
 		}
 	};
 	try {
 		return await initWithSidecarHeal();
 	} catch (error) {
 		const message = error instanceof Error ? error.message : "";
-		if (/Protobuf parsing failed/i.test(message) && (await quarantineCorruptModelFile(message, options.cacheDir))) {
+		if (/Protobuf parsing failed/i.test(message) && (await quarantineCorruptModelFile(message, cacheDir))) {
 			return initWithSidecarHeal();
 		}
 		throw error;

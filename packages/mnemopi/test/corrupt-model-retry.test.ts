@@ -5,6 +5,7 @@ import { describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { getFastembedCacheDir } from "@oh-my-pi/pi-utils";
 import { defaultLocalModelInitializer, type LocalEmbeddingModel } from "../src/core/embeddings";
 import * as runtime from "../src/core/fastembed-runtime";
 
@@ -44,6 +45,32 @@ describe("defaultLocalModelInitializer corruption retry", () => {
 		} finally {
 			loadSpy.mockRestore();
 			await fs.rm(cacheDir, { recursive: true, force: true });
+		}
+	});
+
+	test("uses the shared default cache root when cacheDir is omitted", async () => {
+		const cacheDir = getFastembedCacheDir();
+		const modelFile = path.join(cacheDir, "missing-corrupt-model", "model_optimized.onnx");
+		const observedCacheDirs: Array<string | undefined> = [];
+		let initCalls = 0;
+		const loadSpy = spyOn(runtime, "loadFastembed").mockResolvedValue({
+			FlagEmbedding: {
+				init: async (options: { cacheDir?: string }) => {
+					observedCacheDirs.push(options.cacheDir);
+					initCalls++;
+					if (initCalls === 1) throw new Error(`Load model from ${modelFile} failed:Protobuf parsing failed.`);
+					return fakeModel;
+				},
+			},
+		} as never);
+		try {
+			const model = await defaultLocalModelInitializer({
+				model: "fast-bge-small-en-v1.5" as never,
+			});
+			expect(model).toBe(fakeModel);
+			expect(observedCacheDirs).toEqual([cacheDir, cacheDir]);
+		} finally {
+			loadSpy.mockRestore();
 		}
 	});
 
