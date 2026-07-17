@@ -654,7 +654,7 @@ export type OpenAICompletionsParams = Omit<ChatCompletionCreateParamsStreaming, 
 	top_k?: number;
 	min_p?: number;
 	repetition_penalty?: number;
-	thinking?: { type: "enabled" | "disabled"; keep?: "all" };
+	thinking?: { type: "enabled" | "disabled"; effort?: string; keep?: "all" };
 	enable_thinking?: boolean;
 	preserve_thinking?: boolean;
 	chat_template_kwargs?: { enable_thinking?: boolean; preserve_thinking?: boolean };
@@ -943,6 +943,11 @@ export function applyChatCompletionsCompatPolicy(params: OpenAICompletionsParams
 				if (reasoning.wireEffort === "none") {
 					encodeChatCompletionsDisabledReasoning(params, reasoning.disableMode);
 					return;
+				}
+				if (reasoning.dialect === "kimi" && reasoning.wireEffort !== undefined) {
+					params.thinking = { type: "enabled", effort: reasoning.wireEffort };
+					if (policy.compat.thinkingKeep) params.thinking.keep = policy.compat.thinkingKeep;
+					break;
 				}
 				params.thinking = { type: "enabled" };
 				if (policy.compat.thinkingKeep) params.thinking.keep = policy.compat.thinkingKeep;

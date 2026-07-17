@@ -1178,12 +1178,17 @@ export function streamSimple<TApi extends Api>(
 
 	// Kimi Code - route to dedicated handler that wraps OpenAI or Anthropic API
 	if (isKimiModel(model)) {
-		// Pass raw SimpleStreamOptions - streamKimi handles mapping internally
-		return withProviderInFlightLimit(model, requestOptions, () =>
+		// streamKimi handles openai/anthropic format mapping internally, but the
+		// mandatory-reasoning clamp is a request-shaping concern owned here: K3's
+		// `supports_thinking_type: "only"` endpoint rejects disabled/omitted
+		// thinking, so clamp disabled requests to the lowest supported effort
+		// (mirrors the mapOptionsForApi path every other provider takes).
+		const kimiOptions = normalizeMandatoryReasoningOptions(model, requestOptions);
+		return withProviderInFlightLimit(model, kimiOptions, () =>
 			streamKimi(model as Model<"openai-completions">, context, {
-				...requestOptions,
+				...kimiOptions,
 				apiKey,
-				format: requestOptions?.kimiApiFormat ?? "anthropic",
+				format: kimiOptions?.kimiApiFormat,
 			}),
 		);
 	}
