@@ -114,7 +114,6 @@ describe("transformMessages redact sensitive credentials", () => {
 			maxTokens: 2048,
 			input: ["text"],
 			reasoning: true,
-			compat: { signingEndpoint: true },
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		});
 		const messages: Message[] = [

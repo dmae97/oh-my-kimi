@@ -1500,7 +1500,9 @@ describe("AgentSession handoff", () => {
 		const extensionsResult = await loadExtensions([], tempDir.path());
 		const captureAgentEnd = await loadExtensionFromFactory(
 			pi => {
-				pi.on("agent_end", event => agentEndWillContinue.push(event.willContinue));
+				pi.on("agent_end", event => {
+					agentEndWillContinue.push(event.willContinue);
+				});
 			},
 			tempDir.path(),
 			new EventBus(),
