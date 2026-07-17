@@ -7,6 +7,17 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { KimiProvider, searchKimi } from "@oh-my-pi/pi-coding-agent/web/search/providers/kimi";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
+const originalMoonshotSearchApiKey = process.env.MOONSHOT_SEARCH_API_KEY;
+const originalKimiSearchApiKey = process.env.KIMI_SEARCH_API_KEY;
+
+function restoreSearchApiKeyEnv(): void {
+	if (originalMoonshotSearchApiKey === undefined) delete process.env.MOONSHOT_SEARCH_API_KEY;
+	else process.env.MOONSHOT_SEARCH_API_KEY = originalMoonshotSearchApiKey;
+	if (originalKimiSearchApiKey === undefined) delete process.env.KIMI_SEARCH_API_KEY;
+	else process.env.KIMI_SEARCH_API_KEY = originalKimiSearchApiKey;
+}
+
+
 async function withLocalAuthStorage<T>(run: (authStorage: AuthStorage) => Promise<T>): Promise<T> {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "web-search-kimi-auth-"));
 	const authStorage = await AuthStorage.create(path.join(dir, "auth.db"));
@@ -20,19 +31,18 @@ async function withLocalAuthStorage<T>(run: (authStorage: AuthStorage) => Promis
 
 describe("KimiProvider availability", () => {
 	afterEach(() => {
-		delete process.env.MOONSHOT_SEARCH_API_KEY;
-		delete process.env.KIMI_SEARCH_API_KEY;
+		restoreSearchApiKeyEnv();
 		vi.restoreAllMocks();
 	});
 
 	it("does not advertise availability for a stored moonshot Open Platform credential", async () => {
 		delete process.env.MOONSHOT_SEARCH_API_KEY;
 		delete process.env.KIMI_SEARCH_API_KEY;
-		const available = await withLocalAuthStorage(authStorage => {
+		const available = await withLocalAuthStorage(async authStorage => {
 			// A Moonshot Open Platform key is a different credential system than the
 			// Kimi Code search endpoint (issue #5762) — it must not mark Kimi available.
-			authStorage.setRuntimeApiKey("moonshot", "moonshot-open-platform-key");
-			return Promise.resolve(new KimiProvider().isAvailable(authStorage));
+			await authStorage.set("moonshot", { type: "api_key", key: "moonshot-open-platform-key" });
+			return new KimiProvider().isAvailable(authStorage);
 		});
 		expect(available).toBe(false);
 	});
@@ -40,9 +50,9 @@ describe("KimiProvider availability", () => {
 	it("advertises availability for a stored kimi-code credential", async () => {
 		delete process.env.MOONSHOT_SEARCH_API_KEY;
 		delete process.env.KIMI_SEARCH_API_KEY;
-		const available = await withLocalAuthStorage(authStorage => {
-			authStorage.setRuntimeApiKey("kimi-code", "kimi-code-console-key");
-			return Promise.resolve(new KimiProvider().isAvailable(authStorage));
+		const available = await withLocalAuthStorage(async authStorage => {
+			await authStorage.set("kimi-code", { type: "api_key", key: "kimi-code-console-key" });
+			return new KimiProvider().isAvailable(authStorage);
 		});
 		expect(available).toBe(true);
 	});
@@ -58,8 +68,7 @@ describe("KimiProvider availability", () => {
 
 describe("searchKimi credential resolution", () => {
 	afterEach(() => {
-		delete process.env.MOONSHOT_SEARCH_API_KEY;
-		delete process.env.KIMI_SEARCH_API_KEY;
+		restoreSearchApiKeyEnv();
 		vi.restoreAllMocks();
 	});
 
@@ -80,7 +89,7 @@ describe("searchKimi credential resolution", () => {
 		};
 
 		await withLocalAuthStorage(async authStorage => {
-			authStorage.setRuntimeApiKey("kimi-code", "kimi-code-console-key");
+			await authStorage.set("kimi-code", { type: "api_key", key: "kimi-code-console-key" });
 			const result = await searchKimi({ query: "kimi docs", authStorage, fetch: fetchMock });
 			expect(result.provider).toBe("kimi");
 		});
@@ -97,7 +106,7 @@ describe("searchKimi credential resolution", () => {
 		};
 
 		await withLocalAuthStorage(async authStorage => {
-			authStorage.setRuntimeApiKey("moonshot", "moonshot-open-platform-key");
+			await authStorage.set("moonshot", { type: "api_key", key: "moonshot-open-platform-key" });
 			await expect(searchKimi({ query: "kimi docs", authStorage, fetch: fetchMock })).rejects.toThrow(/Kimi Code/);
 		});
 	});
