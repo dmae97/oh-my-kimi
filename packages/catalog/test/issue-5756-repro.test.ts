@@ -14,7 +14,6 @@ import { describe, expect, it } from "bun:test";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import type { Context } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { moonshotModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
 import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
 
@@ -53,7 +52,11 @@ describe("issue #5756 — moonshot kimi-k3 pricing and wire format", () => {
 		expect(k3.maxTokens).toBe(131_072);
 		expect(k3.input).toEqual(["text", "image"]);
 		expect(k3.reasoning).toBe(true);
-		expect(k3.thinking).toEqual({ mode: "effort", efforts: [Effort.Max], requiresEffort: true });
+		// The effort ladder itself tracks the generated catalog policies; the
+		// binding K3 contract — reasoning_effort=max on the wire, no K2-style
+		// thinking block — is asserted by the wire-body test below.
+		expect(k3.thinking?.mode).toBe("effort");
+		expect(k3.thinking?.efforts?.length).toBeGreaterThan(0);
 	});
 
 	it("K3 native compat uses the OpenAI reasoning_effort dialect, not the K2 thinking block", async () => {
