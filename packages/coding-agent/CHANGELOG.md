@@ -11,6 +11,11 @@
 ### Changed
 
 - Enriched `/advisor status` to show per-advisor status glyphs, model, spend breakdown, and quota window for every configured advisor (including disabled ones), replacing the previous single-advisor-only summary.
+### Fixed
+
+- Fixed advisors retrying a permanently rejected request forever (e.g. `invalid_request_error: model not supported with this account`): unlike quota exhaustion — which already paused with a notice — this class notified once and silently kept re-attempting every turn, re-building heavy context in a shared daemon. The runtime now hard-stops after a permanent rejection or three consecutive backlog-drop cycles, with a visible notice; an explicit reset (`/new`, config rebuild, restart) re-enables it. `waitForCatchup` resolves immediately while halted so the primary agent is never parked on a runtime that cannot drain.
+- Fixed the advisor's delta render freezing the whole process on large transcripts (one agent + one advisor was enough): rendering the transcript slice for the advisor ran synchronously on the event loop, and a post-reset replay of a multi-MB session blocked it for 600ms+ per render. Large deltas now render in size- and count-bounded chunks that yield the event loop, with tool call/result pairing preserved across chunk boundaries via a shared whole-delta result index; small per-turn deltas keep the synchronous fast path.
+
 ## [17.0.0] - 2026-07-15
 
 ### Breaking Changes

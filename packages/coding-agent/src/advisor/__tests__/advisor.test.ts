@@ -1797,6 +1797,320 @@ describe("advisor", () => {
 			expect(failures).toHaveLength(2);
 		});
 
+		it("halts permanently on an invalid_request rejection instead of retrying forever", async () => {
+			// The runaway observed live: a provider that refuses the configured
+			// model outright ("not supported ... (code=invalid_request_error)")
+			// failed 351 turns/hour in a shared daemon, rebuilding heavy context
+			// every cycle. One drop cycle must latch the runtime off.
+			const promptInputs: string[] = [];
+			const failures: unknown[] = [];
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					throw new Error(
+						"Codex error event: The 'gpt-5.3-codex-spark' model is not supported when using Codex with a ChatGPT account. (code=invalid_request_error)",
+					);
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const messages: AgentMessage[] = [{ role: "user", content: "aaa", timestamp: 1 } as AgentMessage];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+				notifyFailure: error => failures.push(error),
+			};
+			const runtime = new AdvisorRuntime(agent, host, 0);
+
+			runtime.onTurnEnd(messages);
+			await Bun.sleep(0);
+			await Bun.sleep(0);
+			await Bun.sleep(0);
+
+			expect(promptInputs).toHaveLength(3);
+			expect(failures).toHaveLength(1);
+			expect(runtime.halted).toBe(true);
+
+			// New deltas must be ignored while halted — no further prompts.
+			messages.push({ role: "user", content: "bbb", timestamp: 2 } as AgentMessage);
+			runtime.onTurnEnd(messages);
+			await Bun.sleep(0);
+			await Bun.sleep(0);
+			expect(promptInputs).toHaveLength(3);
+
+			// The catch-up gate must not park the primary agent on a runtime that
+			// will never drain again: resolve immediately regardless of maxMs.
+			await runtime.waitForCatchup(60_000, 0);
+
+			// Explicit reset (config rebuild, /new) re-enables the runtime.
+			runtime.reset();
+			expect(runtime.halted).toBe(false);
+		});
+
+		it("halts after three transient drop cycles without an intervening success, but not across successes", async () => {
+			const promptInputs: string[] = [];
+			let shouldFail = true;
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					if (shouldFail) throw new Error("socket hang up");
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const messages: AgentMessage[] = [{ role: "user", content: "t1", timestamp: 1 } as AgentMessage];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+				notifyFailure: () => {},
+			};
+			const runtime = new AdvisorRuntime(agent, host, 0);
+
+			const runTurn = async (content: string) => {
+				messages.push({ role: "user", content, timestamp: messages.length + 1 } as AgentMessage);
+				runtime.onTurnEnd(messages);
+				await Bun.sleep(0);
+				await Bun.sleep(0);
+				await Bun.sleep(0);
+			};
+
+			// Two failing drop cycles, then a success: the cycle counter resets.
+			await runTurn("f1");
+			await runTurn("f2");
+			expect(runtime.halted).toBe(false);
+			shouldFail = false;
+			await runTurn("ok");
+			expect(runtime.halted).toBe(false);
+
+			// Three CONSECUTIVE drop cycles with no success latch the runtime off.
+			shouldFail = true;
+			await runTurn("f3");
+			await runTurn("f4");
+			expect(runtime.halted).toBe(false);
+			await runTurn("f5");
+			expect(runtime.halted).toBe(true);
+			const promptsAtHalt = promptInputs.length;
+			await runTurn("ignored");
+			expect(promptInputs).toHaveLength(promptsAtHalt);
+		});
+
+		// The live incident shape: ONE agent + ONE advisor froze the whole
+		// process. The advisor's delta render (formatSessionHistoryMarkdown over
+		// the transcript slice) ran synchronously on the event loop; a post-reset
+		// replay of a multi-MB transcript blocked it for 600ms+ per render. These
+		// tests pin the bounded-stall contract and the correctness of the
+		// deferred/chunked path.
+		describe("large-transcript responsiveness", () => {
+			const bigMessage = (i: number, chars = 5_000): AgentMessage => {
+				const text = `msg-${i} ${"x".repeat(chars)}`;
+				return (
+					i % 2
+						? { role: "assistant", content: [{ type: "text", text }], timestamp: i }
+						: { role: "user", content: text, timestamp: i }
+				) as AgentMessage;
+			};
+
+			const stallSampler = () => {
+				let max = 0;
+				let last = performance.now();
+				const timer = setInterval(() => {
+					const now = performance.now();
+					const drift = now - last - 5;
+					if (drift > max) max = drift;
+					last = now;
+				}, 5);
+				return { stop: () => clearInterval(timer), max: () => max };
+			};
+
+			const waitForPrompts = async (prompts: string[], count: number, timeoutMs = 10_000): Promise<void> => {
+				const deadline = Date.now() + timeoutMs;
+				while (prompts.length < count && Date.now() < deadline) await Bun.sleep(5);
+			};
+
+			it("keeps the event loop responsive while replaying a multi-MB transcript", async () => {
+				const promptInputs: string[] = [];
+				const agent: AdvisorAgent = {
+					prompt: async input => {
+						promptInputs.push(input);
+					},
+					abort: () => {},
+					reset: () => {},
+					state: { messages: [] },
+				};
+				// ~2000 × 5KB ≈ 10MB replay — the post-reset/first-enable shape.
+				const messages = Array.from({ length: 2000 }, (_, i) => bigMessage(i));
+				const host: AdvisorRuntimeHost = {
+					snapshotMessages: () => messages,
+					enqueueAdvice: () => {},
+				};
+				const runtime = new AdvisorRuntime(agent, host, 0);
+				const sampler = stallSampler();
+				runtime.onTurnEnd(messages);
+				await waitForPrompts(promptInputs, 1);
+				sampler.stop();
+				expect(promptInputs).toHaveLength(1);
+				// Nothing dropped: first and last transcript messages both rendered.
+				expect(promptInputs[0]).toContain("msg-0 ");
+				expect(promptInputs[0]).toContain("msg-1999 ");
+				// Pre-chunking this replay blocked the loop ~600ms+ in one shot;
+				// chunked rendering keeps individual stalls bounded. Generous
+				// ceiling: still fails the pre-fix behavior, tolerates CI/GC noise.
+				expect(sampler.max()).toBeLessThan(500);
+				runtime.dispose();
+			}, 20_000);
+
+			it("never splits a toolCall from its non-adjacent toolResult across chunk boundaries", async () => {
+				const promptInputs: string[] = [];
+				const agent: AdvisorAgent = {
+					prompt: async input => {
+						promptInputs.push(input);
+					},
+					abort: () => {},
+					reset: () => {},
+					state: { messages: [] },
+				};
+				// 150 messages force the chunked path (count > 100). The toolCall
+				// sits at index 99 — exactly where the count boundary closes the
+				// first chunk — and its result arrives in the NEXT chunk (index
+				// 148), far past any adjacency window: only the shared
+				// whole-delta result index can pair them.
+				const messages: AgentMessage[] = Array.from({ length: 150 }, (_, i) => bigMessage(i, 64));
+				messages[99] = {
+					role: "assistant",
+					content: [{ type: "toolCall", id: "call-split", name: "read", arguments: { path: "x" } }],
+					timestamp: 99,
+				} as unknown as AgentMessage;
+				messages[100] = {
+					role: "custom",
+					customType: "hook",
+					content: "interleaved",
+					timestamp: 100,
+				} as AgentMessage;
+				messages[148] = {
+					role: "toolResult",
+					toolCallId: "call-split",
+					content: [{ type: "text", text: "result-body" }],
+					timestamp: 148,
+				} as AgentMessage;
+				const host: AdvisorRuntimeHost = {
+					snapshotMessages: () => messages,
+					enqueueAdvice: () => {},
+				};
+				const runtime = new AdvisorRuntime(agent, host, 0);
+				runtime.onTurnEnd(messages);
+				await waitForPrompts(promptInputs, 1);
+				expect(promptInputs).toHaveLength(1);
+				expect(promptInputs[0]).toContain("read(");
+				// The call+result pair stayed in one chunk: rendered as completed,
+				// never as a spurious in-flight call.
+				expect(promptInputs[0]).toContain("⇒ ok");
+				expect(promptInputs[0]).not.toContain("⇒ pending");
+				runtime.dispose();
+			}, 20_000);
+
+			it("defers a single turn carrying a multi-MB payload instead of formatting it inline", async () => {
+				const promptInputs: string[] = [];
+				const agent: AdvisorAgent = {
+					prompt: async input => {
+						promptInputs.push(input);
+					},
+					abort: () => {},
+					reset: () => {},
+					state: { messages: [] },
+				};
+				const messages: AgentMessage[] = [{ role: "user", content: "before", timestamp: 1 } as AgentMessage];
+				const host: AdvisorRuntimeHost = {
+					snapshotMessages: () => messages,
+					enqueueAdvice: () => {},
+				};
+				const runtime = new AdvisorRuntime(agent, host, 0);
+				runtime.onTurnEnd(messages);
+				await waitForPrompts(promptInputs, 1);
+				expect(promptInputs).toHaveLength(1);
+
+				// One turn, one message, multi-MB body (an edit-diff-sized payload):
+				// the count gate alone would format it synchronously; the size gate
+				// must route it through the deferred renderer — and still deliver.
+				messages.push({
+					role: "assistant",
+					content: [{ type: "text", text: `huge ${"y".repeat(3_000_000)}` }],
+					timestamp: 2,
+				} as AgentMessage);
+				runtime.onTurnEnd(messages);
+				// Synchronous fast path would have pushed the prompt already;
+				// the deferred path leaves the queue empty at this tick.
+				expect(promptInputs).toHaveLength(1);
+				await waitForPrompts(promptInputs, 2);
+				expect(promptInputs).toHaveLength(2);
+				expect(promptInputs[1]).toContain("huge ");
+				runtime.dispose();
+			}, 20_000);
+
+			it("replays the full transcript after a reset lands mid-chunked-render", async () => {
+				const promptInputs: string[] = [];
+				const agent: AdvisorAgent = {
+					prompt: async input => {
+						promptInputs.push(input);
+					},
+					abort: () => {},
+					reset: () => {},
+					state: { messages: [] },
+				};
+				const messages = Array.from({ length: 400 }, (_, i) => bigMessage(i));
+				const host: AdvisorRuntimeHost = {
+					snapshotMessages: () => messages,
+					enqueueAdvice: () => {},
+				};
+				const runtime = new AdvisorRuntime(agent, host, 0);
+				runtime.onTurnEnd(messages);
+				// Land the reset inside the render's first chunk yield.
+				await Bun.sleep(0);
+				runtime.reset();
+				runtime.onTurnEnd(messages);
+				await waitForPrompts(promptInputs, 1);
+				// The aborted pre-reset render must not have advanced the cursor:
+				// the post-reset replay carries the whole transcript.
+				const replay = promptInputs.find(input => input.includes("msg-0 ") && input.includes("msg-399 "));
+				expect(replay).toBeDefined();
+				runtime.dispose();
+			}, 20_000);
+
+			it("delivers interleaved turns in order without loss while a chunked render is in flight", async () => {
+				const promptInputs: string[] = [];
+				const agent: AdvisorAgent = {
+					prompt: async input => {
+						promptInputs.push(input);
+					},
+					abort: () => {},
+					reset: () => {},
+					state: { messages: [] },
+				};
+				const messages = Array.from({ length: 300 }, (_, i) => bigMessage(i));
+				const host: AdvisorRuntimeHost = {
+					snapshotMessages: () => messages,
+					enqueueAdvice: () => {},
+				};
+				const runtime = new AdvisorRuntime(agent, host, 0);
+				runtime.onTurnEnd(messages);
+				// Second turn arrives while the first render is still on the chain.
+				messages.push({ role: "user", content: "late-arrival tail", timestamp: 300 } as AgentMessage);
+				runtime.onTurnEnd(messages);
+				const deadline = Date.now() + 10_000;
+				while (Date.now() < deadline && !promptInputs.join("\n").includes("late-arrival tail")) await Bun.sleep(5);
+				const combined = promptInputs.join("\n");
+				// Every message exactly once, ordering preserved.
+				expect(combined).toContain("msg-0 ");
+				expect(combined).toContain("msg-299 ");
+				expect(combined.indexOf("msg-299 ")).toBeGreaterThan(combined.indexOf("msg-0 "));
+				expect(combined.indexOf("late-arrival tail")).toBeGreaterThan(combined.indexOf("msg-299 "));
+				expect(combined.match(/msg-150 /g)).toHaveLength(1);
+				expect(combined.match(/late-arrival tail/g)).toHaveLength(1);
+				runtime.dispose();
+			}, 20_000);
+		});
+
 		it("treats a clean prompt resolution with state.error as a failed turn (real Agent contract)", async () => {
 			// `Agent.#runLoop` catches provider/stream failures internally — it resolves
 			// `prompt()` cleanly and stores the message on `state.error` (e.g. the
