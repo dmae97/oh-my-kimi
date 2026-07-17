@@ -62,17 +62,25 @@ const MAX_STRING_SEQ_BYTES = 16 * 1024 * 1024;
 // runs at most once per resolved report — never inside the growth loop.
 const SGR_MOUSE_COMPLETE = /^<\d+;\d+;\d+[Mm]$/;
 
-// A raw stdin burst that carries an interior line break but no ESC byte is a
-// multiline paste whose terminal delivered it without bracketed-paste markers
-// (`\x1b[200~`…`\x1b[201~`). Observed in the Codex desktop embedded terminal on
-// macOS (issue #5841): the Cmd+V payload reaches stdin as ordinary text with
-// CR/LF line endings, so per-key splitting turns every CR into a submit and the
-// block fragments into one message per line. The match requires a line break
-// *followed by another character* so a lone Enter (`\r`), a single trailing
-// newline (`text\r\n`), or a run of bare Enters (`\r\r`) stays a normal
-// keypress; only content-CR-content bursts are coalesced into a paste. ESC-free
-// is required so real bracketed pastes and CSI/mouse reports keep their path.
-const RAW_MULTILINE_BURST = /[\r\n][^\r\n]/;
+// A raw stdin burst that carries two or more interior line breaks but no ESC
+// byte is a multiline paste whose terminal delivered it without bracketed-paste
+// markers (`\x1b[200~`…`\x1b[201~`). Observed in the Codex desktop embedded
+// terminal on macOS (issue #5841): the Cmd+V payload reaches stdin as ordinary
+// text with CR/LF line endings, so per-key splitting turns every CR into a
+// submit and the block fragments into one message per line.
+//
+// The match requires content-break-content-break-content — three non-empty
+// segments separated by two interior break runs (a CRLF pair counts as one
+// run). Terminal read boundaries are not key boundaries: the event loop can
+// batch a single Enter with a following keystroke into one read (`"a\rb"`),
+// which is byte-identical to a two-line paste, so coalescing on a single
+// interior break would swallow that Enter's submit. Two interior breaks cannot
+// come from one Enter, and the real paste bug is always 3+ lines (the repro is
+// three; the reported bursts were 11 and 23), so this keeps every ordinary
+// Enter — lone (`\r`), trailing (`text\r\n`), bare run (`\r\r`), or batched
+// (`"a\rb"`) — on the normal key path. ESC-free is required so bracketed pastes
+// and CSI/mouse reports keep their path.
+const RAW_MULTILINE_BURST = /[^\r\n][\r\n]+[^\r\n]+[\r\n]+[^\r\n]/;
 
 /**
  * Resolve the exclusive-end index of the escape sequence starting at `pos`

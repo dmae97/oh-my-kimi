@@ -573,6 +573,27 @@ describe("StdinBuffer", () => {
 			expect(emittedSequences).toEqual([]);
 		});
 
+		it("coalesces a CRLF-delimited three-line burst", () => {
+			processInput("line 1\r\nline 2\r\nline 3");
+			expect(emittedPaste).toEqual(["line 1\r\nline 2\r\nline 3"]);
+			expect(emittedSequences).toEqual([]);
+		});
+
+		it("leaves a single Enter batched with a following keystroke on the normal path", () => {
+			// The event loop can batch one Enter plus the next typed char into a
+			// single stdin read; that is byte-identical to a two-line paste, so it
+			// must keep the Enter's submit rather than coalesce (PR #5843 review).
+			processInput("a\rb");
+			expect(emittedPaste).toEqual([]);
+			expect(emittedSequences).toEqual(["a", "\r", "b"]);
+		});
+
+		it("leaves a two-line burst on the normal path (one interior break is ambiguous)", () => {
+			processInput("foo\rbar");
+			expect(emittedPaste).toEqual([]);
+			expect(emittedSequences).toEqual(["f", "o", "o", "\r", "b", "a", "r"]);
+		});
+
 		it("leaves a lone Enter as a normal submit keypress", () => {
 			processInput("\r");
 			expect(emittedPaste).toEqual([]);
