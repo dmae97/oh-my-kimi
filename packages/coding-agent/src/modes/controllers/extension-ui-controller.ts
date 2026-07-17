@@ -21,7 +21,6 @@ import type {
 	TerminalInputHandler,
 } from "../../extensibility/extensions";
 import { getSessionSlashCommands } from "../../extensibility/extensions/get-commands-handler";
-import { createExtensionModelQuery } from "../../extensibility/extensions/model-api";
 import { AskDialogComponent, boundPromptTitle } from "../../modes/components/ask-dialog";
 import { HookEditorComponent } from "../../modes/components/hook-editor";
 import { HookInputComponent } from "../../modes/components/hook-input";
@@ -494,32 +493,15 @@ export class ExtensionUiController {
 		if (!uiContext) {
 			return;
 		}
-		for (const registeredTool of this.ctx.session.extensionRunner?.getAllRegisteredTools() ?? []) {
+		const runner = this.ctx.session.extensionRunner;
+		for (const registeredTool of runner?.getAllRegisteredTools() ?? []) {
 			if (registeredTool.definition.onSession) {
 				try {
 					await registeredTool.definition.onSession(event, {
+						...runner!.createContext(),
 						ui: uiContext,
-						getContextUsage: () => this.ctx.session.getContextUsage(),
-						compact: instructionsOrOptions => this.#compactSession(instructionsOrOptions),
 						hasUI: true,
-						cwd: this.ctx.sessionManager.getCwd(),
-						sessionManager: this.ctx.session.sessionManager,
-						modelRegistry: this.ctx.session.modelRegistry,
-						model: this.ctx.session.model,
-						models: createExtensionModelQuery(
-							this.ctx.session.modelRegistry,
-							this.ctx.session.settings,
-							() => this.ctx.session.model,
-						),
-						isIdle: () => !this.ctx.session.isStreaming,
-						hasPendingMessages: () => this.ctx.session.queuedMessageCount > 0,
-						abort: () => {
-							this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
-						},
-						shutdown: () => {
-							// Signal shutdown request
-						},
-						getSystemPrompt: () => this.ctx.session.systemPrompt,
+						compact: instructionsOrOptions => this.#compactSession(instructionsOrOptions),
 					});
 				} catch (err) {
 					this.showToolError(registeredTool.definition.name, err instanceof Error ? err.message : String(err));

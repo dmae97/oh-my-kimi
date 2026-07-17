@@ -440,6 +440,24 @@ export interface ExtensionContext {
 	getSystemPrompt(): string[];
 	/** Structured memory runtime for status/search/save across the configured backend. */
 	memory?: MemoryRuntimeContext;
+	/**
+	 * Schedule a repeating callback whose throws are contained. Unlike raw
+	 * `setInterval`, a synchronous throw or rejected promise from `callback` is
+	 * logged and surfaced through the extension error channel instead of
+	 * escaping as a process-fatal `uncaughtException` — one misbehaving timer
+	 * can no longer take down the whole session. The handle is `unref`'d and
+	 * cleared automatically on `session_shutdown`. Prefer this over raw
+	 * `setInterval` for any extension background work.
+	 */
+	setInterval(callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]): Timer;
+	/**
+	 * Schedule a one-shot callback whose throws are contained, mirroring
+	 * {@link setInterval}. Cleared automatically on `session_shutdown` if it has
+	 * not yet fired.
+	 */
+	setTimeout(callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]): Timer;
+	/** Clear a timer scheduled via {@link setInterval} or {@link setTimeout}. */
+	clearTimer(timer: Timer): void;
 }
 
 /**

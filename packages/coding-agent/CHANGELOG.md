@@ -11,6 +11,11 @@
 ### Fixed
 
 - Fixed reassigning the `plan` role model mid-planning not taking effect on the active planning turn; the change now applies at the next turn boundary instead of only the next plan-mode entry ([#5657](https://github.com/can1357/oh-my-pi/issues/5657)).
+- Added managed `ctx.setInterval` / `ctx.setTimeout` / `ctx.clearTimer` helpers on the extension context. Callbacks scheduled through them run with the same isolation as handler dispatch — a throw or rejected promise is logged and reported through the extension error channel instead of escaping as a process-fatal `uncaughtException` — and every outstanding timer is `unref`'d and cleared automatically on `session_shutdown` ([#5664](https://github.com/can1357/oh-my-pi/issues/5664)).
+
+### Fixed
+
+- Fixed an extension's self-scheduled `setInterval`/`setTimeout` callback throwing being able to tear down the whole session. Such callbacks ran outside the handler-dispatch try/catch, surfaced as a process-level `uncaughtException`, and the global postmortem handler treated them as fatal; extension authors now have sanctioned managed timers (see Added), and the constraint is documented in `docs/extensions.md` / `docs/skills/authoring-extensions.md` ([#5664](https://github.com/can1357/oh-my-pi/issues/5664)).
 
 ## [17.0.1] - 2026-07-16
 

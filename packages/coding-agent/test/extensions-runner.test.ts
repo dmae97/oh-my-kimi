@@ -8,12 +8,13 @@ import * as path from "node:path";
 import type { AgentMessage, AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { discoverAndLoadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
+import { discoverAndLoadExtensions, ExtensionRuntime } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import {
 	EXTENSION_HANDLER_TIMEOUT_MS,
 	ExtensionRunner,
 	testSetExtensionHandlerTimeoutMs,
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
+import type { ExtensionError } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import { ExtensionToolWrapper } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/wrapper";
 import { Type } from "@oh-my-pi/pi-coding-agent/extensibility/typebox";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -1945,6 +1946,122 @@ describe("ExtensionRunner", () => {
 			expect(events).toHaveLength(32);
 			// Drop-oldest policy: provider-0 was evicted, provider-1 survived as the head.
 			expect(events[0]?.provider).toBe("provider-1");
+		});
+	});
+
+	describe("managed timers (ctx.setInterval / ctx.setTimeout)", () => {
+		it("contains a throwing interval callback instead of letting it escape as uncaughtException", () => {
+			vi.useFakeTimers();
+			try {
+				const runner = new ExtensionRunner(
+					[],
+					new ExtensionRuntime(),
+					tempDir.path(),
+					sessionManager,
+					modelRegistry,
+				);
+				const errors: ExtensionError[] = [];
+				runner.onError(err => errors.push(err));
+
+				const ctx = runner.createContext();
+				let ticks = 0;
+				ctx.setInterval(() => {
+					ticks += 1;
+					throw new Error("boom from interval");
+				}, 1000);
+
+				// Two ticks: the throw is swallowed each time, so the interval keeps firing.
+				expect(() => vi.advanceTimersByTime(2000)).not.toThrow();
+				expect(ticks).toBe(2);
+				expect(errors).toHaveLength(2);
+				expect(errors[0]?.event).toBe("interval_callback");
+				expect(errors[0]?.extensionPath).toBe("<timer>");
+				expect(errors[0]?.error).toContain("boom from interval");
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("contains a throwing timeout callback and reports it once", () => {
+			vi.useFakeTimers();
+			try {
+				const runner = new ExtensionRunner(
+					[],
+					new ExtensionRuntime(),
+					tempDir.path(),
+					sessionManager,
+					modelRegistry,
+				);
+				const errors: ExtensionError[] = [];
+				runner.onError(err => errors.push(err));
+
+				runner.createContext().setTimeout(() => {
+					throw new Error("boom from timeout");
+				}, 500);
+
+				expect(() => vi.advanceTimersByTime(1000)).not.toThrow();
+				expect(errors).toHaveLength(1);
+				expect(errors[0]?.event).toBe("timeout_callback");
+				expect(errors[0]?.error).toContain("boom from timeout");
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("clearTimer stops a managed interval from firing again", () => {
+			vi.useFakeTimers();
+			try {
+				const runner = new ExtensionRunner(
+					[],
+					new ExtensionRuntime(),
+					tempDir.path(),
+					sessionManager,
+					modelRegistry,
+				);
+				const ctx = runner.createContext();
+				let ticks = 0;
+				const timer = ctx.setInterval(() => {
+					ticks += 1;
+				}, 1000);
+
+				vi.advanceTimersByTime(1000);
+				expect(ticks).toBe(1);
+
+				ctx.clearTimer(timer);
+				vi.advanceTimersByTime(3000);
+				expect(ticks).toBe(1);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("clearManagedTimers cancels every outstanding timer on teardown", () => {
+			vi.useFakeTimers();
+			try {
+				const runner = new ExtensionRunner(
+					[],
+					new ExtensionRuntime(),
+					tempDir.path(),
+					sessionManager,
+					modelRegistry,
+				);
+				const ctx = runner.createContext();
+				let intervalTicks = 0;
+				let timeoutFired = false;
+				ctx.setInterval(() => {
+					intervalTicks += 1;
+				}, 1000);
+				ctx.setTimeout(() => {
+					timeoutFired = true;
+				}, 1000);
+
+				runner.clearManagedTimers();
+				vi.advanceTimersByTime(5000);
+				expect(intervalTicks).toBe(0);
+				expect(timeoutFired).toBe(false);
+			} finally {
+				vi.useRealTimers();
+			}
 		});
 	});
 });
