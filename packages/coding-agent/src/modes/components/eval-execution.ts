@@ -114,7 +114,9 @@ export class EvalExecutionComponent extends Container {
 	#updateDisplay(): void {
 		const availableLines = this.#outputLines;
 		const previewLogicalLines = availableLines.slice(-PREVIEW_LINES);
-		const hiddenLineCount = availableLines.length - previewLogicalLines.length;
+		// Only the collapsed preview hides lines; when expanded the footer must
+		// not keep advertising hidden lines / ctrl+o.
+		const hiddenLineCount = this.#expanded ? 0 : availableLines.length - previewLogicalLines.length;
 
 		this.#contentContainer.clear();
 

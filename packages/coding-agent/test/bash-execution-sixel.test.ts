@@ -141,3 +141,47 @@ describe("BashExecutionComponent streaming throttle", () => {
 		expect(output).not.toContain("streaming_line");
 	});
 });
+
+describe("BashExecutionComponent expand footer", () => {
+	const ui = { requestRender: () => {}, requestComponentRender: () => {} } as unknown as TUI;
+
+	beforeEach(async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		setThemeInstance(theme!);
+	});
+
+	// PREVIEW_LINES is 20: 27 lines leaves 7 hidden in the collapsed preview.
+	const makeComponent = () => {
+		const component = new BashExecutionComponent("ls", ui, false);
+		const lines = Array.from({ length: 27 }, (_, i) => `entry${i}`);
+		component.setComplete(0, false, { output: lines.join("\n") });
+		return component;
+	};
+
+	it("advertises hidden lines while collapsed", () => {
+		const rendered = makeComponent().render(120).join("\n");
+		expect(rendered).toContain("more lines");
+		expect(rendered).toContain("ctrl+o to expand");
+	});
+
+	it("drops the hidden-lines footer once expanded", () => {
+		const component = makeComponent();
+		component.setExpanded(true);
+		const rendered = component.render(120).join("\n");
+		expect(rendered).not.toContain("more lines");
+		expect(rendered).not.toContain("ctrl+o to expand");
+		// Every line is now present, including the previously hidden prefix.
+		expect(rendered).toContain("entry0");
+		expect(rendered).toContain("entry26");
+	});
+
+	it("restores the footer when collapsed again", () => {
+		const component = makeComponent();
+		component.setExpanded(true);
+		component.setExpanded(false);
+		const rendered = component.render(120).join("\n");
+		expect(rendered).toContain("more lines");
+		expect(rendered).toContain("ctrl+o to expand");
+	});
+});
