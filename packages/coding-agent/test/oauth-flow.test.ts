@@ -660,41 +660,75 @@ describe("mcp oauth flow", () => {
 		expect(registrationCalled).toBe(false);
 	});
 
-	// Issue #4307: Figma's DCR endpoint 403s every request (only catalog-approved
-	// clients may connect). The old flow swallowed the 403 and threw a bare
-	// "OAuth provider requires client_id" with no way for the user to see that
-	// DCR was tried and rejected. The rewritten error must name the endpoint and
-	// status and point at the `oauth.clientId` workaround.
-	it("surfaces DCR endpoint and status when registration is rejected", async () => {
+	// Issue #5852: a rejected DCR request must stop reauthentication before an
+	// authorization URL without client_id reaches the browser.
+	it("blocks authorization when dynamic client registration is rejected", async () => {
+		let authorizationRequests = 0;
 		const fetchImpl: FetchImpl = async input => {
 			const url = String(input);
-			if (url === "https://www.figma.com/.well-known/oauth-authorization-server") {
+			if (url === "https://cropwise.example/oauth/register") {
 				return new Response(
-					JSON.stringify({ registration_endpoint: "https://api.figma.com/v1/oauth/mcp/register" }),
-					{ status: 200, headers: { "Content-Type": "application/json" } },
+					JSON.stringify({
+						error: "unapproved_client",
+						error_description: "client_name 'oh-my-pi' is not on the approved list.",
+					}),
+					{ status: 403, headers: { "Content-Type": "application/json" } },
 				);
 			}
-			if (url === "https://api.figma.com/v1/oauth/mcp/register") {
-				return new Response("Forbidden", { status: 403 });
-			}
-			if (url.startsWith("https://www.figma.com/oauth/mcp?")) {
-				return new Response("Parameter client_id is required", { status: 400 });
+			if (url.startsWith("https://cropwise.example/authorize?")) {
+				authorizationRequests += 1;
+				return new Response("Missing required parameter: client_id", { status: 400 });
 			}
 			throw new Error(`Unexpected fetch: ${url}`);
 		};
 		const flow = new MCPOAuthFlow(
 			{
-				authorizationUrl: "https://www.figma.com/oauth/mcp",
-				tokenUrl: "https://api.figma.com/v1/oauth/token",
-				registrationUrl: "https://api.figma.com/v1/oauth/mcp/register",
+				authorizationUrl: "https://cropwise.example/authorize",
+				tokenUrl: "https://cropwise.example/token",
+				registrationUrl: "https://cropwise.example/oauth/register",
 				fetch: fetchImpl,
 			},
 			{},
 		);
 
 		await expect(flow.generateAuthUrl("state", "http://127.0.0.1:53190/callback")).rejects.toThrow(
-			/dynamic client registration was rejected \(POST https:\/\/api\.figma\.com\/v1\/oauth\/mcp\/register → HTTP 403 — Forbidden\).*oauth\.clientId/s,
+			/HTTP 403.*unapproved_client.*approved list.*oauth\.clientId/s,
 		);
+		expect(authorizationRequests).toBe(0);
+	});
+
+	it.each([
+		["server error", 503, "upstream unavailable"],
+		["rate limit", 429, "slow down"],
+		["invalid client metadata", 400, '{"error":"invalid_client_metadata"}'],
+		["unrelated forbidden response", 403, "Forbidden"],
+	] as const)("keeps the clientless authorization fallback after a %s DCR failure", async (_case, status, body) => {
+		let authorizationProbes = 0;
+		const fetchImpl: FetchImpl = async input => {
+			const url = String(input);
+			if (url === "https://provider.example/oauth/register") {
+				return new Response(body, { status });
+			}
+			if (url.startsWith("https://provider.example/authorize?")) {
+				authorizationProbes += 1;
+				return new Response("ok", { status: 200 });
+			}
+			throw new Error(`Unexpected fetch: ${url}`);
+		};
+		const flow = new MCPOAuthFlow(
+			{
+				authorizationUrl: "https://provider.example/authorize",
+				tokenUrl: "https://provider.example/token",
+				registrationUrl: "https://provider.example/oauth/register",
+				fetch: fetchImpl,
+			},
+			{},
+		);
+
+		const { url } = await flow.generateAuthUrl("state", "http://127.0.0.1:53192/callback");
+
+		expect(new URL(url).searchParams.has("client_id")).toBe(false);
+		expect(authorizationProbes).toBe(1);
 	});
 
 	it("names the missing-DCR case when no registration endpoint is advertised", async () => {
