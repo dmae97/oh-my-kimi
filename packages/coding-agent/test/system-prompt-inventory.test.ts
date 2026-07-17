@@ -130,6 +130,32 @@ describe("system prompt tool inventory", () => {
 		expect(text).not.toContain("- Read: `read`");
 	});
 
+	it.each([
+		["compact", true, false],
+		["inline", false, false],
+	] as const)("omits xd-mounted tools from the %s inventory", async (_mode, nativeTools, inlineToolDescriptors) => {
+		const { systemPrompt } = await buildSystemPrompt({
+			cwd: tempDir,
+			contextFiles: [],
+			skills: [],
+			rules: [],
+			toolNames: ["read", "web_search"],
+			tools: TOOLS,
+			workspaceTree: { ...EMPTY_TREE, rootPath: tempDir },
+			nativeTools,
+			inlineToolDescriptors,
+			xdevTools: [{ name: "web_search", summary: "Searches the web." }],
+			xdevDocs: "Mounted web search documentation.",
+		});
+		const text = systemPrompt.join("\n\n");
+		const inventory = nativeTools ? inventoryFrom(text) : text;
+
+		expect(inventory).toContain(nativeTools ? "`read`" : "# Tool: read");
+		expect(inventory).not.toContain(nativeTools ? "`web_search`" : "# Tool: web_search");
+		expect(text).toContain("# xd:// Tool Devices");
+		expect(text).toContain("Mounted web search documentation.");
+	});
+
 	it("uses a conservative fallback inventory when no tools map is provided", async () => {
 		const { systemPrompt } = await buildSystemPrompt({
 			cwd: tempDir,
