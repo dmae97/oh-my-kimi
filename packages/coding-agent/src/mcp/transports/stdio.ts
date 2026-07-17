@@ -404,6 +404,132 @@ export function writeFrame(stdin: FrameSink, frame: string): boolean {
 	}
 }
 
+/** Grace window to observe a cooperative exit after SIGTERM before escalating to SIGKILL. */
+const TERM_GRACE_MS = 1000;
+/** Grace window to observe SIGKILL taking effect before `close()` gives up and returns. */
+const KILL_GRACE_MS = 500;
+
+/**
+ * The subset of `Subprocess` that termination needs. Decoupled from the
+ * `Subprocess<In, Out, Err>` stdio generics — `#process`'s pipes are
+ * irrelevant to signaling — so tests can exercise it against a plain
+ * `Bun.spawn(cmd, { stdio: "ignore" })` child without fighting the generics.
+ */
+interface KillableSubprocess {
+	readonly pid: number;
+	readonly exited: Promise<number>;
+	kill(signal?: number | NodeJS.Signals): void;
+}
+
+/**
+ * Race `exited` against a timer. Resolves `true` once the process has exited
+ * within `timeoutMs`, `false` if the timer wins first. `exited` resolving OR
+ * rejecting both count as "exited" — mirrors `waitForExit()` in
+ * `lsp/client.ts`, which treats the same ambiguity (Bun documents
+ * `Subprocess.exited` as resolve-only, but a settle either way means there is
+ * nothing left to wait on).
+ *
+ * The timer is always cleared before returning — win or lose — so a process
+ * that exits promptly never leaves a dangling `timeoutMs` timer holding the
+ * event loop open behind it.
+ */
+async function waitForProcessExit(exited: Promise<number>, timeoutMs: number): Promise<boolean> {
+	const { promise: timedOut, resolve: resolveTimedOut } = Promise.withResolvers<false>();
+	const timer = setTimeout(() => resolveTimedOut(false), timeoutMs);
+	try {
+		return await Promise.race([
+			exited.then(
+				() => true,
+				() => true,
+			),
+			timedOut,
+		]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+/** `true` when `error` is a Node errno exception carrying the given `code`. */
+function isErrnoCode(error: unknown, code: string): boolean {
+	if (typeof error !== "object" || error === null || !("code" in error)) return false;
+	return error.code === code;
+}
+
+/**
+ * Signal `signal` to `proc`. When `detached` is true on a POSIX platform,
+ * targets the whole process group via the negative-pid convention
+ * (`process.kill(-pid, signal)`) so a detached session leader's descendants —
+ * not just the direct child — receive it too; a bare direct-child signal
+ * never reaches grandchildren the child itself spawned.
+ *
+ * `ESRCH` from the group signal means the group is already gone — that is a
+ * success (nothing left to signal), not a failure — so it does not fall
+ * through. Any other group-signal failure (e.g. `EPERM`) falls back to
+ * signaling the direct child as a last resort. Non-detached transports
+ * (macOS, Windows, or POSIX where detach did not apply) always signal the
+ * direct child only: a negative-pid signal outside a detached session could
+ * hit an unrelated process group.
+ */
+function signalStdioProcess(
+	proc: KillableSubprocess,
+	detached: boolean,
+	signal: NodeJS.Signals,
+	platform: NodeJS.Platform,
+): void {
+	if (detached && platform !== "win32") {
+		try {
+			process.kill(-proc.pid, signal);
+			return;
+		} catch (error) {
+			if (isErrnoCode(error, "ESRCH")) return;
+			// Fall through to the direct-child signal below.
+		}
+	}
+	try {
+		proc.kill(signal);
+	} catch {
+		// Already gone.
+	}
+}
+
+/**
+ * Terminate an MCP stdio subprocess: SIGTERM (process-group when `detached`
+ * on POSIX, direct child otherwise), wait up to `TERM_GRACE_MS` for a
+ * cooperative exit, then escalate to SIGKILL — waiting up to `KILL_GRACE_MS`
+ * more only when the leader itself hadn't already exited. A detached
+ * leader's cooperative exit does not prove the whole process group is gone
+ * (a grandchild can outlive it and ignore SIGTERM), so detached transports
+ * always fire the group SIGKILL sweep, even after a clean SIGTERM exit.
+ * Every step is a no-op-safe signal against an already-exited target, so
+ * repeat calls (idempotent `close()`) never throw.
+ *
+ * Exported so tests can exercise group-signal escalation with an explicit
+ * `detached`/`platform` pair: `StdioTransport.connect()` derives `detached`
+ * from `resolveStdioSpawnCommand()`, which is tied to the host's real
+ * `process.platform`, so a POSIX detached session cannot be reproduced
+ * end-to-end through `connect()` on a non-Linux dev/CI host.
+ */
+export async function terminateStdioProcess(
+	proc: KillableSubprocess,
+	detached: boolean,
+	platform: NodeJS.Platform = process.platform,
+): Promise<void> {
+	signalStdioProcess(proc, detached, "SIGTERM", platform);
+	const exitedOnTerm = await waitForProcessExit(proc.exited, TERM_GRACE_MS);
+	// A non-detached transport has no process group beyond the leader itself:
+	// once it exits, there is nothing left to signal. A detached transport's
+	// leader exiting is NOT proof the group is empty — a grandchild it spawned
+	// can still be alive and ignoring SIGTERM — so detached transports always
+	// fall through to the group SIGKILL, even on a cooperative leader exit.
+	if (exitedOnTerm && !detached) return;
+	signalStdioProcess(proc, detached, "SIGKILL", platform);
+	// Once the leader has already exited there is no further `exited` signal
+	// to wait on for this call — the SIGKILL above is a fire-and-forget sweep
+	// for any surviving group members — so only block on the grace window
+	// when the leader itself is still the thing being escalated against.
+	if (!exitedOnTerm) await waitForProcessExit(proc.exited, KILL_GRACE_MS);
+}
+
 /**
  * Stdio transport for MCP servers.
  * Spawns a subprocess and communicates via stdin/stdout.
@@ -419,6 +545,12 @@ export class StdioTransport implements MCPTransport {
 	>();
 	#connected = false;
 	#readLoop: Promise<void> | null = null;
+	/**
+	 * Set from `resolveStdioSpawnCommand()`'s `detached` flag in `connect()`.
+	 * Gates process-group signaling in `close()` — only a transport that
+	 * actually spawned into its own session may target it.
+	 */
+	#detached = false;
 
 	onClose?: () => void;
 	onError?: (error: Error) => void;
@@ -469,6 +601,7 @@ export class StdioTransport implements MCPTransport {
 			detached: spawnCommand.detached,
 			windowsVerbatimArguments: spawnCommand.windowsVerbatimArguments,
 		});
+		this.#detached = spawnCommand.detached;
 
 		this.#connected = true;
 
@@ -730,8 +863,26 @@ export class StdioTransport implements MCPTransport {
 		}
 
 		if (this.#process) {
-			this.#process.kill();
+			// Grab the handle and null the field immediately (before any
+			// `await`) so a concurrent/repeat `close()` sees `#process` already
+			// cleared and skips straight past this block — no double-signal.
+			const proc = this.#process;
 			this.#process = null;
+
+			// 1. Cooperative EOF first: a well-behaved server sees stdin close
+			// and can exit on its own before any signal is sent. Guarded — the
+			// sink can throw if the pipe is already closed/dead (e.g. the child
+			// already exited and the read loop got there first).
+			try {
+				proc.stdin.end();
+			} catch {
+				// Already closed/dead.
+			}
+
+			// 2-3. Group-aware SIGTERM (when this transport actually spawned
+			// detached), bounded wait, then escalate to SIGKILL. See
+			// `terminateStdioProcess` for the exact signaling/escalation rules.
+			await terminateStdioProcess(proc, this.#detached);
 		}
 
 		if (this.#readLoop) {
