@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import { Agent, type AgentMessage, type AgentTool } from "@oh-my-pi/pi-agent-core";
-import { z } from "@oh-my-pi/pi-ai";
+import { type ThinkingContent, z } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { type SettingPath, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -62,6 +62,15 @@ function orphanedToolUseStop(): MockResponse {
 function thinkingOnlyStop(): MockResponse {
 	return {
 		content: [{ type: "thinking", thinking: "I should inspect the next file." }],
+		stopReason: "stop",
+		usage: { output: 1, cacheRead: 100 },
+	};
+}
+
+function signedThinkingOnlyStop(): MockResponse {
+	const content: ThinkingContent = { type: "thinking", thinking: "", thinkingSignature: "nonempty" };
+	return {
+		content: [content],
 		stopReason: "stop",
 		usage: { output: 1, cacheRead: 100 },
 	};
@@ -224,6 +233,20 @@ describe("AgentSession empty stop guard", () => {
 		expect(assistantText(session.agent.state.messages)).toContain("finished after thinking-only retry");
 		expect(reminderMessages(session.agent.state.messages)).toHaveLength(1);
 		expect(emptyAssistantStops(session.agent.state.messages)).toHaveLength(0);
+	});
+
+	it("accepts a signed thinking-only stop without retrying", async () => {
+		const { session, mock } = await createHarness([
+			signedThinkingOnlyStop(),
+			{ content: ["must not be requested"], stopReason: "stop" },
+		]);
+
+		await session.prompt("finish with signed thinking");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(1);
+		expect(reminderMessages(session.agent.state.messages)).toHaveLength(0);
+		expect(session.agent.state.messages.at(-1)?.role).toBe("assistant");
 	});
 
 	it("removes orphaned tool-use stops even when retry cap is hit", async () => {

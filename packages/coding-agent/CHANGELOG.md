@@ -14,6 +14,7 @@
 - Fixed legacy provider extensions failing to load when they use the historical synchronous auth-storage surface ([#5879](https://github.com/can1357/oh-my-pi/issues/5879)).
 - Fixed orphaned detached MCP stdio server process trees surviving session dispose by escalating stdin-EOF → group SIGTERM → group SIGKILL on close() (#5578)
 - Fixed `/new` starting an unsolicited old-context provider turn when a hidden steer (e.g. an `xd://` mount notice) was queued: the session transition is now an atomic boundary, so a queued steer/follow-up can no longer auto-resume against the pre-`/new` context while the session is disconnected mid-transition. `/compact` still resumes a steer/follow-up that arrives while it runs, draining the queue once it reconnects ([#5800](https://github.com/can1357/oh-my-pi/issues/5800)).
+- Fixed signed thinking-only Claude stops being discarded and retried as empty responses ([#5881](https://github.com/can1357/oh-my-pi/issues/5881)).
 
 ## [17.0.2] - 2026-07-17
 
