@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Session load now skips the recursive async blob-ref resolver for entries with no `blob:sha256:` references. A cheap synchronous precheck gates the walk per entry (preserving the previous per-entry initiation order under synchronous store mutation), so text-heavy histories no longer pay the `Promise.all` tree descent for every non-session entry ([#5922](https://github.com/can1357/oh-my-pi/issues/5922)).
+
 ## [17.0.3] - 2026-07-17
 
 ### Changed
