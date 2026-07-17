@@ -210,6 +210,19 @@ function renderGoalMode(ctx: SegmentContext, mode: { enabled: boolean; paused: b
 	return { content: theme.fg(color, parts.join(" ")), visible: true };
 }
 
+function formatLoopLimit(limit: NonNullable<SegmentContext["loopMode"]>["limit"]): string | undefined {
+	if (!limit) return undefined;
+	if (limit.kind === "iterations") return `${limit.remaining}/${limit.initial}`;
+
+	const totalSeconds = Math.max(0, Math.ceil((limit.deadlineMs - Date.now()) / 1_000));
+	const hours = Math.floor(totalSeconds / 3_600);
+	const minutes = Math.floor((totalSeconds % 3_600) / 60);
+	const seconds = totalSeconds % 60;
+	if (hours > 0) return `${hours}h${minutes > 0 ? `${minutes}m` : ""} left`;
+	if (minutes > 0) return `${minutes}m${seconds > 0 ? `${seconds}s` : ""} left`;
+	return `${seconds}s left`;
+}
+
 const modeSegment: StatusLineSegment = {
 	id: "mode",
 	render(ctx) {
@@ -241,9 +254,13 @@ const modeSegment: StatusLineSegment = {
 		}
 
 		const loop = ctx.loopMode;
-		if (loop?.enabled) {
-			const content = withIcon(theme.icon.loop, "Loop");
-			return { content: theme.fg("customMessageLabel", content), visible: true };
+		if (loop) {
+			const icon = loop.state === "paused" ? theme.icon.pause || theme.icon.loop : theme.icon.loop;
+			const color: ThemeColor = loop.state === "paused" ? "warning" : "customMessageLabel";
+			const parts = [withIcon(icon, `Loop ${loop.state}`)];
+			const limit = formatLoopLimit(loop.limit);
+			if (limit) parts.push(limit);
+			return { content: theme.fg(color, parts.join(" ")), visible: true };
 		}
 
 		return { content: "", visible: false };

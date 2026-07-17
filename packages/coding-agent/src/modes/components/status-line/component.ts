@@ -273,7 +273,7 @@ export class StatusLineComponent implements Component {
 	 */
 	#activeMeters: WeakMap<AgentSession, ActiveMeter> = new WeakMap();
 	#planModeStatus: { enabled: boolean; paused: boolean } | null = null;
-	#loopModeStatus: { enabled: boolean } | null = null;
+	#loopModeStatus: SegmentContext["loopMode"] = null;
 	#goalModeStatus: { enabled: boolean; paused: boolean } | null = null;
 	#vibeModeStatus: { enabled: boolean } | null = null;
 	#collabStatus: CollabStatus | null = null;
@@ -496,7 +496,7 @@ export class StatusLineComponent implements Component {
 		this.#planModeStatus = status ?? null;
 	}
 
-	setLoopModeStatus(status: { enabled: boolean } | undefined): void {
+	setLoopModeStatus(status: NonNullable<SegmentContext["loopMode"]> | undefined): void {
 		this.#loopModeStatus = status ?? null;
 	}
 

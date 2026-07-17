@@ -316,6 +316,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime => {
 			if (!runtime.ctx.loopModeEnabled) return "Loop: off";
+			if (runtime.ctx.loopModePaused) return "Loop: paused";
 			if (runtime.ctx.loopLimit) return `Loop: on (${describeLoopLimitRuntime(runtime.ctx.loopLimit)})`;
 			if (runtime.ctx.loopPrompt) return "Loop: on (repeating prompt)";
 			return "Loop: on (waiting for next prompt)";

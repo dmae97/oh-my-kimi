@@ -45,6 +45,7 @@
 ### Removed
 
 - Removed the unreliable Bing and Yahoo HTML-scraping web search providers
+- Fixed the status line loop indicator to distinguish waiting, running, and paused states and show the remaining loop budget.
 
 ## [17.0.2] - 2026-07-17
 
