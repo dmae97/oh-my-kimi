@@ -3,6 +3,7 @@ import type { Static, TSchema } from "@oh-my-pi/pi-ai";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 import { applyToolProxy } from "../../extensibility/tool-proxy";
 import type { Theme } from "../../modes/theme/theme";
+import { defaultLoadModeForToolName } from "../../tools/essential-tools";
 import type {
 	RpcHostToolCallRequest,
 	RpcHostToolCancelRequest,
@@ -54,7 +55,7 @@ class RpcHostToolAdapter<TParams extends TSchema = TSchema, TTheme extends Theme
 		this.#definition = definition;
 		this.#bridge = bridge;
 		applyToolProxy(definition, this);
-		this.loadMode = definition.loadMode ?? "discoverable";
+		this.loadMode = defaultLoadModeForToolName(definition.name, definition.loadMode);
 	}
 
 	execute(

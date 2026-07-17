@@ -89,6 +89,9 @@
 ### Fixed
 
 - Fixed `providers.webSearch: kimi` sending a Moonshot Open Platform credential (`MOONSHOT_API_KEY` / stored `moonshot` auth) to the Kimi Code search endpoint (`api.kimi.com/coding/v1/search`), which rejects it with `401` and silently falls back to another provider. Kimi web search now resolves and advertises Kimi Code credentials only — a Kimi Code Console key via `KIMI_SEARCH_API_KEY` / `MOONSHOT_SEARCH_API_KEY` or `omp /login kimi-code` ([#5762](https://github.com/can1357/oh-my-pi/issues/5762)).
+### Fixed
+
+- Fixed extension/SDK/RPC `registerTool` demoting essential built-ins (`read`/`write`/`bash`/`edit`/`glob`/…) to `discoverable` when a re-registration omitted `loadMode`, which — with `tools.xdev` on — unmounted them from the top-level schema and broke the `xd://` transport (`read xd://`/`write xd://`), leaving the model with no callable coding essentials. Omitted `loadMode` now defaults to `"essential"` for known essential built-in names at every adapter boundary, and `read`/`write` (the transport itself) are never mounted under xdev regardless of `loadMode` ([#5764](https://github.com/can1357/oh-my-pi/issues/5764)).
 
 ## [17.0.1] - 2026-07-16
 
