@@ -662,7 +662,6 @@ async function findImageApiKey(
 		case "gemini":
 			return findGeminiImageCredentials(modelRegistry, sessionId);
 	}
-
 }
 
 async function loadImageFromPath(imagePath: string, cwd: string): Promise<InlineImageData> {

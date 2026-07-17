@@ -100,7 +100,6 @@ function assertSingleMetricPoint(metricName: string): void {
 	}
 }
 
-
 const server = Bun.serve({
 	port: 0,
 	async fetch(req) {

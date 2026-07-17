@@ -210,7 +210,6 @@ function normalizeResultOutput(result: BashResult | BashInteractiveResult): stri
 	return result.output || "";
 }
 
-
 function normalizeBashEnv(env: Record<string, string> | undefined): Record<string, string> | undefined {
 	if (!env || Object.keys(env).length === 0) return undefined;
 	const normalized: Record<string, string> = {};

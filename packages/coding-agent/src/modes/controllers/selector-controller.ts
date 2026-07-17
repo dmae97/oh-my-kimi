@@ -809,7 +809,9 @@ export class SelectorController {
 								this.ctx.session.setThinkingLevel(AUTO_THINKING, true);
 							}
 							const roleInfo = getRoleInfo(role, settings);
-							this.ctx.showStatus(`${scopeLabel}${roleInfo?.tag ?? roleInfo?.name ?? role} model: ${selector ?? model.id}`);
+							this.ctx.showStatus(
+								`${scopeLabel}${roleInfo?.tag ?? roleInfo?.name ?? role} model: ${selector ?? model.id}`,
+							);
 						}
 					} catch (error) {
 						this.ctx.showError(error instanceof Error ? error.message : String(error));
@@ -833,7 +835,9 @@ export class SelectorController {
 							this.ctx.settings.setModelRole(role, undefined);
 						}
 						const roleInfo = getRoleInfo(role, settings);
-						this.ctx.showStatus(`${scopeLabel}${roleInfo?.tag ?? roleInfo?.name ?? role} role cleared — auto-selection applies`);
+						this.ctx.showStatus(
+							`${scopeLabel}${roleInfo?.tag ?? roleInfo?.name ?? role} role cleared — auto-selection applies`,
+						);
 						// Clearing either persisted scope can also remove a captured
 						// runtime override. When that changes the effective default,
 						// resolve the newly exposed persisted layer and switch the live
