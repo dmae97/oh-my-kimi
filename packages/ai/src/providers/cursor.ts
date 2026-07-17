@@ -213,6 +213,34 @@ function parseConnectEndStream(data: Uint8Array): Error | null {
 	}
 }
 
+/**
+ * Maps an opaque HTTP/2 negotiation failure into an actionable error.
+ *
+ * bun only opens an HTTP/2 session when TLS-ALPN negotiates `h2`. Behind a
+ * TLS-intercepting proxy that strips ALPN (e.g. Zscaler), the handshake yields
+ * no `h2` protocol and bun throws `ERR_HTTP2_ERROR: h2 is not supported`. The
+ * Cursor run RPC is HTTP/2-only (the ALB rejects HTTP/1.1 with 464), so there
+ * is no h1 fallback the way model discovery has one — the run simply cannot
+ * proceed. Replace the opaque message with one that names the cause and points
+ * at the `providers.cursor.baseUrl` workaround.
+ *
+ * Non-ALPN errors pass through untouched.
+ */
+export function mapH2TransportError(error: unknown, baseUrl: string): unknown {
+	const code = (error as { code?: unknown } | null)?.code;
+	const message = error instanceof Error ? error.message : String(error);
+	if (code === "ERR_HTTP2_ERROR" && /h2 is not supported/i.test(message)) {
+		return new AIError.ProviderResponseError(
+			`Cursor run transport could not negotiate HTTP/2 with ${baseUrl}: "h2 is not supported". ` +
+				"This host serves the run RPC over HTTP/2 only, and the TLS handshake did not negotiate " +
+				"h2 via ALPN — typically an ALPN-stripping TLS-intercepting proxy (e.g. Zscaler). " +
+				"Front the provider with a local HTTP/2 bridge and set providers.cursor.baseUrl to it.",
+			{ provider: "cursor", kind: "runtime", cause: error },
+		);
+	}
+	return error;
+}
+
 function debugBytes(bytes: Uint8Array, asHex: boolean): string {
 	if (asHex) {
 		return Buffer.from(bytes).toString("hex");
@@ -431,7 +459,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 			} else {
 				h2Client = http2.connect(baseUrl);
 			}
-			h2Client.on("error", error => settleH2(error));
+			h2Client.on("error", error => settleH2(mapH2TransportError(error, baseUrl)));
 
 			h2Request = h2Client.request(requestHeaders);
 
@@ -573,7 +601,8 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 			});
 
 			h2Request.on("error", error => {
-				void closeDebugLog().finally(() => settleH2(error));
+				const mapped = mapH2TransportError(error, baseUrl);
+				void closeDebugLog().finally(() => settleH2(mapped));
 			});
 
 			if (options?.signal) {
