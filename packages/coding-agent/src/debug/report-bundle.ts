@@ -277,7 +277,7 @@ async function collectSameDayLogs(linesPerFile: number): Promise<string> {
 	return chunks.join("\n\n");
 }
 
-const LOG_FILE_PATTERN = new RegExp(`^${APP_NAME}\\.(\\d{4}-\\d{2}-\\d{2})\\.\\d+\\.log$`);
+const LOG_FILE_PATTERN = new RegExp(`^${APP_NAME}\\.(\\d{4}-\\d{2}-\\d{2})\\.\\d+\\.log(?:\\.\\d+)?$`);
 
 export async function createDebugLogSource(): Promise<DebugLogSource> {
 	const logsDir = getLogsDir();

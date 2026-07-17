@@ -40,9 +40,12 @@ describe("report bundle logs", () => {
 		await fs.mkdir(logsDir, { recursive: true });
 		const today = new Date().toISOString().slice(0, 10);
 		const crashedName = `omp.${today}.4242.log`;
+		const rotatedName = `${crashedName}.1`;
 		const currentName = `omp.${today}.${process.pid}.log`;
 		await Bun.write(path.join(logsDir, crashedName), '{"pid":4242,"message":"fatal in crashed pid"}\n');
 		await fs.utimes(path.join(logsDir, crashedName), 1, 1);
+		await Bun.write(path.join(logsDir, rotatedName), '{"pid":4242,"message":"earlier rotated crash output"}\n');
+		await fs.utimes(path.join(logsDir, rotatedName), 0, 0);
 		await Bun.write(path.join(logsDir, currentName), '{"pid":0,"message":"later invocation"}\n');
 		await fs.utimes(path.join(logsDir, currentName), 2, 2);
 
@@ -54,6 +57,8 @@ describe("report bundle logs", () => {
 		const logsText = (await files.get("logs.txt")?.text()) ?? "";
 		expect(logsText).toContain(crashedName);
 		expect(logsText).toContain("fatal in crashed pid");
+		expect(logsText).toContain(rotatedName);
+		expect(logsText).toContain("earlier rotated crash output");
 		expect(logsText).toContain(currentName);
 		expect(logsText).toContain("later invocation");
 		expect(logsText.indexOf(crashedName)).toBeLessThan(logsText.indexOf(currentName));
