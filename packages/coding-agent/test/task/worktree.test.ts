@@ -682,6 +682,34 @@ describe("detachGitDir", () => {
 		expect(await runGit(wt, ["branch", "--format=%(refname:short)"])).not.toContain("feature/a");
 	});
 
+	it("preserves sparse-checkout state so excluded files are not captured as deletions", async () => {
+		const { main, wt, commonDir } = await makeLinkedWorktree();
+		// Add a second directory to the source, then sparse-checkout only `keep/`
+		// in the linked worktree so `drop/` is intentionally absent from disk.
+		await fs.mkdir(path.join(main, "keep"), { recursive: true });
+		await fs.mkdir(path.join(main, "drop"), { recursive: true });
+		await fs.writeFile(path.join(main, "keep", "k.txt"), "keep\n");
+		await fs.writeFile(path.join(main, "drop", "d.txt"), "drop\n");
+		await runGit(main, ["add", "keep", "drop"]);
+		await runGit(main, ["commit", "-q", "-m", "add keep/drop"]);
+		await runGit(wt, ["merge", "-q", "main"]);
+		await runGit(wt, ["sparse-checkout", "init", "--cone"]);
+		await runGit(wt, ["sparse-checkout", "set", "keep"]);
+		// Sparse working tree is clean and `drop/` is not materialised.
+		expect(await runGit(wt, ["status", "--porcelain=v1"])).toBe("");
+		expect(await Bun.file(path.join(wt, "drop", "d.txt")).exists()).toBe(false);
+
+		const iso = await copyTree(wt);
+		expect(await git.detachGitDir(iso, commonDir)).toBe("detached");
+
+		// The detached isolation still honours sparse checkout: `drop/d.txt` keeps
+		// its skip-worktree bit and is NOT reported as a deletion (which delta
+		// capture would otherwise apply back to the parent).
+		expect(await runGit(iso, ["status", "--porcelain=v1"])).toBe("");
+		expect(await runGit(iso, ["ls-files", "-t", "drop/d.txt"])).toBe("S drop/d.txt");
+		expect(await runGit(iso, ["config", "core.sparseCheckout"])).toBe("true");
+	});
+
 	it("keeps ensureIsolation from mutating a linked-worktree parent (rcopy backend)", async () => {
 		const { wt, baseSha } = await makeLinkedWorktree();
 		vi.spyOn(natives, "isoResolve").mockReturnValue({

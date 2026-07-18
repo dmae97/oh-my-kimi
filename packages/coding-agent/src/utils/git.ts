@@ -637,6 +637,10 @@ async function readOptionalText(filePath: string): Promise<string | null> {
 	return retryOnEintr(async () => await Bun.file(filePath).text());
 }
 
+async function readOptionalBytes(filePath: string): Promise<Uint8Array | null> {
+	return retryOnEintr(async () => await Bun.file(filePath).bytes());
+}
+
 function parseGitDirPointer(content: string): string | null {
 	const match = /^gitdir:\s*(.+)\s*$/iu.exec(content.trim());
 	return match?.[1] ?? null;
@@ -1444,7 +1448,6 @@ export async function detachGitDir(worktreeRoot: string, sourceCommonDir: string
 	// history reads keep resolving after the source moves on.
 	const headSha = (await tryText(worktreeRoot, ["rev-parse", "HEAD"], { readOnly: true }))?.trim() ?? "";
 	const headRef = (await tryText(worktreeRoot, ["symbolic-ref", "-q", "HEAD"], { readOnly: true }))?.trim() ?? "";
-	const stagedTree = (await runText(worktreeRoot, ["write-tree"], {})).trim();
 	const refDump = headSha
 		? (
 				await runText(worktreeRoot, ["for-each-ref", "--format=%(objectname) %(refname)"], {
@@ -1456,6 +1459,28 @@ export async function detachGitDir(worktreeRoot: string, sourceCommonDir: string
 		(await tryText(worktreeRoot, ["rev-parse", "--show-object-format"], { readOnly: true }))?.trim() || "sha1";
 	const userName = await config.get(worktreeRoot, "user.name");
 	const userEmail = await config.get(worktreeRoot, "user.email");
+
+	// Preserve the index verbatim rather than round-tripping through
+	// write-tree/read-tree: the raw index carries skip-worktree bits (sparse
+	// checkout), assume-unchanged flags, and exact stage entries. A rebuilt
+	// index drops skip-worktree, so files intentionally absent from a sparse
+	// working tree would read as deletions and delta capture would apply those
+	// deletions back to the parent. Sparse config + patterns are carried too so
+	// later git operations in the isolation keep honouring the sparse view.
+	const indexPath = (
+		await runText(worktreeRoot, ["rev-parse", "--path-format=absolute", "--git-path", "index"], {
+			readOnly: true,
+		})
+	).trim();
+	const indexBytes = await readOptionalBytes(indexPath);
+	const sparseCheckout = await config.get(worktreeRoot, "core.sparseCheckout");
+	const sparseCone = await config.get(worktreeRoot, "core.sparseCheckoutCone");
+	const sparsePatternPath = (
+		await runText(worktreeRoot, ["rev-parse", "--path-format=absolute", "--git-path", "info/sparse-checkout"], {
+			readOnly: true,
+		})
+	).trim();
+	const sparsePatterns = await readOptionalText(sparsePatternPath);
 
 	// A pointer `.git` file whose worktree-admin dir back-references this exact
 	// tree is the rcopy `git worktree add` registration. Remove that admin entry
@@ -1521,8 +1546,26 @@ export async function detachGitDir(worktreeRoot: string, sourceCommonDir: string
 	// Carry the source identity so isolated commits have an author.
 	if (userName) await config.set(worktreeRoot, "user.name", userName);
 	if (userEmail) await config.set(worktreeRoot, "user.email", userEmail);
-	// Restore the staged index without touching the working tree.
-	await readTree(worktreeRoot, stagedTree);
+
+	// Restore sparse-checkout state before the index so skip-worktree entries
+	// keep resolving against the carried patterns.
+	if (sparseCheckout) await config.set(worktreeRoot, "core.sparseCheckout", sparseCheckout);
+	if (sparseCone) await config.set(worktreeRoot, "core.sparseCheckoutCone", sparseCone);
+	if (sparsePatterns !== null) {
+		const infoDir = path.join(gitEntry, "info");
+		await fs.promises.mkdir(infoDir, { recursive: true });
+		await Bun.write(path.join(infoDir, "sparse-checkout"), sparsePatterns);
+	}
+
+	// Restore the index verbatim (skip-worktree, assume-unchanged, exact stage
+	// entries) so the working tree's dirty set — including sparse-excluded files
+	// — matches the source. Fall back to rebuilding from HEAD only when the
+	// source had no index (a bare-ish/never-staged checkout).
+	if (indexBytes) {
+		await Bun.write(path.join(gitEntry, "index"), indexBytes);
+	} else if (headSha) {
+		await readTree(worktreeRoot, headSha);
+	}
 	return "detached";
 }
 
