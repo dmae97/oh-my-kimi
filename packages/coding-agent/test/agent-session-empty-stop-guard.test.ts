@@ -273,7 +273,7 @@ describe("AgentSession empty stop guard", () => {
 		);
 		expect(orphanedToolUseStops).toHaveLength(0);
 	});
-	it("caps empty stop retries at three attempts", async () => {
+	it("caps empty stop retries at three attempts and discards the final empty turn", async () => {
 		const { session, mock } = await createHarness([
 			recordCall("beta", "call-record-beta"),
 			emptyStop(),
@@ -287,13 +287,32 @@ describe("AgentSession empty stop guard", () => {
 
 		expect(mock.calls).toHaveLength(5);
 		expect(reminderMessages(session.agent.state.messages)).toHaveLength(3);
-		expect(emptyAssistantStops(session.agent.state.messages)).toHaveLength(1);
+		expect(emptyAssistantStops(session.agent.state.messages)).toHaveLength(0);
 
 		const activeBranchMessages = session.sessionManager
 			.getBranch()
 			.filter(entry => entry.type === "message")
 			.map(entry => entry.message as AgentMessage);
-		expect(emptyAssistantStops(activeBranchMessages)).toHaveLength(1);
+		expect(emptyAssistantStops(activeBranchMessages)).toHaveLength(0);
+	});
+
+	it("does not let a capped empty stop anchor the next context estimate", async () => {
+		const billedEmptyStops = Array.from(
+			{ length: 4 },
+			(): MockResponse => ({
+				content: [],
+				stopReason: "stop",
+				usage: { input: 172_000, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 172_001 },
+			}),
+		);
+		const { session, mock } = await createHarness(billedEmptyStops);
+
+		await expectPromptCompletes(session.prompt("answer from compacted context"));
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(4);
+		expect(session.getContextUsage()?.tokens).toBeLessThan(10_000);
+		expect(emptyAssistantStops(session.agent.state.messages)).toHaveLength(0);
 	});
 
 	it("emits failed auto-retry end when repeated empty stops exhaust the retry cap", async () => {
@@ -315,7 +334,7 @@ describe("AgentSession empty stop guard", () => {
 			success: false,
 			attempt: 3,
 		});
-		expect(retryEndEvents[0]?.finalError).toContain("empty stop");
+		expect(retryEndEvents[0]?.finalError).toContain("/shake images");
 	});
 
 	it("ends auto-retry state when empty stop retries hit the cap", async () => {
@@ -357,7 +376,7 @@ describe("AgentSession empty stop guard", () => {
 		});
 		expect(retryEndEvents[0]?.finalError).toContain("empty stop");
 		expect(reminderMessages(session.agent.state.messages)).toHaveLength(3);
-		expect(emptyAssistantStops(session.agent.state.messages)).toHaveLength(1);
+		expect(emptyAssistantStops(session.agent.state.messages)).toHaveLength(0);
 
 		mock.push({ content: ["fresh unrelated success"], stopReason: "stop" });
 		await session.prompt("start unrelated turn after cap");

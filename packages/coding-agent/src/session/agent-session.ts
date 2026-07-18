@@ -11929,7 +11929,8 @@ export class AgentSession {
 		this.#emptyStopRetryCount++;
 		if (this.#emptyStopRetryCount > EMPTY_STOP_MAX_RETRIES) {
 			const attempts = this.#emptyStopRetryCount - 1;
-			const finalError = "Assistant returned empty stop after retry cap";
+			const finalError =
+				"Assistant returned empty stop after retry cap; try switching models or `/shake images` to remove archived frames";
 			logger.warn(finalError, {
 				attempts,
 				model: assistantMessage.model,
@@ -11944,11 +11945,11 @@ export class AgentSession {
 			this.#clearPendingRecoveredRetryErrors();
 			this.#retryAttempt = 0;
 			this.#resolveRetry();
-			// Tool-use orphans corrupt Anthropic message history (tool_result without
-			// matching tool_use). Always remove them even when the retry cap is hit.
-			if (assistantMessage.stopReason === "toolUse") {
-				this.#discardAssistantTurn(assistantMessage);
-			}
+			// A zero-content turn carries no transcript value, while its provider usage
+			// can anchor the next prompt at the full failed-request size and re-trigger
+			// compaction at the same boundary. Remove every capped empty stop; toolUse
+			// orphans still need this for Anthropic message-history validity.
+			this.#discardAssistantTurn(assistantMessage);
 			return false;
 		}
 		this.#discardAssistantTurn(assistantMessage);
