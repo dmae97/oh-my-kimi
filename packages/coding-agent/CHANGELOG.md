@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `task` tool schemas emitting boolean subschemas that llama.cpp grammar generation cannot parse ([#5957](https://github.com/can1357/oh-my-pi/issues/5957)).
+
 ## [17.0.3] - 2026-07-17
 
 ### Changed

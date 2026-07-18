@@ -106,11 +106,14 @@ export interface SubagentLifecyclePayload {
 /** Display cap for a normalized one-line label (roster line, registry `displayName`, prompt field). */
 export const LABEL_MAX = 80;
 
+// Keep this explicit: ArkType serializes `unknown` as a boolean subschema, which llama.cpp grammars reject.
+const outputSchemaInputSchema = type("object | boolean | string | null");
+
 export const taskItemSchema = type({
 	"name?": "string",
 	agent: "string = 'task'",
 	task: "string",
-	"outputSchema?": "unknown",
+	"outputSchema?": outputSchemaInputSchema,
 	"schemaMode?": '"permissive" | "strict"',
 	"+": "delete",
 });
@@ -118,7 +121,7 @@ const taskItemSchemaIsolated = type({
 	"name?": "string",
 	agent: "string = 'task'",
 	task: "string",
-	"outputSchema?": "unknown",
+	"outputSchema?": outputSchemaInputSchema,
 	"schemaMode?": '"permissive" | "strict"',
 	"isolated?": "boolean",
 	"+": "delete",
@@ -144,7 +147,7 @@ export const taskSchema = type({
 	"name?": "string",
 	agent: "string = 'task'",
 	task: "string",
-	"outputSchema?": "unknown",
+	"outputSchema?": outputSchemaInputSchema,
 	"schemaMode?": '"permissive" | "strict"',
 	"isolated?": "boolean",
 	"+": "delete",
@@ -153,7 +156,7 @@ const taskSchemaNoIsolation = type({
 	"name?": "string",
 	agent: "string = 'task'",
 	task: "string",
-	"outputSchema?": "unknown",
+	"outputSchema?": outputSchemaInputSchema,
 	"schemaMode?": '"permissive" | "strict"',
 	"+": "delete",
 });
@@ -197,7 +200,7 @@ function createTaskSchema(options: {
 				"name?": "string",
 				agent,
 				task: "string",
-				"outputSchema?": "unknown",
+				"outputSchema?": outputSchemaInputSchema,
 				"schemaMode?": '"permissive" | "strict"',
 				"isolated?": "boolean",
 				"+": "delete",
@@ -212,7 +215,7 @@ function createTaskSchema(options: {
 			"name?": "string",
 			agent,
 			task: "string",
-			"outputSchema?": "unknown",
+			"outputSchema?": outputSchemaInputSchema,
 			"schemaMode?": '"permissive" | "strict"',
 			"+": "delete",
 		});
@@ -227,7 +230,7 @@ function createTaskSchema(options: {
 			"name?": "string",
 			agent,
 			task: "string",
-			"outputSchema?": "unknown",
+			"outputSchema?": outputSchemaInputSchema,
 			"schemaMode?": '"permissive" | "strict"',
 			"isolated?": "boolean",
 			"+": "delete",
@@ -237,7 +240,7 @@ function createTaskSchema(options: {
 		"name?": "string",
 		agent,
 		task: "string",
-		"outputSchema?": "unknown",
+		"outputSchema?": outputSchemaInputSchema,
 		"schemaMode?": '"permissive" | "strict"',
 		"+": "delete",
 	});
