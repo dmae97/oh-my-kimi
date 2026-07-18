@@ -49,6 +49,7 @@ function createDelayedSession(finalMessage: AssistantMessage): DelayedSession {
 			messages.push(finalMessage);
 			return true;
 		},
+		getLastAssistantMessage: () => messages.findLast(message => message.role === "assistant"),
 		dispose: async () => {},
 	} as unknown as AgentSession;
 

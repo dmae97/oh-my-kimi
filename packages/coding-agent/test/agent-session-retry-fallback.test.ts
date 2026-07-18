@@ -1119,6 +1119,68 @@ describe("AgentSession retry fallback", () => {
 		});
 	});
 
+	it("keeps the pruned refusal visible to getLastAssistantMessage until the next run", async () => {
+		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!primaryModel) {
+			throw new Error("Expected bundled test model to exist");
+		}
+
+		const mock = createMockModel({
+			responses: [
+				{
+					stopReason: "error",
+					stopDetails: { type: "refusal", category: "cyber", explanation: "Declined." },
+					errorMessage: "Refusal (cyber): Declined.",
+				},
+				{ content: ["recovered"] },
+			],
+		});
+		const agent = new Agent({
+			getApiKey: model => `${model.provider}-test-key`,
+			initialState: {
+				model: primaryModel,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: (model, context, options) => mock.stream(model, context, options),
+		});
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.maxRetries": 1,
+			"retry.modelFallback": false,
+		});
+		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+
+		await session.prompt("Trigger classifier refusal");
+		await session.waitForIdle();
+
+		// The refusal turn is pruned from active context (no assistant tail)…
+		expect(session.agent.state.messages.at(-1)?.role).toBe("user");
+		// …but terminal-outcome consumers (print mode, task executor) must still
+		// see the settled error instead of a silently successful-looking state.
+		const settled = session.getLastAssistantMessage();
+		expect(settled?.stopReason).toBe("error");
+		expect(settled?.errorMessage).toBe("Refusal (cyber): Declined.");
+		expect(settled?.stopDetails).toEqual({ type: "refusal", category: "cyber", explanation: "Declined." });
+
+		await session.prompt("Next prompt supersedes the pruned refusal");
+		await session.waitForIdle();
+
+		const recovered = session.getLastAssistantMessage();
+		expect(recovered?.stopReason).toBe("stop");
+		expect(recovered?.content).toEqual([{ type: "text", text: "recovered" }]);
+	});
+
 	it("does not exceed retry.maxRetries for classifier fallback chains", async () => {
 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
 		const firstFallback = getBundledModel("openai", "gpt-4o-mini");

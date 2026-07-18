@@ -4446,6 +4446,11 @@ export class AgentSession {
 	}
 
 	#processAgentEvent = async (event: AgentEvent): Promise<void> => {
+		// A fresh run supersedes the previously settled (and pruned) refusal
+		// turn: state-based lookups take over again.
+		if (event.type === "agent_start") {
+			this.#prunedTerminalRefusal = undefined;
+		}
 		// Step the mid-run todo counter synchronously, BEFORE any await in this
 		// handler. The agent loop's next-turn `getAsideMessages` poll can run
 		// before queued microtasks drain, so `#takeMidRunTodoNudge` MUST see the
@@ -4991,10 +4996,14 @@ export class AgentSession {
 			}
 			// Classifier refusals are persisted-skipped above; also prune the trailing
 			// stub from active context so the next turn's prompt does not replay it.
+			// Keep a reference for post-settle readers (print mode, task executor via
+			// getLastAssistantMessage) — pruning made the terminal error invisible to
+			// anything inspecting agent state after prompt() resolved.
 			// Fall through to the standard error tail so `session_stop` hooks (block,
 			// continue, telemetry) still fire — matching the pre-fix flow for
 			// `stopReason === "error"`.
 			if (this.#isClassifierRefusal(msg)) {
+				this.#prunedTerminalRefusal = msg;
 				this.#removeAssistantMessageFromActiveContext(msg);
 			}
 			this.#resolveRetry();
@@ -6962,9 +6971,14 @@ export class AgentSession {
 		}
 	}
 
-	/** Most recent assistant message in agent state. */
+	/**
+	 * Most recent settled assistant message. A classifier-refusal turn pruned
+	 * from active context at settle is still reported until the next run
+	 * starts, so terminal-outcome consumers (print mode, task executor) see
+	 * the refusal error rather than the previous turn — or nothing.
+	 */
 	getLastAssistantMessage(): AssistantMessage | undefined {
-		return this.#findLastAssistantMessage();
+		return this.#prunedTerminalRefusal ?? this.#findLastAssistantMessage();
 	}
 	/** Current effective system prompt blocks (includes any per-turn extension modifications) */
 	get systemPrompt(): string[] {

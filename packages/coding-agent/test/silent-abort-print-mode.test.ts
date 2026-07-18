@@ -50,6 +50,7 @@ function createMockSession(
 		extensionRunner: undefined,
 		subscribe: () => () => {},
 		prompt: async () => {},
+		getLastAssistantMessage: () => messages.findLast(message => message.role === "assistant"),
 		dispose,
 	} as unknown as AgentSession;
 }
