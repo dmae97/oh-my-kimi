@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Coerced boolean tool-schema subschemas to MFJS object forms for native Moonshot/Kimi endpoints, preventing the task tool's `outputSchema` field from causing HTTP 400 responses ([#5952](https://github.com/can1357/oh-my-pi/issues/5952)).
+
 ## [17.0.3] - 2026-07-17
 
 ### Fixed

@@ -29,8 +29,11 @@ import { decontaminateZodInstance } from "./zod-decontaminate";
 export type ResidualSchemaIncompatibility = "type-array" | "type-null" | "nullable" | "combiners" | "not";
 
 export interface NormalizeSchemaOptions {
-	/** Coerce JSON Schema boolean subschemas for providers whose wire cannot encode them. */
-	coerceBooleanSubschemas?: boolean;
+	/**
+	 * Coerce boolean subschemas to object forms. `standard` preserves `false`
+	 * with `not`; `permissive` uses `{}` when the provider cannot express it.
+	 */
+	coerceBooleanSubschemas?: "standard" | "permissive";
 	unsupportedFields: (key: string) => boolean;
 	normalizeFieldNames: boolean;
 	collapseNullFields: boolean;
@@ -284,12 +287,12 @@ function normalizeSchemaNode(value: unknown, options: NormalizeSchemaWalkOptions
 	}
 	if (typeof value === "boolean") {
 		// A bare boolean is a JSON Schema subschema only in a subschema slot.
-		// The Google/CCA protobuf Schema wire has no representation for it
-		// (issue #5604): `true` accepts anything -> `{}`, `false` accepts nothing
-		// -> `{ not: {} }`. In a keyword slot (`nullable`, `enum` entry, …) a
-		// boolean is a plain value and is left untouched.
-		if (!options.coerceBooleanSubschemas || !options.booleanIsSubschema) return value;
-		return value ? {} : { not: {} };
+		// Some provider wires have no boolean-schema representation: `true`
+		// becomes `{}`; `false` uses `not` when supported, or the permissive
+		// `{}` fallback when the provider cannot express an impossible schema.
+		const mode = options.coerceBooleanSubschemas;
+		if (!mode || !options.booleanIsSubschema) return value;
+		return value || mode === "permissive" ? {} : { not: {} };
 	}
 	if (!isJsonObject(value)) {
 		return value;
@@ -993,7 +996,7 @@ export function normalizeSchema(value: unknown, options: NormalizeSchemaOptions)
 
 export function normalizeSchemaForGoogle(value: unknown): unknown {
 	return normalizeSchema(value, {
-		coerceBooleanSubschemas: true,
+		coerceBooleanSubschemas: "standard",
 		unsupportedFields: isGoogleUnsupportedSchemaField,
 		normalizeFieldNames: true,
 		collapseNullFields: true,
@@ -1015,7 +1018,7 @@ export function normalizeSchemaForGoogle(value: unknown): unknown {
 
 export function normalizeSchemaForCCA(value: unknown): unknown {
 	return normalizeSchema(value, {
-		coerceBooleanSubschemas: true,
+		coerceBooleanSubschemas: "standard",
 		unsupportedFields: isGoogleUnsupportedSchemaField,
 		normalizeFieldNames: true,
 		collapseNullFields: false,
@@ -1080,6 +1083,9 @@ export function normalizeSchemaForMCP(value: unknown): unknown {
  *    `default` and `description` are MFJS Meta Data fields and are preserved.
  *  - `additionalProperties` (boolean or schema) and `type: "null"` (incl.
  *    inside `anyOf`) are kept.
+ *  - Boolean subschemas are object-coerced; MFJS has no exact `false` schema,
+ *    so both values become the permissive empty schema while local tool
+ *    validation remains authoritative.
  *
  * Out of scope (absent from the built-in tool surface, spec-ambiguous to
  * rewrite blindly): `allOf` intersection merging, external/recursive `$ref`,
@@ -1087,6 +1093,7 @@ export function normalizeSchemaForMCP(value: unknown): unknown {
  */
 export function normalizeSchemaForMoonshot(value: unknown): unknown {
 	return normalizeSchema(value, {
+		coerceBooleanSubschemas: "permissive",
 		unsupportedFields: isMoonshotUnsupportedSchemaField,
 		normalizeFieldNames: false,
 		collapseNullFields: false,
