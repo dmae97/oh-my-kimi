@@ -2563,6 +2563,33 @@ describe("grammar tool-schema normalization (issue #5914)", () => {
 		expect(nested?.additionalProperties).toBe(false);
 	});
 
+	it("widens booleans nested inside object-valued additionalProperties", async () => {
+		const model = localLlamaModel();
+		const mapTool: Tool = {
+			name: "map_tool",
+			description: "tool with a schema-valued additionalProperties",
+			parameters: {
+				type: "object",
+				properties: {
+					env: {
+						type: "object",
+						additionalProperties: { type: "object", properties: { metadata: {} } },
+					},
+				},
+				additionalProperties: false,
+			},
+		};
+		const payload = await captureOpenAICompletionsPayload(model, { ...baseContext(), tools: [mapTool] });
+		const params = toolParameters(payload, "map_tool");
+		const env = getNestedObject(toObject(params.properties), "env");
+		const ap = toObject(env?.additionalProperties);
+		// The schema-valued form is traversed: the nested open field is widened
+		// so the GBNF converter never reaches a bare boolean subschema.
+		expect(getNestedObject(toObject(ap?.properties), "metadata")).toEqual(primitiveUnion);
+		// The boolean form on the outer object still survives untouched.
+		expect(params.additionalProperties).toBe(false);
+	});
+
 	it("leaves the wire schema untouched on non-grammar hosts", async () => {
 		const model = remoteModel();
 		expect(model.compat.toolSchemaFlavor).toBeUndefined();
