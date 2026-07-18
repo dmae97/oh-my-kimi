@@ -314,8 +314,10 @@ export interface OpenAICompat {
 	 * normalization (collapse `const`→`enum`, infer `type` on bare enums, strip
 	 * unsupported validators/`prefixItems`) because Moonshot/Kimi native hosts
 	 * reject standard JSON Schema constructs with HTTP 400. Default:
-	 * auto-detected (`"moonshot-mfjs"` on api.moonshot.ai / api.kimi.com). Set
-	 * `"none"` to opt a custom Moonshot-compatible host out.
+	 * auto-detected — Moonshot native hosts (api.moonshot.ai / api.kimi.com)
+	 * and Kimi-family model ids on any host, since proxies (OpenRouter, custom
+	 * gateways) forward schemas to Moonshot verbatim. Set `"none"` to opt a
+	 * host out.
 	 */
 	toolSchemaFlavor?: "moonshot-mfjs" | "none";
 	/**
@@ -514,6 +516,8 @@ export interface ResolvedOpenAISharedCompat {
 	openRouterRouting?: OpenAICompat["openRouterRouting"];
 	/** Provider-specific wire model-id transform applied to the base id. */
 	wireModelIdMode: "raw" | "firepass" | "fireworks" | "openrouter";
+	/** See {@link OpenAICompat.toolSchemaFlavor}. Read by both wire paths when converting tools. */
+	toolSchemaFlavor?: OpenAICompat["toolSchemaFlavor"];
 }
 
 /**
@@ -584,7 +588,6 @@ export type ResolvedOpenAICompat = ResolvedOpenAISharedCompat &
 		thinkingKeep?: OpenAICompat["thinkingKeep"];
 		streamIdleTimeoutMs?: number;
 		toolStrictMode: ResolvedToolStrictMode;
-		toolSchemaFlavor?: OpenAICompat["toolSchemaFlavor"];
 		/** The model sits behind Vercel AI Gateway. */
 		isVercelGatewayHost: boolean;
 		dropThinkingWhenReasoningEffort: boolean;

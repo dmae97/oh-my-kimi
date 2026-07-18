@@ -532,7 +532,10 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 		supportsStrictMode: detectStrictModeSupport(provider, baseUrl),
 		extraBody: isDirectDeepseekReasoning ? { thinking: { type: "enabled" } } : undefined,
 		toolStrictMode: isCerebras ? "all_strict" : "mixed",
-		toolSchemaFlavor: isMoonshotNative ? "moonshot-mfjs" : undefined,
+		// Kimi-family ids trigger MFJS on any host, not just native base URLs:
+		// proxies (OpenRouter, custom gateways) forward `tools.function.parameters`
+		// to Moonshot verbatim, which 400s on non-MFJS constructs.
+		toolSchemaFlavor: isMoonshotNative || isKimiModel ? "moonshot-mfjs" : undefined,
 		streamIdleTimeoutMs,
 		stripDeepseekSpecialTokens:
 			isDeepseekModelIdOrName(spec.id) && (provider === "nvidia" || provider === "deepseek"),
@@ -658,6 +661,9 @@ export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): Resol
 		openRouterRouting: undefined,
 		isOpenRouterHost: isOpenRouter,
 		wireModelIdMode: isOpenRouter ? "openrouter" : "raw",
+		// Mirrors buildOpenAICompat: Kimi behind a Responses-capable proxy still
+		// lands on Moonshot's MFJS validator.
+		toolSchemaFlavor: isKimiModel ? "moonshot-mfjs" : undefined,
 		alwaysSendMaxTokens: spec.id ? isKimiModelId(spec.id) : false,
 		enableGeminiThinkingLoopGuard: modelFamilyToken(spec.id ?? "") === "gemini",
 		supportsObfuscationOptOut: isOpenAIUrl || spec.provider === "openai",

@@ -38,6 +38,7 @@ import {
 	adaptSchemaForStrict,
 	findStrictToolSchemaViolation,
 	NO_STRICT,
+	normalizeSchemaForMoonshot,
 	sanitizeSchemaForOpenAIResponses,
 	toolWireSchema,
 } from "../utils/schema";
@@ -999,7 +1000,15 @@ export function convertTools(
 		}
 		const strict = !NO_STRICT && strictMode && tool.strict !== false;
 		const baseParameters = toolWireSchema(tool);
-		const responseParameters = sanitizeSchemaForOpenAIResponses(baseParameters);
+		// MFJS must run AFTER the Responses sanitizer: the sanitizer normalizes
+		// `{}` → `true` (issue #1179), and Moonshot's validator rejects boolean
+		// subschemas ("property schema … must be an object"), so the Moonshot
+		// pass re-coerces them last.
+		const sanitized = sanitizeSchemaForOpenAIResponses(baseParameters);
+		const responseParameters =
+			model.compat.toolSchemaFlavor === "moonshot-mfjs"
+				? (normalizeSchemaForMoonshot(sanitized) as Record<string, unknown>)
+				: sanitized;
 		const { schema: parameters, strict: effectiveStrict } = adaptSchemaForStrict(responseParameters, strict);
 		// Quarantine a tool whose emitted schema carries a provider-rejecting
 		// enum/const-vs-type contradiction: dropping just that tool keeps the rest
