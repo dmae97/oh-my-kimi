@@ -12,6 +12,9 @@
 - Restored wrapped descriptions in the slash-command autocomplete picker so long skill descriptions remain readable at normal terminal widths ([#5848](https://github.com/can1357/oh-my-pi/issues/5848)).
 - Added viewport-pinned live regions so replacing dashboard frames can stay out of immutable native scrollback until they finalize ([#5777](https://github.com/can1357/oh-my-pi/issues/5777)).
 - Added live-session cleanup for tracked Kitty graphics so consumers can delete retained inline images before replaying text fallbacks.
+### Fixed
+
+- Fixed in-place multiplexer pane growth rewriting newly exposed committed rows as blank padding by rebasing the commit seam to the resized viewport tail ([#6011](https://github.com/can1357/oh-my-pi/issues/6011)).
 
 ## [17.0.3] - 2026-07-17
 
