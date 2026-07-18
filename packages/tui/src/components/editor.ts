@@ -13,6 +13,7 @@ import type { SymbolTheme } from "../symbols";
 import { type Component, CURSOR_MARKER, type Focusable } from "../tui";
 import {
 	getSegmenter,
+	getWidthConfigEpoch,
 	getWordNavKind,
 	moveWordLeft,
 	moveWordRight,
@@ -43,12 +44,15 @@ const segmenter = getSegmenter();
 
 /**
  * Represents a chunk of text for word-wrap layout.
- * Tracks both the text content and its position in the original line.
+ * Tracks the text content, its position in the original line, and its exact
+ * visible width (`width === visibleWidth(text)`, measured at build time) so
+ * layout/render never re-measure cached chunks.
  */
 interface TextChunk {
 	text: string;
 	startIndex: number;
 	endIndex: number;
+	width: number;
 }
 
 /**
@@ -56,92 +60,121 @@ interface TextChunk {
  * Wraps at word boundaries when possible, falling back to character-level
  * wrapping for words longer than the available width.
  *
+ * Widths are carried, never recomputed: the line is segmented exactly once,
+ * per-grapheme widths are measured lazily at most once each, and every chunk
+ * is a contiguous slice of `line` (no incremental string concatenation).
+ *
  * @param line - The text line to wrap
  * @param maxWidth - Maximum visible width per chunk
- * @returns Array of chunks with text and position information
+ * @param knownLineWidth - Caller-carried exact `visibleWidth(line)`, if already measured
+ * @returns Array of chunks with text, position, and exact visible width
  */
-function wordWrapLine(line: string, maxWidth: number): TextChunk[] {
+function wordWrapLine(line: string, maxWidth: number, knownLineWidth?: number): TextChunk[] {
 	if (!line || maxWidth <= 0) {
-		return [{ text: "", startIndex: 0, endIndex: 0 }];
+		return [{ text: "", startIndex: 0, endIndex: 0, width: 0 }];
 	}
 
-	const lineWidth = visibleWidth(line);
+	const lineWidth = knownLineWidth ?? visibleWidth(line);
 	if (lineWidth <= maxWidth) {
-		return [{ text: line, startIndex: 0, endIndex: line.length }];
+		return [{ text: line, startIndex: 0, endIndex: line.length, width: lineWidth }];
 	}
 
-	const chunks: TextChunk[] = [];
-
-	// Split into tokens (words and whitespace runs)
-	const tokens: { text: string; startIndex: number; endIndex: number; isWhitespace: boolean }[] = [];
-	let currentToken = "";
-	let tokenStart = 0;
+	// Single segmentation pass: grapheme start offsets (with end sentinel),
+	// lazily-filled grapheme widths, and word/whitespace token boundaries.
+	const gStart: number[] = [];
+	const gWidth: number[] = [];
+	interface Token {
+		startG: number;
+		endG: number;
+		startIndex: number;
+		endIndex: number;
+		isWhitespace: boolean;
+	}
+	const tokens: Token[] = [];
 	let inWhitespace = false;
-	let charIndex = 0;
-
+	let tokenStartG = 0;
+	let tokenStartIndex = 0;
+	let gCount = 0;
 	for (const seg of segmenter.segment(line)) {
-		const grapheme = seg.segment;
-		const graphemeIsWhitespace = getWordNavKind(grapheme) === "whitespace";
-
-		if (currentToken === "") {
+		const graphemeIsWhitespace = getWordNavKind(seg.segment) === "whitespace";
+		if (gCount === 0) {
 			inWhitespace = graphemeIsWhitespace;
-			tokenStart = charIndex;
 		} else if (graphemeIsWhitespace !== inWhitespace) {
-			// Token type changed - save current token
+			// Token type changed - close the current token
 			tokens.push({
-				text: currentToken,
-				startIndex: tokenStart,
-				endIndex: charIndex,
+				startG: tokenStartG,
+				endG: gCount,
+				startIndex: tokenStartIndex,
+				endIndex: seg.index,
 				isWhitespace: inWhitespace,
 			});
-			currentToken = "";
-			tokenStart = charIndex;
+			tokenStartG = gCount;
+			tokenStartIndex = seg.index;
 			inWhitespace = graphemeIsWhitespace;
 		}
-
-		currentToken += grapheme;
-		charIndex += grapheme.length;
+		gStart.push(seg.index);
+		gWidth.push(-1);
+		gCount++;
 	}
-
-	// Push final token
-	if (currentToken) {
+	gStart.push(line.length);
+	if (gCount > tokenStartG) {
 		tokens.push({
-			text: currentToken,
-			startIndex: tokenStart,
-			endIndex: charIndex,
+			startG: tokenStartG,
+			endG: gCount,
+			startIndex: tokenStartIndex,
+			endIndex: line.length,
 			isWhitespace: inWhitespace,
 		});
 	}
 
-	// Build chunks using word wrapping
-	let currentChunk = "";
-	let currentWidth = 0;
-	let chunkStartIndex = 0;
-	let atLineStart = true; // Track if we're at the start of a line (for skipping whitespace)
+	/** Exact `visibleWidth` of grapheme `g`, measured at most once. */
+	const graphemeWidth = (g: number): number => {
+		let w = gWidth[g] ?? -1;
+		if (w < 0) {
+			w = visibleWidth(line.slice(gStart[g] ?? 0, gStart[g + 1] ?? line.length));
+			gWidth[g] = w;
+		}
+		return w;
+	};
 
-	function consumePrefixToWidth(text: string, availableWidth: number): { text: string; len: number } {
-		let prefix = "";
+	const chunks: TextChunk[] = [];
+	const pushChunk = (text: string, startIndex: number, endIndex: number): void => {
+		chunks.push({ text, startIndex, endIndex, width: visibleWidth(text) });
+	};
+
+	/** Widest grapheme prefix of [startG, endG) that fits `availableWidth`. */
+	const consumePrefixToWidth = (
+		startG: number,
+		endG: number,
+		availableWidth: number,
+	): { endG: number; len: number } => {
 		let prefixWidth = 0;
-		let len = 0;
-		for (const seg of segmenter.segment(text)) {
-			const grapheme = seg.segment;
-			const graphemeWidth = visibleWidth(grapheme);
-			if (prefixWidth + graphemeWidth > availableWidth) break;
-			prefix += grapheme;
-			prefixWidth += graphemeWidth;
-			len += grapheme.length;
+		let g = startG;
+		while (g < endG) {
+			const w = graphemeWidth(g);
+			if (prefixWidth + w > availableWidth) break;
+			prefixWidth += w;
+			g++;
 			if (prefixWidth === availableWidth) break;
 		}
-		return { text: prefix, len };
-	}
-	function hasWideGrapheme(text: string): boolean {
-		for (const seg of segmenter.segment(text)) {
-			if (visibleWidth(seg.segment) > 1) return true;
+		return { endG: g, len: (gStart[g] ?? 0) - (gStart[startG] ?? 0) };
+	};
+	const hasWideGrapheme = (startG: number, endG: number): boolean => {
+		for (let g = startG; g < endG; g++) {
+			if (graphemeWidth(g) > 1) return true;
 		}
 		return false;
-	}
+	};
+
+	// Build chunks using word wrapping. The pending chunk is always the
+	// contiguous slice line[chunkStart, chunkEnd) with visible width currentWidth.
+	let chunkStart = 0;
+	let chunkEnd = 0;
+	let currentWidth = 0;
+	let atLineStart = true; // Track if we're at the start of a line (for skipping whitespace)
+
 	for (const token of tokens) {
-		const tokenWidth = visibleWidth(token.text);
+		const tokenWidth = visibleWidth(line.slice(token.startIndex, token.endIndex));
 
 		// Skip leading whitespace at line start. Keep the skipped run mapped onto the
 		// preceding chunk (when one exists) so every cursor position resolves to a
@@ -149,7 +182,8 @@ function wordWrapLine(line: string, maxWidth: number): TextChunk[] {
 		if (atLineStart && token.isWhitespace) {
 			const prev = chunks[chunks.length - 1];
 			if (prev) prev.endIndex = token.endIndex;
-			chunkStartIndex = token.endIndex;
+			chunkStart = token.endIndex;
+			chunkEnd = token.endIndex;
 			continue;
 		}
 		atLineStart = false;
@@ -157,65 +191,49 @@ function wordWrapLine(line: string, maxWidth: number): TextChunk[] {
 		// If this single token is wider than maxWidth, we need to break it
 		if (tokenWidth > maxWidth) {
 			// If we're mid-line, try to use the remaining width by consuming a prefix of this long token.
-			let consumedPrefix = "";
-			let consumedPrefixLen = 0; // JS string index (code units) consumed from token.text
-			if (currentChunk && currentWidth < maxWidth) {
+			let consumedPrefixLen = 0; // JS string index (code units) consumed from the token
+			let consumedPrefixEndG = token.startG;
+			if (chunkEnd > chunkStart && currentWidth < maxWidth) {
 				const remainingWidth = maxWidth - currentWidth;
-				const consumed = consumePrefixToWidth(token.text, remainingWidth);
-				consumedPrefix = consumed.text;
+				const consumed = consumePrefixToWidth(token.startG, token.endG, remainingWidth);
+				consumedPrefixEndG = consumed.endG;
 				consumedPrefixLen = consumed.len;
 			}
 			// First, push any accumulated chunk (optionally filled with the prefix).
-			if (currentChunk) {
-				if (consumedPrefix) {
-					chunks.push({
-						text: currentChunk + consumedPrefix,
-						startIndex: chunkStartIndex,
-						endIndex: token.startIndex + consumedPrefixLen,
-					});
-					currentChunk = "";
-					currentWidth = 0;
-					chunkStartIndex = token.startIndex + consumedPrefixLen;
+			if (chunkEnd > chunkStart) {
+				if (consumedPrefixLen > 0) {
+					const endIndex = token.startIndex + consumedPrefixLen;
+					pushChunk(line.slice(chunkStart, endIndex), chunkStart, endIndex);
+					chunkStart = endIndex;
+					chunkEnd = endIndex;
 				} else {
-					chunks.push({
-						text: currentChunk,
-						startIndex: chunkStartIndex,
-						endIndex: token.startIndex,
-					});
-					currentChunk = "";
-					currentWidth = 0;
-					chunkStartIndex = token.startIndex;
+					pushChunk(line.slice(chunkStart, chunkEnd), chunkStart, token.startIndex);
+					chunkStart = token.startIndex;
+					chunkEnd = token.startIndex;
 				}
+				currentWidth = 0;
 			}
 			// Break the remaining long token by grapheme
-			const remainingText = consumedPrefixLen > 0 ? token.text.slice(consumedPrefixLen) : token.text;
-			let tokenChunk = "";
-			let tokenChunkWidth = 0;
-			let tokenChunkStart = token.startIndex + consumedPrefixLen;
-			let tokenCharIndex = token.startIndex + consumedPrefixLen;
-			for (const seg of segmenter.segment(remainingText)) {
-				const grapheme = seg.segment;
-				const graphemeWidth = visibleWidth(grapheme);
-				if (tokenChunkWidth + graphemeWidth > maxWidth && tokenChunk) {
-					chunks.push({
-						text: tokenChunk,
-						startIndex: tokenChunkStart,
-						endIndex: tokenCharIndex,
-					});
-					tokenChunk = grapheme;
-					tokenChunkWidth = graphemeWidth;
-					tokenChunkStart = tokenCharIndex;
+			let tcStart = token.startIndex + consumedPrefixLen;
+			let tcEnd = tcStart;
+			let tcWidth = 0;
+			for (let g = consumedPrefixEndG; g < token.endG; g++) {
+				const w = graphemeWidth(g);
+				const gEnd = gStart[g + 1] ?? line.length;
+				if (tcWidth + w > maxWidth && tcEnd > tcStart) {
+					pushChunk(line.slice(tcStart, tcEnd), tcStart, tcEnd);
+					tcStart = tcEnd;
+					tcWidth = w;
 				} else {
-					tokenChunk += grapheme;
-					tokenChunkWidth += graphemeWidth;
+					tcWidth += w;
 				}
-				tokenCharIndex += grapheme.length;
+				tcEnd = gEnd;
 			}
 			// Keep remainder as start of next chunk
-			if (tokenChunk) {
-				currentChunk = tokenChunk;
-				currentWidth = tokenChunkWidth;
-				chunkStartIndex = tokenChunkStart;
+			if (tcEnd > tcStart) {
+				chunkStart = tcStart;
+				chunkEnd = tcEnd;
+				currentWidth = tcWidth;
 			}
 			continue;
 		}
@@ -224,36 +242,34 @@ function wordWrapLine(line: string, maxWidth: number): TextChunk[] {
 		if (currentWidth + tokenWidth > maxWidth) {
 			// For wide-character tokens (e.g., CJK runs), prefer using remaining width before wrapping
 			// the whole token to the next line. This avoids leaving a short ASCII word alone.
-			if (currentChunk && !token.isWhitespace && currentWidth < maxWidth && hasWideGrapheme(token.text)) {
+			if (
+				chunkEnd > chunkStart &&
+				!token.isWhitespace &&
+				currentWidth < maxWidth &&
+				hasWideGrapheme(token.startG, token.endG)
+			) {
 				const remainingWidth = maxWidth - currentWidth;
-				const consumed = consumePrefixToWidth(token.text, remainingWidth);
-				if (consumed.text) {
-					chunks.push({
-						text: currentChunk + consumed.text,
-						startIndex: chunkStartIndex,
-						endIndex: token.startIndex + consumed.len,
-					});
-					const remainder = token.text.slice(consumed.len);
-					currentChunk = remainder;
+				const consumed = consumePrefixToWidth(token.startG, token.endG, remainingWidth);
+				if (consumed.len > 0) {
+					const endIndex = token.startIndex + consumed.len;
+					pushChunk(line.slice(chunkStart, endIndex), chunkStart, endIndex);
+					const remainder = line.slice(endIndex, token.endIndex);
+					chunkStart = endIndex;
+					chunkEnd = token.endIndex;
 					currentWidth = visibleWidth(remainder);
-					chunkStartIndex = token.startIndex + consumed.len;
 					atLineStart = false;
 					continue;
 				}
 			}
 			// Push current chunk (trimming trailing whitespace for display)
-			const trimmedChunk = currentChunk.trimEnd();
+			const trimmedChunk = line.slice(chunkStart, chunkEnd).trimEnd();
 			if (trimmedChunk || chunks.length === 0) {
-				chunks.push({
-					text: trimmedChunk,
-					startIndex: chunkStartIndex,
-					endIndex: chunkStartIndex + currentChunk.length,
-				});
+				pushChunk(trimmedChunk, chunkStart, chunkEnd);
 			} else {
 				// All-whitespace chunk collapsed away: keep its span mapped on the
 				// previous chunk so cursor positions inside it stay addressable.
 				const prev = chunks[chunks.length - 1];
-				if (prev) prev.endIndex = chunkStartIndex + currentChunk.length;
+				if (prev) prev.endIndex = chunkEnd;
 			}
 			// Start new line - skip leading whitespace
 			atLineStart = true;
@@ -262,32 +278,29 @@ function wordWrapLine(line: string, maxWidth: number): TextChunk[] {
 				// point; otherwise cursor positions inside it map to no layout line.
 				const prev = chunks[chunks.length - 1];
 				if (prev) prev.endIndex = token.endIndex;
-				currentChunk = "";
+				chunkStart = token.endIndex;
+				chunkEnd = token.endIndex;
 				currentWidth = 0;
-				chunkStartIndex = token.endIndex;
 			} else {
-				currentChunk = token.text;
+				chunkStart = token.startIndex;
+				chunkEnd = token.endIndex;
 				currentWidth = tokenWidth;
-				chunkStartIndex = token.startIndex;
 				atLineStart = false;
 			}
 		} else {
 			// Add token to current chunk
-			currentChunk += token.text;
+			if (chunkEnd === chunkStart) chunkStart = token.startIndex;
+			chunkEnd = token.endIndex;
 			currentWidth += tokenWidth;
 		}
 	}
 
 	// Push final chunk
-	if (currentChunk) {
-		chunks.push({
-			text: currentChunk,
-			startIndex: chunkStartIndex,
-			endIndex: line.length,
-		});
+	if (chunkEnd > chunkStart) {
+		pushChunk(line.slice(chunkStart, chunkEnd), chunkStart, line.length);
 	}
 
-	return chunks.length > 0 ? chunks : [{ text: "", startIndex: 0, endIndex: 0 }];
+	return chunks.length > 0 ? chunks : [{ text: "", startIndex: 0, endIndex: 0, width: 0 }];
 }
 
 /** Visual cell column of code-unit `offset` within `text`, counted by grapheme walk. */
@@ -339,8 +352,17 @@ interface EditorState {
 
 interface LayoutLine {
 	text: string;
+	/** Exact `visibleWidth(text)` carried from wrap/layout, never re-derived. */
+	width: number;
 	hasCursor: boolean;
 	cursorPos?: number;
+}
+
+/** Per-line measurement carried across renders: exact visible width plus
+ *  lazily-built wrap chunks (only populated once the line needs wrapping). */
+interface WrapEntry {
+	width: number;
+	chunks: TextChunk[] | null;
 }
 
 export interface EditorTheme {
@@ -396,11 +418,14 @@ export class Editor implements Component, Focusable {
 
 	// Store last layout width for cursor navigation
 	#lastLayoutWidth: number = 80;
-	// Word-wrap result cache shared by #layoutText, #buildVisualLineMap, and key
-	// handlers within a frame. Line text is a sound key (strings are immutable);
-	// cleared on width change and size-bounded so stale lines don't accumulate.
-	#wrapCache = new Map<string, TextChunk[]>();
+	// Line measurement + word-wrap cache shared by #layoutText,
+	// #buildVisualLineMap, and key handlers within a frame. Line text is a
+	// sound key (strings are immutable); cleared on layout-width or
+	// width-config (Hangul jamo setting) change and size-bounded so stale
+	// lines don't accumulate.
+	#wrapCache = new Map<string, WrapEntry>();
 	#wrapCacheWidth = -1;
+	#wrapCacheEpoch = -1;
 	#paddingXOverride: number | undefined;
 	#maxHeight?: number;
 	#scrollOffset: number = 0;
@@ -895,7 +920,7 @@ export class Editor implements Component, Focusable {
 		for (let visibleIndex = 0; visibleIndex < visibleLayoutLines.length; visibleIndex++) {
 			const layoutLine = visibleLayoutLines[visibleIndex]!;
 			let displayText = layoutLine.text;
-			let displayWidth = visibleWidth(layoutLine.text);
+			let displayWidth = layoutLine.width;
 			let cursorPaddingOverflow = 0;
 			let decorated = false;
 			let imeSafeCursorTail = false;
@@ -1041,7 +1066,9 @@ export class Editor implements Component, Focusable {
 				displayText = this.#decorate(displayText);
 			}
 			if (!hasCursor) {
-				displayWidth = visibleWidth(displayText);
+				// Undecorated, unsliced lines keep their carried width; any
+				// transform above produced a new string and must be re-measured.
+				displayWidth = displayText === layoutLine.text ? layoutLine.width : visibleWidth(displayText);
 				if (displayWidth > lineContentWidth) {
 					displayText = truncateToWidth(displayText, lineContentWidth);
 					displayWidth = visibleWidth(displayText);
@@ -1489,20 +1516,29 @@ export class Editor implements Component, Focusable {
 		}
 	}
 
-	#wrapLine(line: string, width: number): TextChunk[] {
-		if (width !== this.#wrapCacheWidth) {
+	/** Cached per-line measurement: exact visible width now, wrap chunks on demand. */
+	#lineEntry(line: string, width: number): WrapEntry {
+		const epoch = getWidthConfigEpoch();
+		if (width !== this.#wrapCacheWidth || epoch !== this.#wrapCacheEpoch) {
 			this.#wrapCache.clear();
 			this.#wrapCacheWidth = width;
+			this.#wrapCacheEpoch = epoch;
 		}
-		let chunks = this.#wrapCache.get(line);
-		if (chunks === undefined) {
+		let entry = this.#wrapCache.get(line);
+		if (entry === undefined) {
 			if (this.#wrapCache.size >= 256) {
 				this.#wrapCache.clear();
 			}
-			chunks = wordWrapLine(line, width);
-			this.#wrapCache.set(line, chunks);
+			entry = { width: visibleWidth(line), chunks: null };
+			this.#wrapCache.set(line, entry);
 		}
-		return chunks;
+		return entry;
+	}
+
+	#wrapLine(line: string, width: number): TextChunk[] {
+		const entry = this.#lineEntry(line, width);
+		entry.chunks ??= wordWrapLine(line, width, entry.width);
+		return entry.chunks;
 	}
 
 	#layoutText(contentWidth: number): LayoutLine[] {
@@ -1512,6 +1548,7 @@ export class Editor implements Component, Focusable {
 			// Empty editor
 			layoutLines.push({
 				text: "",
+				width: 0,
 				hasCursor: true,
 				cursorPos: 0,
 			});
@@ -1522,19 +1559,21 @@ export class Editor implements Component, Focusable {
 		for (let i = 0; i < this.#state.lines.length; i++) {
 			const line = this.#state.lines[i] || "";
 			const isCurrentLine = i === this.#state.cursorLine;
-			const lineVisibleWidth = visibleWidth(line);
+			const lineVisibleWidth = this.#lineEntry(line, contentWidth).width;
 
 			if (lineVisibleWidth <= contentWidth) {
 				// Line fits in one layout line
 				if (isCurrentLine) {
 					layoutLines.push({
 						text: line,
+						width: lineVisibleWidth,
 						hasCursor: true,
 						cursorPos: this.#state.cursorCol,
 					});
 				} else {
 					layoutLines.push({
 						text: line,
+						width: lineVisibleWidth,
 						hasCursor: false,
 					});
 				}
@@ -1575,12 +1614,14 @@ export class Editor implements Component, Focusable {
 					if (hasCursorInChunk) {
 						layoutLines.push({
 							text: chunk.text,
+							width: chunk.width,
 							hasCursor: true,
 							cursorPos: adjustedCursorPos,
 						});
 					} else {
 						layoutLines.push({
 							text: chunk.text,
+							width: chunk.width,
 							hasCursor: false,
 						});
 					}
@@ -2716,7 +2757,7 @@ export class Editor implements Component, Focusable {
 
 		for (let i = 0; i < this.#state.lines.length; i++) {
 			const line = this.#state.lines[i] || "";
-			const lineVisWidth = visibleWidth(line);
+			const lineVisWidth = this.#lineEntry(line, width).width;
 			if (line.length === 0) {
 				// Empty line still takes one visual line
 				visualLines.push({ logicalLine: i, startCol: 0, length: 0 });
