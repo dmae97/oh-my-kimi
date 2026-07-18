@@ -42,7 +42,13 @@ import {
 import { OpenAIHttpError, postOpenAIStream } from "../utils/openai-http";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { callWithCopilotModelRetry } from "../utils/retry";
-import { adaptSchemaForStrict, NO_STRICT, normalizeSchemaForMoonshot, toolWireSchema } from "../utils/schema";
+import {
+	adaptSchemaForStrict,
+	NO_STRICT,
+	normalizeSchemaForMoonshot,
+	sanitizeSchemaForGrammar,
+	toolWireSchema,
+} from "../utils/schema";
 import {
 	type HealedToolCall,
 	StreamMarkupHealing,
@@ -2229,10 +2235,16 @@ function convertTools(
 					description: tool.description || "",
 					// Moonshot/Kimi native hosts validate against the stricter MFJS subset
 					// (const→enum, typed enums, no validators) and 400 otherwise.
+					// Grammar-constrained local backends (llama.cpp, LM Studio, vLLM)
+					// build a GBNF grammar from the schema and 400 with
+					// `Unrecognized schema: true` on the bare boolean subschema
+					// `toolWireSchema` emits for open fields (issue #5914).
 					parameters:
 						compat.toolSchemaFlavor === "moonshot-mfjs"
 							? (normalizeSchemaForMoonshot(wireParameters) as Record<string, unknown>)
-							: wireParameters,
+							: compat.toolSchemaFlavor === "grammar"
+								? sanitizeSchemaForGrammar(wireParameters)
+								: wireParameters,
 					// Only include strict if provider supports it. Some reject unknown fields.
 					...(includeStrict ? { strict: true } : includeExplicitFalse ? { strict: false } : {}),
 				},

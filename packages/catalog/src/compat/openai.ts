@@ -549,7 +549,7 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 		// Kimi-family ids trigger MFJS on any host, not just native base URLs:
 		// proxies (OpenRouter, custom gateways) forward `tools.function.parameters`
 		// to Moonshot verbatim, which 400s on non-MFJS constructs.
-		toolSchemaFlavor: isMoonshotNative || isKimiModel ? "moonshot-mfjs" : undefined,
+		toolSchemaFlavor: isMoonshotNative || isKimiModel ? "moonshot-mfjs" : isLocalOpenAICompatBackend ? "grammar" : undefined,
 		streamIdleTimeoutMs,
 		stripDeepseekSpecialTokens:
 			isDeepseekModelIdOrName(spec.id) && (provider === "nvidia" || provider === "deepseek"),
