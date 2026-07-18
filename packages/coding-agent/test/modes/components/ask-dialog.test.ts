@@ -1045,7 +1045,7 @@ describe("AskDialogComponent", () => {
 		}
 	});
 
-	it("preserves a preview line's final column across overflowing renders", () => {
+	it("keeps the memoized overflowing render identical to the initial width-adjusted render", () => {
 		const originalRows = Object.getOwnPropertyDescriptor(process.stdout, "rows");
 		Object.defineProperty(process.stdout, "rows", { configurable: true, value: 24 });
 		try {
@@ -1062,8 +1062,10 @@ describe("AskDialogComponent", () => {
 				{ onSubmit: vi.fn(), onCancel: vi.fn(), onPrompt: vi.fn() },
 			);
 
-			expect(render(component)).toContain("Ω");
-			expect(render(component)).toContain("Ω");
+			const initial = render(component);
+			const cached = render(component);
+			expect(initial).toContain("Ω");
+			expect(cached).toBe(initial);
 		} finally {
 			if (originalRows) Object.defineProperty(process.stdout, "rows", originalRows);
 			else Reflect.deleteProperty(process.stdout, "rows");
@@ -1152,6 +1154,12 @@ describe("AskDialogComponent", () => {
 				out = render(component);
 			}
 			expect(out).toContain("PREVIEW-LAST");
+			expect(out).not.toContain("Other (type your own)");
+			component.handleInput(DOWN);
+			out = render(component);
+			expect(out).toContain("Other (type your own)");
+			component.handleInput(UP);
+			out = render(component);
 			for (let page = 0; page < 10; page++) {
 				component.handleInput(PAGE_UP);
 				out = render(component);

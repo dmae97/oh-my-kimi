@@ -853,8 +853,8 @@ export class AskDialogComponent implements Component {
 		let nextOffset = clamp(currentOffset, 0, maxOffset);
 		const cursorRows = cursorEnd - cursorStart;
 		if (manualScroll && cursorRows > rows) {
-			if (cursorEnd <= nextOffset) nextOffset = cursorEnd - 1;
-			if (cursorStart >= nextOffset + rows) nextOffset = cursorStart - rows + 1;
+			// A page must not expose another option while Enter still targets this one.
+			nextOffset = clamp(nextOffset, cursorStart, cursorEnd - rows);
 		} else if (cursorStart < nextOffset || cursorEnd > nextOffset + rows) {
 			nextOffset = cursorRows <= rows ? cursorEnd - rows : cursorStart;
 		}
