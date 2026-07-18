@@ -378,6 +378,7 @@ function createRunPageScope(page: Page): RunPageScope {
 				const wrapper = (event: unknown): void => {
 					const index = requestHandlers.lastIndexOf(wrapper);
 					if (index >= 0) requestHandlers.splice(index, 1);
+					Reflect.apply(off, page, ["request", wrapper]);
 					Reflect.apply(handler, page, [event]);
 				};
 				requestHandlers.push(wrapper);

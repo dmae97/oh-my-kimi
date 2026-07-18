@@ -165,4 +165,62 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser tab evaluation", () => {
 			server.stop(true);
 		}
 	}, 30_000);
+
+	it("fires a once request handler exactly once and clears it between runs", async () => {
+		const server = Bun.serve({
+			port: 0,
+			fetch(request) {
+				const { pathname } = new URL(request.url);
+				if (pathname === "/mock") return new Response("normal-mock");
+				return new Response("<title>Once interception</title>", {
+					headers: { "content-type": "text/html" },
+				});
+			},
+		});
+		const tool = new BrowserTool(makeSession());
+		const name = `once-interception-${process.pid}`;
+
+		try {
+			await tool.execute("open", {
+				action: "open",
+				name,
+				url: `http://127.0.0.1:${server.port}/`,
+			});
+			const fired = await tool.execute("run", {
+				action: "run",
+				name,
+				code: `
+					const baseline = page.listenerCount("request");
+					globalThis.__requestListenerBaseline = baseline;
+					await page.setRequestInterception(true);
+					page.once("request", request => {
+						if (new URL(request.url()).pathname === "/mock") {
+							void request.respond({ status: 200, body: "mocked-once" });
+							return;
+						}
+						void request.continue();
+					});
+					const body = await tab.evaluate(async () => await (await fetch("/mock")).text());
+					// A once handler that fired must unregister from the emitter, not just the tracker.
+					return { body, leaked: page.listenerCount("request") - baseline };
+				`,
+			});
+			expect(fired.content).toEqual([{ type: "text", text: '{\n  "body": "mocked-once",\n  "leaked": 0\n}' }]);
+
+			const resumed = await tool.execute("run", {
+				action: "run",
+				name,
+				code: `
+					return {
+						clean: page.listenerCount("request") === globalThis.__requestListenerBaseline,
+						body: await tab.evaluate(async () => await (await fetch("/mock")).text()),
+					};
+				`,
+			});
+			expect(resumed.content).toEqual([{ type: "text", text: '{\n  "clean": true,\n  "body": "normal-mock"\n}' }]);
+		} finally {
+			await tool.execute("close", { action: "close", name, kill: true });
+			server.stop(true);
+		}
+	}, 30_000);
 });
