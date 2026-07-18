@@ -125,4 +125,46 @@ describe("session image persistence", () => {
 		expect(resolvedImage?.data).toBe(data);
 		expect(resolvedItem?.result).toBe(data);
 	});
+
+	it("skips the async resolver for entries without blob refs while still resolving blob-ref entries", async () => {
+		using tempDir = TempDir.createSync("@session-blob-precheck-");
+		const blobStore = new BlobStore(tempDir.path());
+		let getCalls = 0;
+		const origGet = blobStore.get.bind(blobStore);
+		blobStore.get = async (hash: string) => {
+			getCalls++;
+			return origGet(hash);
+		};
+
+		const imageData = Buffer.alloc(1500, 7).toString("base64");
+		const withImage = messageEntry({
+			role: "toolResult",
+			toolCallId: "call-1",
+			toolName: "read",
+			content: [png(imageData)],
+			isError: false,
+			timestamp: 0,
+		} as unknown as ToolResultMessage);
+		const persistedWithImage = prepareEntryForPersistence(withImage, blobStore);
+
+		const textOnly: FileEntry[] = Array.from({ length: 50 }, (_, i) => ({
+			type: "message",
+			id: `text-${i}`,
+			parentId: i === 0 ? null : `text-${i - 1}`,
+			timestamp: new Date(0).toISOString(),
+			message: { role: "user", content: [text(`plain body ${i}`)], timestamp: 0 },
+		})) as unknown as FileEntry[];
+
+		const loaded: FileEntry[] = [
+			...textOnly.map(entry => structuredClone(entry)),
+			structuredClone(persistedWithImage),
+		];
+		await resolveBlobRefsInEntries(loaded, blobStore);
+
+		// The blob-ref entry resolves through BlobStore.get exactly once; the 50 text entries never touch it.
+		expect(getCalls).toBe(1);
+		const resolved = loaded[loaded.length - 1] as ToolResultEntry;
+		const resolvedImage = resolved.message.content.find((block): block is ImageContent => block.type === "image");
+		expect(resolvedImage?.data).toBe(imageData);
+	});
 });
