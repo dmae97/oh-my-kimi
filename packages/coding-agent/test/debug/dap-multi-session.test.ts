@@ -123,6 +123,10 @@ class FakeDapClient {
 		for (const handler of this.#events.get(event) ?? []) void handler(body, message);
 	}
 
+	emit(event: string, body: unknown): void {
+		this.#emit(event, body);
+	}
+
 	async #emitReverse(command: string, args: unknown): Promise<void> {
 		const handler = this.#reverseHandlers.get(command);
 		if (!handler) throw new Error(`Missing reverse handler for ${command}`);
@@ -206,6 +210,39 @@ describe("DAP multi-session debugging", () => {
 		expect(threads.threads).toEqual([{ id: 7, name: "target.js" }]);
 		expect(child.requests.filter(request => request.command === "threads")).toHaveLength(1);
 		expect(root.requests.filter(request => request.command === "threads")).toHaveLength(0);
+
+		await manager.terminate(undefined, 100);
+	});
+
+	it("reactivates a live session when the active child terminates", async () => {
+		const root = new FakeDapClient({
+			name: "target.js",
+			type: "pwa-node",
+			__pendingTargetId: "child",
+		});
+		const child = new FakeDapClient();
+		spyOn(DapClient, "spawn").mockResolvedValue(root as unknown as DapClient);
+		spyOn(DapClient, "connect").mockResolvedValue(child as unknown as DapClient);
+		const manager = new DapSessionManager();
+
+		const launched = await manager.launch(
+			{ adapter: TEST_ADAPTER, program: "/tmp/target.js", cwd: "/tmp" },
+			undefined,
+			1_000,
+		);
+		expect(launched.parentSessionId).toBeDefined();
+
+		child.emit("terminated", {});
+		await child.dispose();
+
+		const active = manager.getActiveSession();
+		expect(active).not.toBeNull();
+		expect(active?.id).not.toBe(launched.id);
+		expect(active?.status).not.toBe("terminated");
+
+		const threads = await manager.threads(undefined, 100);
+		expect(threads.threads).toEqual([{ id: 7, name: "target.js" }]);
+		expect(root.requests.filter(request => request.command === "threads")).toHaveLength(1);
 
 		await manager.terminate(undefined, 100);
 	});

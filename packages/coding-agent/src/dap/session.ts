@@ -1359,10 +1359,12 @@ export class DapSessionManager {
 		client.onEvent("exited", body => {
 			session.exitCode = (body as DapExitedEventBody | undefined)?.exitCode;
 			session.status = "terminated";
+			this.#reactivateAfterTermination(session);
 			this.#resolveTreeOutcome(session);
 		});
 		client.onEvent("terminated", () => {
 			session.status = "terminated";
+			this.#reactivateAfterTermination(session);
 			this.#resolveTreeOutcome(session);
 		});
 		this.#sessions.set(session.id, session);
@@ -1379,6 +1381,7 @@ export class DapSessionManager {
 		void client.proc.exited.finally(() => {
 			clearInterval(heartbeat);
 			session.status = "terminated";
+			this.#reactivateAfterTermination(session);
 			this.#resolveTreeOutcome(session);
 		});
 		return session;
@@ -1733,6 +1736,20 @@ export class DapSessionManager {
 			current.lastUsedAt = now;
 			current = current.parentSessionId ? this.#sessions.get(current.parentSessionId) : undefined;
 		}
+	}
+
+	/** Point the active session at a live tree member when the active one terminates. */
+	#reactivateAfterTermination(session: DapSession): void {
+		if (this.#activeSessionId !== session.id) return;
+		const live = this.#getTreeSessions(session).filter(
+			candidate => candidate.status !== "terminated" && candidate.client.isAlive(),
+		);
+		if (live.length === 0) return;
+		const replacement =
+			live.find(candidate => candidate.status === "stopped") ??
+			live.find(candidate => candidate.parentSessionId !== undefined) ??
+			live[0];
+		this.#activeSessionId = replacement.id;
 	}
 
 	#resolveTreeOutcome(session: DapSession): void {
