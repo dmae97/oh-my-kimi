@@ -1329,7 +1329,10 @@ export async function runRpcMode(
 							return (await uiCtx.input(prompt.message, prompt.placeholder, { timeout: 600_000 })) ?? "";
 						},
 					});
-					await session.modelRegistry.refresh();
+					// Provider-scoped online refresh so the just-persisted credential
+					// re-runs discovery instead of reusing a fresh authoritative cache
+					// row (#5780).
+					await session.modelRegistry.refreshProvider(command.providerId, "online");
 					return success(id, "login", { providerId: command.providerId });
 				} catch (err: unknown) {
 					return error(id, "login", err instanceof Error ? err.message : String(err));

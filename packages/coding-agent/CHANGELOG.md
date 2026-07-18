@@ -129,6 +129,9 @@
 ### Fixed
 
 - Fixed browser `tab.click`/`type`/`fill`/`waitFor*`/`scrollIntoView` crashing with the opaque minified `A.trim is not a function` when handed the `ElementHandle` from `tab.id(n)`/`tab.ref(...)` (or an un-awaited `Promise` of one); the selector funnels now reject non-strings with a `ToolError` naming the recovery (`(await tab.id(n)).click()` or a string selector), and `browser.md` clarifies that handles are called directly rather than passed as selectors ([#5776](https://github.com/can1357/oh-my-pi/issues/5776)).
+### Fixed
+
+- Fixed `/login` and `/logout` (plus the setup-wizard sign-in and RPC login) refreshing model discovery with the default all-provider `online-if-uncached` strategy, which reused a fresh authoritative cache row (e.g. an empty dynamic result fetched before login) and never re-ran `fetchDynamicModels` with the just-persisted credential — so newly authenticated models stayed unavailable in-session and stale endpoint/deployment data survived a relogin. Each auth-completion path now awaits a provider-scoped `refreshProvider(providerId, "online")`, leaving unrelated providers untouched ([#5780](https://github.com/can1357/oh-my-pi/issues/5780)).
 
 ## [17.0.1] - 2026-07-16
 

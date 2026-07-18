@@ -1483,7 +1483,14 @@ export class SelectorController {
 				// focus (#5339).
 				onManualCodeInput: useManualInput ? () => dialog.showManualInput(MANUAL_LOGIN_PROMPT) : undefined,
 			});
-			this.ctx.session.modelRegistry.refreshInBackground();
+			// Scope the post-login refresh to the just-authenticated provider with an
+			// `online` strategy: the default all-provider `online-if-uncached` reuses
+			// a fresh authoritative cache row (e.g. an empty result fetched before
+			// login), so newly persisted credentials would never re-run discovery and
+			// models would stay unavailable in-session (#5780). Unrelated providers
+			// are left untouched. `refreshProvider` swallows discovery failures, so
+			// awaiting cannot reject the login.
+			await this.ctx.session.modelRegistry.refreshProvider(providerId, "online");
 			const block = new TranscriptBlock();
 			// Name the account (and Anthropic organization) that was stored so a
 			// login that lands on an unintended account/subscription is visible
@@ -1523,7 +1530,12 @@ export class SelectorController {
 				return;
 			}
 
-			await this.ctx.session.modelRegistry.refresh();
+			// Provider-scoped online refresh so the removed credential's stale
+			// endpoint/deployment models are invalidated deterministically; the
+			// default all-provider `online-if-uncached` would reuse the fresh
+			// authoritative cache row and keep showing models the credential
+			// unlocked (#5780). Other providers are left untouched.
+			await this.ctx.session.modelRegistry.refreshProvider(providerId, "online");
 			const block = new TranscriptBlock();
 			block.addChild(
 				new Text(
