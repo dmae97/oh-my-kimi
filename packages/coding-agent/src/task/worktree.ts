@@ -414,6 +414,8 @@ export async function ensureIsolation(
 	preferred?: IsoBackendKind,
 ): Promise<IsolationHandle> {
 	const repoRoot = await getRepoRoot(baseCwd);
+	const repository = await git.repo.resolve(repoRoot);
+	const sourceCommonDir = repository?.commonDir ?? path.join(repoRoot, ".git");
 	const baseDir = getWorktreeDir(getTaskIsolationSegment(repoRoot, id));
 	const mergedDir = path.join(baseDir, TASK_ISOLATION_MOUNT_DIR);
 	const resolution = natives.isoResolve(preferred ?? null);
@@ -424,6 +426,14 @@ export async function ensureIsolation(
 		await fs.rm(baseDir, { recursive: true, force: true });
 		try {
 			await natives.isoStart(candidate, repoRoot, mergedDir);
+			// Sever the isolation's git metadata from the source checkout. Copy
+			// backends duplicate `repoRoot`'s `.git` verbatim — a linked-worktree
+			// pointer file (or the rcopy `git worktree add` registration) leaves
+			// the isolation sharing the source's HEAD/index/ref namespace, so a
+			// task's git operations would mutate the parent checkout and stack
+			// parallel task branches. Detaching gives each isolation a private,
+			// frozen repo that still borrows the source object DB via alternates.
+			await git.detachGitDir(mergedDir, sourceCommonDir);
 			return {
 				mergedDir,
 				backend: candidate,
