@@ -427,6 +427,40 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(capturedBeta).toContain("mid-conversation-system-2026-04-07");
 	});
 
+	it("adds the extended-cache-ttl beta to API-key requests that default to 1h caching", async () => {
+		const captureBeta = () => {
+			let captured: string | undefined;
+			const fetchMock = (async (_input: string | URL | Request, init?: RequestInit) => {
+				captured = (init?.headers as Record<string, string> | undefined)?.["anthropic-beta"];
+				return new Response(
+					JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "captured" } }),
+					{ status: 400, headers: { "Content-Type": "application/json" } },
+				);
+			}) as typeof fetch;
+			return { fetchMock, beta: () => captured ?? "" };
+		};
+		const cacheContext: Context = {
+			systemPrompt: ["Stay concise."],
+			messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+		};
+
+		const canonical = captureBeta();
+		await streamAnthropic(ANTHROPIC_MODEL, cacheContext, {
+			apiKey: "sk-ant-api-test",
+			fetch: canonical.fetchMock,
+		}).result();
+		expect(canonical.beta()).toContain("extended-cache-ttl-2025-04-11");
+
+		// Endpoints without long-cache support never send `ttl: "1h"`, so the
+		// companion beta must stay off the wire too.
+		const proxy = captureBeta();
+		await streamAnthropic(UMANS_ANTHROPIC_MODEL, cacheContext, {
+			apiKey: "sk-umans-test",
+			fetch: proxy.fetchMock,
+		}).result();
+		expect(proxy.beta()).not.toContain("extended-cache-ttl-2025-04-11");
+	});
+
 	it("gates the effort beta and field off google-vertex requests (#5614)", async () => {
 		let capturedBeta: string | undefined;
 		let capturedBody:
@@ -564,7 +598,8 @@ describe("Anthropic request fingerprint alignment", () => {
 
 		expect(payload.system).toEqual([
 			{ type: "text", text: "stable system" },
-			{ type: "text", text: "stable durable context", cache_control: { type: "ephemeral" } },
+			// Canonical Anthropic API-key requests default to the 1h breakpoint.
+			{ type: "text", text: "stable durable context", cache_control: { type: "ephemeral", ttl: "1h" } },
 		]);
 	});
 

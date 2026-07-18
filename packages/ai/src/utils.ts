@@ -287,11 +287,16 @@ export function getOpenAIResponsesHistoryItems(
 }
 
 /**
- * Resolve cache retention preference.
- * Defaults to "short" and uses PI_CACHE_RETENTION for backward compatibility.
+ * Resolve cache retention preference: explicit request option first, then the
+ * `PI_CACHE_RETENTION` env override (`long` | `short` | `none`), then the
+ * provider-supplied fallback.
  */
-export function resolveCacheRetention(cacheRetention?: CacheRetention): CacheRetention {
+export function resolveCacheRetention(
+	cacheRetention?: CacheRetention,
+	fallback: CacheRetention = "short",
+): CacheRetention {
 	if (cacheRetention) return cacheRetention;
-	if ($env.PI_CACHE_RETENTION === "long") return "long";
-	return "short";
+	const env = $env.PI_CACHE_RETENTION;
+	if (env === "long" || env === "short" || env === "none") return env;
+	return fallback;
 }

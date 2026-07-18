@@ -8,6 +8,7 @@ import {
 } from "@oh-my-pi/pi-ai/providers/anthropic-client";
 import type { AssistantMessageEvent, Context, Model, ModelSpec, ProviderSessionState } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { withEnv } from "./helpers";
 
 const model: Model<"anthropic-messages"> = buildModel({
 	id: "claude-sonnet-4-5",
@@ -1378,6 +1379,47 @@ describe("anthropic stream envelope handling", () => {
 		});
 		expect(cacheControls[0]).toEqual({ type: "ephemeral", ttl: "1h" });
 		expect(cacheControls[1]).toEqual({ type: "ephemeral" });
+		expect(cacheControls[2]).toEqual({ type: "ephemeral" });
+	});
+
+	it("defaults API-key requests to 1h cache TTL where long retention is supported", async () => {
+		type CapturedParams = { messages: Array<{ content: unknown }> };
+		const payloads: CapturedParams[] = [];
+		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation((params: unknown) => {
+			// Params captured verbatim at the mocked SDK boundary.
+			const captured = params as CapturedParams;
+			payloads.push(captured);
+			return createMockRequest(createTextSuccessEvents("ok")) as never;
+		});
+		const proxyModel = buildModel({
+			...model,
+			compat: { ...model.compatConfig, supportsLongCacheRetention: false },
+		} as ModelSpec<"anthropic-messages">);
+		const drain = async (testModel: Model<"anthropic-messages">): Promise<void> => {
+			const stream = streamAnthropic(testModel, context, { apiKey: "sk-ant-test" });
+			for await (const _ of stream) {
+				// drain stream
+			}
+			await stream.result();
+		};
+
+		await drain(model);
+		await drain(proxyModel);
+		await withEnv({ PI_CACHE_RETENTION: "short" }, () => drain(model));
+
+		const cacheControls = payloads.map(payload => {
+			const content = payload.messages.at(-1)?.content;
+			if (!Array.isArray(content)) return undefined;
+			const lastBlock: { cache_control?: { ttl?: string; type: string } } | undefined = content.at(-1);
+			return lastBlock?.cache_control;
+		});
+		// Agent sessions idle past 5 minutes on background jobs; the canonical
+		// Anthropic API defaults to the 1h breakpoint so resume doesn't cold-miss
+		// the whole prefix.
+		expect(cacheControls[0]).toEqual({ type: "ephemeral", ttl: "1h" });
+		// Endpoints without long-cache support keep the plain 5m breakpoint.
+		expect(cacheControls[1]).toEqual({ type: "ephemeral" });
+		// PI_CACHE_RETENTION=short opts back out of the 1h default.
 		expect(cacheControls[2]).toEqual({ type: "ephemeral" });
 	});
 });

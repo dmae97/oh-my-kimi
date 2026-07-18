@@ -144,7 +144,8 @@ const claudeCodeAgentBetaDefaults = [
 	midConversationSystemBeta,
 	"advanced-tool-use-2025-11-20",
 ] as const;
-const claudeCodeAgentPostEffortBetas = ["extended-cache-ttl-2025-04-11"] as const;
+const extendedCacheTtlBeta = "extended-cache-ttl-2025-04-11";
+const claudeCodeAgentPostEffortBetas = [extendedCacheTtlBeta] as const;
 const fineGrainedToolStreamingBeta = "fine-grained-tool-streaming-2025-05-14";
 const interleavedThinkingBeta = "interleaved-thinking-2025-05-14";
 // Asks the API to redact thinking blocks from responses. Only sent when the
@@ -424,7 +425,15 @@ function getCacheControl(
 	cacheRetention: CacheRetention | undefined,
 	isOAuthToken: boolean,
 ): { retention: CacheRetention; cacheControl?: AnthropicCacheControl } {
-	const retention = cacheRetention ?? (isOAuthToken ? "long" : resolveCacheRetention(undefined));
+	// OAuth mirrors Claude Code and always defaults to 1h retention. API-key
+	// requests also default to 1h where the endpoint supports it (canonical
+	// Anthropic API, `compat.supportsLongCacheRetention`): agent sessions
+	// routinely idle past 5 minutes waiting on background jobs, and a 5m
+	// breakpoint cold-misses the entire prefix on resume. PI_CACHE_RETENTION
+	// still overrides the API-key default in either direction.
+	const retention = isOAuthToken
+		? (cacheRetention ?? "long")
+		: resolveCacheRetention(cacheRetention, model.compat.supportsLongCacheRetention ? "long" : "short");
 	if (retention === "none") {
 		return { retention };
 	}
@@ -1852,6 +1861,17 @@ const streamAnthropicOnce = (
 					!extraBetas.includes(contextManagementBeta)
 				) {
 					extraBetas.push(contextManagementBeta);
+				}
+				// `ttl: "1h"` requires the extended-cache-ttl beta on API-key
+				// requests. OAuth requests never add it here: agent requests
+				// already carry it in the Claude Code beta list, and utility
+				// requests must not deviate from CC's header fingerprint.
+				if (
+					!(options?.isOAuth ?? isAnthropicOAuthToken(apiKey)) &&
+					getCacheControl(model, options?.cacheRetention, false).cacheControl?.ttl === "1h" &&
+					!extraBetas.includes(extendedCacheTtlBeta)
+				) {
+					extraBetas.push(extendedCacheTtlBeta);
 				}
 				// Server-side fallback beta chain: opt-in via `options.fallbacks`.
 				// Nested overrides (`speed`, `output_config.effort`,
