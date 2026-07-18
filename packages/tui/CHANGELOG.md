@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [17.0.5] - 2026-07-18
+
 ### Changed
 
 - Improved rendering performance across text, box, editor, and frame layouts by caching validated line widths and avoiding redundant Unicode width measurements.

@@ -2,9 +2,10 @@
 
 ## [Unreleased]
 
+## [17.0.5] - 2026-07-18
+
 ### Added
 
-- Added native Warp CLI-agent events for rich session status, tool approvals, and completion notifications.
 - Added support for Codex (ChatGPT subscription) in `generate_image` via the `providers.image: "openai-codex"` option, including automatic subscription detection and fallback logic.
 - Added an optional `provider` parameter to `generate_image` to override the global image provider setting for a single request.
 - Added OpenTelemetry log and metric export capabilities alongside existing trace exports, supporting standard OTLP environment variables.
@@ -14,14 +15,12 @@
 
 ### Changed
 
-- Changed the default `astGrep.enabled` setting to `false`.
 - Changed bundled TTSR rules to warn instead of interrupting generation.
 - Renamed the system prompt's project-context section wrapper from `<context>` to `<repo-rules>` to prevent XML tag collisions with in-band tool dialects.
 - Renamed the `/extensions` dashboard tab "Agents (standard)" to "Agent Dirs (.agent/.agents)" to clarify its purpose.
 - Optimized performance by reducing concurrent subagent update CPU usage, skipping unnecessary title generation in non-interactive hosts, and memoizing `convertToLlm` conversions over settled history.
 - Improved the display of `read xd://` calls by rendering them in a compact grouped view instead of full tool-execution cards.
 - Made the hashline seen-line guard opt-in and off by default via `edit.enforceSeenLines`.
-- Batched todo operations with real tool calls to prevent solo todo turns and extra round trips.
 
 ### Fixed
 
@@ -55,8 +54,6 @@
 - Fixed `task` tool schemas emitting boolean subschemas that llama.cpp grammar generation cannot parse ([#5957](https://github.com/can1357/oh-my-pi/issues/5957)).
 - Fixed the transcript keeping finalized assistant blocks in the live compose walk after their rows entered native terminal scrollback, making each stream tick's `TranscriptContainer.render` depth-linear in session length. Fully committed finalized blocks are now compacted out of the local frame regardless of post-finalize version tracking; a later mutation no longer recommits on ordinary frames (no duplication) and rehydrates on the next destructive full replay (no loss). Compose cost for a live tail tick is now flat as depth grows (`bench/transcript-compose.bench.ts`: ratio(N5000/N500) 2.30 → 0.90) ([#5930](https://github.com/can1357/oh-my-pi/issues/5930)).
 - Fixed `/quit` and `/exit` hanging during interactive shutdown by making the mnemopi dispose path retain the current session and flush in-flight extractions without sleeping the bank; the `/memory enqueue` path and end-of-session backend enqueue still perform full cross-session consolidation. ([#3641](https://github.com/can1357/oh-my-pi/issues/3641))
-
-## [17.0.3] - 2026-07-17
 
 ## [17.0.2] - 2026-07-17
 

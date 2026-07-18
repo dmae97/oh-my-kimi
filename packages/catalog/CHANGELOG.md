@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [17.0.5] - 2026-07-18
+
 ### Added
 
 - Added an Anthropic compatibility flag to allow non-official OAuth endpoints to opt into configured Claude Code fingerprint header overrides.

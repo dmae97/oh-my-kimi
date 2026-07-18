@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [17.0.5] - 2026-07-18
+
 ### Added
 
 - Added a per-message token estimation cache to optimize performance by reusing token counts for settled message history, with automatic cache invalidation on message mutation.

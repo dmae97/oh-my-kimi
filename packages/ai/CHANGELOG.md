@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [17.0.5] - 2026-07-18
+
 ### Changed
 
 - Changed Anthropic API-key requests to default to a 1-hour prompt-cache retention (using the extended-cache-ttl-2025-04-11 beta) to prevent cold-misses during idle sessions, with support for PI_CACHE_RETENTION values "short" and "none" to override this behavior.
