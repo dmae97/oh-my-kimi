@@ -67,8 +67,9 @@ describe("selector setting side effects", () => {
 		expect(requestRender).toHaveBeenCalledTimes(1);
 	});
 
+	for (const id of ["terminal.showImages", "showImages"]) {
 	for (const visible of [false, true]) {
-		it(`updates every image owner and rebuilds the transcript when showImages=${visible}`, () => {
+		it(`updates every image owner and rebuilds the transcript when ${id}=${visible}`, () => {
 			const setShowImages = vi.fn();
 			const setImagesVisible = vi.fn();
 			const clearInlineImages = vi.fn();
@@ -82,7 +83,7 @@ describe("selector setting side effects", () => {
 				ui: { clearInlineImages, resetDisplay },
 			} as unknown as InteractiveModeContext);
 
-			controller.handleSettingChange("showImages", visible);
+			controller.handleSettingChange(id, visible);
 
 			expect(setShowImages).toHaveBeenCalledWith(visible);
 			expect(setImagesVisible).toHaveBeenCalledWith(visible);
@@ -94,6 +95,7 @@ describe("selector setting side effects", () => {
 				);
 			}
 		});
+	}
 	}
 
 	it("clears stale default role thinking when auto is selected", async () => {

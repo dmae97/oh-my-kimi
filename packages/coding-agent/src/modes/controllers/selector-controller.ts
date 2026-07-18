@@ -442,6 +442,7 @@ export class SelectorController {
 				break;
 
 			// Settings with UI side effects
+			case "terminal.showImages":
 			case "showImages": {
 				const visible = value as boolean;
 				for (const child of this.ctx.chatContainer.children) {
