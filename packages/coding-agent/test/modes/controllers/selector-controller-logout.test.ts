@@ -64,7 +64,7 @@ describe("SelectorController logout", () => {
 			describeCredentialSource: (_provider: string, _sessionId?: string) => undefined,
 			removeCredential,
 		} as unknown as AuthStorage;
-		const refresh = vi.fn(async () => undefined);
+		const refreshProvider = vi.fn(async (_providerId: string, _mode: string) => undefined);
 		const presented = Promise.withResolvers<void>();
 		const ctx = {
 			editorContainer,
@@ -77,7 +77,7 @@ describe("SelectorController logout", () => {
 				sessionId: "session-logout-test",
 				modelRegistry: {
 					authStorage,
-					refresh,
+					refreshProvider,
 				},
 			},
 			showError: vi.fn(),
@@ -99,7 +99,7 @@ describe("SelectorController logout", () => {
 
 		expect(removeCredential).toHaveBeenCalledWith("anthropic", 22);
 		expect(credentials.map(row => row.id)).toEqual([21]);
-		expect(refresh).toHaveBeenCalled();
+		expect(refreshProvider).toHaveBeenCalledWith("anthropic", "online");
 		expect(ctx.showError).not.toHaveBeenCalled();
 		expect(ctx.present).toHaveBeenCalled();
 	});

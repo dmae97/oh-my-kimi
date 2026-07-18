@@ -474,7 +474,7 @@ describe("Coding Agent Tools", () => {
 			expect(output).toMatch(/\[Showing lines 1-\d+ of 1000 \(\d+(\.\d+)?\s*KB limit\)\. Use :\d+ to continue\]/);
 		});
 
-		it("should handle offset parameter (with leading context expansion)", async () => {
+		it("should handle offset parameter (exact bounds)", async () => {
 			const testFile = path.join(testDir, "offset-test.txt");
 			const lines = Array.from({ length: 100 }, (_, i) => `Line ${i + 1}`);
 			fs.writeFileSync(testFile, lines.join("\n"));
@@ -482,18 +482,16 @@ describe("Coding Agent Tools", () => {
 			const result = await readTool.execute("test-call-5", { path: `${testFile}:L51` });
 			const output = getTextOutput(result);
 
-			// Read tool widens by 1 leading + 3 trailing unanchored context lines
-			// so anchors at the boundary stay fresh. Line 50 is the single leading
-			// context line; lines 47..49 are NOT included.
-			expect(output).not.toContain("Line 49");
-			expect(output).toContain("Line 50");
+			// Explicit selectors are honored exactly (#5802): the read starts at
+			// line 51 with no leading context lines.
+			expect(output).not.toContain("Line 50");
 			expect(output).toContain("Line 51");
 			expect(output).toContain("Line 100");
 			// No truncation message since file fits within limits
 			expect(output).not.toContain("Use :");
 		});
 
-		it("should handle limit parameter (with trailing context expansion)", async () => {
+		it("should handle limit parameter (exact bounds)", async () => {
 			const testFile = path.join(testDir, "limit-test.txt");
 			const lines = Array.from({ length: 100 }, (_, i) => `Line ${i + 1}`);
 			fs.writeFileSync(testFile, lines.join("\n"));
@@ -501,53 +499,32 @@ describe("Coding Agent Tools", () => {
 			const result = await readTool.execute("test-call-6", { path: `${testFile}:L1-L10` });
 			const output = getTextOutput(result);
 
-			// Trailing context: lines 11..13 included so an edit anchored at
-			// the boundary stays fresh.
+			// Explicit ranges return exactly the requested lines (#5802).
 			expect(output).toContain("Line 1");
 			expect(output).toContain("Line 10");
-			expect(output).toContain("Line 13");
-			expect(output).not.toContain("Line 14");
-			expect(output).toContain("[Showing lines 1-13 of 100. Use :14 to continue]");
+			expect(output).not.toContain("Line 11");
+			expect(output).toContain("[Showing lines 1-10 of 100. Use :11 to continue]");
 		});
 
-		it("does not expand on the leading side when offset is 1 or unspecified", async () => {
-			const testFile = path.join(testDir, "no-leading.txt");
-			const lines = Array.from({ length: 50 }, (_, i) => `Line ${i + 1}`);
-			fs.writeFileSync(testFile, lines.join("\n"));
-
-			// :L1-L5 has offset=1 → no leading context (already at the top).
-			// Trailing context still applies.
-			const result = await readTool.execute("test-no-leading", {
-				path: `${testFile}:L1-L5`,
-			});
-			const output = getTextOutput(result);
-
-			expect(output).toContain("Line 1");
-			expect(output).toContain("Line 5");
-			expect(output).toContain("Line 8");
-			expect(output).not.toContain("Line 9");
-			expect(output).toContain("[Showing lines 1-8 of 50. Use :9 to continue]");
-		});
-
-		it("clamps leading context at file start without errors", async () => {
+		it("honors exact bounds when the range does not start at line 1", async () => {
 			const testFile = path.join(testDir, "leading-clamp.txt");
 			const lines = Array.from({ length: 50 }, (_, i) => `Line ${i + 1}`);
 			fs.writeFileSync(testFile, lines.join("\n"));
 
-			// :L2-L5: offset=2 → expand by min(1, 1) = 1 leading line.
+			// :L2-L5 returns exactly lines 2..5 — no leading or trailing
+			// context expansion (#5802).
 			const result = await readTool.execute("test-leading-clamp", {
 				path: `${testFile}:L2-L5`,
 			});
 			const output = getTextOutput(result);
 
-			expect(output).toContain("Line 1");
+			expect(output).not.toContain("Line 1\n");
 			expect(output).toContain("Line 2");
 			expect(output).toContain("Line 5");
-			expect(output).toContain("Line 8");
-			expect(output).not.toContain("Line 9");
+			expect(output).not.toContain("Line 6");
 		});
 
-		it("should handle offset + limit together (1 leading + 3 trailing)", async () => {
+		it("should handle offset + limit together (exact bounds)", async () => {
 			const testFile = path.join(testDir, "offset-limit-test.txt");
 			const lines = Array.from({ length: 100 }, (_, i) => `Line ${i + 1}`);
 			fs.writeFileSync(testFile, lines.join("\n"));
@@ -557,14 +534,12 @@ describe("Coding Agent Tools", () => {
 			});
 			const output = getTextOutput(result);
 
-			// Both endpoints are user-constrained: 1 leading + 3 trailing.
-			expect(output).not.toContain("Line 39");
-			expect(output).toContain("Line 40");
+			// Both endpoints are honored exactly (#5802).
+			expect(output).not.toContain("Line 40");
 			expect(output).toContain("Line 41");
 			expect(output).toContain("Line 60");
-			expect(output).toContain("Line 63");
-			expect(output).not.toContain("Line 64");
-			expect(output).toContain("[Showing lines 40-63 of 100. Use :64 to continue]");
+			expect(output).not.toContain("Line 61");
+			expect(output).toContain("[Showing lines 41-60 of 100. Use :61 to continue]");
 		});
 
 		it("should show error when offset is beyond file length", async () => {
@@ -782,8 +757,10 @@ describe("Coding Agent Tools", () => {
 
 				expect(output).toContain("# Archive README");
 				expect(output).toContain("Line 2");
-				// Trailing context (±3) keeps Line 3 visible when present.
-				expect(output).toContain("Line 3");
+				// Explicit ranges are honored exactly (#5802): Line 3 stays behind
+				// the continuation hint.
+				expect(output).not.toContain("Line 3");
+				expect(output).toContain("more lines in archive entry. Use :3 to continue");
 			});
 		}
 
