@@ -26,6 +26,7 @@
 
 ### Fixed
 
+- Fixed non-PTY `launch start` daemons opening visible console windows on Windows by preserving an attached host console and using `CREATE_NO_WINDOW` only for headless hosts ([#6018](https://github.com/can1357/oh-my-pi/issues/6018)).
 - Fixed `--model <role>` resolving a bare configured `modelRoles` key.
 - Browser tool selectors now accept bare snapshot refs (`tab.click("e501")`, `@e501`) everywhere `aria-ref=e501` works — previously the tab-worker backend fell through to a CSS tag selector that could never match, burning the 2s zero-match watchdog with a misleading "matches no elements" hint. `tab.select`, `tab.uploadFile`, `tab.press({ selector })`, `tab.screenshot({ selector })`, and `tab.drag` now resolve refs too. Unknown/stale refs fail immediately with the "refresh refs" error.
 - `tab.select` no longer double-reports the previously selected option of a single `<select>`: the returned selection is read back after the full assignment pass instead of mid-loop.
