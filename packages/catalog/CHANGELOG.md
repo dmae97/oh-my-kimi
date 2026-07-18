@@ -4,15 +4,14 @@
 
 ### Added
 
-- Added an Anthropic compatibility flag for opting non-official OAuth endpoints into configured Claude Code fingerprint header overrides. ([#5888](https://github.com/can1357/oh-my-pi/issues/5888))
+- Added an Anthropic compatibility flag to allow non-official OAuth endpoints to opt into configured Claude Code fingerprint header overrides.
 
 ### Fixed
 
-- Fixed Kimi K3 models served through generic OpenAI-compatible routes exposing unsupported reasoning efforts instead of the mandatory `low`/`high`/`max` scale ([#5983](https://github.com/can1357/oh-my-pi/issues/5983)).
-- Fixed the model cache (`models.db`) serializing provider-defined request headers written into a model's `headers` — any custom name can carry a credential (for example `Authorization`, `X-Goog-Api-Key`, or `X-Access-Token`), so a denylist cannot make plaintext persistence safe. `writeModelCache` now omits all model headers and records only the ids whose headers were removed. On read, schema v10 restores matching static-model headers from the caller's live source; dynamic-only models with omitted headers force an online refetch and are excluded from offline/failure fallbacks rather than returned unusable. Older header-bearing rows are invalidated and securely deleted so their values do not remain recoverable in SQLite free pages ([#5780](https://github.com/can1357/oh-my-pi/issues/5780)).
-- Fixed OpenAI Codex discovery to replace stale bundled models with the authenticated account catalog, preventing unsupported models from remaining selectable. ([#5364](https://github.com/can1357/oh-my-pi/issues/5364))
-- Fixed OpenAI Codex discovery ignoring the caller-supplied `fetch`, so it always hit the global network instead of the configured (proxy/extra-CA/test) fetch. ([#5364](https://github.com/can1357/oh-my-pi/issues/5364))
-- Fixed a loopback `litellm` proxy fronting a local llama.cpp/vLLM server aborting long prefills with `stream timed out while waiting for the first event` and retry-looping. `litellm` is excluded from `isLocalOpenAICompatBackend` to keep `replayReasoningContent` off proxies (which could 400 an unrelated cloud upstream), but that exclusion also stripped the 300s local stream-timeout floor, leaving the 100s default; a slow reprocess (llama.cpp `non-consecutive token position` KV thrash) then exceeded it. The timeout floor now applies to any loopback/RFC1918 backend, including proxies, while reasoning replay stays gated to first-party local providers. ([#4786](https://github.com/can1357/oh-my-pi/issues/4786))
+- Fixed a security issue where sensitive provider-defined request headers (such as API keys or credentials) were serialized in plaintext within the model cache (models.db). The cache now omits these headers, securely invalidates older cached rows, and restores or refetches them dynamically.
+- Fixed OpenAI Codex discovery to respect caller-supplied fetch configurations (such as proxies or custom CAs) and correctly replace stale bundled models with the authenticated account catalog.
+- Fixed stream timeouts and retry loops during long prefills on local loopback or RFC1918 backends (such as litellm proxies fronting local servers) by applying the local stream-timeout floor to these backends.
+- Fixed Kimi K3 models served through generic OpenAI-compatible routes exposing unsupported reasoning efforts instead of the mandatory low/high/max scale.
 
 ## [17.0.4] - 2026-07-18
 

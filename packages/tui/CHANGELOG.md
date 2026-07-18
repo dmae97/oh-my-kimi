@@ -4,17 +4,15 @@
 
 ### Changed
 
-- Carried validated line widths through text, box, editor, and frame layout to avoid repeated Unicode width measurement. ([#5938](https://github.com/can1357/oh-my-pi/issues/5938))
+- Improved rendering performance across text, box, editor, and frame layouts by caching validated line widths and avoiding redundant Unicode width measurements.
 
 ### Fixed
 
-- Fixed ordinary coding-agent editor keystrokes performing a full root compose by adding an explicit stable-focus subtree-render opt-in while preserving full composition for callback-driven components and focus changes ([#5928](https://github.com/can1357/oh-my-pi/issues/5928)).
-- Restored wrapped descriptions in the slash-command autocomplete picker so long skill descriptions remain readable at normal terminal widths ([#5848](https://github.com/can1357/oh-my-pi/issues/5848)).
-- Added viewport-pinned live regions so replacing dashboard frames can stay out of immutable native scrollback until they finalize ([#5777](https://github.com/can1357/oh-my-pi/issues/5777)).
-- Added live-session cleanup for tracked Kitty graphics so consumers can delete retained inline images before replaying text fallbacks.
-### Fixed
-
-- Fixed in-place multiplexer pane growth rewriting newly exposed committed rows as blank padding by rebasing the commit seam to the resized viewport tail ([#6011](https://github.com/can1357/oh-my-pi/issues/6011)).
+- Fixed a performance issue where typing in the editor triggered a full UI re-render, significantly improving keystroke responsiveness.
+- Restored text wrapping for long descriptions in the slash-command autocomplete picker to ensure readability at standard terminal widths.
+- Prevented temporary dashboard frame updates from cluttering the terminal's native scrollback history.
+- Added support for cleaning up tracked Kitty graphics, allowing inline images to be properly deleted before falling back to text.
+- Fixed an issue where resizing or growing a multiplexer pane would incorrectly overwrite newly exposed rows with blank padding.
 
 ## [17.0.3] - 2026-07-17
 

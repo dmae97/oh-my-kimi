@@ -4,7 +4,8 @@
 
 ### Changed
 
-- `installRuntimeModuleResolver` now returns an uninstaller that removes the registration and restores the stock `node:module` resolver once no runtime roots remain registered. Documented the Bun 1.3.14 limitation the patch inherits: while any JS `_resolveFilename` override is installed, `createRequire(...)` relative requires fail because Bun invokes the override without the requester context — keep the patch scoped to dedicated worker/runtime processes.
+- Updated `installRuntimeModuleResolver` to return an uninstaller function that restores the stock `node:module` resolver once all runtime roots are unregistered.
+- Added documentation regarding a known limitation with Bun 1.3.14's `createRequire` behavior when the module resolver patch is active.
 
 ## [17.0.2] - 2026-07-17
 

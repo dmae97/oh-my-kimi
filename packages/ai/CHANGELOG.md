@@ -4,18 +4,18 @@
 
 ### Changed
 
-- Anthropic API-key requests to the canonical API now default to 1h prompt-cache retention (`cache_control: { ttl: "1h" }` plus the `extended-cache-ttl-2025-04-11` beta), matching the OAuth default. The previous 5m default cold-missed the entire prompt prefix whenever a session idled past 5 minutes — e.g. waiting on long-running background jobs. `PI_CACHE_RETENTION` now accepts `short` and `none` to override the default in either direction; endpoints without `compat.supportsLongCacheRetention` keep the 5m breakpoint.
+- Changed Anthropic API-key requests to default to a 1-hour prompt-cache retention (using the extended-cache-ttl-2025-04-11 beta) to prevent cold-misses during idle sessions, with support for PI_CACHE_RETENTION values "short" and "none" to override this behavior.
 
 ### Fixed
 
-- Retry one transient OpenAI Responses stream truncation before replay-unsafe output, preventing recoverable transport truncations from surfacing as failed turns ([#5908](https://github.com/can1357/oh-my-pi/issues/5908)).
-- Kept native Kimi Code K3 thinking enabled for named function selection by using generic required tool choice.
-- Fixed `/login moonshot` validating China-platform API keys against the international host instead of honoring `MOONSHOT_BASE_URL` ([#5981](https://github.com/can1357/oh-my-pi/issues/5981)).
-- Fixed Anthropic session credential stickiness suppressing usage-based re-ranking indefinitely: the session pin skipped ranking for up to 30 days (or process lifetime) even after the ≤1h prompt cache it protects was no longer guaranteed warm. The Anthropic skip is now gated on time since the session's last resolve (`ANTHROPIC_SESSION_STICKY_CACHE_WARM_MS`, 1h), while providers without a verified cache lifetime retain their existing stickiness. When ranking runs, the pinned account is only a tie-break rather than an absolute front-of-queue override, restoring proactive multi-account load balancing after long idle ([#5966](https://github.com/can1357/oh-my-pi/issues/5966)).
-- Fixed clockless Anthropic usage windows outranking clocked sibling credentials by scoring their headroom over the full window duration ([#5960](https://github.com/can1357/oh-my-pi/issues/5960)).
-- Fixed local grammar-constrained OpenAI-compatible backends (llama.cpp, LM Studio, vLLM) rejecting every tool request with `400 "Unable to generate parser for this template ... Unrecognized schema: true"`. The `task` tool's open `outputSchema` field normalizes to a bare boolean `true` subschema (issue #1179), which llama.cpp's JSON-schema→GBNF converter cannot compile. The chat-completions encoder now widens bare boolean subschemas into a value-accepting primitive union (and preserves closed-object `additionalProperties: false`) for these backends via the new `grammar` tool-schema flavor ([#5914](https://github.com/can1357/oh-my-pi/issues/5914)).
-- Fixed custom OAuth Anthropic-compatible endpoints with explicit header overrides still receiving generated Claude Code fingerprint headers instead. ([#5888](https://github.com/can1357/oh-my-pi/issues/5888))
-- Fixed plan-gated OpenAI Codex models (Sol/Luna) silently re-routing an active session to a sibling OAuth account when usage headroom changed: `AuthStorage.#resolveOAuthSelection` now promotes the session-preferred credential back to the front of the ranked candidates whenever it is still usable, unblocked, and plan-eligible, so a session stays sticky unless the sticky account is blocked, exhausted, or ineligible for the current model ([#5203](https://github.com/can1357/oh-my-pi/issues/5203)).
+- Fixed transient OpenAI stream truncations by retrying once before output becomes replay-unsafe, preventing recoverable transport errors from failing the turn.
+- Fixed native Kimi Code K3 thinking being disabled during named function selection by utilizing generic required tool choice.
+- Fixed /login moonshot validating China-platform API keys against the international host instead of honoring MOONSHOT_BASE_URL.
+- Fixed Anthropic session stickiness suppressing usage-based re-ranking indefinitely by gating stickiness on a 1-hour cache warmth window (configurable via ANTHROPIC_SESSION_STICKY_CACHE_WARM_MS) to restore proactive multi-account load balancing after long idle periods.
+- Fixed credential ranking where clockless Anthropic usage windows incorrectly outranked clocked sibling credentials.
+- Fixed tool request failures (HTTP 400) on local grammar-constrained OpenAI-compatible backends (such as llama.cpp, LM Studio, and vLLM) by widening bare boolean subschemas into a value-accepting primitive union.
+- Fixed custom OAuth Anthropic-compatible endpoints receiving generated Claude Code fingerprint headers even when explicit header overrides were provided.
+- Fixed active sessions for plan-gated OpenAI Codex models (Sol/Luna) silently re-routing to sibling OAuth accounts when usage headroom changed, ensuring session stickiness is preserved as long as the preferred credential remains usable and eligible.
 
 ## [17.0.4] - 2026-07-18
 
