@@ -219,8 +219,7 @@ interface PendingDelta {
 
 interface CatchupWaiter {
 	threshold: number;
-	resolve: () => void;
-	finish: () => void;
+	finish: (caughtUp: boolean) => void;
 	timer?: NodeJS.Timeout;
 }
 
@@ -366,7 +365,13 @@ export class AdvisorRuntime {
 		}
 	}
 
-	waitForCatchup(maxMs: number, threshold: number, signal?: AbortSignal): Promise<void> {
+	/**
+	 * Wait until the advisor backlog falls below `threshold`.
+	 *
+	 * Returns `false` when the deadline, abort signal, or a runtime failure releases
+	 * the waiter before the requested backlog was drained.
+	 */
+	waitForCatchup(maxMs: number, threshold: number, signal?: AbortSignal): Promise<boolean> {
 		if (
 			this.disposed ||
 			signal?.aborted ||
@@ -378,21 +383,26 @@ export class AdvisorRuntime {
 			// primary would otherwise park for the full catch-up budget.
 			this.#failing
 		)
-			return Promise.resolve();
-		const { promise, resolve } = Promise.withResolvers<void>();
+			return Promise.resolve(this.#backlog < threshold);
+		const { promise, resolve } = Promise.withResolvers<boolean>();
 		let waiter!: CatchupWaiter;
-		const finish = (): void => {
+		const finish = (caughtUp: boolean): void => {
 			const idx = this.#waiters.indexOf(waiter);
 			if (idx >= 0) this.#waiters.splice(idx, 1);
 			clearTimeout(waiter.timer);
-			signal?.removeEventListener("abort", finish);
-			resolve();
+			signal?.removeEventListener("abort", abort);
+			resolve(caughtUp);
 		};
-		waiter = { threshold, resolve, finish, timer: setTimeout(finish, maxMs) };
+		const abort = (): void => finish(false);
+		waiter = {
+			threshold,
+			finish,
+			timer: setTimeout(abort, maxMs),
+		};
 		this.#waiters.push(waiter);
-		signal?.addEventListener("abort", finish, { once: true });
+		signal?.addEventListener("abort", abort, { once: true });
 		if (signal?.aborted) {
-			finish();
+			abort();
 		}
 		return promise;
 	}
@@ -571,14 +581,14 @@ export class AdvisorRuntime {
 		for (let i = this.#waiters.length - 1; i >= 0; i--) {
 			const w = this.#waiters[i];
 			if (this.#backlog < w.threshold) {
-				w.finish();
+				w.finish(true);
 			}
 		}
 	}
 
 	#wakeAllWaiters(): void {
 		for (const w of [...this.#waiters]) {
-			w.finish();
+			w.finish(false);
 		}
 	}
 

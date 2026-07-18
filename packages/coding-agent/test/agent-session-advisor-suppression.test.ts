@@ -61,6 +61,12 @@ interface CompletedAdvisorHarness {
 	advisorMock: MockModel;
 }
 
+interface AdvisorTestExtensionRunner {
+	hasHandlers(eventType: string): boolean;
+	emitBeforeAgentStart(): Promise<undefined>;
+	emit(event: { type: string; message?: AgentMessage }): Promise<void>;
+}
+
 describe("AgentSession advisor auto-resume suppression", () => {
 	let tempDir: TempDir;
 	let session: AgentSession;
@@ -166,6 +172,7 @@ describe("AgentSession advisor auto-resume suppression", () => {
 
 	async function createCompletedAdvisorSession(
 		severity: "concern" | "blocker" = "concern",
+		extensionRunner?: AdvisorTestExtensionRunner,
 	): Promise<CompletedAdvisorHarness> {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mock = createMockModel({
@@ -206,6 +213,7 @@ describe("AgentSession advisor auto-resume suppression", () => {
 			modelRegistry,
 			advisorTools: [],
 			advisorStreamFn: advisorMock.stream,
+			extensionRunner: extensionRunner as never,
 		});
 		return { session, sessionManager, mock, advisorMock };
 	}
@@ -268,6 +276,74 @@ describe("AgentSession advisor auto-resume suppression", () => {
 		expect(persisted.at(-1)).toContain("Fixture verdict confirmed");
 		expect(advisorMock.calls.length).toBeGreaterThanOrEqual(1);
 		expect(mock.calls.length).toBe(1);
+	});
+
+	it("waits for preserved advisor card hooks and persistence before reporting catch-up", async () => {
+		const hookStarted = Promise.withResolvers<void>();
+		const releaseHook = Promise.withResolvers<void>();
+		const extensionRunner: AdvisorTestExtensionRunner = {
+			hasHandlers: eventType => eventType === "message_end",
+			emitBeforeAgentStart: async () => undefined,
+			emit: async event => {
+				if (event.type !== "message_end" || !event.message || !isAdvisorCard(event.message)) return;
+				hookStarted.resolve();
+				await releaseHook.promise;
+			},
+		};
+		const { session, sessionManager, mock } = await createCompletedAdvisorSession("concern", extensionRunner);
+		const persisted = capturePersistedAdvice(sessionManager);
+
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		await session.prompt("answer with exactly one line");
+		await hookStarted.promise;
+
+		expect(await session.waitForAdvisorCatchup(0)).toBe(false);
+		expect(persisted).toEqual([]);
+
+		let catchupSettled = false;
+		const catchup = session.waitForAdvisorCatchup(1000).then(caughtUp => {
+			catchupSettled = true;
+			return caughtUp;
+		});
+		await Promise.resolve();
+		expect(catchupSettled).toBe(false);
+		expect(persisted).toEqual([]);
+
+		releaseHook.resolve();
+		expect(await catchup).toBe(true);
+		expect(persisted.at(-1)).toContain("Fixture verdict confirmed");
+		expect(mock.calls).toHaveLength(1);
+	});
+
+	it("waits for preserved advisor card start hooks before reporting catch-up", async () => {
+		const hookStarted = Promise.withResolvers<void>();
+		const releaseHook = Promise.withResolvers<void>();
+		const extensionRunner: AdvisorTestExtensionRunner = {
+			hasHandlers: eventType => eventType === "message_start",
+			emitBeforeAgentStart: async () => undefined,
+			emit: async event => {
+				if (event.type !== "message_start" || !event.message || !isAdvisorCard(event.message)) return;
+				hookStarted.resolve();
+				await releaseHook.promise;
+			},
+		};
+		const { session, mock } = await createCompletedAdvisorSession("concern", extensionRunner);
+
+		expect(session.setAdvisorEnabled(true)).toBe(true);
+		await session.prompt("answer with exactly one line");
+		await hookStarted.promise;
+
+		let catchupSettled = false;
+		const catchup = session.waitForAdvisorCatchup(1000).then(caughtUp => {
+			catchupSettled = true;
+			return caughtUp;
+		});
+		await Promise.resolve();
+		expect(catchupSettled).toBe(false);
+
+		releaseHook.resolve();
+		expect(await catchup).toBe(true);
+		expect(mock.calls).toHaveLength(1);
 	});
 
 	it("steers a late advisor blocker after a terminal answer so the primary corrects it", async () => {

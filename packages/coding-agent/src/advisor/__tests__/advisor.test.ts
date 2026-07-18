@@ -865,6 +865,65 @@ describe("advisor", () => {
 			expect(promptInputs[1]).toContain("second");
 		});
 
+		it("waits for an in-flight review within the catch-up deadline", async () => {
+			const promptStarted = Promise.withResolvers<void>();
+			const releasePrompt = Promise.withResolvers<void>();
+			const messages: AgentMessage[] = [{ role: "user", content: "first", timestamp: 1 } as AgentMessage];
+			const agent: AdvisorAgent = {
+				prompt: async () => {
+					promptStarted.resolve();
+					await releasePrompt.promise;
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const runtime = new AdvisorRuntime(agent, {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+			});
+
+			runtime.onTurnEnd();
+			await promptStarted.promise;
+			let settled = false;
+			const catchup = runtime.waitForCatchup(1000, 1).then(caughtUp => {
+				settled = true;
+				return caughtUp;
+			});
+			await Promise.resolve();
+			expect(settled).toBe(false);
+
+			releasePrompt.resolve();
+			expect(await catchup).toBe(true);
+		});
+
+		it("reports an in-flight review that exceeds the catch-up deadline", async () => {
+			const promptStarted = Promise.withResolvers<void>();
+			const releasePrompt = Promise.withResolvers<void>();
+			const messages: AgentMessage[] = [{ role: "user", content: "first", timestamp: 1 } as AgentMessage];
+			const agent: AdvisorAgent = {
+				prompt: async () => {
+					promptStarted.resolve();
+					await releasePrompt.promise;
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const runtime = new AdvisorRuntime(agent, {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+			});
+
+			runtime.onTurnEnd();
+			await promptStarted.promise;
+			expect(await runtime.waitForCatchup(20, 1)).toBe(false);
+			expect(runtime.backlog).toBe(1);
+
+			releasePrompt.resolve();
+			await settleUntil(() => runtime.backlog === 0);
+		});
+
 		it("preserves the next user turn when an accepted empty stop is pruned", async () => {
 			const promptInputs: string[] = [];
 			const agent = makeAgent(promptInputs);
@@ -3779,6 +3838,44 @@ describe("advisor", () => {
 	// or it strands and #drainStrandedQueuedMessages auto-resumes it. Do not swap
 	// the call site back to session `isStreaming`.
 	describe("resolveAdvisorDeliveryChannel", () => {
+		it("preserves every severity when a headless drain forbids primary turns", () => {
+			for (const severity of [undefined, "nit", "concern", "blocker"] as const) {
+				expect(
+					resolveAdvisorDeliveryChannel({
+						severity,
+						autoResumeSuppressed: false,
+						streaming: false,
+						aborting: false,
+						terminalAnswerNoQueuedWork: true,
+						preserveOnly: true,
+					}),
+				).toBe("preserve");
+			}
+		});
+
+		it("keeps live headless advice on normal delivery channels until the primary finishes", () => {
+			expect(
+				resolveAdvisorDeliveryChannel({
+					severity: "nit",
+					autoResumeSuppressed: false,
+					streaming: true,
+					aborting: false,
+					preserveOnly: true,
+				}),
+			).toBe("aside");
+			for (const severity of ["concern", "blocker"] as const) {
+				expect(
+					resolveAdvisorDeliveryChannel({
+						severity,
+						autoResumeSuppressed: false,
+						streaming: true,
+						aborting: false,
+						preserveOnly: true,
+					}),
+				).toBe("steer");
+			}
+		});
+
 		it("routes a non-interrupting nit to the aside queue regardless of state", () => {
 			expect(
 				resolveAdvisorDeliveryChannel({
