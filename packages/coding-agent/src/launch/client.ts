@@ -3,6 +3,7 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { isEexist, isEisdir, isEnoent, postmortem } from "@oh-my-pi/pi-utils";
+import { hostHasInheritableConsole } from "../eval/py/spawn-options";
 import { resolveWorkerSpawnCmd, workerEnvFromParent } from "../subprocess/worker-client";
 import { daemonBrokerEndpoint, daemonRuntimeDir } from "./paths";
 import {
@@ -16,10 +17,15 @@ import {
 	parseDaemonRpcResult,
 	parseDaemonWireResponse,
 } from "./protocol";
+import { resolveDaemonSpawnOptions } from "./spawn-options";
 
 const CONNECT_TIMEOUT_MS = 10_000;
 const CONNECT_RETRY_MS = 50;
 const TOKEN_FILE = "broker.token";
+const BROKER_SPAWN_OPTIONS = resolveDaemonSpawnOptions({
+	platform: process.platform,
+	hostHasInheritableConsole: hostHasInheritableConsole(),
+});
 
 interface PendingRequest {
 	operation: DaemonOperation;
@@ -228,7 +234,7 @@ class SocketDaemonClient implements DaemonBrokerClient {
 			stdin: "ignore",
 			stdout: "ignore",
 			stderr: "ignore",
-			detached: true,
+			...BROKER_SPAWN_OPTIONS,
 		});
 		child.unref();
 	}
