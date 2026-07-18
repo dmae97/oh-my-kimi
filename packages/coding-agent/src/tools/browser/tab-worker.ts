@@ -1212,7 +1212,16 @@ export class WorkerCore {
 			press: (key, opts) =>
 				op(`tab.press(${JSON.stringify(key)})`, actionOpMs, async sig => {
 					const selector = opts?.selector;
-					if (selector) await untilAborted(sig, () => page.focus(normalizeSelector(selector)));
+					if (selector) {
+						if (parseAriaRefSelector(selector) !== null) {
+							const handle = await this.#resolveAriaRef(selector);
+							try {
+								await untilAborted(sig, () => handle.focus());
+							} finally {
+								await handle.dispose().catch(() => undefined);
+							}
+						} else await untilAborted(sig, () => page.focus(normalizeSelector(selector)));
+					}
 					await untilAborted(sig, () => page.keyboard.press(key));
 				}),
 			scroll: (deltaX, deltaY) =>
@@ -1387,9 +1396,10 @@ export class WorkerCore {
 		const captureMime = `image/${captureType}` as const;
 		let buffer: Buffer;
 		if (opts.selector) {
-			const handle = (await untilAborted(signal, () =>
-				page.$(normalizeSelector(opts.selector!)),
-			)) as ElementHandle | null;
+			const handle =
+				parseAriaRefSelector(opts.selector) !== null
+					? await this.#resolveAriaRef(opts.selector)
+					: asElementHandle(await untilAborted(signal, () => page.$(normalizeSelector(opts.selector!))));
 			if (!handle) throw new ToolError("Screenshot selector did not resolve to an element");
 			try {
 				// Bring the element into view with a single instant scroll instead of puppeteer's
@@ -1462,9 +1472,10 @@ export class WorkerCore {
 			role: "from" | "to",
 		): Promise<{ x: number; y: number; handle?: ElementHandle }> => {
 			if (typeof target === "string") {
-				const handle = (await untilAborted(signal, () =>
-					page.$(normalizeSelector(target)),
-				)) as ElementHandle | null;
+				const handle =
+					parseAriaRefSelector(target) !== null
+						? await this.#resolveAriaRef(target)
+						: asElementHandle(await untilAborted(signal, () => page.$(normalizeSelector(target))));
 				if (!handle) throw new ToolError(`Drag ${role} selector did not resolve: ${target}`);
 				const box = (await untilAborted(signal, () => handle.boundingBox())) as {
 					x: number;
@@ -1505,10 +1516,7 @@ export class WorkerCore {
 	}
 
 	async #select(selector: string, values: string[], timeoutMs: number, signal: AbortSignal): Promise<string[]> {
-		const page = this.#requirePage();
-		const handle = (await untilAborted(signal, () =>
-			page.locator(normalizeSelector(selector)).setTimeout(timeoutMs).waitHandle({ signal }),
-		)) as ElementHandle;
+		const handle = await this.#resolveActionHandle(selector, timeoutMs, signal);
 		try {
 			return (await untilAborted(signal, () =>
 				handle.evaluate((el, vals) => {
@@ -1527,10 +1535,17 @@ export class WorkerCore {
 						globalThis as unknown as { Event: new (type: string, init?: { bubbles: boolean }) => unknown }
 					).Event;
 					const wanted = new Set(vals as string[]);
-					const selected: string[] = [];
+					// Assign the full selection first, then read back: on a single
+					// <select>, un-selecting the current option mid-loop leaves the
+					// browser reporting it selected until another option takes over,
+					// which double-counted the old value in the returned list.
 					for (let i = 0; i < select.options.length; i++) {
 						const opt = select.options[i] as SelectOption;
 						opt.selected = wanted.has(opt.value);
+					}
+					const selected: string[] = [];
+					for (let i = 0; i < select.options.length; i++) {
+						const opt = select.options[i] as SelectOption;
 						if (opt.selected) selected.push(opt.value);
 					}
 					select.dispatchEvent(new EventCtor("input", { bubbles: true }));
@@ -1551,10 +1566,7 @@ export class WorkerCore {
 		session: SessionSnapshot,
 	): Promise<void> {
 		if (!filePaths.length) throw new ToolError("tab.uploadFile() requires at least one file path");
-		const page = this.#requirePage();
-		const handle = (await untilAborted(signal, () =>
-			page.locator(normalizeSelector(selector)).setTimeout(timeoutMs).waitHandle({ signal }),
-		)) as ElementHandle;
+		const handle = await this.#resolveActionHandle(selector, timeoutMs, signal);
 		try {
 			const absolute = filePaths.map(filePath => resolveToCwd(filePath, session.cwd));
 			const upload = handle as unknown as { uploadFile: (...paths: string[]) => Promise<void> };

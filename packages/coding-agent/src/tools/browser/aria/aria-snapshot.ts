@@ -69,13 +69,15 @@ export async function resolveAriaRefHandle(page: Page, ref: string): Promise<Ele
 const ARIA_REF_PREFIXES = ["aria-ref=", "aria-ref/", "ariaref/"];
 
 /**
- * Recognize the explicit `[ref=eN]` selector forms and return the bare ref id,
- * else null. Accepts `aria-ref=e5` (Playwright-MCP style), `aria-ref/e5`, and
- * `ariaref/e5` — lets `tab.click("aria-ref=e5")` etc. act on snapshot refs. A
- * bare `e5` is intentionally NOT a ref selector: the cmux backend already uses
- * bare `eN`/`@eN` for its own observe ids, so requiring the prefix keeps action
- * selectors meaning the same thing on both backends. (`tab.ref("e5")` still
- * accepts a bare id directly.)
+ * Recognize a snapshot-ref selector and return the bare ref id, else null.
+ * Accepts `aria-ref=e5` (Playwright-MCP style), `aria-ref/e5`, `ariaref/e5`,
+ * and bare `e5`/`@e5`: agents copy ids straight out of the snapshot YAML
+ * (`[ref=e5]`), so `tab.click("e5")` must act on the ref instead of falling
+ * through to a CSS tag selector that can never match. Bare ids are safe to
+ * claim here — an eN tag name is not real HTML, and the tab-worker backend's
+ * observe ids are numeric (`tab.id(7)`), so refs are its only eN namespace.
+ * (The cmux backend parses selectors itself and routes bare `eN` to its own
+ * observe ids; either way `eN` means "the id from the last page dump".)
  */
 export function parseAriaRefSelector(selector: string): string | null {
 	const trimmed = selector.trim();
@@ -85,7 +87,8 @@ export function parseAriaRefSelector(selector: string): string | null {
 			return /^e\d+$/.test(id) ? id : null;
 		}
 	}
-	return null;
+	const bare = /^@?(e\d+)$/.exec(trimmed);
+	return bare ? bare[1]! : null;
 }
 
 /**
