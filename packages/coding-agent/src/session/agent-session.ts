@@ -4163,30 +4163,58 @@ export class AgentSession {
 		return queued;
 	}
 
+	/**
+	 * Orders subscriber fan-out across concurrent `#emitSessionEvent` calls.
+	 * Extension emits only await when the event type has handlers, so an event
+	 * with no handlers could otherwise overtake an earlier event still inside
+	 * its extension emit — an instant refusal delivered its assistant
+	 * `message_end` to the TUI before its own `message_start`, skipping the
+	 * turn-ending error render entirely.
+	 */
+	#subscriberEmitGate: Promise<void> = Promise.resolve();
+
 	async #emitSessionEvent(event: AgentSessionEvent): Promise<void> {
 		if (event.type === "message_update") {
 			this.#emit(event);
 			void this.#queueExtensionEvent(event);
 			return;
 		}
-		await this.#emitExtensionEvent(event);
-		// Hold the wire-level agent_end until in-flight prompts unwind. Subscribers
-		// (rpc-mode, ACP, Cursor) treat agent_end as the "session is idle" signal;
-		// emitting while #promptInFlightCount > 0 lets a client fire its next
-		// `prompt` into a session that still reports isStreaming === true. Flush
-		// happens in #endInFlight / #resetInFlight. A later agent_end (e.g. from
-		// an auto-compaction turn that starts before the original prompt unwinds)
-		// supersedes the pending one, which is what subscribers want — they only
-		// care about the final settle.
-		if (event.type === "agent_end" && this.#promptInFlightCount > 0) {
-			this.#pendingAgentEndEmit = event;
-			return;
+		// Take a FIFO ticket before the extension emit: extension deliveries for
+		// consecutive events still run concurrently, but subscriber fan-out waits
+		// for every earlier event's fan-out (or deferral) to happen first.
+		const previousGate = this.#subscriberEmitGate;
+		const { promise: gate, resolve: releaseGate } = Promise.withResolvers<void>();
+		this.#subscriberEmitGate = gate;
+		try {
+			await this.#emitExtensionEvent(event);
+			await previousGate;
+			// Hold the wire-level agent_end until in-flight prompts unwind. Subscribers
+			// (rpc-mode, ACP, Cursor) treat agent_end as the "session is idle" signal;
+			// emitting while #promptInFlightCount > 0 lets a client fire its next
+			// `prompt` into a session that still reports isStreaming === true. Flush
+			// happens in #endInFlight / #resetInFlight. A later agent_end (e.g. from
+			// an auto-compaction turn that starts before the original prompt unwinds)
+			// supersedes the pending one, which is what subscribers want — they only
+			// care about the final settle.
+			if (event.type === "agent_end" && this.#promptInFlightCount > 0) {
+				this.#pendingAgentEndEmit = event;
+				return;
+			}
+			this.#emit(event);
+		} finally {
+			releaseGate();
 		}
-		this.#emit(event);
 	}
 
 	// Track last assistant message for auto-compaction check
 	#lastAssistantMessage: AssistantMessage | undefined = undefined;
+	/**
+	 * Classifier-refusal turn pruned from active context at settle (#3591).
+	 * Retained until the next run starts so post-settle readers
+	 * ({@link getLastAssistantMessage}: print mode, task executor) still see
+	 * the terminal error instead of a silently successful-looking state.
+	 */
+	#prunedTerminalRefusal: AssistantMessage | undefined = undefined;
 
 	/** Internal handler for agent events - shared by subscribe and reconnect.
 	 *
