@@ -122,6 +122,7 @@ Environment variables are **not** a single settings layer. Each is read by the f
 | `OMP_AUTH_BROKER_URL` | `auth.broker.url` | Env value takes precedence over config. |
 | `OMP_AUTH_BROKER_TOKEN` | `auth.broker.token` | Env value takes precedence over config. |
 | `PI_CODING_AGENT_DIR` | (relocates agent dir) | Moves `config.yml`, `agent.db`, and the whole agent base. |
+| `PI_CONFIG_FILES` | CLI config overlays | Platform path-list (`:` on Unix, `;` on Windows); files load in order before `--config` overlays. |
 
 Provider API keys are resolved separately (stored auth, OAuth, `models.yml`, environment, and `.env` files); see [Providers](./providers.md) and the full [Environment variables](./environment-variables.md) reference.
 
@@ -216,6 +217,10 @@ Use `--config` for a temporary layer that should not persist:
 omp --config ./local/ci-settings.yml "check this failure"
 omp --config ./base.yml --config ./experiment.yml "try this model"
 ```
+
+`--config` is accepted by the default launch command, `acp`, and `models`.
+
+Wrappers may instead set `PI_CONFIG_FILES` to a platform-delimited path list (`:` on Unix, `;` on Windows). Environment overlays load in listed order before explicit `--config` overlays.
 
 Overlay paths are resolved relative to the process working directory (and `~` is expanded). Each overlay must parse as a YAML mapping; a missing file, invalid YAML, or a top-level array/scalar is a hard error — it does **not** silently fall back to lower-precedence settings.
 
