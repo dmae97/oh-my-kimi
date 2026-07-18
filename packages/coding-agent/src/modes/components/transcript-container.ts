@@ -167,6 +167,7 @@ export class TranscriptContainer
 	// final: the leading finalized blocks plus the first live block's declared
 	// settled rows. TUI commits rows to native scrollback only above it.
 	#nativeScrollbackLiveRegionStart: number | undefined;
+	#nativeScrollbackLiveRegionPinned = false;
 	// Persistent assembled transcript rows. Rows before the stable floor are
 	// byte-identical to the previous render; rows at/after it were re-pushed.
 	#lines: string[] = [];
@@ -227,6 +228,11 @@ export class TranscriptContainer
 
 	getNativeScrollbackLiveRegionStart(): number | undefined {
 		return this.#nativeScrollbackLiveRegionStart;
+	}
+
+	/** Propagates viewport pinning from the first still-mutating transcript block. */
+	isNativeScrollbackLiveRegionPinned(): boolean {
+		return this.#nativeScrollbackLiveRegionPinned;
 	}
 
 	/**
@@ -316,6 +322,7 @@ export class TranscriptContainer
 	override render(width: number): readonly string[] {
 		width = Math.max(1, width);
 		this.#nativeScrollbackLiveRegionStart = undefined;
+		this.#nativeScrollbackLiveRegionPinned = false;
 
 		const count = this.children.length;
 
@@ -347,6 +354,10 @@ export class TranscriptContainer
 			if (!isBlockFinalized(this.children[i]!)) {
 				liveStartIndex = i;
 				hasLiveBlock = true;
+				this.#nativeScrollbackLiveRegionPinned =
+					(
+						this.children[i] as Component & Partial<NativeScrollbackLiveRegion>
+					).isNativeScrollbackLiveRegionPinned?.() === true;
 				break;
 			}
 		}

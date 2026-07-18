@@ -59,6 +59,12 @@ class SeamLineList extends LineList implements NativeScrollbackLiveRegion {
 	}
 }
 
+class PinnedSeamLineList extends SeamLineList {
+	isNativeScrollbackLiveRegionPinned(): boolean {
+		return true;
+	}
+}
+
 /**
  * Records the engine's committed-row claim visible at each render() call.
  * Pins the propagation contract: the claim must be fed *before* render so the
@@ -271,6 +277,43 @@ describe("streaming scrollback — visual record", () => {
 			tui.requestRender();
 			await settle(term);
 			expect(tape(term)).toEqual(rows("tool-", 10));
+		} finally {
+			tui.stop();
+		}
+	});
+
+	it("keeps a tall viewport-pinned wall out of scrollback until it finalizes", async () => {
+		if (process.platform === "win32") return;
+		const term = new VirtualTerminal(60, 8, 1_000);
+		overrideProbe(term, undefined);
+		const tui = new TUI(term);
+		const wall = new PinnedSeamLineList([]);
+
+		try {
+			tui.addChild(wall);
+			tui.start();
+			await settle(term);
+
+			const writes = capture(term);
+			let frame: string[] = [];
+			for (let tick = 0; tick < 6; tick++) {
+				frame = Array.from(
+					{ length: 14 },
+					(_unused, row) => `frame-${tick} worker-${Math.floor(row / 7)} row-${row % 7}`,
+				);
+				wall.setLines(frame);
+				tui.requestRender();
+				await settle(term);
+			}
+
+			expect(eraseScrollbackCount(writes)).toBe(0);
+			expect(term.getBufferPosition().baseY).toBe(0);
+			expect(tape(term)).toEqual(frame.slice(-8));
+
+			wall.seam = undefined;
+			tui.requestRender();
+			await settle(term);
+			expect(tape(term)).toEqual(frame);
 		} finally {
 			tui.stop();
 		}

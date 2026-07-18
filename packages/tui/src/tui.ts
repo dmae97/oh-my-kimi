@@ -194,17 +194,22 @@ export interface OverlayFocusOwner {
  * FINAL — byte-stable at the current width for the component's lifetime — and
  * commit to native scrollback as exact, audited content. Rows at/after the
  * boundary repaint in place inside the visible window; when they scroll above
- * the window top they still commit — the tape records what was on screen —
- * but as frozen visual snapshots that are permanently audit-exempt: later
- * re-layout of their source never re-anchors or recommits them. A root that
- * reports no seam commits everything that scrolls as final (shell semantics).
+ * the window top they normally commit as frozen visual snapshots.
+ *
+ * A viewport-pinned region opts out of those mutable snapshot commits. Its
+ * offscreen mutable rows are virtually clipped until the boundary advances;
+ * use this for fixed-height dashboards whose frames replace each other rather
+ * than append. A root that reports no seam commits everything that scrolls as
+ * final (shell semantics).
  *
  * When several root children report a seam in the same frame, the topmost one
- * defines the boundary: exactness is prefix-only, so everything below the
- * first seam is already excluded.
+ * defines the boundary and pinning policy: commits are prefix-only, so
+ * everything below the first seam is already excluded.
  */
 export interface NativeScrollbackLiveRegion {
 	getNativeScrollbackLiveRegionStart(): number | undefined;
+	/** Keeps the mutable suffix viewport-local instead of recording frozen snapshots. */
+	isNativeScrollbackLiveRegionPinned?(): boolean;
 }
 
 export interface NativeScrollbackCommittedRows {
@@ -639,11 +644,9 @@ interface CursorControlResult extends HardwareCursorUpdate {
 }
 
 /**
- * One root child's contribution to the composed frame: the array reference its
- * render() returned, the frame row it starts at, the row count recorded at
- * compose time (in-place mutators keep the reference but may change length),
- * and the child-local seam report captured at render time — replayed verbatim
- * when a component-scoped frame reuses this segment without re-rendering.
+ * One root child's contribution to the composed frame: its rendered rows,
+ * frame span, and live-region report captured at render time. Component-scoped
+ * frames replay the seam and viewport-pinning policy without re-rendering.
  */
 interface FrameSegment {
 	component: Component;
@@ -651,6 +654,7 @@ interface FrameSegment {
 	start: number;
 	rowCount: number;
 	liveLocalStart?: number;
+	liveRegionPinned: boolean;
 }
 
 /** Depth-first identity search through `Container`-shaped children. */
@@ -1042,6 +1046,7 @@ export class TUI extends Container {
 	// Exactly what is painted on the screen rows (post-composite, prepared).
 	#previousWindow: string[] = [];
 	#nativeScrollbackLiveRegionStart: number | undefined;
+	#nativeScrollbackLiveRegionPinned = false;
 	#fullRedrawCount = 0;
 	// Caps how many inline images render as live graphics; older ones fall back
 	// to text via a purge + full redraw. Cap is configured by the host app.
@@ -1166,6 +1171,7 @@ export class TUI extends Container {
 	override render(width: number): readonly string[] {
 		width = Math.max(1, width);
 		this.#nativeScrollbackLiveRegionStart = undefined;
+		this.#nativeScrollbackLiveRegionPinned = false;
 		const children = this.children;
 		const previousSegments = this.#frameSegments;
 		const segments: FrameSegment[] = new Array(children.length);
@@ -1186,10 +1192,12 @@ export class TUI extends Container {
 				partialRoots !== null && previous !== undefined && previous.component === child && !partialRoots.has(child);
 			let childLines: readonly string[];
 			let liveLocalStart: number | undefined;
+			let liveRegionPinned = false;
 			let reported: number | undefined;
 			if (reuse) {
 				childLines = previous.lines;
 				liveLocalStart = previous.liveLocalStart;
+				liveRegionPinned = previous.liveRegionPinned;
 			} else {
 				// Feed the engine's committed-row claim (from the previous frame's
 				// emit) before rendering so the child can skip re-deriving blocks
@@ -1209,6 +1217,11 @@ export class TUI extends Container {
 						? Math.max(0, Math.min(childLines.length, Math.trunc(liveRegionStart)))
 						: childLines.length;
 				}
+				if (liveLocalStart !== undefined) {
+					liveRegionPinned =
+						(child as Component & Partial<NativeScrollbackLiveRegion>).isNativeScrollbackLiveRegionPinned?.() ===
+						true;
+				}
 				// Consume the stability report unconditionally for implementers:
 				// reading re-bases the component's baseline to the state this
 				// compose is about to ingest (used or not, the current rows are
@@ -1225,6 +1238,7 @@ export class TUI extends Container {
 			// history.
 			if (liveLocalStart !== undefined && this.#nativeScrollbackLiveRegionStart === undefined) {
 				this.#nativeScrollbackLiveRegionStart = offset + liveLocalStart;
+				this.#nativeScrollbackLiveRegionPinned = liveRegionPinned;
 			}
 			if (chainStable) {
 				if (previous !== undefined && previous.component === child && previous.start === offset) {
@@ -1253,6 +1267,7 @@ export class TUI extends Container {
 				start: offset,
 				rowCount: childLines.length,
 				liveLocalStart,
+				liveRegionPinned,
 			};
 			offset += childLines.length;
 		}
@@ -2881,6 +2896,7 @@ export class TUI extends Container {
 		// known. Ascending by frame row.
 		const cursorMarkers = this.#frameCursorMarkers;
 		const liveRegionStart = this.#nativeScrollbackLiveRegionStart;
+		const liveRegionPinned = this.#nativeScrollbackLiveRegionPinned;
 
 		// Exactness boundary (used by the audit-zone math below). Rows below it
 		// are declared FINAL by the component seam: when they commit, they enter
@@ -3007,7 +3023,7 @@ export class TUI extends Container {
 		if (fullPaint) {
 			committedPrefixResliced = true;
 			windowTop = Math.max(0, frameLength - height);
-			chunkTo = windowTop;
+			chunkTo = liveRegionPinned ? Math.min(windowTop, finalBoundary) : windowTop;
 		} else if (
 			frameLength <= this.#committedRows ||
 			(committedRowsResynced &&
@@ -3027,7 +3043,7 @@ export class TUI extends Container {
 			// "duplication, never loss" is the ED3-unsafe fallback contract.
 			committedPrefixResliced = true;
 			windowTop = Math.max(0, frameLength - height);
-			chunkTo = windowTop;
+			chunkTo = liveRegionPinned ? Math.min(windowTop, finalBoundary) : windowTop;
 			this.#committedRows = chunkTo;
 			this.#committedPrefix = rawFrame.slice(0, chunkTo);
 		} else {
@@ -3046,7 +3062,12 @@ export class TUI extends Container {
 			// history — and re-bases the audit prefix at the new width so the
 			// accepted wrap drift does not read as a violation on the next
 			// ordinary frame.
-			chunkTo = hasVisibleOverlay || geometryChanged ? this.#committedRows : windowTop;
+			chunkTo =
+				hasVisibleOverlay || geometryChanged
+					? this.#committedRows
+					: liveRegionPinned
+						? Math.min(windowTop, Math.max(this.#committedRows, finalBoundary))
+						: windowTop;
 			if (geometryChanged) {
 				committedPrefixResliced = true;
 				this.#committedPrefix = rawFrame.slice(0, this.#committedRows);

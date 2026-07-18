@@ -36,6 +36,9 @@
 - Fixed Markdown rendering incorrectly turning local file paths containing `www.` or protocol sequences into HTTP links by requiring a valid GFM left boundary for autolinks.
 - Fixed terminal resize behavior by restoring alternate-screen rendering during drag frames, preventing wrapped fragments from polluting native scrollback while preserving the overlay-exit flicker fix.
 - Added optional right-border scrollbar to the `Editor` component (`setScrollbarVisible`): shows a thumb glyph on the right border when content overflows `maxHeight`, enabling scrollable multi-line editors (e.g. advisor instructions) without losing the submit hint off-screen.
+### Fixed
+
+- Added viewport-pinned live regions so replacing dashboard frames can stay out of immutable native scrollback until they finalize ([#5777](https://github.com/can1357/oh-my-pi/issues/5777)).
 
 ## [17.0.1] - 2026-07-16
 
