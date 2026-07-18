@@ -194,24 +194,41 @@ export interface RuntimeResolverOptions {
  * runtime caches. Stock resolution is tried first and kept for anything
  * outside the registered roots (bundled imports, node builtins, host or
  * extension trees). Multiple runtime roots may register; they are consulted
- * in registration order.
+ * in registration order. Returns an uninstaller that drops the registration
+ * and restores the stock resolver once no registrations remain.
  *
  * One stock "success" is distrusted: the compiled-binary resolver ignores
  * `main`/`exports` for real-FS packages (Bun #1763), so a package shipping
  * its TS source next to `dist/` (e.g. `@huggingface/hub`'s root `index.ts`)
  * resolves to the wrong file. When the stock hit lands inside a registered
  * runtime root, the manifest-aware resolution wins.
+ *
+ * KNOWN LIMITATION (Bun 1.3.14): while any JS override of
+ * `Module._resolveFilename` is installed, Bun routes `createRequire(...)`
+ * resolution through it with `parent === undefined` — the requester context is
+ * never passed, so relative requires from a `createRequire` require fail with
+ * "Cannot find module './x' from ''". The override cannot recover what it is
+ * never given. Keep this patch scoped to dedicated worker/runtime processes
+ * (tiny-inference, fastembed); never install it in the main agent process,
+ * where legacy-pi extensions rely on `createRequire` relative requires.
  */
-export function installRuntimeModuleResolver({ runtimeNodeModules, stubs = {} }: RuntimeResolverOptions): void {
+export function installRuntimeModuleResolver({ runtimeNodeModules, stubs = {} }: RuntimeResolverOptions): () => void {
 	const registry = resolverRegistry();
 	const existing = registry.find(entry => entry.runtimeNodeModules === runtimeNodeModules);
 	if (existing) Object.assign(existing.stubs, stubs);
 	else registry.push({ runtimeNodeModules, stubs: { ...stubs } });
 
 	const resolver = (Module as unknown as { default?: ModuleResolver } & ModuleResolver).default ?? Module;
-	const target = resolver as unknown as ModuleResolver & { [PATCHED]?: boolean };
-	if (target[PATCHED]) return;
-	const original = target._resolveFilename.bind(target);
+	const target = resolver as unknown as ModuleResolver & { [PATCHED]?: () => void };
+	const uninstall = (): void => {
+		const entries = resolverRegistry();
+		const index = entries.findIndex(entry => entry.runtimeNodeModules === runtimeNodeModules);
+		if (index !== -1) entries.splice(index, 1);
+		if (entries.length === 0) target[PATCHED]?.();
+	};
+	if (target[PATCHED]) return uninstall;
+	const pristine = target._resolveFilename;
+	const original = pristine.bind(target);
 	target._resolveFilename = (request: string, parent: unknown, isMain: boolean, options?: unknown): string => {
 		let stockResolved: string | null = null;
 		let stockError: unknown;
@@ -256,7 +273,11 @@ export function installRuntimeModuleResolver({ runtimeNodeModules, stubs = {} }:
 		if (stockResolved) return stockResolved;
 		throw stockError;
 	};
-	target[PATCHED] = true;
+	target[PATCHED] = () => {
+		target._resolveFilename = pristine;
+		delete target[PATCHED];
+	};
+	return uninstall;
 }
 
 /** Pinned dependency set materialized into a runtime cache directory. */

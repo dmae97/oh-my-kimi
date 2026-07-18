@@ -17,8 +17,13 @@ import {
 // stock compiled-binary resolver gets wrong (Bun #1763).
 
 const tempDirs: string[] = [];
+const resolverUninstalls: Array<() => void> = [];
 
 afterEach(async () => {
+	// Restore the process-wide module resolver first: a leaked patch breaks
+	// `createRequire` relative requires for every later test file (Bun invokes
+	// a JS `_resolveFilename` override with `parent === undefined`).
+	for (const uninstall of resolverUninstalls.splice(0)) uninstall();
 	await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -162,7 +167,9 @@ describe("installRuntimeModuleResolver", () => {
 		const sharpStub = path.join(runtimeDir, "sharp-stub.cjs");
 		await Bun.write(sharpStub, "module.exports = {};\n");
 
-		installRuntimeModuleResolver({ runtimeNodeModules: nodeModules, stubs: { sharp: sharpStub } });
+		resolverUninstalls.push(
+			installRuntimeModuleResolver({ runtimeNodeModules: nodeModules, stubs: { sharp: sharpStub } }),
+		);
 
 		const moduleWithResolver = Module as unknown as { default?: ResolveFilenameModule } & ResolveFilenameModule;
 		const resolver = moduleWithResolver.default ?? moduleWithResolver;
@@ -171,6 +178,38 @@ describe("installRuntimeModuleResolver", () => {
 			path.join(nodeModules, "@huggingface", "transformers", "dist", "transformers.node.cjs"),
 		);
 		expect(resolver._resolveFilename("sharp", runtimeParent, false)).toBe(sharpStub);
+	});
+
+	test("uninstall restores the stock resolver and createRequire relative requires", async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-runtime-uninstall-"));
+		tempDirs.push(root);
+		await fs.writeFile(path.join(root, "config.js"), 'module.exports = { value: "config-ok" };\n');
+		await fs.writeFile(
+			path.join(root, "entry.mjs"),
+			[
+				'import { createRequire } from "node:module";',
+				"const req = createRequire(import.meta.url);",
+				'const { value } = req("./config.js");',
+				"export { value };",
+			].join("\n"),
+		);
+		const runtimeNodeModules = path.join(root, "runtime", "node_modules");
+		await fs.mkdir(runtimeNodeModules, { recursive: true });
+
+		const moduleWithResolver = Module as unknown as { default?: ResolveFilenameModule } & ResolveFilenameModule;
+		const resolver = moduleWithResolver.default ?? moduleWithResolver;
+		const pristine = resolver._resolveFilename;
+
+		const uninstall = installRuntimeModuleResolver({ runtimeNodeModules });
+		expect(resolver._resolveFilename).not.toBe(pristine);
+		uninstall();
+		expect(resolver._resolveFilename).toBe(pristine);
+
+		// With the stock resolver restored, createRequire-relative requires work.
+		// Dynamic import: the module is a runtime-generated temp file, and the test
+		// intentionally exercises the module-loading boundary the patch breaks.
+		const mod = (await import(path.join(root, "entry.mjs"))) as { value: string };
+		expect(mod.value).toBe("config-ok");
 	});
 });
 
