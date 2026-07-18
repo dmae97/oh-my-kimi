@@ -368,6 +368,15 @@ def test_migration_adds_classification_to_existing_db(tmp_path: Path) -> None:
     assert row.classification is None  # column exists, default NULL
     database.set_issue_classification("octo/widget#1", "bug")
     assert database.get_issue("octo/widget#1").classification == "bug"
+    assert database.record_event(
+        delivery_id="deferred",
+        event_type="issues",
+        repo="octo/widget",
+        issue_key="octo/widget#2",
+        payload={"action": "opened"},
+        state="deferred",
+    )
+    assert database.get_event("deferred").state == "deferred"
     database.close()
 
 
@@ -464,6 +473,39 @@ def test_admit_submission_dedupes_by_delivery_before_rate_limit(db: Database) ->
     assert not rejected.duplicate
     assert rejected.used == 1
     assert db.count_submissions_since("alice", since) == 1
+
+
+def test_deferred_submissions_are_promoted_oldest_first_when_capacity_frees(db: Database) -> None:
+    since = iso_seconds_ago(60)
+    for i in range(2):
+        assert db.record_submission(delivery_id=f"accepted-{i}", login="Alice", repo="octo/widget")
+    for i in range(2):
+        assert db.defer_submission_event(
+            delivery_id=f"deferred-{i}",
+            event_type="issues",
+            login="alice",
+            repo="octo/widget",
+            issue_key=f"octo/widget#{i + 10}",
+            payload={"action": "opened"},
+            cap=2,
+            reason="rate limit",
+        )
+
+    newer = db.admit_submission(
+        delivery_id="newer",
+        login="alice",
+        repo="octo/widget",
+        since=iso_seconds_ago(-1),
+        cap=2,
+    )
+    assert not newer.accepted
+    assert db.promote_deferred_submissions(since=iso_seconds_ago(-1)) == 2
+
+    first = db.claim_next_event()
+    second = db.claim_next_event()
+    assert first is not None and first.delivery_id == "deferred-0"
+    assert second is not None and second.delivery_id == "deferred-1"
+    assert db.count_submissions_since("alice", since) == 4
 
 
 def test_admit_submission_enforces_cap_atomically_across_connections(tmp_path: Path) -> None:

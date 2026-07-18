@@ -112,8 +112,8 @@ def test_api_status_reports_runtime_counts_and_inflight(settings: Settings) -> N
     assert runtime["uptime_seconds"] >= 0
 
     counts = body["event_counts"]
-    # All five buckets must be present even when zero — the UI relies on it.
-    assert set(counts) == {"queued", "running", "done", "failed", "skipped"}
+    # All six buckets must be present even when zero — the UI relies on it.
+    assert set(counts) == {"queued", "deferred", "running", "done", "failed", "skipped"}
     assert counts["queued"] + counts["running"] == 2  # d-queued + d-running
     assert counts["skipped"] == 1
     assert counts["running"] >= 1
@@ -905,9 +905,9 @@ def rate_limited_settings(monkeypatch: pytest.MonkeyPatch, env: dict[str, str]) 
 def test_webhook_rate_limits_unknown_submitter_at_default_cap(rate_limited_settings: Settings) -> None:
     app = create_app(rate_limited_settings)
     with TestClient(app) as client:
-        # Default cap is 2 → first two queued, third throttled.
+        # Default cap is 2 → two queue, two enter the bounded backlog, then overflow skips.
         states = []
-        for i in range(3):
+        for i in range(5):
             resp = _post_issue_opened(
                 client,
                 delivery=f"d-{i}",
@@ -918,7 +918,7 @@ def test_webhook_rate_limits_unknown_submitter_at_default_cap(rate_limited_setti
             assert resp.status_code == 202
             states.append(resp.json()["state"])
     close_database()
-    assert states == ["queued", "queued", "skipped"]
+    assert states == ["queued", "queued", "deferred", "deferred", "skipped"]
 
 
 def test_webhook_incoming_pr_comment_without_directive_skips_without_counting_budget(
@@ -955,7 +955,7 @@ def test_webhook_incoming_pr_comment_without_directive_skips_without_counting_bu
     assert unmapped is not None
     assert unmapped.issue_key == "octo/widget#900"
     assert "incoming PR comments ignored" in (unmapped.last_error or "")
-    assert states == ["queued", "queued", "skipped"]
+    assert states == ["queued", "queued", "deferred"]
 
 
 def test_webhook_delivery_populates_issue_index(settings: Settings) -> None:
@@ -1015,7 +1015,7 @@ def test_webhook_contributor_gets_higher_cap(rate_limited_settings: Settings) ->
             number=299,
             association="CONTRIBUTOR",
         )
-        assert resp.json()["state"] == "skipped"
+        assert resp.json()["state"] == "deferred"
     close_database()
 
 
@@ -1066,7 +1066,7 @@ def test_webhook_rate_limit_per_user_is_independent(rate_limited_settings: Setti
                 ).json()["state"]
                 == "queued"
             )
-        # alice's next attempt is skipped.
+        # alice's next attempt is deferred.
         assert (
             _post_issue_opened(
                 client,
@@ -1075,7 +1075,7 @@ def test_webhook_rate_limit_per_user_is_independent(rate_limited_settings: Setti
                 number=599,
                 association="NONE",
             ).json()["state"]
-            == "skipped"
+            == "deferred"
         )
         # bob is untouched.
         for i in range(2):
@@ -1105,13 +1105,13 @@ def test_webhook_rate_limited_event_records_reason(rate_limited_settings: Settin
                 association="NONE",
             )
         db = get_database(rate_limited_settings.sqlite_path)
-        skipped = db.get_event("r-2")
+        deferred = db.get_event("r-2")
     close_database()
-    assert skipped is not None
-    assert skipped.state == "skipped"
-    assert skipped.last_error is not None
-    assert "rate limit" in skipped.last_error
-    assert "@charlie" in skipped.last_error
+    assert deferred is not None
+    assert deferred.state == "deferred"
+    assert deferred.last_error is not None
+    assert "rate limit" in deferred.last_error
+    assert "@charlie" in deferred.last_error
 
 
 # ---------- /api/github/issues ----------
