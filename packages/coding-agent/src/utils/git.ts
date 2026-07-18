@@ -1438,17 +1438,20 @@ export async function detachGitDir(worktreeRoot: string, sourceCommonDir: string
 	if (isoCommon !== parentCommon) return "independent";
 
 	// Snapshot the state the standalone repo must preserve. HEAD may be a branch
-	// ref (normal checkout) or detached; refs are frozen so `baseSha..branch`
-	// ranges and history reads keep resolving after the source moves on.
+	// ref (normal checkout), detached, or unborn (a fresh/orphan branch with no
+	// commits — a linked worktree still shares the parent ref namespace, so it
+	// must be severed too). Refs are frozen so `baseSha..branch` ranges and
+	// history reads keep resolving after the source moves on.
 	const headSha = (await tryText(worktreeRoot, ["rev-parse", "HEAD"], { readOnly: true }))?.trim() ?? "";
-	if (!headSha) return "independent"; // unborn HEAD: no shared state to sever
 	const headRef = (await tryText(worktreeRoot, ["symbolic-ref", "-q", "HEAD"], { readOnly: true }))?.trim() ?? "";
 	const stagedTree = (await runText(worktreeRoot, ["write-tree"], {})).trim();
-	const refDump = (
-		await runText(worktreeRoot, ["for-each-ref", "--format=%(objectname) %(refname)"], {
-			readOnly: true,
-		})
-	).trim();
+	const refDump = headSha
+		? (
+				await runText(worktreeRoot, ["for-each-ref", "--format=%(objectname) %(refname)"], {
+					readOnly: true,
+				})
+			).trim()
+		: "";
 	const objectFormat =
 		(await tryText(worktreeRoot, ["rev-parse", "--show-object-format"], { readOnly: true }))?.trim() || "sha1";
 	const userName = await config.get(worktreeRoot, "user.name");
@@ -1472,7 +1475,13 @@ export async function detachGitDir(worktreeRoot: string, sourceCommonDir: string
 	await fs.promises.rm(gitEntry, { recursive: true, force: true });
 	if (ownWorktreeAdmin) await fs.promises.rm(ownWorktreeAdmin, { recursive: true, force: true });
 
-	await runEffect(worktreeRoot, ["init", "--object-format", objectFormat, "-q"]);
+	// Preserve the checked-out branch name so an unborn HEAD (fresh/orphan
+	// branch with no commits) keeps its symbolic ref after `init` rather than
+	// snapping to the init default; born HEADs get the ref rewritten below anyway.
+	const initArgs = ["init", "--object-format", objectFormat, "-q"];
+	const initialBranch = headRef.startsWith(LOCAL_BRANCH_PREFIX) ? headRef.slice(LOCAL_BRANCH_PREFIX.length) : "";
+	if (initialBranch) initArgs.push("-b", initialBranch);
+	await runEffect(worktreeRoot, initArgs);
 	const objectsInfo = path.join(gitEntry, "objects", "info");
 	await fs.promises.mkdir(objectsInfo, { recursive: true });
 	const alternates = [path.join(parentCommon, "objects")];
@@ -1486,21 +1495,28 @@ export async function detachGitDir(worktreeRoot: string, sourceCommonDir: string
 	}
 	await Bun.write(path.join(objectsInfo, "alternates"), `${alternates.join("\n")}\n`);
 
-	// Freeze refs. Point HEAD at the raw SHA first so `update-ref` writes land
-	// even for the branch HEAD currently names, then restore the symbolic HEAD.
-	await Bun.write(path.join(gitEntry, "HEAD"), `${headSha}\n`);
-	if (refDump) {
-		const commands = refDump
-			.split("\n")
-			.filter(Boolean)
-			.map(line => {
-				const sep = line.indexOf(" ");
-				return `create ${line.slice(sep + 1)} ${line.slice(0, sep)}`;
-			})
-			.join("\n");
-		await runEffect(worktreeRoot, ["update-ref", "--stdin"], { stdin: `${commands}\n` });
+	// Freeze refs when HEAD is born. Point HEAD at the raw SHA first so
+	// `update-ref` writes land even for the branch HEAD currently names, then
+	// restore the symbolic HEAD. An unborn HEAD has no refs to freeze; `init -b`
+	// above already set the symbolic HEAD to the unborn branch.
+	if (headSha) {
+		await Bun.write(path.join(gitEntry, "HEAD"), `${headSha}\n`);
+		if (refDump) {
+			const commands = refDump
+				.split("\n")
+				.filter(Boolean)
+				.map(line => {
+					const sep = line.indexOf(" ");
+					return `create ${line.slice(sep + 1)} ${line.slice(0, sep)}`;
+				})
+				.join("\n");
+			await runEffect(worktreeRoot, ["update-ref", "--stdin"], { stdin: `${commands}\n` });
+		}
+		if (headRef) await Bun.write(path.join(gitEntry, "HEAD"), `ref: ${headRef}\n`);
+	} else if (headRef && !initialBranch) {
+		// Unborn detached HEAD (no branch, no commit) — restore the raw ref target.
+		await Bun.write(path.join(gitEntry, "HEAD"), `ref: ${headRef}\n`);
 	}
-	if (headRef) await Bun.write(path.join(gitEntry, "HEAD"), `ref: ${headRef}\n`);
 
 	// Carry the source identity so isolated commits have an author.
 	if (userName) await config.set(worktreeRoot, "user.name", userName);

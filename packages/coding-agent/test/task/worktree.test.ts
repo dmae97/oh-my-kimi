@@ -648,6 +648,40 @@ describe("detachGitDir", () => {
 		expect(await Bun.file(path.join(iso, ".git", "objects", "info", "alternates")).exists()).toBe(false);
 	});
 
+	it("severs a copied linked-worktree whose HEAD is unborn (no commits on the branch)", async () => {
+		const { wt, commonDir } = await makeLinkedWorktree();
+		// Switch the linked worktree to a fresh orphan branch: HEAD is now unborn
+		// (a symbolic ref with no commit) yet still resolves through the shared
+		// common dir, so a task's first commit would otherwise land in the parent.
+		await runGit(wt, ["checkout", "--orphan", "fresh-orphan"]);
+		await runGit(wt, ["rm", "-rf", "--cached", "."]);
+		await fs.rm(path.join(wt, "file.txt"), { force: true });
+		await fs.writeFile(path.join(wt, "staged.txt"), "staged\n");
+		await runGit(wt, ["add", "staged.txt"]);
+		const iso = await copyTree(wt);
+		const statusBefore = await runGit(iso, ["status", "--porcelain=v1"]);
+
+		expect(await git.detachGitDir(iso, commonDir)).toBe("detached");
+		// The unborn branch name is preserved and the common dir is now private.
+		expect(await runGit(iso, ["symbolic-ref", "HEAD"])).toBe("refs/heads/fresh-orphan");
+		const isoCommon = path.resolve(
+			(await runGit(iso, ["rev-parse", "--path-format=absolute", "--git-common-dir"])).trim(),
+		);
+		expect(isoCommon).not.toBe(commonDir);
+		// Staged state survives.
+		expect(await runGit(iso, ["status", "--porcelain=v1"])).toBe(statusBefore);
+
+		// The task makes its first branch + commit.
+		await runGit(iso, ["checkout", "-q", "-b", "feature/a"]);
+		await fs.writeFile(path.join(iso, "a.txt"), "task a\n");
+		await runGit(iso, ["add", "a.txt"]);
+		await runGit(iso, ["commit", "-q", "-m", "task a"]);
+
+		// The parent worktree keeps its unborn orphan HEAD; no task branch leaked.
+		expect(await runGit(wt, ["symbolic-ref", "HEAD"])).toBe("refs/heads/fresh-orphan");
+		expect(await runGit(wt, ["branch", "--format=%(refname:short)"])).not.toContain("feature/a");
+	});
+
 	it("keeps ensureIsolation from mutating a linked-worktree parent (rcopy backend)", async () => {
 		const { wt, baseSha } = await makeLinkedWorktree();
 		vi.spyOn(natives, "isoResolve").mockReturnValue({
