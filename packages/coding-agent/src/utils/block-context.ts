@@ -266,54 +266,6 @@ export function findBlockContextLines(
 	return nativeBlockContext(fullLines, visible, source) ?? lexicalBracketContext(fullLines, visible);
 }
 
-interface LineEntryOptions {
-	lineText?: (lineNumber: number, sourceText: string, context: boolean) => string;
-}
-
-function buildEntries(
-	fullLines: readonly string[],
-	visible: ReadonlySet<number>,
-	context: ReadonlyMap<number, string> | undefined,
-	options: LineEntryOptions,
-): LineEntry[] {
-	const sorted = [...visible];
-	if (context) {
-		for (const lineNumber of context.keys()) {
-			if (!visible.has(lineNumber)) sorted.push(lineNumber);
-		}
-	}
-	sorted.sort((left, right) => left - right);
-
-	const entries: LineEntry[] = [];
-	let previousLine: number | undefined;
-	for (const lineNumber of sorted) {
-		if (previousLine !== undefined && lineNumber > previousLine + 1) {
-			entries.push({ kind: "ellipsis" });
-		}
-		const sourceText = fullLines[lineNumber - 1] ?? "";
-		const isContext = context?.has(lineNumber) === true;
-		entries.push({
-			kind: "line",
-			lineNumber,
-			text: options.lineText?.(lineNumber, sourceText, isContext) ?? sourceText,
-			context: isContext,
-		});
-		previousLine = lineNumber;
-	}
-
-	return entries;
-}
-
-/** Build display entries for exactly the requested spans, separated by ellipses. */
-export function buildLineEntries(
-	fullLines: readonly string[],
-	visibleSpans: readonly LineSpan[],
-	options: LineEntryOptions = {},
-): LineEntry[] {
-	const spans = normalizeLineSpans(visibleSpans, fullLines.length);
-	return buildEntries(fullLines, visibleLineNumbers(spans), undefined, options);
-}
-
 /**
  * Build display entries for `visibleSpans` plus any off-window block-boundary
  * lines, in source order, with `{ kind: "ellipsis" }` markers inserted across
@@ -324,11 +276,35 @@ export function buildLineEntriesWithBlockContext(
 	fullLines: readonly string[],
 	visibleSpans: readonly LineSpan[],
 	source: BlockContextSource = {},
-	options: LineEntryOptions = {},
+	options: {
+		lineText?: (lineNumber: number, sourceText: string, context: boolean) => string;
+	} = {},
 ): LineEntry[] {
 	const spans = normalizeLineSpans(visibleSpans, fullLines.length);
 	const visible = visibleLineNumbers(spans);
-	return buildEntries(fullLines, visible, findBlockContextLines(fullLines, visible, source), options);
+	const context = findBlockContextLines(fullLines, visible, source);
+	const allLines = new Set<number>(visible);
+	for (const lineNumber of context.keys()) allLines.add(lineNumber);
+
+	const sorted = [...allLines].sort((left, right) => left - right);
+	const entries: LineEntry[] = [];
+	let previousLine: number | undefined;
+	for (const lineNumber of sorted) {
+		if (previousLine !== undefined && lineNumber > previousLine + 1) {
+			entries.push({ kind: "ellipsis" });
+		}
+		const sourceText = fullLines[lineNumber - 1] ?? "";
+		const isContext = context.has(lineNumber);
+		entries.push({
+			kind: "line",
+			lineNumber,
+			text: options.lineText?.(lineNumber, sourceText, isContext) ?? sourceText,
+			context: isContext,
+		});
+		previousLine = lineNumber;
+	}
+
+	return entries;
 }
 
 export function lineEntriesToPlainText(entries: readonly LineEntry[], ellipsis = "…"): string {

@@ -77,7 +77,6 @@ describe("read tool large artifact handling", () => {
 
 		expect(output).toContain("line-001");
 		expect(output).toContain("line-003");
-		expect(output).not.toContain("line-004");
 		expect(output).toContain("Artifact storage:");
 		expect(output).toContain("artifact://0:raw:N-M");
 		expect(output).not.toContain("line-400");

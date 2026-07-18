@@ -131,6 +131,7 @@
 ### Added
 
 - Added `PI_CONFIG_FILES`, a platform-delimited (`:` on Unix, `;` on Windows) environment path-list of settings overlays loaded before `--config` overlays, so wrapper scripts can inject settings without argv surgery ([#5685](https://github.com/can1357/oh-my-pi/issues/5685)).
+- Fixed the `/extensions` dashboard tab labeled "Agents (standard)" being confused with the `/agents` subagents feature — the `.agent`/`.agents` config-standard provider now presents as "Agent Dirs (.agent/.agents)" since it lists skills, rules, prompts, commands, and context/system files, never subagents ([#5821](https://github.com/can1357/oh-my-pi/issues/5821)).
 
 ## [17.0.2] - 2026-07-17
 
