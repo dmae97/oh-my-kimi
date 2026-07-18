@@ -537,6 +537,15 @@ class DaemonBroker {
 			if (error) record.log?.append(`PTY output error: ${error.message}\n`);
 			if (chunk) this.#onOutput(record, generation, chunk);
 		};
+		const started = Promise.withResolvers<number | undefined>();
+		const onStart = (error: Error | null, pid: number): void => {
+			if (error) {
+				record.log?.append(`PTY startup callback failed: ${error.message}\n`);
+				started.resolve(undefined);
+				return;
+			}
+			started.resolve(Number.isSafeInteger(pid) && pid > 0 ? pid : undefined);
+		};
 		let run: Promise<PtyRunResult>;
 		if (process.platform === "win32") {
 			run = session.startArgv(
@@ -546,41 +555,29 @@ class DaemonBroker {
 					...options,
 				},
 				onChunk,
+				onStart,
 			);
 		} else {
-			const pidPath = path.join(record.dir, "process.pid");
-			await fs.rm(pidPath, { force: true });
 			const argv = [record.spec.application, ...record.spec.args];
-			const command = [
-				`printf '%s' "$$" > ${quoteShellArg(pidPath)}`,
-				`exec ${argv.map(quoteShellArg).join(" ")}`,
-			].join("; ");
+			const command = `exec ${argv.map(quoteShellArg).join(" ")}`;
 			const shell = procmgr.getShellConfig().shell;
-			run = session.start({ command, shell, ...options }, onChunk);
+			run = session.start({ command, shell, ...options }, onChunk, onStart);
 		}
-		void run
-			.then(result => this.#onPtyExit(record, generation, result))
-			.catch(error =>
-				this.#settle(record, generation, undefined, error instanceof Error ? error.message : String(error)),
-			);
+		void run.then(
+			async result => {
+				await this.#onPtyExit(record, generation, result);
+				started.resolve(undefined);
+			},
+			async error => {
+				await this.#settle(record, generation, undefined, error instanceof Error ? error.message : String(error));
+				started.resolve(undefined);
+			},
+		);
 
-		if (process.platform === "win32") return;
-		const pidPath = path.join(record.dir, "process.pid");
-		const deadline = Date.now() + 5_000;
-		const pidFile = Bun.file(pidPath);
-		while (Date.now() < deadline && generation === record.generation) {
-			try {
-				const pid = Number.parseInt((await pidFile.text()).trim(), 10);
-				if (Number.isSafeInteger(pid) && pid > 0) {
-					record.snapshot.pid = pid;
-					this.#persist(record);
-					return;
-				}
-			} catch (error) {
-				if (!isEnoent(error)) throw error;
-			}
-			if (terminalState(record.snapshot.state)) return;
-			await Bun.sleep(20);
+		const pid = await started.promise;
+		if (pid !== undefined && generation === record.generation) {
+			record.snapshot.pid = pid;
+			this.#persist(record);
 		}
 	}
 
