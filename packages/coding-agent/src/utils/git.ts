@@ -1380,6 +1380,137 @@ export async function writeTree(cwd: string, options: Pick<CommandOptions, "env"
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// API: worktree isolation
+// ════════════════════════════════════════════════════════════════════════════
+
+/** Outcome of {@link detachGitDir}. */
+export type DetachGitDirResult =
+	/** `worktreeRoot` had no `.git`; nothing to detach. */
+	| "no-git"
+	/** `.git` already resolves to an independent object DB — left untouched. */
+	| "independent"
+	/** Detached into a standalone repo borrowing `sourceCommonDir`'s objects. */
+	| "detached";
+
+/**
+ * Sever a copied/mounted working tree from the git metadata it shares with a
+ * source checkout, turning it into a standalone repository that borrows the
+ * source object database through `objects/info/alternates`.
+ *
+ * Isolation backends (reflink/apfs/btrfs/rcopy…) materialise `merged` by
+ * copying `worktreeRoot` byte-for-byte. When `worktreeRoot` is a **linked git
+ * worktree** its `.git` is a pointer file (`gitdir: …/worktrees/<name>`), so
+ * the copy still resolves HEAD/index/refs through the source repo — a task's
+ * `git checkout`/`commit` inside the isolation then mutates the *parent*
+ * checkout. The rcopy `git worktree add` path leaks the other way: task
+ * branches land in the shared ref namespace and stack on each other.
+ *
+ * After detaching, the working tree keeps its files verbatim while:
+ * - HEAD, refs, and the index are frozen to the snapshot at call time;
+ * - all commits/branches the task creates stay private to the isolation;
+ * - objects resolve against `sourceCommonDir` via alternates, so history reads
+ *   and later `git fetch <merged>` object transfer keep working;
+ * - the source checkout's HEAD, branch, index, and working tree are untouched.
+ *
+ * A full-copy `.git` (non-worktree source) already owns its object DB and is
+ * returned as `"independent"` without modification. `worktreeRoot` without a
+ * `.git` yields `"no-git"`.
+ */
+export async function detachGitDir(worktreeRoot: string, sourceCommonDir: string): Promise<DetachGitDirResult> {
+	ensureAvailable();
+	const gitEntry = path.join(worktreeRoot, ".git");
+	let entryStat: fs.Stats;
+	try {
+		entryStat = await fs.promises.lstat(gitEntry);
+	} catch (err) {
+		if (isEnoent(err)) return "no-git";
+		throw err;
+	}
+	const parentCommon = path.resolve(sourceCommonDir);
+	const isoCommon = path.resolve(
+		(
+			await runText(worktreeRoot, ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+				readOnly: true,
+			})
+		).trim(),
+	);
+	// A full-copy `.git` already resolves to its own object DB — leave it alone.
+	if (isoCommon !== parentCommon) return "independent";
+
+	// Snapshot the state the standalone repo must preserve. HEAD may be a branch
+	// ref (normal checkout) or detached; refs are frozen so `baseSha..branch`
+	// ranges and history reads keep resolving after the source moves on.
+	const headSha = (await tryText(worktreeRoot, ["rev-parse", "HEAD"], { readOnly: true }))?.trim() ?? "";
+	if (!headSha) return "independent"; // unborn HEAD: no shared state to sever
+	const headRef = (await tryText(worktreeRoot, ["symbolic-ref", "-q", "HEAD"], { readOnly: true }))?.trim() ?? "";
+	const stagedTree = (await runText(worktreeRoot, ["write-tree"], {})).trim();
+	const refDump = (
+		await runText(worktreeRoot, ["for-each-ref", "--format=%(objectname) %(refname)"], {
+			readOnly: true,
+		})
+	).trim();
+	const objectFormat =
+		(await tryText(worktreeRoot, ["rev-parse", "--show-object-format"], { readOnly: true }))?.trim() || "sha1";
+	const userName = await config.get(worktreeRoot, "user.name");
+	const userEmail = await config.get(worktreeRoot, "user.email");
+
+	// A pointer `.git` file whose worktree-admin dir back-references this exact
+	// tree is the rcopy `git worktree add` registration. Remove that admin entry
+	// so the source repo's worktree list stops tracking the isolation. A pointer
+	// referencing the *source's* admin (a copied linked-worktree `.git`) is not
+	// ours to delete — only the local pointer file is discarded.
+	let ownWorktreeAdmin: string | undefined;
+	if (entryStat.isFile()) {
+		const pointer = parseGitDirPointer((await readOptionalText(gitEntry)) ?? "");
+		if (pointer) {
+			const adminDir = path.resolve(path.dirname(gitEntry), pointer);
+			const backRef = (await readOptionalText(path.join(adminDir, "gitdir")))?.trim();
+			if (backRef && path.resolve(backRef) === path.resolve(gitEntry)) ownWorktreeAdmin = adminDir;
+		}
+	}
+
+	await fs.promises.rm(gitEntry, { recursive: true, force: true });
+	if (ownWorktreeAdmin) await fs.promises.rm(ownWorktreeAdmin, { recursive: true, force: true });
+
+	await runEffect(worktreeRoot, ["init", "--object-format", objectFormat, "-q"]);
+	const objectsInfo = path.join(gitEntry, "objects", "info");
+	await fs.promises.mkdir(objectsInfo, { recursive: true });
+	const alternates = [path.join(parentCommon, "objects")];
+	const chained = await readOptionalText(path.join(parentCommon, "objects", "info", "alternates"));
+	if (chained) {
+		for (const line of chained.split("\n")) {
+			const entry = line.trim();
+			if (!entry) continue;
+			alternates.push(path.isAbsolute(entry) ? entry : path.resolve(parentCommon, "objects", entry));
+		}
+	}
+	await Bun.write(path.join(objectsInfo, "alternates"), `${alternates.join("\n")}\n`);
+
+	// Freeze refs. Point HEAD at the raw SHA first so `update-ref` writes land
+	// even for the branch HEAD currently names, then restore the symbolic HEAD.
+	await Bun.write(path.join(gitEntry, "HEAD"), `${headSha}\n`);
+	if (refDump) {
+		const commands = refDump
+			.split("\n")
+			.filter(Boolean)
+			.map(line => {
+				const sep = line.indexOf(" ");
+				return `create ${line.slice(sep + 1)} ${line.slice(0, sep)}`;
+			})
+			.join("\n");
+		await runEffect(worktreeRoot, ["update-ref", "--stdin"], { stdin: `${commands}\n` });
+	}
+	if (headRef) await Bun.write(path.join(gitEntry, "HEAD"), `ref: ${headRef}\n`);
+
+	// Carry the source identity so isolated commits have an author.
+	if (userName) await config.set(worktreeRoot, "user.name", userName);
+	if (userEmail) await config.set(worktreeRoot, "user.email", userEmail);
+	// Restore the staged index without touching the working tree.
+	await readTree(worktreeRoot, stagedTree);
+	return "detached";
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // API: show
 // ════════════════════════════════════════════════════════════════════════════
 

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed isolated `task` subagents mutating the parent checkout and stacking parallel task branches. Copy isolation backends (reflink/apfs/btrfs/zfs/block-clone/rcopy) materialise the worktree by duplicating its `.git` verbatim; when the parent is a linked git worktree its `.git` is a pointer file, so the isolation shared the parent's HEAD/index/ref namespace and a task's `git checkout`/`commit` moved the parent's branch (and the rcopy `git worktree add` path leaked task branches into the shared namespace so a second task committed on top of the first). `ensureIsolation` now runs a new `git.detachGitDir` after `isoStart`: each isolation becomes a standalone repo with a frozen HEAD/refs/index snapshot that borrows the source object database through `objects/info/alternates`, so isolated git operations stay private, every task branch is parented on the requested base, and patch/branch capture (`git fetch <merged>`) still resolves objects. ([#6003](https://github.com/can1357/oh-my-pi/issues/6003))
+
 ## [17.0.4] - 2026-07-18
 
 ### Fixed

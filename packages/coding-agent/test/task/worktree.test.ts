@@ -556,6 +556,134 @@ describe("getRepoRoot", () => {
 	});
 });
 
+describe("detachGitDir", () => {
+	// Build a source checkout whose `.git` is a linked-worktree pointer file —
+	// the exact shape (`gitdir: …/worktrees/<name>`) that makes copy backends
+	// leak into the parent. Returns the linked worktree root plus its shared
+	// common dir and base SHA.
+	async function makeLinkedWorktree(): Promise<{ main: string; wt: string; commonDir: string; baseSha: string }> {
+		const main = await fs.mkdtemp(path.join(os.tmpdir(), "omp-detach-main-"));
+		tempDirs.push(main);
+		await runGit(main, ["init", "-q", "-b", "main"]);
+		await runGit(main, ["config", "user.email", "src@example.com"]);
+		await runGit(main, ["config", "user.name", "Source User"]);
+		await fs.writeFile(path.join(main, "file.txt"), "base\n");
+		await runGit(main, ["add", "file.txt"]);
+		await runGit(main, ["commit", "-q", "-m", "base"]);
+		const wt = path.join(main, "..", `${path.basename(main)}-wt`);
+		tempDirs.push(wt);
+		await runGit(main, ["worktree", "add", "-q", wt, "-b", "feature/parent", "HEAD"]);
+		const commonDir = path.resolve(
+			(await runGit(main, ["rev-parse", "--path-format=absolute", "--git-common-dir"])).trim(),
+		);
+		const baseSha = await runGit(wt, ["rev-parse", "HEAD"]);
+		return { main, wt, commonDir, baseSha };
+	}
+
+	// Mimic a copy isolation backend (reflink/apfs/rcopy): a verbatim tree copy,
+	// including the `.git` pointer file, into a fresh isolation directory.
+	async function copyTree(source: string): Promise<string> {
+		const iso = await fs.mkdtemp(path.join(os.tmpdir(), "omp-detach-iso-"));
+		tempDirs.push(iso);
+		await fs.cp(source, iso, { recursive: true });
+		return iso;
+	}
+
+	it("severs a copied linked-worktree from the parent so task git ops stay isolated", async () => {
+		const { wt, commonDir, baseSha } = await makeLinkedWorktree();
+		// Dirty the source worktree: staged, unstaged, and untracked changes.
+		await fs.writeFile(path.join(wt, "staged.txt"), "staged\n");
+		await runGit(wt, ["add", "staged.txt"]);
+		await fs.writeFile(path.join(wt, "file.txt"), "unstaged\n");
+		await fs.writeFile(path.join(wt, "untracked.txt"), "untracked\n");
+		const iso = await copyTree(wt);
+		const statusBefore = await runGit(iso, ["status", "--porcelain=v1"]);
+
+		const result = await git.detachGitDir(iso, commonDir);
+
+		expect(result).toBe("detached");
+		// Working tree (staged/unstaged/untracked) is preserved verbatim.
+		expect(await runGit(iso, ["status", "--porcelain=v1"])).toBe(statusBefore);
+		// The isolation now owns an independent common dir.
+		const isoCommon = path.resolve(
+			(await runGit(iso, ["rev-parse", "--path-format=absolute", "--git-common-dir"])).trim(),
+		);
+		expect(isoCommon).not.toBe(commonDir);
+
+		// A task creates its own branch from the requested base and commits.
+		await runGit(iso, ["checkout", "-q", "-b", "feature/a", baseSha]);
+		await fs.writeFile(path.join(iso, "a.txt"), "task a\n");
+		await runGit(iso, ["add", "a.txt"]);
+		await runGit(iso, ["commit", "-q", "-m", "task a"]);
+		const taskCommit = await runGit(iso, ["rev-parse", "HEAD"]);
+		const taskParent = await runGit(iso, ["rev-parse", "HEAD^"]);
+
+		// The parent worktree is untouched: same branch, no leaked task branch.
+		expect(await runGit(wt, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("feature/parent");
+		expect(await runGit(wt, ["branch", "--format=%(refname:short)"])).not.toContain("feature/a");
+		// The task commit is parented on the requested base, not on parent state.
+		expect(taskParent).toBe(baseSha);
+		// Objects still resolve through the borrowed source ODB: the parent can
+		// fetch the task branch (proving the alternates link is intact).
+		await runGit(wt, ["fetch", iso, "feature/a:refs/heads/omp-fetched"]);
+		expect(await runGit(wt, ["rev-parse", "omp-fetched"])).toBe(taskCommit);
+	});
+
+	it("leaves an already-independent full-copy checkout untouched", async () => {
+		const src = await fs.mkdtemp(path.join(os.tmpdir(), "omp-detach-src-"));
+		tempDirs.push(src);
+		await runGit(src, ["init", "-q", "-b", "main"]);
+		await runGit(src, ["config", "user.email", "src@example.com"]);
+		await runGit(src, ["config", "user.name", "Source User"]);
+		await fs.writeFile(path.join(src, "file.txt"), "base\n");
+		await runGit(src, ["add", "file.txt"]);
+		await runGit(src, ["commit", "-q", "-m", "base"]);
+		const srcCommon = path.resolve(
+			(await runGit(src, ["rev-parse", "--path-format=absolute", "--git-common-dir"])).trim(),
+		);
+		const iso = await copyTree(src); // full `.git` directory copied — its own ODB
+
+		expect(await git.detachGitDir(iso, srcCommon)).toBe("independent");
+		// Its objects are self-contained: no alternates file was written.
+		expect(await Bun.file(path.join(iso, ".git", "objects", "info", "alternates")).exists()).toBe(false);
+	});
+
+	it("keeps ensureIsolation from mutating a linked-worktree parent (rcopy backend)", async () => {
+		const { wt, baseSha } = await makeLinkedWorktree();
+		vi.spyOn(natives, "isoResolve").mockReturnValue({
+			kind: natives.IsoBackendKind.Rcopy,
+			candidates: [natives.IsoBackendKind.Rcopy],
+			fellBack: false,
+			reason: undefined,
+		});
+		const worktreeBase = await fs.mkdtemp(path.join(os.tmpdir(), "omp-detach-wtbase-"));
+		tempDirs.push(worktreeBase);
+		const originalWorktreeDir = process.env.OMP_WORKTREE_DIR;
+		delete process.env.OMP_WORKTREE_DIR;
+		setWorktreesDir(worktreeBase);
+		try {
+			const handle = await ensureIsolation(wt, "parent-isolation-guard");
+			await runGit(handle.mergedDir, ["checkout", "-q", "-b", "feature/a", baseSha]);
+			await fs.writeFile(path.join(handle.mergedDir, "a.txt"), "task a\n");
+			await runGit(handle.mergedDir, ["add", "a.txt"]);
+			await runGit(handle.mergedDir, ["commit", "-q", "-m", "task a"]);
+
+			// Parent branch, HEAD, and worktree list are all unchanged.
+			expect(await runGit(wt, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("feature/parent");
+			expect(await runGit(wt, ["branch", "--format=%(refname:short)"])).not.toContain("feature/a");
+			const worktrees = (await runGit(wt, ["worktree", "list", "--porcelain"]))
+				.split("\n")
+				.filter(line => line.startsWith("worktree "));
+			expect(worktrees).toHaveLength(2); // main + the linked parent only
+			expect(await runGit(handle.mergedDir, ["rev-parse", "HEAD^"])).toBe(baseSha);
+		} finally {
+			setWorktreesDir(undefined);
+			if (originalWorktreeDir === undefined) delete process.env.OMP_WORKTREE_DIR;
+			else process.env.OMP_WORKTREE_DIR = originalWorktreeDir;
+		}
+	});
+});
+
 describe("applyNestedPatches", () => {
 	let parentRepo: string;
 	let nestedRel: string;
