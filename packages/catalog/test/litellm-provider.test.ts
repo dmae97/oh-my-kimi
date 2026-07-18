@@ -428,61 +428,60 @@ describe("LiteLLM provider discovery", () => {
 		expect(models?.find(model => model.id === "params-tools")?.supportsTools).toBe(true);
 	});
 
-	test.each([
-		["all-team-models"],
-		["all-proxy-models"],
-		["no-default-models"],
-	])("falls back from %s placeholder to v2 model info", async sentinelModelId => {
-		const calls: string[] = [];
-		const fetchMock = vi.fn(async (input: string | URL | Request) => {
-			const url = inputUrl(input);
-			calls.push(url);
-			if (url === MODELS_DEV_URL) {
-				return Response.json({});
-			}
-			if (url === "http://primary:4000/model_group/info") {
-				return Response.json({ data: [makeLiteLLMSentinelPlaceholder(sentinelModelId)] });
-			}
-			if (url === "http://primary:4000/v2/model/info") {
-				return Response.json({
-					data: [
-						{
-							model_name: "example-real-model",
-							model_info: {
-								max_input_tokens: 200_000,
-								max_output_tokens: 12_000,
-								supports_vision: false,
-								supports_reasoning: true,
+	test.each([["all-team-models"], ["all-proxy-models"], ["no-default-models"]])(
+		"falls back from %s placeholder to v2 model info",
+		async sentinelModelId => {
+			const calls: string[] = [];
+			const fetchMock = vi.fn(async (input: string | URL | Request) => {
+				const url = inputUrl(input);
+				calls.push(url);
+				if (url === MODELS_DEV_URL) {
+					return Response.json({});
+				}
+				if (url === "http://primary:4000/model_group/info") {
+					return Response.json({ data: [makeLiteLLMSentinelPlaceholder(sentinelModelId)] });
+				}
+				if (url === "http://primary:4000/v2/model/info") {
+					return Response.json({
+						data: [
+							{
+								model_name: "example-real-model",
+								model_info: {
+									max_input_tokens: 200_000,
+									max_output_tokens: 12_000,
+									supports_vision: false,
+									supports_reasoning: true,
+								},
 							},
-						},
-					],
-				});
-			}
-			if (url === "http://primary:4000/v1/models") {
-				throw new Error("/v1/models should not be called when v2 metadata succeeds");
-			}
-			throw new Error(`Unexpected URL: ${url}`);
-		}) as FetchImpl;
-		const options = litellmModelManagerOptions({
-			apiKey: "sk-rich",
-			baseUrl: "http://primary:4000/v1",
-			fetch: fetchMock,
-		});
+						],
+					});
+				}
+				if (url === "http://primary:4000/v1/models") {
+					throw new Error("/v1/models should not be called when v2 metadata succeeds");
+				}
+				throw new Error(`Unexpected URL: ${url}`);
+			}) as FetchImpl;
+			const options = litellmModelManagerOptions({
+				apiKey: "sk-rich",
+				baseUrl: "http://primary:4000/v1",
+				fetch: fetchMock,
+			});
 
-		const models = await options.fetchDynamicModels?.();
+			const models = await options.fetchDynamicModels?.();
 
-		expect(calls).toContain("http://primary:4000/model_group/info");
-		expect(calls).toContain("http://primary:4000/v2/model/info");
-		expect(calls).not.toContain("http://primary:4000/v1/models");
-		expect(models?.map(model => model.id)).toEqual(["example-real-model"]);
-		expect(models?.[0]).toMatchObject({
-			id: "example-real-model",
-			contextWindow: 200_000,
-			maxTokens: 12_000,
-			input: ["text"],
-			reasoning: true,
-		});
-	});
+			expect(calls).toContain("http://primary:4000/model_group/info");
+			expect(calls).toContain("http://primary:4000/v2/model/info");
+			expect(calls).not.toContain("http://primary:4000/v1/models");
+			expect(models?.map(model => model.id)).toEqual(["example-real-model"]);
+			expect(models?.[0]).toMatchObject({
+				id: "example-real-model",
+				contextWindow: 200_000,
+				maxTokens: 12_000,
+				input: ["text"],
+				reasoning: true,
+			});
+		},
+	);
 
 	test("filters all-team-models placeholder from mixed model_group info", async () => {
 		const calls: string[] = [];

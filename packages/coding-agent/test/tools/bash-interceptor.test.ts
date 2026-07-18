@@ -114,27 +114,21 @@ describe("default echo/printf redirect rule", () => {
 describe("default hub start rules", () => {
 	const tools = ["hub"];
 
-	it.each([
-		"bun run dev",
-		"vite --host 0.0.0.0",
-		"lldb ./app",
-		"bun test --watch",
-		"nohup server",
-		"server &",
-	])("routes %s to hub start", command => {
-		const result = checkBashInterception(command, tools, DEFAULT_BASH_INTERCEPTOR_RULES);
-		expect(result.block).toBe(true);
-		expect(result.suggestedTool).toBe("hub");
-	});
+	it.each(["bun run dev", "vite --host 0.0.0.0", "lldb ./app", "bun test --watch", "nohup server", "server &"])(
+		"routes %s to hub start",
+		command => {
+			const result = checkBashInterception(command, tools, DEFAULT_BASH_INTERCEPTOR_RULES);
+			expect(result.block).toBe(true);
+			expect(result.suggestedTool).toBe("hub");
+		},
+	);
 
-	it.each([
-		"git diff -w",
-		"docker compose up -d",
-		"bun test",
-		"printf 'server &'",
-	])("does not misclassify finite command %s", command => {
-		expect(checkBashInterception(command, tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(false);
-	});
+	it.each(["git diff -w", "docker compose up -d", "bun test", "printf 'server &'"])(
+		"does not misclassify finite command %s",
+		command => {
+			expect(checkBashInterception(command, tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(false);
+		},
+	);
 });
 
 describe("BashTool argument validation", () => {

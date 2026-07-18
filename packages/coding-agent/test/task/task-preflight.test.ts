@@ -97,22 +97,19 @@ describe("task async preflight", () => {
 			spawns: "scout",
 			expectation: "Cannot spawn 'task'",
 		},
-	])("returns $name policy errors before registering an async job", async ({
-		name,
-		params,
-		settings,
-		spawns,
-		expectation,
-	}) => {
-		mockDiscovery();
-		const jobs = manager();
-		const tool = await TaskTool.create(createSession({ manager: jobs, settings, spawns }));
+	])(
+		"returns $name policy errors before registering an async job",
+		async ({ name, params, settings, spawns, expectation }) => {
+			mockDiscovery();
+			const jobs = manager();
+			const tool = await TaskTool.create(createSession({ manager: jobs, settings, spawns }));
 
-		const result = await tool.execute("preflight", params as TaskParams);
+			const result = await tool.execute("preflight", params as TaskParams);
 
-		expect(textOf(result)).toContain(expectation);
-		expect(jobs.getJob(name)).toBeUndefined();
-	});
+			expect(textOf(result)).toContain(expectation);
+			expect(jobs.getJob(name)).toBeUndefined();
+		},
+	);
 
 	it("reports an invalid batch item synchronously while launching its valid sibling", async () => {
 		mockDiscovery();
