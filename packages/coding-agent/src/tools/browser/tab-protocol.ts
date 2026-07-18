@@ -95,6 +95,8 @@ export interface RunErrorPayload {
 	stack?: string;
 	isToolError: boolean;
 	isAbort: boolean;
+	/** The worker could not restore tab-scoped browser state and must be recycled. */
+	recoverTab?: boolean;
 }
 
 export type WorkerOutbound =

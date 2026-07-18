@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `browser.run` leaving Puppeteer request handlers and interception state with divergent lifetimes by removing run-scoped handlers, disabling interception, and releasing held requests on every exit path ([#6004](https://github.com/can1357/oh-my-pi/issues/6004)).
+
 ## [17.0.4] - 2026-07-18
 
 ### Fixed

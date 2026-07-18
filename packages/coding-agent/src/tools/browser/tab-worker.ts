@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { postmortem, Snowflake, untilAborted } from "@oh-my-pi/pi-utils";
+import { postmortem, Snowflake, untilAborted, withTimeout } from "@oh-my-pi/pi-utils";
 import type { HTMLElement } from "linkedom";
 import type {
 	Browser,
@@ -155,6 +155,8 @@ const OP_DEADLINE_SLACK_MS = CELL_BUDGET_SLACK_MS;
 const ZERO_MATCH_FAIL_FAST_MS = 2_000;
 /** Poll cadence for the zero-match watchdog. */
 const ZERO_MATCH_POLL_MS = 250;
+/** Cleanup must settle inside the supervisor's 750ms post-run grace window. */
+const REQUEST_INTERCEPTION_CLEANUP_TIMEOUT_MS = 500;
 
 export interface OpTimeouts {
 	/** Largest per-op deadline allowed — strictly below the cell budget. */
@@ -334,12 +336,124 @@ function redactUrlCredentials(url: string): string {
 	}
 }
 
+class RequestInterceptionCleanupError extends ToolError {}
+
+interface RunPageScope {
+	page: Page;
+	cleanup(): Promise<void>;
+}
+
+/**
+ * Expose the tab page while retaining the request handlers created by this run.
+ * Puppeteer's Page wraps an internal emitter, so `removeAllListeners("request")`
+ * would also remove its forwarding listener; the facade removes only user handlers.
+ */
+function createRunPageScope(page: Page): RunPageScope {
+	const requestHandlers: unknown[] = [];
+	const on = page.on;
+	const off = page.off;
+	const once = page.once;
+	const removeAllListeners = page.removeAllListeners;
+	const onDescriptor = Object.getOwnPropertyDescriptor(page, "on");
+	const offDescriptor = Object.getOwnPropertyDescriptor(page, "off");
+	const onceDescriptor = Object.getOwnPropertyDescriptor(page, "once");
+	const removeAllDescriptor = Object.getOwnPropertyDescriptor(page, "removeAllListeners");
+
+	Object.defineProperties(page, {
+		on: {
+			configurable: true,
+			value: (type: unknown, handler: unknown): Page => {
+				Reflect.apply(on, page, [type, handler]);
+				if (type === "request") requestHandlers.push(handler);
+				return page;
+			},
+		},
+		once: {
+			configurable: true,
+			value: (type: unknown, handler: unknown): Page => {
+				if (type !== "request" || typeof handler !== "function") {
+					Reflect.apply(once, page, [type, handler]);
+					return page;
+				}
+				const wrapper = (event: unknown): void => {
+					const index = requestHandlers.lastIndexOf(wrapper);
+					if (index >= 0) requestHandlers.splice(index, 1);
+					Reflect.apply(handler, page, [event]);
+				};
+				requestHandlers.push(wrapper);
+				Reflect.apply(on, page, [type, wrapper]);
+				return page;
+			},
+		},
+		off: {
+			configurable: true,
+			value: (type: unknown, handler?: unknown): Page => {
+				Reflect.apply(off, page, [type, handler]);
+				if (type === "request") {
+					if (handler === undefined) requestHandlers.length = 0;
+					else {
+						const index = requestHandlers.lastIndexOf(handler);
+						if (index >= 0) requestHandlers.splice(index, 1);
+					}
+				}
+				return page;
+			},
+		},
+		removeAllListeners: {
+			configurable: true,
+			value: (type?: unknown): Page => {
+				Reflect.apply(removeAllListeners, page, [type]);
+				if (type === undefined || type === "request") requestHandlers.length = 0;
+				return page;
+			},
+		},
+	});
+
+	return {
+		page,
+		async cleanup() {
+			if (onDescriptor) Object.defineProperty(page, "on", onDescriptor);
+			else Reflect.deleteProperty(page, "on");
+			if (offDescriptor) Object.defineProperty(page, "off", offDescriptor);
+			else Reflect.deleteProperty(page, "off");
+			if (onceDescriptor) Object.defineProperty(page, "once", onceDescriptor);
+			else Reflect.deleteProperty(page, "once");
+			if (removeAllDescriptor) Object.defineProperty(page, "removeAllListeners", removeAllDescriptor);
+			else Reflect.deleteProperty(page, "removeAllListeners");
+			for (const handler of requestHandlers) Reflect.apply(off, page, ["request", handler]);
+			requestHandlers.length = 0;
+			try {
+				await withTimeout(
+					page.setRequestInterception(false),
+					REQUEST_INTERCEPTION_CLEANUP_TIMEOUT_MS,
+					"Timed out clearing browser request interception",
+				);
+			} catch (error) {
+				throw new RequestInterceptionCleanupError(
+					"Failed to clear browser request interception after browser.run",
+					{
+						error: error instanceof Error ? error.message : String(error),
+					},
+				);
+			}
+		},
+	};
+}
+
 function errorPayload(error: unknown): RunErrorPayload {
+	const recoverTab = error instanceof RequestInterceptionCleanupError || undefined;
 	if (error instanceof ToolAbortError) {
 		return { name: error.name, message: error.message, stack: error.stack, isToolError: false, isAbort: true };
 	}
 	if (error instanceof ToolError) {
-		return { name: error.name, message: error.message, stack: error.stack, isToolError: true, isAbort: false };
+		return {
+			name: error.name,
+			message: error.message,
+			stack: error.stack,
+			isToolError: true,
+			isAbort: false,
+			recoverTab,
+		};
 	}
 	if (error instanceof Error) {
 		return { name: error.name, message: error.message, stack: error.stack, isToolError: false, isAbort: false };
@@ -720,6 +834,7 @@ export class WorkerCore {
 			await session.send("Page.enable").catch(() => undefined);
 			await session.send("Page.handleJavaScriptDialog", { accept: false }).catch(() => undefined);
 			await session.send("Page.stopLoading").catch(() => undefined);
+			await session.send("Fetch.disable").catch(() => undefined);
 		} catch (error) {
 			this.#log("debug", "Recovery CDP session failed; proceeding with attach", {
 				error: error instanceof Error ? error.message : String(error),
@@ -816,15 +931,19 @@ export class WorkerCore {
 			opCounter: 0,
 		};
 		this.#active = active;
+		let completed = false;
+		let returnValue: unknown;
+		let failure: { error: unknown } | undefined;
+		let runPage: RunPageScope | undefined;
 		try {
 			throwIfAborted(signal);
-			const page = this.#requirePage();
+			runPage = createRunPageScope(this.#requirePage());
 			const browser = this.#requireBrowser();
 			const tabApi = this.#createTabApi(msg.name, msg.timeoutMs, signal, msg.session, output, screenshots, active);
 			const runtime = this.#ensureRuntime(msg.session);
 			runtime.setCwd(msg.session.cwd);
 			runtime.setRunScope({
-				page,
+				page: runPage.page,
 				browser,
 				tab: tabApi,
 				assert: (cond: unknown, text?: string): void => {
@@ -879,25 +998,37 @@ export class WorkerCore {
 			try {
 				const hooks = this.#hooksForActiveRun();
 				if (!hooks) throw new ToolError("Browser runtime started without an active run");
-				const returnValue = await Promise.race([
+				returnValue = await Promise.race([
 					runtime.run(msg.code, `browser-run-${msg.id}.js`, hooks, { runId: msg.id, cwd: msg.session.cwd }),
 					cancelRejection,
 				]);
-				await this.#postReadyInfo();
-				this.#transport.send({
-					type: "result",
-					id: msg.id,
-					ok: true,
-					payload: { displays: output.finish(), returnValue: cloneSafe(returnValue), screenshots },
-				});
+				completed = true;
 			} finally {
 				signal.removeEventListener("abort", onCancel);
 			}
 		} catch (error) {
-			this.#transport.send({ type: "result", id: msg.id, ok: false, error: errorPayload(error) });
+			failure = { error };
 		} finally {
-			if (this.#active?.id === msg.id) this.#active = null;
 			runAc.abort(postmortem.markExpectedCleanupError(new ToolAbortError("Browser run ended")));
+			try {
+				await runPage?.cleanup();
+			} catch (error) {
+				failure = { error };
+			}
+			if (this.#active?.id === msg.id) this.#active = null;
+		}
+		if (failure) {
+			this.#transport.send({ type: "result", id: msg.id, ok: false, error: errorPayload(failure.error) });
+			return;
+		}
+		if (completed) {
+			await this.#postReadyInfo();
+			this.#transport.send({
+				type: "result",
+				id: msg.id,
+				ok: true,
+				payload: { displays: output.finish(), returnValue: cloneSafe(returnValue), screenshots },
+			});
 		}
 	}
 

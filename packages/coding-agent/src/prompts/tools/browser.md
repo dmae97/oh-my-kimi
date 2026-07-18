@@ -16,6 +16,7 @@ Drives real Chromium tab; full puppeteer access via JS.
   - `tab.waitForNavigation` must start BEFORE the trigger click.
   - Navigation invalidates element ids — re-observe.
   - Stalled actions fail fast with named error, never whole-cell timeout.
+  - Raw request interception is run-scoped: run end removes `request` handlers, disables interception, releases held requests.
 
 - `app.path` → NEVER tamper with a real desktop app (no stealth patches).
 - Selectors: CSS + puppeteer `aria/…`, `text/…`, `xpath/…`, `pierce/…`. Playwright-only pseudos (`:has-text()`, `:visible`) are REJECTED.
