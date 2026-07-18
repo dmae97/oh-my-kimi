@@ -8,6 +8,7 @@
 import { describe, expect, it, spyOn } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import type { AgentSession } from "../session/agent-session";
+import * as telemetryExport from "../telemetry-export";
 import { runPrintMode } from "./print-mode";
 
 /** Stand-in for `process.exit`: it terminates, so nothing after it should run. */
@@ -35,11 +36,19 @@ describe("print-mode error exit disposes the session before exit", () => {
 			extensionRunner: undefined,
 			subscribe: () => {},
 			state: { messages: [errorMsg] },
+			prepareForHeadlessAdvisorDrain: () => {},
+			waitForAdvisorCatchup: async () => {
+				order.push("catchup");
+				return true;
+			},
 			dispose: async () => {
 				order.push("dispose");
 			},
 		} as unknown as AgentSession;
 
+		const flushSpy = spyOn(telemetryExport, "flushTelemetryExport").mockImplementation(async () => {
+			order.push("flush");
+		});
 		const exitSpy = spyOn(process, "exit").mockImplementation(((code: number) => {
 			order.push("exit");
 			throw new ProcessExit(code);
@@ -53,8 +62,9 @@ describe("print-mode error exit disposes the session before exit", () => {
 		} finally {
 			exitSpy.mockRestore();
 			stderrSpy.mockRestore();
+			flushSpy.mockRestore();
 		}
 
-		expect(order).toEqual(["dispose", "exit"]);
+		expect(order).toEqual(["catchup", "flush", "dispose", "exit"]);
 	});
 });
