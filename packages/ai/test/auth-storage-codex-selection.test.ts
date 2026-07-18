@@ -1547,6 +1547,10 @@ describe("AuthStorage codex oauth ranking", () => {
 			}
 		};
 
+		const base = Date.now();
+		let clockOffset = 0;
+		vi.spyOn(Date, "now").mockImplementation(() => base + clockOffset);
+
 		await authStorage.set(
 			"openai-codex",
 			accounts.map(account => ({ type: "oauth", ...createCredential(account.id, account.email) })),
@@ -1572,6 +1576,10 @@ describe("AuthStorage codex oauth ranking", () => {
 
 		setUsedFraction(stickyReport, 0.85);
 		setUsedFraction(siblingReport, 0.01);
+		// Step past the usage-report TTL so the second resolve re-fetches the
+		// inverted headroom instead of ranking on the cached first-resolve reports
+		// (mirrors mid-session header ingest / TTL expiry in a real session).
+		clockOffset = 10 * 60 * 1000;
 		expect(await authStorage.getApiKey("openai-codex", sessionId, { modelId })).toBe(firstApiKey);
 	});
 
