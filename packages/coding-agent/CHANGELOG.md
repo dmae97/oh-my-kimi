@@ -37,6 +37,7 @@
 - Reduced concurrent subagent update CPU by reconstructing recent output only at progress emission boundaries. ([#5936](https://github.com/can1357/oh-my-pi/issues/5936))
 - Fixed `docs/advisor-watchdog.md` overstating advisor delivery for a normal yield: the severity table listed `concern` as unconditionally interrupting and the prose promised a self-ended run could always be steered/resumed. Documented the #4840 terminal-answer exception (`concern` becomes a passive card while `blocker` normally steers, #5628) plus the plan-mode and deferred-ACP constraints that preserve would-be steers until the user resumes ([#5913](https://github.com/can1357/oh-my-pi/issues/5913)).
 - Fixed subagent (task) sessions triggering an unnecessary tiny-model session-title generation call on `todo init`. Subagent sessions in a non-interactive host (print/RPC/ACP/eval/SDK/CI) have no operator-visible title and now skip the replan title refresh; interactive hosts keep it, since a live subagent focused from the Agent Hub renders its session name in the status line ([#5910](https://github.com/can1357/oh-my-pi/issues/5910)).
+- Fixed `tab.scroll()` timing out after a queued wheel event waits too long for a busy renderer's acknowledgement ([#5905](https://github.com/can1357/oh-my-pi/issues/5905)).
 
 ## [17.0.3] - 2026-07-17
 

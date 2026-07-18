@@ -1,6 +1,7 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, vi } from "bun:test";
 import { resolvePredicateTimeout } from "@oh-my-pi/pi-coding-agent/tools/browser/run-cancellation";
 import {
+	dispatchScroll,
 	normalizeSelector,
 	resolveOpTimeouts,
 	resolveWaitTimeout,
@@ -39,6 +40,33 @@ describe("browser per-op fail-fast ceilings", () => {
 		expect(actionOpMs).toBeGreaterThanOrEqual(1);
 		expect(quickOpMs).toBeGreaterThanOrEqual(1);
 		expect(actionOpMs).toBeLessThanOrEqual(budgetBound);
+	});
+});
+
+describe("browser scroll acknowledgement", () => {
+	it("returns after the acknowledgement deadline while the renderer remains stalled", async () => {
+		const acknowledgement = Promise.withResolvers<void>();
+
+		await expect(dispatchScroll(() => acknowledgement.promise, 1)).resolves.toBeUndefined();
+	});
+
+	it("preserves wheel dispatch failures received before the acknowledgement deadline", async () => {
+		await expect(dispatchScroll(() => Promise.reject(new Error("target closed")), 100)).rejects.toThrow(
+			"target closed",
+		);
+	});
+
+	it("cancels the acknowledgement deadline after a prompt dispatch", async () => {
+		vi.useFakeTimers();
+		try {
+			const timerCount = vi.getTimerCount();
+
+			await dispatchScroll(() => Promise.resolve());
+
+			expect(vi.getTimerCount()).toBe(timerCount);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
 
