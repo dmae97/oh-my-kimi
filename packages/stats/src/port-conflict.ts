@@ -14,14 +14,31 @@ interface PortHolder {
 	image: string;
 }
 
+/** Header stamped on every dashboard response so reuse probes can identify us. */
+export const STATS_DASHBOARD_HEADER = "x-omp-stats-dashboard";
+
 async function probeStatsDashboard(port: number): Promise<boolean> {
 	try {
 		const response = await fetch(`http://localhost:${port}/api/stats/models`, {
 			signal: AbortSignal.timeout(STATS_PROBE_TIMEOUT_MS),
 		});
-		const isDashboard = response.status === 200;
-		await response.body?.cancel();
-		return isDashboard;
+		if (response.status !== 200) {
+			await response.body?.cancel();
+			return false;
+		}
+		// A live omp-stats dashboard stamps this header on every response.
+		if (response.headers.get(STATS_DASHBOARD_HEADER)) {
+			await response.body?.cancel();
+			return true;
+		}
+		// Older dashboards predate the header; fall back to the response shape
+		// (`/api/stats/models` returns a JSON array) so we never reuse — or later
+		// kill — a foreign 200 responder such as an SPA dev server catch-all.
+		if (!(response.headers.get("content-type") ?? "").includes("application/json")) {
+			await response.body?.cancel();
+			return false;
+		}
+		return Array.isArray(await response.json());
 	} catch {
 		return false;
 	}

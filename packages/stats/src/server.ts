@@ -20,7 +20,7 @@ import {
 import { decodeEmbeddedClientArchive } from "./embedded-client";
 import embeddedClientArchiveTxt from "./embedded-client.generated.txt";
 import { getGainDashboardStats } from "./gain-aggregator";
-import { recoverStatsPort } from "./port-conflict";
+import { recoverStatsPort, STATS_DASHBOARD_HEADER } from "./port-conflict";
 
 const EMBEDDED_CLIENT_ARCHIVE = decodeEmbeddedClientArchive(embeddedClientArchiveTxt);
 
@@ -301,11 +301,13 @@ function createDashboardServer(port: number) {
 			const url = new URL(req.url);
 			const path = url.pathname;
 
-			// CORS headers for local development
+			// CORS headers for local development; the identity header lets another
+			// omp session's reuse probe positively recognize this dashboard.
 			const corsHeaders: Record<string, string> = {
 				"Access-Control-Allow-Origin": "*",
 				"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 				"Access-Control-Allow-Headers": "Content-Type",
+				[STATS_DASHBOARD_HEADER]: "1",
 			};
 
 			if (req.method === "OPTIONS") {
