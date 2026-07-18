@@ -12,7 +12,7 @@ from contextlib import suppress
 from robomp import tasks
 from robomp.cancellation import clear_current_event, set_current_event
 from robomp.config import Settings
-from robomp.db import Database, EventRow, iso_seconds_ago
+from robomp.db import Database, EventRow
 from robomp.github_backend import GitHubBackend
 from robomp.sandbox import GitTransport, SandboxManager, _reap_slot
 from robomp.slot_pool import SlotPool
@@ -100,11 +100,6 @@ class WorkerPool:
         # restarted orchestrator doesn't burn CPU on a cold cache.
         if self.sandbox.natives_cache is not None and self.settings.natives_cache_gc_interval_seconds > 0:
             self._workers.append(asyncio.create_task(self._natives_cache_gc_loop(), name="robomp-natives-gc"))
-        # Periodic promotion of deferred rate-limited events. Runs independently
-        # of the empty-queue path so a sustained ordinary queue can't starve a
-        # submitter whose rolling window has since freed.
-        if self.settings.deferred_promotion_scan_seconds > 0:
-            self._workers.append(asyncio.create_task(self._deferred_promotion_loop(), name="robomp-deferred-promotion"))
 
     async def stop(self, *, drain_timeout: float = 25.0, kill_timeout: float = 5.0) -> None:
         """Halt the dispatcher, then drain (or kill) in-flight `_run_event` tasks.
@@ -191,40 +186,6 @@ class WorkerPool:
         except asyncio.CancelledError:
             raise
 
-    async def _deferred_promotion_loop(self) -> None:
-        """Sweep deferred rate-limited events back into the queue on a timer.
-
-        Sleeps the configured interval first, then re-admits any deferred event
-        whose submitter now has rolling-window capacity and wakes the dispatcher
-        so promoted rows are claimed promptly. Cancellation is the only exit;
-        any per-sweep failure is logged and the loop continues.
-        """
-        interval = self.settings.deferred_promotion_scan_seconds
-        log.info("deferred promotion loop online", extra={"interval": interval})
-        try:
-            while not self._stop.is_set():
-                try:
-                    await asyncio.wait_for(self._stop.wait(), timeout=interval)
-                    return  # stop was set during the wait
-                except TimeoutError:
-                    pass
-                try:
-                    promoted = await self._promote_deferred()
-                    if promoted:
-                        self.wake()
-                except Exception:
-                    log.exception("deferred promotion sweep raised")
-        except asyncio.CancelledError:
-            raise
-
-    async def _promote_deferred(self) -> int:
-        """Re-admit deferred events whose submitters regained window capacity."""
-        since = iso_seconds_ago(self.settings.rate_limit_window_seconds)
-        promoted = await asyncio.to_thread(self.db.promote_deferred_submissions, since=since)
-        if promoted:
-            log.info("deferred submissions promoted", extra={"count": promoted})
-        return promoted
-
     async def _dispatch_loop(self) -> None:
         log.info("dispatch loop online")
         try:
@@ -253,11 +214,7 @@ class WorkerPool:
             # Naive but fine for v1 (small queue).
             row = await asyncio.to_thread(self.db.claim_next_event)
             if row is None:
-                if not await self._promote_deferred():
-                    return None
-                row = await asyncio.to_thread(self.db.claim_next_event)
-                if row is None:
-                    return None
+                return None
             key = row.issue_key or row.delivery_id
             if key in self._inflight:
                 # Put it back; another in-flight task is touching the same issue.
