@@ -914,7 +914,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 	const finalOutputChunks: string[] = [];
 	const RECENT_OUTPUT_TAIL_BYTES = 8 * 1024;
 	let recentOutputTail = "";
-	let tailLastLineRepresentable = false;
+	let recentOutputDirty = false;
 	let resolved = false;
 	let abortSent = false;
 	let abortReason: AbortReason | undefined;
@@ -1054,7 +1054,22 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 	let lastProgressEmitMs = 0;
 	let progressTimeoutId: NodeJS.Timeout | null = null;
 
+	// Recompute progress.recentOutput from the capped tail. Deferred: text_delta
+	// appends only extend the tail and mark it dirty; the (up to 8KB) split/filter
+	// runs synchronously here, immediately before the ONLY places the progress
+	// object is snapshotted ({...progress} for onProgress and the eventBus
+	// progress channel, both inside emitProgressNow — including the
+	// scheduleProgress(flush) finalize/error/cancel paths). Observers therefore
+	// always see exact state; no staleness beyond the existing 150ms coalescing.
+	const refreshRecentOutput = () => {
+		if (!recentOutputDirty) return;
+		recentOutputDirty = false;
+		const filtered = recentOutputTail.split("\n").filter(line => line.trim());
+		progress.recentOutput = filtered.slice(-8).reverse();
+	};
+
 	const emitProgressNow = () => {
+		refreshRecentOutput();
 		progress.durationMs = Date.now() - startTime;
 		onProgress?.({ ...progress });
 		const activityGist =
@@ -1137,36 +1152,16 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 		return message.usage;
 	};
 
-	const updateRecentOutputLines = () => {
-		const lines = recentOutputTail.split("\n");
-		const filtered = lines.filter(line => line.trim());
-		progress.recentOutput = filtered.slice(-8).reverse();
-		// The tail's last raw segment (after its final newline) is "represented"
-		// in recentOutput only when it trims non-empty — an empty/whitespace-only
-		// trailing segment is filtered out, so recentOutput[0] is then the line
-		// before it, not the tail's true last line.
-		tailLastLineRepresentable = lines[lines.length - 1].trim().length > 0;
-	};
-
 	const appendRecentOutputTail = (text: string) => {
 		if (!text) return;
 		recentOutputTail += text;
-		const truncated = recentOutputTail.length > RECENT_OUTPUT_TAIL_BYTES;
-		if (truncated) {
+		if (recentOutputTail.length > RECENT_OUTPUT_TAIL_BYTES) {
 			recentOutputTail = recentOutputTail.slice(-RECENT_OUTPUT_TAIL_BYTES);
 		}
-		// Fast path: a token without a newline only extends the current last line.
-		// This runs on every text_delta token (hundreds/thousands per second while
-		// streaming), so skip re-splitting the whole (up to 8KB) tail unless the line
-		// structure actually changed. Requires no truncation AND the tail's last line
-		// already represented (trims non-empty) — otherwise boundaries shift and a
-		// full recompute is required. Appending to a non-empty line keeps it non-empty,
-		// so the flag stays valid across consecutive fast-path tokens.
-		if (truncated || text.includes("\n") || !tailLastLineRepresentable || progress.recentOutput.length === 0) {
-			updateRecentOutputLines();
-		} else {
-			progress.recentOutput = [progress.recentOutput[0] + text, ...progress.recentOutput.slice(1)];
-		}
+		// O(chunk) hot path: this runs on every text_delta token (hundreds/
+		// thousands per second while streaming). Line reconstruction is deferred
+		// to refreshRecentOutput() at the emit boundary.
+		recentOutputDirty = true;
 	};
 
 	const replaceRecentOutputFromContent = (content: unknown[]) => {
@@ -1181,12 +1176,12 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 				recentOutputTail = recentOutputTail.slice(-RECENT_OUTPUT_TAIL_BYTES);
 			}
 		}
-		updateRecentOutputLines();
+		recentOutputDirty = true;
 	};
 
 	const resetRecentOutput = () => {
 		recentOutputTail = "";
-		tailLastLineRepresentable = false;
+		recentOutputDirty = false;
 		progress.recentOutput = [];
 	};
 
