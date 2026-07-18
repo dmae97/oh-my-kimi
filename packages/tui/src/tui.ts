@@ -2368,15 +2368,23 @@ export class TUI extends Container {
 			}
 		}
 
-		// Pass input to focused component (including Ctrl+C)
-		// The focused component can decide how to handle Ctrl+C
-		if (this.#focusedComponent?.handleInput) {
+		// Pass input to focused component (including Ctrl+C).
+		// The focused component can decide how to handle Ctrl+C.
+		// Ordinary keystrokes only dirty the focused subtree; handleInput may
+		// move focus (submit opening a selector) and the new surface is not in
+		// #componentRenderTargets, so fall back to a full frame then.
+		const focused = this.#focusedComponent;
+		if (focused?.handleInput) {
 			// Filter out key release events unless component opts in
-			if (isKeyRelease(data) && !this.#focusedComponent.wantsKeyRelease) {
+			if (isKeyRelease(data) && !focused.wantsKeyRelease) {
 				return;
 			}
-			this.#focusedComponent.handleInput(data);
-			this.requestRender();
+			focused.handleInput(data);
+			if (this.#focusedComponent === focused) {
+				this.requestComponentRender(focused);
+			} else {
+				this.requestRender();
+			}
 		}
 	}
 

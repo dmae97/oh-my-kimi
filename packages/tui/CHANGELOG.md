@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed ordinary focused-component keystrokes performing a full root compose by scoping stable-focus renders to that component while retaining full composition when input moves focus ([#5928](https://github.com/can1357/oh-my-pi/issues/5928)).
+
 ## [17.0.3] - 2026-07-17
 
 ### Fixed
