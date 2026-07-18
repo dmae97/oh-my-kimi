@@ -15,6 +15,7 @@
 - Fixed clockless Anthropic usage windows outranking clocked sibling credentials by scoring their headroom over the full window duration ([#5960](https://github.com/can1357/oh-my-pi/issues/5960)).
 - Fixed local grammar-constrained OpenAI-compatible backends (llama.cpp, LM Studio, vLLM) rejecting every tool request with `400 "Unable to generate parser for this template ... Unrecognized schema: true"`. The `task` tool's open `outputSchema` field normalizes to a bare boolean `true` subschema (issue #1179), which llama.cpp's JSON-schema→GBNF converter cannot compile. The chat-completions encoder now widens bare boolean subschemas into a value-accepting primitive union (and preserves closed-object `additionalProperties: false`) for these backends via the new `grammar` tool-schema flavor ([#5914](https://github.com/can1357/oh-my-pi/issues/5914)).
 - Fixed custom OAuth Anthropic-compatible endpoints with explicit header overrides still receiving generated Claude Code fingerprint headers instead. ([#5888](https://github.com/can1357/oh-my-pi/issues/5888))
+- Fixed plan-gated OpenAI Codex models (Sol/Luna) silently re-routing an active session to a sibling OAuth account when usage headroom changed: `AuthStorage.#resolveOAuthSelection` now promotes the session-preferred credential back to the front of the ranked candidates whenever it is still usable, unblocked, and plan-eligible, so a session stays sticky unless the sticky account is blocked, exhausted, or ineligible for the current model ([#5203](https://github.com/can1357/oh-my-pi/issues/5203)).
 
 ## [17.0.4] - 2026-07-18
 
@@ -144,9 +145,6 @@
 
 ### Fixed
 
-- Healed GLM in-band tool calls whose `<arg_value>` closer is missing or mistyped as `</arg_key>`; the scanner now ends the value at the next-pair signature instead of swallowing the remaining arguments into one field.
-- Healed the same `arg_key`/`arg_value` spill when it arrives through native tool calling (provider parses the in-band syntax server-side): as a last resort after validation and coercion fail, contaminated string arguments are split at the spill boundary and the swallowed pairs restored.
-- Fixed plan-gated OpenAI Codex models (Sol/Luna) silently re-routing an active session to a sibling OAuth account when usage headroom changed: `AuthStorage.#resolveOAuthSelection` now promotes the session-preferred credential back to the front of the ranked candidates whenever it is still usable, unblocked, and plan-eligible, so a session stays sticky unless the sticky account is blocked, exhausted, or ineligible for the current model ([#5203](https://github.com/can1357/oh-my-pi/issues/5203)).
 - Fixed an issue in GLM tool calling where missing or malformed argument closers (such as `<arg_value>` mistyped as `</arg_key>`) caused subsequent arguments to be swallowed or merged into a single field, affecting both in-band and native tool calling.
 
 ## [16.4.3] - 2026-07-11
