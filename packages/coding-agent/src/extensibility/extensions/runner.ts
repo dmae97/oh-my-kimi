@@ -534,8 +534,9 @@ export class ExtensionRunner {
 		return undefined;
 	}
 
-	createContext(): ExtensionContext {
-		const getModel = this.#getModel;
+	/** Creates an extension context, optionally scoped to a provider request model. */
+	createContext(model?: Model): ExtensionContext {
+		const getModel = model ? () => model : this.#getModel;
 		return {
 			ui: this.#uiContext,
 			getContextUsage: () => this.#getContextUsageFn(),
@@ -965,8 +966,9 @@ export class ExtensionRunner {
 		return currentMessages;
 	}
 
-	async emitBeforeProviderRequest(payload: unknown): Promise<BeforeProviderRequestEventResult> {
-		const ctx = this.createContext();
+	/** Runs request payload hooks with the model used for that provider request. */
+	async emitBeforeProviderRequest(payload: unknown, model?: Model): Promise<BeforeProviderRequestEventResult> {
+		const ctx = this.createContext(model);
 		let currentPayload = payload;
 
 		for (const ext of this.extensions) {
