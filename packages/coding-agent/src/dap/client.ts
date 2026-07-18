@@ -55,6 +55,8 @@ export class DapClient {
 	readonly adapter: DapResolvedAdapter;
 	readonly cwd: string;
 	readonly proc: DapClientState["proc"];
+	/** TCP server port reused by child DAP sessions. */
+	readonly port?: number;
 	/** ReadableStream of DAP bytes — from proc.stdout (stdio) or a socket (socket mode). */
 	readonly #readable: ReadableStream<Uint8Array>;
 	/** Write sink — proc.stdin (stdio) or a socket (socket mode). */
@@ -78,7 +80,12 @@ export class DapClient {
 		adapter: DapResolvedAdapter,
 		cwd: string,
 		proc: DapClientState["proc"],
-		options?: { readable?: ReadableStream<Uint8Array>; writeSink?: DapWriteSink; socket?: { end(): void } },
+		options?: {
+			readable?: ReadableStream<Uint8Array>;
+			writeSink?: DapWriteSink;
+			socket?: { end(): void };
+			port?: number;
+		},
 	) {
 		this.adapter = adapter;
 		this.cwd = cwd;
@@ -86,6 +93,7 @@ export class DapClient {
 		this.#readable = options?.readable ?? (proc.stdout as ReadableStream<Uint8Array>);
 		this.#writeSink = options?.writeSink ?? proc.stdin;
 		this.#socket = options?.socket;
+		this.port = options?.port;
 		this.proc.exited.then(
 			() => this.#rejectPendingWritesForExit(),
 			() => this.#rejectPendingWritesForExit(),
@@ -95,6 +103,9 @@ export class DapClient {
 	static async spawn({ adapter, cwd, socketReadyTimeoutMs }: DapSpawnOptions): Promise<DapClient> {
 		if (adapter.connectMode === "socket") {
 			return DapClient.#spawnSocket({ adapter, cwd, socketReadyTimeoutMs });
+		}
+		if (adapter.connectMode === "tcp") {
+			return DapClient.#spawnTcp({ adapter, cwd, socketReadyTimeoutMs });
 		}
 		// Merge non-interactive env and start in a new session (detached → setsid)
 		// so the adapter process tree has no controlling terminal. Without this,
@@ -116,6 +127,85 @@ export class DapClient {
 		});
 		void client.#startMessageReader();
 		return client;
+	}
+
+	/** Connect to another session on an existing TCP DAP server. */
+	static async connect({
+		adapter,
+		cwd,
+		host,
+		port,
+	}: {
+		adapter: DapResolvedAdapter;
+		cwd: string;
+		host: string;
+		port: number;
+	}): Promise<DapClient> {
+		const exited = Promise.withResolvers<void>();
+		const { readable, writeSink, socket } = await connectTcpSocket(host, port, () => exited.resolve());
+		const proc = {
+			exited: exited.promise,
+			exitCode: null,
+			stdin: { write: () => 0, flush: () => undefined },
+			stdout: new ReadableStream<Uint8Array>(),
+			stderr: new ReadableStream<Uint8Array>(),
+			peekStderr: () => "",
+			kill: () => {
+				exited.resolve();
+				return true;
+			},
+		} as unknown as DapClientState["proc"];
+		const client = new DapClient(adapter, cwd, proc, { readable, writeSink, socket, port });
+		exited.promise.then(() => client.#handleProcessExit());
+		void client.#startMessageReader();
+		return client;
+	}
+
+	/** Spawn an adapter that listens on a caller-selected TCP port. */
+	static async #spawnTcp({ adapter, cwd, socketReadyTimeoutMs }: DapSpawnOptions): Promise<DapClient> {
+		const host = "127.0.0.1";
+		const reservation = Bun.listen({
+			hostname: host,
+			port: 0,
+			socket: {
+				open() {},
+				data() {},
+				close() {},
+				error() {},
+			},
+		});
+		const port = reservation.port;
+		reservation.stop(true);
+		const args = adapter.args.map(arg => arg.replaceAll("$" + "{port}", String(port)));
+		const proc = ptree.spawn([adapter.resolvedCommand, ...args], {
+			cwd,
+			stdin: "pipe",
+			env: {
+				...Bun.env,
+				...NON_INTERACTIVE_ENV,
+			},
+			detached: true,
+		});
+
+		try {
+			const { readable, writeSink, socket } = await waitForTcpTransport(
+				host,
+				port,
+				socketReadyTimeoutMs ?? SOCKET_READY_TIMEOUT_MS,
+				proc,
+			);
+			const client = new DapClient(adapter, cwd, proc, { readable, writeSink, socket, port });
+			proc.exited.then(() => client.#handleProcessExit());
+			void client.#startMessageReader();
+			return client;
+		} catch (error) {
+			try {
+				proc.kill();
+			} catch {
+				/* proc may already be dead */
+			}
+			throw error;
+		}
 	}
 
 	/**
@@ -657,6 +747,83 @@ async function waitForCondition(
 		await Bun.sleep(50);
 	}
 	throw new Error(`Socket not ready after ${timeoutMs}ms`);
+}
+
+/** Connect once to a TCP DAP server. */
+async function connectTcpSocket(host: string, port: number, onClose?: () => void): Promise<SocketTransport> {
+	const { promise, resolve, reject } = Promise.withResolvers<SocketTransport>();
+	let streamController: ReadableStreamDefaultController<Uint8Array>;
+	let opened = false;
+	const readable = new ReadableStream<Uint8Array>({
+		start(controller) {
+			streamController = controller;
+		},
+	});
+
+	void Bun.connect({
+		hostname: host,
+		port,
+		socket: {
+			open(socket) {
+				opened = true;
+				resolve({
+					readable,
+					writeSink: socketToSink(socket),
+					socket,
+				});
+			},
+			data(_socket, data) {
+				streamController.enqueue(new Uint8Array(data));
+			},
+			close() {
+				onClose?.();
+				if (!opened) {
+					reject(new Error(`Connection to TCP port ${host}:${port} closed before opening`));
+				}
+				try {
+					streamController.close();
+				} catch {
+					/* already closed */
+				}
+			},
+			error(_socket, error) {
+				onClose?.();
+				if (!opened) {
+					reject(error);
+				}
+				try {
+					streamController.error(error);
+				} catch {
+					/* already closed */
+				}
+			},
+		},
+	}).catch(error => {
+		onClose?.();
+		reject(error);
+	});
+	return promise;
+}
+
+/** Wait for a TCP DAP server and retain the first successful connection. */
+async function waitForTcpTransport(
+	host: string,
+	port: number,
+	timeoutMs: number,
+	proc: { exitCode: number | null },
+): Promise<SocketTransport> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		if (proc.exitCode !== null) {
+			throw new Error(`Adapter process exited before TCP port ${host}:${port} was ready`);
+		}
+		try {
+			return await connectTcpSocket(host, port);
+		} catch {
+			await Bun.sleep(50);
+		}
+	}
+	throw new Error(`TCP port ${host}:${port} was not ready after ${timeoutMs}ms`);
 }
 
 interface SocketTransport {
