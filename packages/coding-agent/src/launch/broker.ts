@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Process, type PtyRunResult, PtySession } from "@oh-my-pi/pi-natives";
 import { isEexist, isEnoent, logger, postmortem, procmgr, sanitizeText } from "@oh-my-pi/pi-utils";
+import { hostHasInheritableConsole } from "../eval/py/spawn-options";
 import { truncateHead, truncateHeadBytes, truncateTail, truncateTailBytes } from "../session/streaming-output";
 import { workerEnvFromParent } from "../subprocess/worker-client";
 import { daemonBrokerEndpoint } from "./paths";
@@ -24,6 +25,7 @@ import {
 	parseDaemonSpec,
 	parseDaemonWireRequest,
 } from "./protocol";
+import { resolveDaemonSpawnOptions } from "./spawn-options";
 
 const DEFAULT_IDLE_GRACE_MS = 3_000;
 const MAX_REQUEST_BYTES = 1024 * 1024;
@@ -36,6 +38,10 @@ const PID_FILE = "broker.pid";
 const META_FILE = "meta.json";
 const LOG_FILE = "output.log";
 const PREVIOUS_LOG_FILE = "output.previous.log";
+const DAEMON_SPAWN_OPTIONS = resolveDaemonSpawnOptions({
+	platform: process.platform,
+	hostHasInheritableConsole: hostHasInheritableConsole(),
+});
 
 const SIGNAL_NUMBER: Record<DaemonSignal, number> = {
 	SIGINT: os.constants.signals.SIGINT,
@@ -588,7 +594,7 @@ class DaemonBroker {
 			stdin: "pipe",
 			stdout: "pipe",
 			stderr: "pipe",
-			detached: true,
+			...DAEMON_SPAWN_OPTIONS,
 		});
 		record.process = process;
 		record.input = process.stdin;
@@ -611,7 +617,7 @@ class DaemonBroker {
 				cwd: record.spec.cwd,
 				env: workerEnvFromParent(record.spec.env),
 				stdio: ["ignore", output.fd, output.fd],
-				detached: true,
+				...DAEMON_SPAWN_OPTIONS,
 			});
 			record.process = process;
 			record.snapshot.pid = process.pid;
