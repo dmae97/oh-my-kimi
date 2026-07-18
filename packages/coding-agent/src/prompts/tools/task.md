@@ -1,7 +1,14 @@
 {{#if asyncEnabled}}{{#if batchEnabled}}Delegate work to background subagents by passing multiple items in a single `tasks[]` batch.
-Execution does not block — you receive IDs immediately; results deliver when subagents finish.{{else}}Delegate work to ONE background subagent per call.
-Execution does not block — you receive an ID immediately; the result delivers when the subagent finishes.{{/if}}{{#if hasBlockingAgents}}
+Execution does not block — you receive IDs immediately.{{else}}Delegate work to ONE background subagent per call.
+Execution does not block — you receive an ID immediately.{{/if}}{{#if hasBlockingAgents}}
 Agents marked BLOCKING run inline — results return in this call; non-blocking items in the same batch still spawn as background jobs.{{/if}}{{else}}{{#if batchEnabled}}Run subagents synchronously by passing items in a `tasks[]` batch. Execution blocks until all work finishes.{{else}}Run ONE subagent synchronously. Execution blocks until work finishes.{{/if}}{{/if}}
+{{#if asyncEnabled}}
+
+# Async Job Contract
+- Results auto-deliver. A settled `hub jobs`/`hub wait` snapshot is the delivery; no duplicate `async-result` follows.
+- Job IDs are process-local and expire roughly five minutes after settlement. Afterward, use the agent ID with `hub send`, `agent://<id>`, or `history://<id>`.
+- `completed` means successful yield/job exit, not artifact acceptance. Verify claimed changes.
+{{/if}}
 
 # Task Design
 - **Agent typing:** Pick each item's `agent` type. Read-only research MUST use `agent: "scout"` (faster model). Use default worker only when no specialist fits.

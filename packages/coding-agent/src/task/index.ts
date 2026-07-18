@@ -21,6 +21,7 @@ import type { ToolSession } from "..";
 import type { Theme } from "../modes/theme/theme";
 import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.md" with { type: "text" };
 import taskDescriptionTemplate from "../prompts/tools/task.md" with { type: "text" };
+import taskAsyncContractTemplate from "../prompts/tools/task-async-contract.md" with { type: "text" };
 import taskSummaryTemplate from "../prompts/tools/task-summary.md" with { type: "text" };
 import { truncateForPrompt } from "../tools/approval";
 import { isIrcEnabled } from "../tools/hub";
@@ -894,14 +895,16 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			failedSchedules.length > 0
 				? ` Failed to schedule ${failedSchedules.length} spawn${failedSchedules.length === 1 ? "" : "s"}: ${failedSchedules.join("; ")}.`
 				: "";
-		const coordinationHint =
+		const coordinationHint = [
 			started.length === 1
 				? ircEnabled
 					? `DM \`${started[0].agentId}\` via \`hub\` send to coordinate while it runs; use \`hub\` only to inspect (\`jobs\`), wait, or cancel a stuck task.`
 					: `Use \`hub\` to inspect (\`jobs\`), wait, or cancel a stuck task.`
 				: ircEnabled
 					? `DM these ids via \`hub\` send to coordinate while they run; use \`hub\` only to inspect (\`jobs\`), wait, or cancel a stuck task.`
-					: `Use \`hub\` to inspect (\`jobs\`), wait, or cancel a stuck task by id.`;
+					: `Use \`hub\` to inspect (\`jobs\`), wait, or cancel a stuck task by id.`,
+			taskAsyncContractTemplate.trim(),
+		].join("\n");
 
 		if (syncSpawns.length === 0) {
 			if (spawns.length === 1) {
