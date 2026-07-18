@@ -79,8 +79,8 @@ const SESSION_STICKY_CACHE_PREFIX = "session:sticky:";
  * cache — switching accounts mid-session cold-starts it — but Anthropic caps
  * OAuth prompt-cache retention at `ttl: "1h"` (ephemeral ~5min otherwise), so
  * once a session has gone this long without an Anthropic resolve the
- * conversation-prefix cache the pin protects has certainly expired and ranking
- * must run again to restore proactive multi-account load balancing.
+ * conversation-prefix cache the pin protects is no longer guaranteed warm and
+ * ranking must run again to restore proactive multi-account load balancing.
  */
 const SESSION_STICKY_CACHE_WARM_MS = 60 * 60_000;
 

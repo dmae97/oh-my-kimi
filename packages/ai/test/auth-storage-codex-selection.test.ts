@@ -2445,8 +2445,8 @@ describe("AuthStorage claude oauth ranking", () => {
 		clockOffset = 30 * 60 * 1000;
 		expect(await storage.getApiKey("anthropic", "claude-idle-gating")).toBe("api-acct-pinned");
 
-		// After >1h of Anthropic request inactivity the prompt cache has certainly
-		// expired, so ranking must run again and rotate to the clearly-better sibling.
+		// After >1h of Anthropic request inactivity the prompt cache is no longer
+		// guaranteed warm, so ranking must run again and rotate to the better sibling.
 		clockOffset = 30 * 60 * 1000 + 2 * HOUR_MS;
 		expect(await storage.getApiKey("anthropic", "claude-idle-gating")).toBe("api-acct-fresh");
 	});
