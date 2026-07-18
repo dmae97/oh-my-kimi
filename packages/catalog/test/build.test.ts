@@ -322,6 +322,36 @@ describe("openai-completions wire-quirk compat detection", () => {
 		expect(buildOpenAICompat(completionsSpec()).dropThinkingWhenReasoningEffort).toBe(false);
 	});
 
+	it("floors the stream timeout for a loopback litellm proxy without enabling reasoning replay (#4786)", () => {
+		// A litellm proxy on a loopback baseUrl fronts a local llama-server whose
+		// prefill can exceed the 100s default first-event budget on large prompts.
+		// The proxy carve-out (which keeps `replayReasoningContent` off so the
+		// field is never forwarded to an unrelated cloud upstream) must NOT also
+		// strip the widened stream-timeout floor, or the turn aborts and
+		// retry-loops during a slow reprocess.
+		const loopback = buildOpenAICompat(
+			completionsSpec({ provider: "litellm", id: "qwen3", baseUrl: "http://127.0.0.1:4000/v1" }),
+		);
+		expect(loopback.streamIdleTimeoutMs).toBe(300_000);
+		expect(loopback.replayReasoningContent).toBe(false);
+
+		// A litellm proxy on a remote baseUrl gets neither: no local upstream to
+		// wait on, and replay would risk a 400 on the cloud upstream.
+		const remote = buildOpenAICompat(
+			completionsSpec({ provider: "litellm", id: "qwen3", baseUrl: "https://litellm.example.com/v1" }),
+		);
+		expect(remote.streamIdleTimeoutMs).toBeUndefined();
+		expect(remote.replayReasoningContent).toBe(false);
+
+		// A first-party local backend (llama.cpp) still gets both the floor and
+		// the reasoning replay it needs for KV-cache reuse.
+		const native = buildOpenAICompat(
+			completionsSpec({ provider: "llama.cpp", id: "qwen3", baseUrl: "http://127.0.0.1:8080/v1" }),
+		);
+		expect(native.streamIdleTimeoutMs).toBe(300_000);
+		expect(native.replayReasoningContent).toBe(true);
+	});
+
 	it("disables the leaked-markup healer for the official OpenAI endpoint only", () => {
 		// Official OpenAI returns structured reasoning and never leaks fences, so
 		// the provider-local healer stays off; every other OpenAI-compatible host

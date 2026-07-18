@@ -1338,4 +1338,97 @@ describe("AgentSession auto-compaction progress guard", () => {
 			.at(-1);
 		expect(compactionEntry?.warning).toBeUndefined();
 	});
+
+	it("re-prepares and compacts after a shake rescue frees the un-summarizable tail", async () => {
+		// Issue #4786: the kept region is a single oversized recent turn, so the
+		// first prepareCompaction returns undefined (nothing on the summarizable
+		// side) and summary compaction cannot start. The dead-end runs the elide
+		// shake rescue INSIDE the tail; once it frees enough, prepareCompaction is
+		// retried on the elided branch, now succeeds, and the pass falls through to
+		// a normal (hook-supplied) compaction that creates headroom and
+		// auto-continues instead of looping the no-progress warning.
+		const branch = sessionManager.getBranch();
+		const firstKeptEntryId = branch[branch.length - 1].id;
+		if (!firstKeptEntryId) throw new Error("seeded entry has no id");
+		let shaken = false;
+		const preparation: compactionModule.CompactionPreparation = {
+			firstKeptEntryId,
+			messagesToSummarize: [{ role: "user", content: "old", timestamp: Date.now() }],
+			turnPrefixMessages: [],
+			recentMessages: [],
+			isSplitTurn: false,
+			tokensBefore: 190000,
+			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+			settings: session.settings.getGroup("compaction"),
+		};
+		vi.spyOn(compactionModule, "prepareCompaction").mockImplementation(() => (shaken ? preparation : undefined));
+		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined as never);
+		vi.spyOn(session.agent, "continue").mockResolvedValue();
+		// Residual is over the band until the rescue elides the tail, then drops.
+		vi.spyOn(session, "getContextUsage").mockImplementation(() =>
+			shaken
+				? { tokens: 1000, contextWindow: 200000, percent: 0.5 }
+				: { tokens: 190000, contextWindow: 200000, percent: 95 },
+		);
+		const shakeSpy = vi.spyOn(session, "shake").mockImplementation(async () => {
+			shaken = true;
+			return { mode: "elide", toolResultsDropped: 1, blocksDropped: 0, tokensFreed: 160000, artifactId: "art-1" };
+		});
+
+		const notices = collectNotices();
+
+		const { promise: compactionDone, resolve: onCompactionDone } = Promise.withResolvers<void>();
+		session.subscribe(event => {
+			if (event.type === "auto_compaction_end" && event.result) onCompactionDone();
+		});
+
+		const assistantMsg = highUsageAssistant();
+		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMsg] });
+
+		await compactionDone;
+		await session.waitForIdle();
+
+		expect(shakeSpy).toHaveBeenCalledWith("elide", expect.anything());
+		expect(promptSpy).toHaveBeenCalledTimes(1);
+		const noProgress = notices.filter(n => n.source === NOTICE_SOURCE && n.message.includes(NO_PROGRESS_FRAGMENT));
+		expect(noProgress.length).toBe(0);
+		const recovery = notices.filter(n => n.source === NOTICE_SOURCE && n.message.includes("dead-end recovery"));
+		expect(recovery.length).toBe(1);
+	});
+
+	it("still warns once when a no-preparation dead-end cannot be shaken", async () => {
+		// prepareCompaction returns undefined AND the oversized tail has nothing
+		// elide-eligible: the rescue frees nothing, prepareCompaction still returns
+		// undefined, and the guard MUST pause with a single no-progress warning
+		// (not loop) instead of re-firing on the same oversized tail.
+		vi.spyOn(compactionModule, "prepareCompaction").mockReturnValue(undefined);
+		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined as never);
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+		vi.spyOn(session, "getContextUsage").mockReturnValue({ tokens: 190000, contextWindow: 200000, percent: 95 });
+		const shakeSpy = vi
+			.spyOn(session, "shake")
+			.mockResolvedValue({ mode: "elide", toolResultsDropped: 0, blocksDropped: 0, tokensFreed: 0 });
+
+		const notices = collectNotices();
+
+		const { promise: compactionDone, resolve: onCompactionDone } = Promise.withResolvers<void>();
+		session.subscribe(event => {
+			if (event.type === "auto_compaction_end") onCompactionDone();
+		});
+
+		const assistantMsg = highUsageAssistant();
+		session.agent.emitExternalEvent({ type: "message_end", message: assistantMsg });
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [assistantMsg] });
+
+		await compactionDone;
+		await session.waitForIdle();
+
+		expect(shakeSpy).toHaveBeenCalledWith("elide", expect.anything());
+		expect(promptSpy).not.toHaveBeenCalled();
+		expect(continueSpy).not.toHaveBeenCalled();
+		const noProgress = notices.filter(n => n.source === NOTICE_SOURCE && n.message.includes(NO_PROGRESS_FRAGMENT));
+		expect(noProgress.length).toBe(1);
+		expect(noProgress[0].level).toBe("warning");
+	});
 });

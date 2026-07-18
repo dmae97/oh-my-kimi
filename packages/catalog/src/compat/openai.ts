@@ -323,6 +323,14 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 	const isLocalOpenAICompatBackend =
 		!PROXY_OPENAI_COMPAT_PROVIDERS.has(provider) &&
 		(LOCAL_OPENAI_COMPAT_PROVIDERS.has(provider) || hasLocalLoopbackBaseUrl(baseUrl));
+	// Stream-timeout floor applies to ANY loopback/RFC1918 backend, INCLUDING
+	// local proxies (litellm) excluded from `isLocalOpenAICompatBackend` above:
+	// widening the first-event/idle abort ceiling only helps a slow local
+	// upstream and never pushes an extra wire field, so the proxy carve-out (a
+	// `replayReasoningContent` safety measure) must not also strip the timeout
+	// floor. Without this, a loopback litellm fronting a cold/reprocessing
+	// llama-server aborts prefill at the 100s default and retry-loops (#4786).
+	const isLocalServingBackend = isLocalOpenAICompatBackend || hasLocalLoopbackBaseUrl(baseUrl);
 
 	const useMaxTokens =
 		isMistral ||
@@ -395,7 +403,7 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 						? KIMI_REASONING_STREAM_IDLE_TIMEOUT_MS
 						: spec.reasoning && isDirectDeepseekApi
 							? DEEPSEEK_REASONING_STREAM_IDLE_TIMEOUT_MS
-							: isLocalOpenAICompatBackend
+							: isLocalServingBackend
 								? LOCAL_OPENAI_COMPAT_STREAM_IDLE_TIMEOUT_MS
 								: undefined;
 
@@ -621,9 +629,13 @@ export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): Resol
 	const isAnthropicModel = id ? isClaudeModelId(id) || isAnthropicNamespacedModelId(id) : false;
 	const isDeepseekFamily = id ? isDeepseekModelIdOrName(id) || isDeepseekModelIdOrName(spec.name) : false;
 	const reasoningCapable = Boolean(spec.reasoning);
-	const isLocalOpenAICompatBackend =
-		!PROXY_OPENAI_COMPAT_PROVIDERS.has(spec.provider) &&
-		(LOCAL_OPENAI_COMPAT_PROVIDERS.has(spec.provider) || hasLocalLoopbackBaseUrl(baseUrl));
+	// `replayReasoningContent` is Responses-only-false, so the proxy carve-out is
+	// irrelevant here; the stream-timeout floor still applies to ANY loopback /
+	// RFC1918 backend, including local proxies (litellm), so a slow local
+	// upstream is not aborted at the 100s default and retry-looped (#4786).
+	const isLocalServingBackend =
+		(!PROXY_OPENAI_COMPAT_PROVIDERS.has(spec.provider) && LOCAL_OPENAI_COMPAT_PROVIDERS.has(spec.provider)) ||
+		hasLocalLoopbackBaseUrl(baseUrl);
 
 	const compat: ResolvedOpenAIResponsesCompat = {
 		supportsDeveloperRole: isAzure || isOpenAIUrl || hostMatchesUrl(baseUrl, "githubCopilot"),
@@ -690,7 +702,7 @@ export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): Resol
 		emptyLengthFinishIsContextError: spec.provider === "ollama",
 		usesOpenAIToolCallIdLimit: spec.provider === "openai",
 		promptCacheSessionHeader: spec.provider === "xai-oauth" ? "x-grok-conv-id" : undefined,
-		streamIdleTimeoutMs: isLocalOpenAICompatBackend
+		streamIdleTimeoutMs: isLocalServingBackend
 			? LOCAL_OPENAI_COMPAT_STREAM_IDLE_TIMEOUT_MS
 			: spec.compat?.streamIdleTimeoutMs,
 	};

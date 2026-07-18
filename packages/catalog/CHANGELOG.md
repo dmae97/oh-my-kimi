@@ -178,6 +178,9 @@
 - Fixed LiteLLM discovery stopping at `/model_group/info` when that endpoint omitted `supports_vision`; it now continues to `/model/info` and preserves `model_info.supports_vision=true` for vision-capable proxy models. ([#4747](https://github.com/can1357/oh-my-pi/issues/4747))
 - Fixed LiteLLM discovery to fall back to bundled catalog metadata when `models.dev` lacks a model reference, preserving reasoning and thinking support for models such as `glm-5.2`. ([#4695](https://github.com/can1357/oh-my-pi/issues/4695))
 - Detected Azure AI Inference / Foundry Anthropic routes as strict-tool-incompatible so resolved Anthropic compat disables strict tools before request construction ([#4679](https://github.com/can1357/oh-my-pi/issues/4679)).
+### Fixed
+
+- Fixed a loopback `litellm` proxy fronting a local llama.cpp/vLLM server aborting long prefills with `stream timed out while waiting for the first event` and retry-looping. `litellm` is excluded from `isLocalOpenAICompatBackend` to keep `replayReasoningContent` off proxies (which could 400 an unrelated cloud upstream), but that exclusion also stripped the 300s local stream-timeout floor, leaving the 100s default; a slow reprocess (llama.cpp `non-consecutive token position` KV thrash) then exceeded it. The timeout floor now applies to any loopback/RFC1918 backend, including proxies, while reasoning replay stays gated to first-party local providers. ([#4786](https://github.com/can1357/oh-my-pi/issues/4786))
 
 ## [16.3.11] - 2026-07-06
 

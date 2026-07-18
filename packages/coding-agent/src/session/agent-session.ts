@@ -13894,35 +13894,73 @@ export class AgentSession {
 				this.#getCompactionModelCandidates(availableModels),
 				this.sessionId,
 			);
-			const preparation = prepareCompaction(pathEntries, compactionSettings, autoCompactionCandidates);
+			let pathEntriesForCompaction = pathEntries;
+			let preparation = prepareCompaction(pathEntriesForCompaction, compactionSettings, autoCompactionCandidates);
 			if (!preparation) {
-				await this.#emitSessionEvent({
-					type: "auto_compaction_end",
-					action,
-					result: undefined,
-					aborted: false,
-					willRetry: false,
-					skipped: true,
-				});
-				const noProgressDeadEnd = reason !== "idle";
-				let continuationScheduled = false;
-				if (!suppressContinuation && this.agent.hasQueuedMessages()) {
-					this.#scheduleAgentContinue({
-						delayMs: 100,
-						generation,
-						shouldContinue: () => this.agent.hasQueuedMessages(),
+				// prepareCompaction found nothing to summarize because the kept region
+				// is a single oversized recent turn — findCutPoint never cuts inside a
+				// tool result, so a huge tool-result / fenced block tail leaves nothing
+				// on the summarizable side and summary compaction cannot even start.
+				// That is exactly the dead-end the elide shake rescues: it reaches
+				// INSIDE the tail and offloads heavy content to an artifact placeholder,
+				// shrinking the tail so findCutPoint can then move the cut and leave
+				// older turns to summarize. Run the same rescue the post-maintenance
+				// guard uses, then re-prepare on the elided branch and fall through to
+				// the normal compaction body when it now succeeds (writing a compaction
+				// entry anchors the stale billed usage so the auto-continue re-check
+				// cannot re-trip and loop the warning — issue #4786). Skip when we
+				// already fell through from a shake strategy pass (it tried and found
+				// nothing) or on the idle timer (it re-checks usage on its own cadence).
+				let rescued: ShakeResult | undefined;
+				if (reason !== "idle" && !fallbackFromShake) {
+					rescued = await this.#tryShakeRescueForDeadEnd(autoCompactionSignal);
+					if (rescued && !autoCompactionSignal.aborted) {
+						pathEntriesForCompaction = this.sessionManager.getBranch();
+						preparation = prepareCompaction(
+							pathEntriesForCompaction,
+							compactionSettings,
+							autoCompactionCandidates,
+						);
+						if (preparation) this.#emitShakeRescueNotice(rescued);
+					}
+				}
+				if (!preparation) {
+					await this.#emitSessionEvent({
+						type: "auto_compaction_end",
+						action,
+						result: undefined,
+						aborted: false,
+						willRetry: false,
+						skipped: true,
 					});
-					continuationScheduled = true;
+					const noProgressDeadEnd = reason !== "idle";
+					let continuationScheduled = false;
+					if (!suppressContinuation && this.agent.hasQueuedMessages()) {
+						this.#scheduleAgentContinue({
+							delayMs: 100,
+							generation,
+							shouldContinue: () => this.agent.hasQueuedMessages(),
+						});
+						continuationScheduled = true;
+					}
+					if (noProgressDeadEnd) {
+						this.emitNotice(
+							"warning",
+							compactionDeadEndWarning("clear large tool output, run `/shake images` to drop attached images,"),
+							"compaction",
+						);
+					}
+					// A rescue that offloaded content but still could not produce a
+					// preparation rewrote the branch; flag it so the overflow-recovery
+					// rollback does not re-restore the just-failed assistant turn on top
+					// of the elided tail.
+					const base = continuationScheduled
+						? COMPACTION_CHECK_CONTINUATION
+						: noProgressDeadEnd
+							? COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION
+							: COMPACTION_CHECK_NONE;
+					return rescued ? { ...base, historyRewritten: true } : base;
 				}
-				if (noProgressDeadEnd) {
-					this.emitNotice(
-						"warning",
-						compactionDeadEndWarning("shrink it (e.g. clear large tool output)"),
-						"compaction",
-					);
-				}
-				if (continuationScheduled) return COMPACTION_CHECK_CONTINUATION;
-				return noProgressDeadEnd ? COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION : COMPACTION_CHECK_NONE;
 			}
 
 			let hookCompaction: CompactionResult | undefined;
@@ -13934,7 +13972,7 @@ export class AgentSession {
 				const hookResult = (await this.#extensionRunner.emit({
 					type: "session_before_compact",
 					preparation,
-					branchEntries: pathEntries,
+					branchEntries: pathEntriesForCompaction,
 					customInstructions: undefined,
 					signal: autoCompactionSignal,
 				})) as SessionBeforeCompactResult | undefined;
