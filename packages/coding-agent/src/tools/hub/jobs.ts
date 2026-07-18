@@ -8,6 +8,7 @@ import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import type { AsyncJob, AsyncJobManager } from "../../async";
+import { settings } from "../../config/settings";
 import type { RenderResultOptions } from "../../extensibility/custom-tools/types";
 import { shimmerEnabled, shimmerText } from "../../modes/theme/shimmer";
 import type { Theme } from "../../modes/theme/theme";
@@ -134,6 +135,7 @@ interface TrackedJobLike {
 	status: string;
 	label: string;
 	startTime: number;
+	latestDetails?: Record<string, unknown>;
 	resultText?: string;
 	errorText?: string;
 }
@@ -143,12 +145,34 @@ export function snapshotJobs(session: ToolSession, jobs: TrackedJobLike[]): JobS
 	return jobs.map(j => {
 		const current = session.asyncJobManager?.getJob(j.id);
 		const latest = current ?? j;
+		let resolvedModel: string | undefined;
+		if (latest.type === "task") {
+			const progressValue = latest.latestDetails?.progress;
+			if (Array.isArray(progressValue)) {
+				let progressRecord: Record<string, unknown> | undefined;
+				for (const item of progressValue) {
+					if (!item || typeof item !== "object") continue;
+					const candidate = item as Record<string, unknown>;
+					if (!progressRecord) progressRecord = candidate;
+					if (candidate.id === latest.id) {
+						progressRecord = candidate;
+						break;
+					}
+				}
+				const modelValue = progressRecord?.resolvedModel;
+				if (typeof modelValue === "string") {
+					const trimmed = modelValue.trim();
+					if (trimmed) resolvedModel = trimmed;
+				}
+			}
+		}
 		return {
 			id: latest.id,
 			type: latest.type,
 			status: latest.status as JobSnapshot["status"],
 			label: latest.label,
 			durationMs: Math.max(0, now - latest.startTime),
+			...(resolvedModel ? { resolvedModel } : {}),
 			...(latest.resultText ? { resultText: latest.resultText } : {}),
 			...(latest.errorText ? { errorText: latest.errorText } : {}),
 		};
@@ -354,6 +378,7 @@ const PREVIEW_LINES_EXPANDED = 4;
 const LABEL_LINES_COLLAPSED = 1;
 const LABEL_LINES_EXPANDED = 3;
 const PREVIEW_LINE_WIDTH = 80;
+const MODEL_BADGE_MAX_WIDTH = 48;
 
 function statusToIcon(status: JobSnapshot["status"]): ToolUIStatus {
 	switch (status) {
@@ -545,6 +570,20 @@ export function jobsRenderResult(
 							visibleLabelLines[visibleLabelLines.length - 1] = `${last} …`;
 						}
 						const durationText = uiTheme.fg("dim", formatDuration(job.durationMs));
+						const modelText =
+							job.type === "task" &&
+							typeof job.resolvedModel === "string" &&
+							job.resolvedModel.trim() &&
+							settings.get("task.showResolvedModelBadge")
+								? `${uiTheme.sep.dot}${uiTheme.fg(
+										"dim",
+										truncateToWidth(
+											replaceTabs(job.resolvedModel.trim()),
+											MODEL_BADGE_MAX_WIDTH,
+											Ellipsis.Unicode,
+										),
+									)}`
+								: "";
 						// Running rows in a live block shimmer their label; once the block
 						// stops animating (sealed, or a settled snapshot — spinnerFrame
 						// cleared) they render static so scrollback never keeps a mid-sweep
@@ -556,7 +595,9 @@ export function jobsRenderResult(
 								? shimmerText(headRaw, uiTheme)
 								: uiTheme.fg("accent", headRaw)
 							: uiTheme.fg("toolOutput", headRaw);
-						lines.push(`${icon}${idPart} ${typeBadge} ${headLabel} ${durationText}`);
+						lines.push(
+							`${icon}${idPart} ${typeBadge} ${headLabel}${modelText}${modelText ? uiTheme.sep.dot : " "}${durationText}`,
+						);
 						for (let i = 1; i < visibleLabelLines.length; i++) {
 							lines.push(`  ${uiTheme.fg("toolOutput", visibleLabelLines[i]!)}`);
 						}

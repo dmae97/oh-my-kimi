@@ -1081,12 +1081,41 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				try {
 					markRunning();
 					progress.status = "running";
-					await reportProgress(`Running background task ${agentId}...`);
+					await reportProgress(
+						`Running background task ${agentId}...`,
+						buildDetails() as unknown as Record<string, unknown>,
+					);
+					const forwardSyncProgress: AgentToolUpdateCallback<TaskToolDetails> = async update => {
+						const nextProgress = update.details?.progress?.[0];
+						if (nextProgress) {
+							// The job body owns status and identity (id/index/agent);
+							// copy only the live metrics the subagent streams so the
+							// polling row reflects the resolved model, reasoning level,
+							// and running counters without reverting the "running"
+							// status back to the subagent's initial "pending" snapshot.
+							progress.resolvedModel = nextProgress.resolvedModel;
+							progress.tokens = nextProgress.tokens;
+							progress.requests = nextProgress.requests;
+							progress.contextTokens = nextProgress.contextTokens;
+							progress.contextWindow = nextProgress.contextWindow;
+							progress.cost = nextProgress.cost;
+							progress.toolCount = nextProgress.toolCount;
+							progress.currentTool = nextProgress.currentTool;
+							progress.lastIntent = nextProgress.lastIntent;
+							progress.recentTools = nextProgress.recentTools.slice();
+							progress.recentOutput = nextProgress.recentOutput.slice();
+							progress.retryState = nextProgress.retryState;
+							progress.retryFailure = nextProgress.retryFailure;
+						}
+						const updateText =
+							update.content.find(part => part.type === "text")?.text ?? `Running background task ${agentId}...`;
+						await reportProgress(updateText, buildDetails() as unknown as Record<string, unknown>);
+					};
 					const result = await this.#executeSync(
 						toolCallId,
 						spawnParams,
 						runSignal,
-						undefined,
+						forwardSyncProgress,
 						agentId,
 						progress.index,
 						true,
@@ -1107,11 +1136,16 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 					progress.extractedToolData = singleResult?.extractedToolData;
 					progress.retryFailure = singleResult?.retryFailure;
 					progress.retryState = undefined;
+					if (singleResult?.resolvedModel) {
+						progress.resolvedModel = singleResult.resolvedModel;
+					} else {
+						delete progress.resolvedModel;
+					}
 					onSettled?.(resultFailed);
 					const statusText = resultFailed
 						? `Background task ${agentId} failed.`
 						: `Background task ${agentId} complete.`;
-					await reportProgress(statusText);
+					await reportProgress(statusText, buildDetails() as unknown as Record<string, unknown>);
 					const deliveryText = `${finalText}${buildFollowUpHint(singleResult?.aborted === true)}`;
 					if (resultFailed) {
 						// Mark the job itself failed; the failed agent stays interrogable.
@@ -1126,7 +1160,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 					progress.durationMs = Math.max(0, Date.now() - startedAt);
 					onSettled?.(true);
 					const statusText = `Background task ${agentId} failed.`;
-					await reportProgress(statusText);
+					await reportProgress(statusText, buildDetails() as unknown as Record<string, unknown>);
 					const message = error instanceof Error ? error.message : String(error);
 					const hint = AgentRegistry.global().get(agentId) ? buildFollowUpHint(false) : "";
 					throw new TaskJobError(`${message}${hint}`);

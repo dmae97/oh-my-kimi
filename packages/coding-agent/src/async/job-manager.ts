@@ -37,6 +37,8 @@ export interface AsyncJob {
 	promise: Promise<void>;
 	resultText?: string;
 	errorText?: string;
+	/** Latest tool-render details reported by the running job. */
+	latestDetails?: Record<string, unknown>;
 	/**
 	 * Registry id of the agent that registered the job (e.g. "Main",
 	 * "AuthLoader"). Used by scoped cancel/list APIs so a subagent's teardown
@@ -205,6 +207,7 @@ export class AsyncJobManager {
 		};
 
 		const reportProgress = async (text: string, details?: Record<string, unknown>): Promise<void> => {
+			if (details) job.latestDetails = details;
 			if (!options?.onProgress) return;
 			try {
 				await options.onProgress(text, details);
