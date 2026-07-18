@@ -137,6 +137,7 @@ describe("read PDF with a line-range selector", () => {
 				.join("\n");
 			expect(selectorText).toContain("pdf line 2");
 			expect(selectorText).toContain("pdf line 3");
+			expect(selectorText).not.toContain("pdf line 1");
 
 			expect(convert).toHaveBeenCalledTimes(1);
 		} finally {

@@ -59,14 +59,12 @@ describe("read tool raw range exactness", () => {
 		expect(output.trimEnd()).toBe("L01\nL02");
 	});
 
-	it("keeps context padding for numbered range reads", async () => {
-		// Numbered mode intentionally pads (leading anchor buffer + trailing
-		// disambiguation lines) — line numbers make the padding self-describing.
+	it("returns exactly the requested numbered range without context padding", async () => {
 		const result = await tool.execute("call-numbered", { path: `${filePath}:31-31` });
 		const output = getTextOutput(result);
 
 		expect(output).toContain("L31");
-		expect(output).toContain("L30");
-		expect(output).toContain("L32");
+		expect(output).not.toContain("L30");
+		expect(output).not.toContain("L32");
 	});
 });

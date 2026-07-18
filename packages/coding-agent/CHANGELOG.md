@@ -96,6 +96,9 @@
 ### Fixed
 
 - Fixed the `/extensions` dashboard tab labeled "Agents (standard)" being confused with the `/agents` subagents feature — the `.agent`/`.agents` config-standard provider now presents as "Agent Dirs (.agent/.agents)" since it lists skills, rules, prompts, commands, and context/system files, never subagents ([#5821](https://github.com/can1357/oh-my-pi/issues/5821)).
+### Fixed
+
+- Fixed non-raw `read` line selectors returning context outside the requested inclusive range ([#5802](https://github.com/can1357/oh-my-pi/issues/5802)).
 
 ## [17.0.2] - 2026-07-17
 

@@ -54,7 +54,7 @@ import {
 } from "../session/streaming-output";
 import { fileHyperlink, renderCodeCell, renderMarkdownCell, renderStatusLine, tryResolveInternalUrlSync } from "../tui";
 import { CachedOutputBlock, markFramedBlockComponent } from "../tui/output-block";
-import { buildLineEntriesWithBlockContext, type LineEntry, lineEntriesToPlainText } from "../utils/block-context";
+import { buildLineEntries, type LineEntry, lineEntriesToPlainText } from "../utils/block-context";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import {
 	ImageInputTooLargeError,
@@ -164,7 +164,7 @@ const PROSE_SUMMARY_EXTENSIONS = new Set([".md", ".txt"]);
 // Remote mount path prefix (sshfs mounts) - skip fuzzy matching to avoid hangs
 const REMOTE_MOUNT_PREFIX = getRemoteDir() + path.sep;
 
-async function readBracketContextFullLines(absolutePath: string, fileSize: number): Promise<string[] | undefined> {
+async function readSmallFileLines(absolutePath: string, fileSize: number): Promise<string[] | undefined> {
 	if (fileSize > SNAPSHOT_MAX_BYTES) return undefined;
 	try {
 		return normalizeToLF(await Bun.file(absolutePath).text()).split("\n");
@@ -394,40 +394,6 @@ function formatSummaryElisionFooter(
 	return `[…${elidedLines}ln elided; re-read needed ranges${tail}]`;
 }
 const READ_CHUNK_SIZE = 8 * 1024;
-
-/**
- * Context lines added around an explicit range read. Anchor-stale failures
- * cluster on edits whose anchors land just outside the most recent read
- * window, but the data (`scripts/session-stats/analyze_selector_reads.py`)
- * shows most follow-up reads are disjoint hops, not adjacent extensions —
- * so symmetric padding rarely pays for itself.
- *
- * Leading=1 catches accidental single-line reads where the anchor is the
- * line immediately above the requested start. Trailing=3 buffers the
- * common case where the agent asks for a narrow range and then needs the
- * next few lines to disambiguate an anchor.
- */
-const RANGE_LEADING_CONTEXT_LINES = 1;
-const RANGE_TRAILING_CONTEXT_LINES = 3;
-
-/**
- * Expand a [start, end) range with leading/trailing context lines on the
- * sides where the user actually constrained the range. A start of 0 (no
- * explicit offset) does not get leading context — that's already an
- * open-ended read from the top.
- */
-function expandRangeWithContext(
-	requestedStart: number,
-	requestedEnd: number,
-	totalLines: number,
-	expandStart: boolean,
-	expandEnd: boolean,
-): { startLine: number; endLine: number } {
-	return {
-		startLine: expandStart ? Math.max(0, requestedStart - RANGE_LEADING_CONTEXT_LINES) : requestedStart,
-		endLine: expandEnd ? Math.min(totalLines, requestedEnd + RANGE_TRAILING_CONTEXT_LINES) : requestedEnd,
-	};
-}
 
 async function streamLinesFromFile(
 	filePath: string,
@@ -1305,26 +1271,10 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const details = options.details ?? {};
 		const allLines = text.split("\n");
 		const totalLines = allLines.length;
-		// User-requested 0-indexed range start. Lines BEFORE this are leading
-		// context (added below if offset is explicit).
 		const requestedStart = offset ? Math.max(0, offset - 1) : 0;
+		const startLine = requestedStart;
 		const ignoreResultLimits = options.ignoreResultLimits ?? false;
-		const requestedEnd = limit !== undefined ? Math.min(requestedStart + limit, allLines.length) : allLines.length;
-		// Expand only on sides the user actually constrained: leading context
-		// when offset>1, trailing context when a finite limit was set. Raw mode
-		// never expands — without line numbers the padding is indistinguishable
-		// from requested content, so `raw:31-31` must return line 31 and nothing
-		// else (verbatim-extraction contract).
-		const rawDisplay = options.raw === true;
-		const expanded = expandRangeWithContext(
-			requestedStart,
-			requestedEnd,
-			allLines.length,
-			!rawDisplay && offset !== undefined && offset > 1,
-			!rawDisplay && limit !== undefined,
-		);
-		const startLine = expanded.startLine;
-		const endLineExpanded = expanded.endLine;
+		const endLine = limit !== undefined ? Math.min(startLine + limit, allLines.length) : allLines.length;
 		const startLineDisplay = startLine + 1;
 
 		const resultBuilder = toolResult(details);
@@ -1350,7 +1300,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				.done();
 		}
 
-		const endLine = endLineExpanded;
 		const selectedContent = allLines.slice(startLine, endLine).join("\n");
 		const userLimitedLines = limit !== undefined ? endLine - startLine : undefined;
 		const truncation = ignoreResultLimits ? noTruncResult(selectedContent) : truncateHead(selectedContent);
@@ -1395,10 +1344,8 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			emittedHashlineHeader = true;
 			return prependHashlineHeader(formatted, hashContext);
 		};
-		const buildLineEntries = (endLineDisplay: number): LineEntry[] =>
-			buildLineEntriesWithBlockContext(allLines, [{ startLine: startLineDisplay, endLine: endLineDisplay }], {
-				path: options.sourcePath,
-			});
+		const buildSelectedLineEntries = (endLineDisplay: number): LineEntry[] =>
+			buildLineEntries(allLines, [{ startLine: startLineDisplay, endLine: endLineDisplay }]);
 
 		let outputText: string;
 		let truncationInfo:
@@ -1436,7 +1383,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				rawSeenLines = contiguousLineNumbers(startLineDisplay, outputLines);
 				outputText = formatText(truncation.content, startLineDisplay);
 			} else {
-				outputText = formatLineEntries(buildLineEntries(endLineDisplay), startLineDisplay);
+				outputText = formatLineEntries(buildSelectedLineEntries(endLineDisplay), startLineDisplay);
 			}
 			details.truncation = truncation;
 			truncationInfo = {
@@ -1451,7 +1398,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				rawSeenLines = contiguousLineNumbers(startLineDisplay, userLimitedLines);
 				outputText = formatText(selectedContent, startLineDisplay);
 			} else {
-				outputText = formatLineEntries(buildLineEntries(endLine), startLineDisplay);
+				outputText = formatLineEntries(buildSelectedLineEntries(endLine), startLineDisplay);
 			}
 			outputText += `\n\n[${remaining} more lines in ${options.entityLabel}. Use :${nextOffset} to continue]`;
 		} else {
@@ -1459,7 +1406,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				rawSeenLines = contiguousLineNumbers(startLineDisplay, endLine - startLine);
 				outputText = formatText(truncation.content, startLineDisplay);
 			} else {
-				outputText = formatLineEntries(buildLineEntries(endLine), startLineDisplay);
+				outputText = formatLineEntries(buildSelectedLineEntries(endLine), startLineDisplay);
 			}
 		}
 
@@ -1480,8 +1427,8 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	 * Render a multi-range read against in-memory text. Each range emits a
 	 * formatted block with its own anchors / line numbers, blocks are joined
 	 * with an elision separator, and ranges past EOF surface as `[…]` notices
-	 * so the model can correct the next call. No leading/trailing context is
-	 * added — multi-range callers always specify exact bounds.
+	 * so the model can correct the next call. Context is never added because
+	 * multi-range callers always specify exact bounds.
 	 */
 	#buildInMemoryMultiRangeResult(
 		text: string,
@@ -1538,7 +1485,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		if (options.raw === true) {
 			outputText = rawParts.length > 0 ? rawParts.join("\n\n…\n\n") : "";
 		} else if (visibleSpans.length > 0) {
-			const entries = buildLineEntriesWithBlockContext(allLines, visibleSpans, { path: options.sourcePath });
+			const entries = buildLineEntries(allLines, visibleSpans);
 			if (shouldAddHashLines) seenLines = lineNumbersFromEntries(entries);
 			const firstLine = entries.find(entry => entry.kind === "line");
 			if (firstLine?.kind === "line") {
@@ -1622,7 +1569,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const notices: string[] = [];
 		const visibleSpans: Array<{ startLine: number; endLine: number }> = [];
 		const displayLineByNumber = new Map<number, string>();
-		const fullLines = rawSelector ? undefined : await readBracketContextFullLines(absolutePath, fileSize);
+		const fullLines = rawSelector ? undefined : await readSmallFileLines(absolutePath, fileSize);
 		let columnTruncated = 0;
 		let displayContent: { text: string; startLine: number; lineNumbers?: Array<number | null> } | undefined;
 
@@ -1690,23 +1637,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 
 		let outputText: string;
 		if (!rawSelector && fullLines && visibleSpans.length > 0) {
-			const entries = buildLineEntriesWithBlockContext(
-				fullLines,
-				visibleSpans,
-				{ path: absolutePath },
-				{
-					lineText: (lineNumber, sourceText) => {
-						const visibleText = displayLineByNumber.get(lineNumber);
-						if (visibleText !== undefined) return visibleText;
-						if (maxColumns <= 0) return sourceText;
-						const truncated = truncateLine(sourceText, maxColumns);
-						if (truncated.wasTruncated) {
-							columnTruncated = maxColumns;
-						}
-						return truncated.text;
-					},
-				},
-			);
+			const entries = buildLineEntries(fullLines, visibleSpans, {
+				lineText: (lineNumber, sourceText) => displayLineByNumber.get(lineNumber) ?? sourceText,
+			});
 			const firstLine = entries.find(entry => entry.kind === "line");
 			displayContent = {
 				text: lineEntriesToPlainText(entries, BRACKET_CONTEXT_ELLIPSIS),
@@ -2513,7 +2446,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					// Raw text or line-range mode
 					const { offset, limit } = selToOffsetLimit(parsed);
 					// Try ACP bridge first — editor's in-memory buffer is source of truth.
-					// Request full text so local range rendering keeps normal context and line numbers.
+					// Request full text so local range rendering preserves exact bounds and line numbers.
 					const bridgePromise = this.#routeReadThroughBridge(absolutePath);
 					if (bridgePromise !== undefined) {
 						try {
@@ -2535,24 +2468,15 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						}
 					}
 
-					// User-requested 0-indexed range start. Lines BEFORE this become
-					// leading context (added below if offset is explicit). Raw mode
-					// never adds context: without line numbers the padding is
-					// indistinguishable from requested content, so `raw:31-31` must
-					// return line 31 and nothing else.
 					const rawSelector = isRawSelector(parsed);
 					const requestedStart = offset ? Math.max(0, offset - 1) : 0;
-					const expandStart = !rawSelector && offset !== undefined && offset > 1;
-					const expandEnd = !rawSelector && limit !== undefined;
-					const leadingContext = expandStart ? Math.min(requestedStart, RANGE_LEADING_CONTEXT_LINES) : 0;
-					const trailingContext = expandEnd ? RANGE_TRAILING_CONTEXT_LINES : 0;
-					const startLine = requestedStart - leadingContext;
+					const startLine = requestedStart;
 					const startLineDisplay = startLine + 1;
 
 					const DEFAULT_LIMIT = this.#defaultLimit;
 					const effectiveLimit = limit ?? DEFAULT_LIMIT;
-					const maxLinesToCollect = Math.min(effectiveLimit + leadingContext + trailingContext, DEFAULT_MAX_LINES);
-					const selectedLineLimit = effectiveLimit + leadingContext + trailingContext;
+					const maxLinesToCollect = Math.min(effectiveLimit, DEFAULT_MAX_LINES);
+					const selectedLineLimit = effectiveLimit;
 					// Scale byte budget with line limit so the configured line count actually fits.
 					// Assume ~512 bytes/line average; never go below the shared default.
 					const maxBytesForRead = Math.max(DEFAULT_MAX_BYTES, maxLinesToCollect * 512);
@@ -2614,15 +2538,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						if (cloned) displayLines = cloned;
 					}
 
-					const displayLineByNumber = new Map<number, string>();
-					for (let i = 0; i < displayLines.length; i++) {
-						displayLineByNumber.set(startLineDisplay + i, displayLines[i] ?? "");
-					}
-					const bracketContextFullLines = rawSelector
-						? undefined
-						: await readBracketContextFullLines(absolutePath, fileSize);
-					const displayedEndLine = startLineDisplay + Math.max(0, displayLines.length - 1);
-
 					const selectedContent = displayLines.join("\n");
 					const userLimitedLines = collectedLines.length;
 
@@ -2679,36 +2594,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						emittedHashlineHeader = true;
 						return prependHashlineHeader(formatted, hashContext);
 					};
-					const formatBracketAwareText = (): string | undefined => {
-						if (!bracketContextFullLines) return undefined;
-						const entries = buildLineEntriesWithBlockContext(
-							bracketContextFullLines,
-							[{ startLine: startLineDisplay, endLine: displayedEndLine }],
-							{ path: absolutePath },
-							{
-								lineText: (lineNumber, sourceText) => {
-									const visibleText = displayLineByNumber.get(lineNumber);
-									if (visibleText !== undefined) return visibleText;
-									if (maxColumns <= 0) return sourceText;
-									const truncated = truncateLine(sourceText, maxColumns);
-									if (truncated.wasTruncated) {
-										columnTruncated = maxColumns;
-									}
-									return truncated.text;
-								},
-							},
-						);
-						const firstLine = entries.find(entry => entry.kind === "line");
-						capturedDisplayContent = {
-							text: lineEntriesToPlainText(entries, BRACKET_CONTEXT_ELLIPSIS),
-							startLine: firstLine?.kind === "line" ? firstLine.lineNumber : startLineDisplay,
-							lineNumbers: entries.map(entry => (entry.kind === "line" ? entry.lineNumber : null)),
-						};
-						const formatted = formatLineEntriesWithMode(entries, shouldAddHashLines, shouldAddLineNumbers);
-						if (!hashContext || emittedHashlineHeader) return formatted;
-						emittedHashlineHeader = true;
-						return prependHashlineHeader(formatted, hashContext);
-					};
 
 					let outputText: string;
 
@@ -2739,7 +2624,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 							},
 						};
 					} else if (truncation.truncated) {
-						outputText = formatBracketAwareText() ?? formatText(truncation.content, startLineDisplay);
+						outputText = formatText(truncation.content, startLineDisplay);
 						details = { truncation };
 						sourcePath = absolutePath;
 						truncationInfo = {
@@ -2753,7 +2638,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					} else if (startLine + userLimitedLines < totalFileLines || !reachedEof) {
 						const nextOffset = startLine + userLimitedLines + 1;
 
-						outputText = formatBracketAwareText() ?? formatText(truncation.content, startLineDisplay);
+						outputText = formatText(truncation.content, startLineDisplay);
 						outputText += reachedEof
 							? `\n\n[${totalFileLines - (startLine + userLimitedLines)} more lines in file. Use :${nextOffset} to continue]`
 							: `\n\n[More lines in file (${formatBytes(fileSize)} total; not scanned to EOF). Use :${nextOffset} to continue]`;
@@ -2761,7 +2646,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						sourcePath = absolutePath;
 					} else {
 						// No truncation, no user limit exceeded
-						outputText = formatBracketAwareText() ?? formatText(truncation.content, startLineDisplay);
+						outputText = formatText(truncation.content, startLineDisplay);
 						details = {};
 						sourcePath = absolutePath;
 					}
@@ -2981,16 +2866,11 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 
 		const { offset, limit } = selToOffsetLimit(parsedSel);
 		const requestedStart = offset ? Math.max(0, offset - 1) : 0;
-		// Raw mode never adds context lines — see the plain-file range path.
-		const expandStart = !rawSelector && offset !== undefined && offset > 1;
-		const expandEnd = !rawSelector && limit !== undefined;
-		const leadingContext = expandStart ? Math.min(requestedStart, RANGE_LEADING_CONTEXT_LINES) : 0;
-		const trailingContext = expandEnd ? RANGE_TRAILING_CONTEXT_LINES : 0;
-		const startLine = requestedStart - leadingContext;
+		const startLine = requestedStart;
 		const startLineDisplay = startLine + 1;
 		const effectiveLimit = limit ?? this.#defaultLimit;
-		const maxLinesToCollect = Math.min(effectiveLimit + leadingContext + trailingContext, DEFAULT_MAX_LINES);
-		const selectedLineLimit = effectiveLimit + leadingContext + trailingContext;
+		const maxLinesToCollect = Math.min(effectiveLimit, DEFAULT_MAX_LINES);
+		const selectedLineLimit = effectiveLimit;
 		const maxBytesForRead = Math.max(DEFAULT_MAX_BYTES, maxLinesToCollect * 512);
 		const streamResult = await streamLinesFromFile(
 			artifact.path,
