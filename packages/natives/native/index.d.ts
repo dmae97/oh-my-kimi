@@ -84,7 +84,10 @@ export declare class Process {
 /** Stateful PTY session for interactive stdin/stdout passthrough. */
 export declare class PtySession {
   constructor()
-  /** Start a shell command, stream output chunks, and report the spawned child PID. */
+  /**
+   * Start a shell command, stream output chunks, and report the spawned child
+   * PID.
+   */
   start(options: PtyStartOptions, onChunk?: ((error: Error | null, chunk: string) => void) | undefined | null, onStart?: ((error: Error | null, pid: number) => void) | undefined | null): Promise<PtyRunResult>
   /**
    * Start an executable with separate arguments, stream output chunks, and

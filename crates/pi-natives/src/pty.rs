@@ -351,14 +351,10 @@ fn run_pty_sync(
 		.spawn_command(cmd)
 		.map_err(|err| Error::from_reason(format!("Failed to spawn PTY command: {err}")))?;
 	drop(pair.slave);
-	let child_pid = child
-		.process_id()
-		.and_then(|value| i32::try_from(value).ok());
+	let child_process_id = child.process_id();
+	let child_pid = child_process_id.and_then(|value| i32::try_from(value).ok());
 	if let Some(callback) = on_start.as_ref() {
-		let pid = child_pid
-			.and_then(|value| u32::try_from(value).ok())
-			.unwrap_or(0);
-		callback.call(Ok(pid), ThreadsafeFunctionCallMode::NonBlocking);
+		callback.call(Ok(child_process_id.unwrap_or(0)), ThreadsafeFunctionCallMode::NonBlocking);
 	}
 	ct.heartbeat()
 		.map_err(|err| Error::from_reason(format!("PTY setup cancelled before reader: {err}")))?;
