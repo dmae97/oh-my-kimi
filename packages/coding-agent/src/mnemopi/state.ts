@@ -454,18 +454,23 @@ export class MnemopiSessionState {
 		this.lastRetainedTurn = userTurns;
 	}
 
-	async forceRetainCurrentSession(): Promise<void> {
+	async forceRetainCurrentSession(options: { extract?: boolean } = {}): Promise<void> {
 		if (this.aliasOf) return;
 		const flat = extractMessages(this.session.sessionManager);
-		await this.retainMessages(flat, this.sessionId);
+		await this.retainMessages(flat, this.sessionId, options);
 		this.lastRetainedTurn = flat.filter(message => message.role === "user").length;
 	}
 
-	async retainMessages(messages: Array<{ role: string; content: string }>, sourceId: string): Promise<void> {
+	async retainMessages(
+		messages: Array<{ role: string; content: string }>,
+		sourceId: string,
+		options: { extract?: boolean } = {},
+	): Promise<void> {
 		const { transcript, messageCount } = prepareRetentionTranscript(messages, true);
 		if (!transcript) return;
 		const { transcript: extractText } = prepareUserRetentionTranscript(messages);
 		const { transcript: embedText } = prepareEmbeddableRetentionTranscript(messages);
+		const shouldExtract = options.extract !== false && extractText !== null;
 		this.rememberInScope(transcript, {
 			source: "coding-agent-transcript",
 			importance: 0.65,
@@ -476,9 +481,9 @@ export class MnemopiSessionState {
 				cwd: this.session.sessionManager.getCwd(),
 			},
 			scope: "bank",
-			extract: extractText !== null,
-			extractEntities: extractText !== null,
-			extractText,
+			extract: shouldExtract,
+			extractEntities: shouldExtract,
+			extractText: shouldExtract ? extractText : null,
 			embedText,
 			veracity: "unknown",
 			memoryType: "episode",
@@ -530,22 +535,42 @@ export class MnemopiSessionState {
 	 * otherwise enqueue would report success while leaving the subagent's
 	 * retained memories unconsolidated until the parent eventually shuts down
 	 * (PR #2327 review).
+	 *
+	 * @param options.full - When true, run `sleepAllSessions` on every owned bank
+	 *  (the full cross-session consolidation used by `/memory enqueue`). When
+	 *  false (the default), run only `sleep` on the current session for a
+	 *  lighter, bounded shutdown pass.
+	 * @param options.sleep - When false, skips the bank sleep step entirely.
+	 *  Used on the interactive shutdown path so `dispose` does not block on
+	 *  synchronous consolidation of old working rows from previous sessions.
+	 * @param options.extract - When false, the retained transcript is stored but
+	 *  no LLM fact extraction is scheduled. Used on the interactive shutdown path
+	 *  so `dispose` does not block on a fresh LLM round-trip.
 	 */
-	async consolidate(): Promise<void> {
-		await this.forceRetainCurrentSession();
+	async consolidate(options: { full?: boolean; extract?: boolean; sleep?: boolean } = {}): Promise<void> {
+		await this.forceRetainCurrentSession({ extract: options.extract });
 		for (const memory of this.scoped.owned) {
 			await memory.flushExtractions();
-			memory.sleepAllSessions(false);
+			if (options.sleep === false) continue;
+			if (options.full) {
+				memory.sleepAllSessions(false);
+			} else {
+				memory.sleep(false);
+			}
 		}
 	}
 
 	/**
-	 * Release the per-session resources. Defaults to running {@link consolidate}
-	 * before closing handles so normal session shutdown promotes working memory
-	 * into long-term storage. Callers that are about to delete the DB files —
-	 * e.g. `mnemopiBackend.clear` — pass `{ consolidate: false }` to skip the
-	 * extraction/sleep pass, since spending tokens on memories that will be
-	 * wiped on the next line is wasted work (PR #2327 review).
+	 * Release the per-session resources. Defaults to running a lighter
+	 * {@link consolidate} pass before closing handles: it retains the current
+	 * transcript and flushes in-flight extractions, but skips the synchronous
+	 * bank sleep so normal session shutdown returns promptly. Full promotion of
+	 * working memory into long-term storage is still performed by the explicit
+	 * `/memory enqueue` and backend enqueue paths. Callers that are about to
+	 * delete the DB files — e.g. `mnemopiBackend.clear` — pass
+	 * `{ consolidate: false }` to skip the retain/flush pass, since spending
+	 * tokens on memories that will be wiped on the next line is wasted work
+	 * (PR #2327 review).
 	 *
 	 * `timeoutMs` caps how long the consolidate await blocks the caller
 	 * (the user-visible `/quit` / `/exit` shutdown path passes this so
@@ -569,9 +594,11 @@ export class MnemopiSessionState {
 			closeOwned();
 			return;
 		}
-		const consolidatePromise = this.consolidate().catch((error: unknown) => {
-			logger.warn("Mnemopi: consolidation on dispose failed.", { error: String(error) });
-		});
+		const consolidatePromise = this.consolidate({ full: false, extract: false, sleep: false }).catch(
+			(error: unknown) => {
+				logger.warn("Mnemopi: consolidation on dispose failed.", { error: String(error) });
+			},
+		);
 		const { timeoutMs } = options;
 		if (timeoutMs !== undefined && timeoutMs > 0) {
 			const TIMED_OUT = Symbol("mnemopi.dispose.timedOut");
