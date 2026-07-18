@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed ordinary focused-component keystrokes performing a full root compose by scoping stable-focus renders to that component while retaining full composition when input moves focus ([#5928](https://github.com/can1357/oh-my-pi/issues/5928)).
+- Fixed ordinary coding-agent editor keystrokes performing a full root compose by adding an explicit stable-focus subtree-render opt-in while preserving full composition for callback-driven components and focus changes ([#5928](https://github.com/can1357/oh-my-pi/issues/5928)).
 
 ## [17.0.3] - 2026-07-17
 
