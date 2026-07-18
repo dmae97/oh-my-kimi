@@ -134,10 +134,7 @@ async function executeSearch(
 	const explicitProvider = params.provider;
 	let candidates: SearchProviderCandidate[];
 	if (explicitProvider && explicitProvider !== "auto") {
-		const provider = await getSearchProvider(explicitProvider);
-		candidates = (await provider.isExplicitlyAvailable(authStorage))
-			? [{ id: explicitProvider, explicit: true }]
-			: resolveProviderCandidates("auto");
+		candidates = [{ id: explicitProvider, explicit: true }];
 	} else if (explicitProvider === "auto") {
 		// Explicit `--provider auto` bypasses the configured preferred provider
 		// for this invocation; exclusions still apply.
@@ -175,7 +172,13 @@ async function executeSearch(
 			const available = candidate.explicit
 				? await provider.isExplicitlyAvailable(authStorage)
 				: await provider.isAvailable(authStorage);
-			if (!available) continue;
+			if (!available && !candidate.explicit) continue;
+			if (!available && candidate.explicit) {
+				throw new SearchProviderError(
+					provider.id,
+					`${provider.label} web search is unavailable. Configure its credentials or select the automatic provider chain.`,
+				);
+			}
 			availableProviderCount++;
 			lastProvider = provider;
 
@@ -213,6 +216,7 @@ async function executeSearch(
 			// summary error), masking the cancellation.
 			throwIfAborted(signal);
 			failures.push({ provider: provider ?? providerMeta, error });
+			if (candidate.explicit) break;
 		}
 	}
 

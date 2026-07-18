@@ -50,6 +50,8 @@ describe("ModelRegistry command-resolved models.yml values", () => {
 		);
 
 		const registry = new ModelRegistry(authStorage, modelsPath);
+		expect(registry.hasCommandBackedApiKey("anthropic")).toBe(true);
+		expect(registry.hasCommandBackedApiKey("openai")).toBe(false);
 		const models = registry.getAll().filter(model => model.provider === "anthropic");
 
 		expect(models.length).toBeGreaterThan(1);

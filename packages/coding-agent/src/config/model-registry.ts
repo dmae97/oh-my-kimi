@@ -1986,6 +1986,17 @@ export class ModelRegistry {
 		);
 	}
 
+	/**
+	 * Whether the provider's configured API key is resolved from a command.
+	 *
+	 * Callers use this to distinguish the registry's command-first resolver
+	 * path from lower-priority credentials in {@link authStorage}.
+	 */
+	hasCommandBackedApiKey(provider: string): boolean {
+		const keyConfig = this.#customProviderApiKeys.get(provider);
+		return isCommandConfigValue(keyConfig);
+	}
+
 	getDiscoverableProviders(): string[] {
 		const disabledProviders = getDisabledProviderIdsFromSettings();
 		return this.#discoverableProviders

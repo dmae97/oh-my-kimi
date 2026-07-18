@@ -22,7 +22,11 @@ import { searchAnthropic } from "@oh-my-pi/pi-coding-agent/web/search/providers/
 import type { SearchParams } from "@oh-my-pi/pi-coding-agent/web/search/providers/base";
 import { searchBrave } from "@oh-my-pi/pi-coding-agent/web/search/providers/brave";
 import { withHardTimeout } from "@oh-my-pi/pi-coding-agent/web/search/providers/utils";
-import type { SearchProviderId, SearchResponse } from "@oh-my-pi/pi-coding-agent/web/search/types";
+import {
+	SearchProviderError,
+	type SearchProviderId,
+	type SearchResponse,
+} from "@oh-my-pi/pi-coding-agent/web/search/types";
 
 const FAKE_SESSION = {} as ToolSession;
 const fakeStorage = {
@@ -173,9 +177,9 @@ describe("executeSearch abort propagation", () => {
 		};
 	}
 
-	function mockProviderChain(providers: provider.SearchProvider[]) {
+	function mockProviderChain(providers: provider.SearchProvider[], options?: { explicitFirst?: boolean }) {
 		vi.spyOn(provider, "resolveProviderCandidates").mockReturnValue(
-			providers.map(({ id }) => ({ id, explicit: false })),
+			providers.map(({ id }, index) => ({ id, explicit: options?.explicitFirst === true && index === 0 })),
 		);
 		return vi.spyOn(provider, "getSearchProvider").mockImplementation(async id => {
 			const match = providers.find(candidate => candidate.id === id);
@@ -265,6 +269,32 @@ describe("executeSearch abort propagation", () => {
 		expect(result.details?.response.provider).toBe("exa");
 		expect(getProvider).toHaveBeenCalledTimes(1);
 		expect(getProvider).toHaveBeenCalledWith("exa");
+		expect(fallbackSearch).not.toHaveBeenCalled();
+	});
+
+	it("does not fall through after an explicitly selected provider fails", async () => {
+		const fallbackSearch = vi.fn(
+			async (): Promise<SearchResponse> => ({
+				provider: "brave",
+				sources: [{ title: "Hidden fallback", url: "https://example.com/fallback" }],
+			}),
+		);
+		const getProvider = mockProviderChain(
+			[
+				fakeProvider("codex", async () => {
+					throw new SearchProviderError("codex", "Configured Codex endpoint does not support web_search.", 400);
+				}),
+				fakeProvider("brave", fallbackSearch),
+			],
+			{ explicitFirst: true },
+		);
+
+		const tool = new WebSearchTool(FAKE_SESSION);
+		const result = await tool.execute("test-id", { query: "anything" });
+
+		expect(result.details?.error).toContain("Configured Codex endpoint does not support web_search.");
+		expect(result.details?.response.provider).toBe("codex");
+		expect(getProvider).toHaveBeenCalledTimes(1);
 		expect(fallbackSearch).not.toHaveBeenCalled();
 	});
 });
