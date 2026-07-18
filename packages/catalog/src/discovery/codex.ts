@@ -1,6 +1,6 @@
 import { type } from "arktype";
 import { parseKnownModel, semverEqual } from "../identity/classify";
-import type { ModelSpec } from "../types";
+import type { FetchImpl, ModelSpec } from "../types";
 import { discoveryFetch } from "../utils";
 import { CODEX_BASE_URL, CODEX_CLIENT_VERSION, OPENAI_HEADER_VALUES, OPENAI_HEADERS } from "../wire/codex";
 
@@ -69,7 +69,7 @@ export interface CodexModelDiscoveryOptions {
 	/** Abort signal for network request cancellation. */
 	signal?: AbortSignal;
 	/** Optional fetch implementation override for tests. */
-	fetchFn?: typeof fetch;
+	fetchFn?: FetchImpl;
 }
 
 /**

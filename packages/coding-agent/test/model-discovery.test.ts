@@ -280,6 +280,53 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(authStorage.getOAuthCredential("anthropic")?.access).toBe("sk-ant-oat-expired-anthropic");
 	});
 
+	test("online-if-uncached refreshes expired OAuth for authoritative providers even when the cache is fresh", async () => {
+		// Regression for #5364: openai-codex is authoritative, so its bundled
+		// models are pruned only when the manager is actually constructed — which
+		// needs an authenticated key. With an expired OAuth token peekApiKey
+		// returns undefined; the fresh-cache shortcut must NOT skip the refresh, or
+		// the manager is never added and unsupported bundled ids (gpt-5.4-nano)
+		// remain selectable for the whole cache TTL.
+		const { refreshCalls } = await useAuthStorageWithRefreshTracker();
+		await authStorage.set("openai-codex", {
+			type: "oauth",
+			access: "expired-openai-codex",
+			refresh: "refresh-openai-codex",
+			expires: Date.now() - 60_000,
+		});
+		// Fresh + authoritative, but written against no static fingerprint so the
+		// constructed manager still performs the account-scoped fetch.
+		writeModelCache("openai-codex", Date.now() - 60_000, [], true, "", cacheDbPath);
+		let modelListCalls = 0;
+		const fetchMock: FetchImpl = async (input, init) => {
+			const url = String(input);
+			if (url.startsWith("https://chatgpt.com/backend-api") && url.includes("/models")) {
+				modelListCalls++;
+				expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer fresh-openai-codex");
+				return Response.json({
+					models: [
+						{
+							slug: "gpt-5.6-terra",
+							display_name: "GPT-5.6 Terra",
+							context_window: 372_000,
+							supported_in_api: true,
+							input_modalities: ["text", "image"],
+						},
+					],
+				});
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		};
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+
+		await registry.refreshProvider("openai-codex", "online-if-uncached");
+
+		expect(refreshCalls).toEqual(["openai-codex"]);
+		expect(modelListCalls).toBe(1);
+		expect(registry.find("openai-codex", "gpt-5.6-terra")).toBeDefined();
+		expect(registry.find("openai-codex", "gpt-5.4-nano")).toBeUndefined();
+	});
+
 	test("configured discovery suppresses built-in special OAuth discovery", async () => {
 		await authStorage.set("google-gemini-cli", {
 			type: "oauth",

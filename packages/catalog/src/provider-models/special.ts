@@ -13,18 +13,20 @@ export interface OpenAICodexModelManagerConfig {
 	accessToken?: string;
 	accountId?: string;
 	clientVersion?: string;
+	fetch?: FetchImpl;
 }
 
 export function openaiCodexModelManagerOptions(
 	config: OpenAICodexModelManagerConfig = {},
 ): ModelManagerOptions<"openai-codex-responses"> {
-	const { accessToken, accountId, clientVersion } = config;
+	const { accessToken, accountId, clientVersion, fetch } = config;
 	return {
 		providerId: "openai-codex",
+		dynamicModelsAuthoritative: true,
 		...(accessToken
 			? {
 					fetchDynamicModels: async () => {
-						const result = await fetchCodexModels({ accessToken, accountId, clientVersion });
+						const result = await fetchCodexModels({ accessToken, accountId, clientVersion, fetchFn: fetch });
 						return result?.models ?? null;
 					},
 				}

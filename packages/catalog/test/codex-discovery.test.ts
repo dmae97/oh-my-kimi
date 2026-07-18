@@ -7,6 +7,7 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { fetchCodexModels } from "@oh-my-pi/pi-catalog/discovery/codex";
 import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { resolveProviderModels } from "@oh-my-pi/pi-catalog/model-manager";
+import { openaiCodexModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/special";
 import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
 
 describe("Codex model discovery", () => {
@@ -138,6 +139,42 @@ describe("Codex model discovery", () => {
 		expect(sol?.contextWindow).toBe(372_000);
 		const legacy = result?.models.find(model => model.id === "gpt-5.5");
 		expect(legacy?.contextWindow).toBe(272_000);
+	});
+
+	it("uses the discovered account catalog as authoritative", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-codex-authoritative-"));
+		const staticOnlyModel: ModelSpec<"openai-codex-responses"> = {
+			id: "unsupported-static",
+			name: "Unsupported static model",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 272_000,
+			maxTokens: 128_000,
+		};
+		const discoveredModel: ModelSpec<"openai-codex-responses"> = {
+			...staticOnlyModel,
+			id: "account-supported",
+			name: "Account-supported model",
+		};
+		try {
+			const result = await resolveProviderModels(
+				{
+					...openaiCodexModelManagerOptions(),
+					staticModels: [staticOnlyModel],
+					cacheDbPath: path.join(tempDir, "models.db"),
+					fetchDynamicModels: async () => [discoveredModel],
+				},
+				"online",
+			);
+
+			expect(result.models.map(model => model.id)).toEqual(["account-supported"]);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
 	});
 
 	it("ignores pre-V2 Codex discovery cache rows", async () => {

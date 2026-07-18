@@ -548,19 +548,25 @@ async function generateModels() {
 	allModels.push(...buildFireworksFastSeed());
 
 	const specialDiscoverySources = [
-		{ label: "Antigravity", fetch: fetchAntigravityModels },
-		{ label: "Codex", fetch: fetchCodexDiscoveryModels },
+		{ label: "Antigravity", providerId: "google-antigravity", authoritative: false, fetch: fetchAntigravityModels },
+		{ label: "Codex", providerId: "openai-codex", authoritative: true, fetch: fetchCodexDiscoveryModels },
 	] as const;
 	const specialDiscoveries = await Promise.all(
 		specialDiscoverySources.map(async source => ({
 			label: source.label,
+			providerId: source.providerId,
+			authoritative: source.authoritative,
 			models: await source.fetch(),
 		})),
 	);
+	const authoritativeSpecialDiscoveryProviders = new Set<string>();
 	for (const discovery of specialDiscoveries) {
 		if (discovery.models.length > 0) {
 			console.log(`Added ${discovery.models.length} models from ${discovery.label} discovery`);
 			allModels.push(...discovery.models);
+			if (discovery.authoritative) {
+				authoritativeSpecialDiscoveryProviders.add(discovery.providerId);
+			}
 		}
 	}
 
@@ -587,6 +593,7 @@ async function generateModels() {
 				!DISCOVERY_ONLY_PROVIDERS.has(model.provider) &&
 				!RETIRED_PROVIDERS.has(model.provider) &&
 				!authoritativeCatalogProviders.has(model.provider) &&
+				!authoritativeSpecialDiscoveryProviders.has(model.provider) &&
 				!modelsDevSnapshotExcludedProviders.has(model.provider)
 			) {
 				allModels.push(model);

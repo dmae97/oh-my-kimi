@@ -78,6 +78,10 @@
 - Fixed reasoning effort mapping for Z.ai GLM-5.2 on the Anthropic messages endpoint to correctly use the two-tier scale (high, max) and emit output_config.effort.
 - Fixed an issue where stale cached model limits would override updated static catalog limits after a catalog fingerprint mismatch.
 - Fixed Cursor discovery to correctly preserve GetUsableModels max-mode metadata for premium models and invalidate stale cache entries.
+### Fixed
+
+- Fixed OpenAI Codex discovery to replace stale bundled models with the authenticated account catalog, preventing unsupported models from remaining selectable. ([#5364](https://github.com/can1357/oh-my-pi/issues/5364))
+- Fixed OpenAI Codex discovery ignoring the caller-supplied `fetch`, so it always hit the global network instead of the configured (proxy/extra-CA/test) fetch. ([#5364](https://github.com/can1357/oh-my-pi/issues/5364))
 
 ## [16.4.3] - 2026-07-11
 

@@ -1641,6 +1641,7 @@ export class ModelRegistry {
 		providerId: string,
 		strategy: ModelRefreshStrategy,
 		cacheProviderId: string,
+		authoritative: boolean,
 	): Promise<string | undefined> {
 		const peekedKey = await this.#peekApiKeyForProvider(providerId);
 		if (isAuthenticated(peekedKey) || strategy === "offline") {
@@ -1650,7 +1651,13 @@ export class ModelRegistry {
 		if (oauthCredentials.length === 0) {
 			return peekedKey;
 		}
-		if (strategy === "online-if-uncached") {
+		// Authoritative providers prune bundled models only when their manager is
+		// actually constructed, which needs an authenticated key. A fresh cache does
+		// not let us skip the refresh here: with an expired OAuth token peekedKey is
+		// undefined, the manager is never added, and stale bundled models survive the
+		// full cache TTL. So only take the no-refresh shortcut for non-authoritative
+		// providers, whose bundled models stay visible regardless.
+		if (strategy === "online-if-uncached" && !authoritative) {
 			// Mirror shouldFetchRemoteSources: built-in managers use the catalog's
 			// default TTL, so only refresh when the manager will actually fetch.
 			const cache = readModelCache<Api>(
@@ -1682,11 +1689,13 @@ export class ModelRegistry {
 	): Promise<ModelManagerOptions<Api>[]> {
 		const specialProviderDescriptors: Array<{
 			providerId: string;
+			authoritative: boolean;
 			resolveKey: (value: string | undefined) => string | undefined;
 			createOptions: (key: string) => ModelManagerOptions<Api>;
 		}> = [
 			{
 				providerId: "google-antigravity",
+				authoritative: false,
 				resolveKey: extractGoogleOAuthToken,
 				createOptions: oauthToken =>
 					googleAntigravityModelManagerOptions({
@@ -1697,6 +1706,7 @@ export class ModelRegistry {
 			},
 			{
 				providerId: "google-gemini-cli",
+				authoritative: false,
 				resolveKey: extractGoogleOAuthToken,
 				createOptions: oauthToken =>
 					googleGeminiCliModelManagerOptions({
@@ -1707,12 +1717,14 @@ export class ModelRegistry {
 			},
 			{
 				providerId: "openai-codex",
+				authoritative: true,
 				resolveKey: value => value,
 				createOptions: accessToken => {
 					const accountId = resolveOAuthAccountIdForAccessToken(this.authStorage, "openai-codex", accessToken);
 					return openaiCodexModelManagerOptions({
 						accessToken,
 						accountId,
+						fetch: this.#fetch,
 					});
 				},
 			},
@@ -1737,12 +1749,22 @@ export class ModelRegistry {
 				const cacheProviderId =
 					descriptor.createModelManagerOptions({ baseUrl: discoveryBaseUrl, fetch: this.#fetch })
 						.cacheProviderId ?? descriptor.providerId;
-				return this.#resolveBuiltInDiscoveryApiKey(descriptor.providerId, strategy, cacheProviderId);
+				return this.#resolveBuiltInDiscoveryApiKey(
+					descriptor.providerId,
+					strategy,
+					cacheProviderId,
+					descriptor.dynamicModelsAuthoritative ?? false,
+				);
 			}),
 		);
 		const specialKeys = await Promise.all(
 			enabledSpecialProviderDescriptors.map(descriptor =>
-				this.#resolveBuiltInDiscoveryApiKey(descriptor.providerId, strategy, descriptor.providerId),
+				this.#resolveBuiltInDiscoveryApiKey(
+					descriptor.providerId,
+					strategy,
+					descriptor.providerId,
+					descriptor.authoritative,
+				),
 			),
 		);
 		const options: ModelManagerOptions<Api>[] = [];
