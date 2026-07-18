@@ -157,6 +157,53 @@ describe("Kimi K3 thinking transport", () => {
 		expect(payload).toMatchObject({ thinking: { type: "enabled", effort: Effort.Low } });
 		expect(payload).not.toMatchObject({ thinking: { type: "disabled" } });
 	});
+
+	it("downgrades named tool choice to required for K3 thinking", async () => {
+		vi.spyOn(kimiOauth, "getKimiCommonHeaders").mockReturnValue(KIMI_HEADERS);
+		const bundledModel = getBundledModel<"openai-completions">("kimi-code", "k3");
+		expect(bundledModel.compat.thinkingFormat).toBe("zai");
+		let payload: unknown;
+		const capturePayload = async (
+			model: Model<"openai-completions">,
+			toolChoice: "required" | { type: "tool"; name: string },
+			tools = TITLE_CONTEXT.tools,
+		) => {
+			const stream = streamKimi(
+				model,
+				{ ...TITLE_CONTEXT, tools },
+				{
+					apiKey: "test-key",
+					format: "openai",
+					reasoning: Effort.Max,
+					toolChoice,
+					onPayload: body => {
+						payload = body;
+						throw new Error("stop after payload capture");
+					},
+				},
+			);
+			await stream.result();
+		};
+
+		for (const model of [K3_MODEL, bundledModel]) {
+			await capturePayload(model, { type: "tool", name: "set_title" });
+			expect(payload).toMatchObject({
+				thinking: { type: "enabled" },
+				tool_choice: "required",
+				tools: [{ type: "function", function: { name: "set_title" } }],
+			});
+
+			await capturePayload(model, "required");
+			expect(payload).toMatchObject({
+				thinking: { type: "enabled" },
+				tool_choice: "required",
+				tools: [{ type: "function", function: { name: "set_title" } }],
+			});
+		}
+
+		await capturePayload(K3_MODEL, { type: "tool", name: "missing_tool" }, []);
+		expect((payload as { tool_choice?: unknown }).tool_choice).toBeUndefined();
+	});
 });
 
 describe("Kimi K2.7 Code thinking policy", () => {
