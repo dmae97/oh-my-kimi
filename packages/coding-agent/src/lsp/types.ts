@@ -1,5 +1,6 @@
 import type { ptree } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
+import { TOOL_TIMEOUTS } from "../tools/tool-timeouts";
 
 // =============================================================================
 // Tool Schema
@@ -14,7 +15,10 @@ export const lspSchema = type({
 	query: "string?",
 	new_name: "string?",
 	apply: "boolean?",
-	timeout: "number?",
+	"timeout?": type.number
+		.atLeast(TOOL_TIMEOUTS.lsp.min)
+		.atMost(TOOL_TIMEOUTS.lsp.max)
+		.describe("Timeout in seconds (default 20; range 5–300)."),
 	payload: "string?",
 });
 

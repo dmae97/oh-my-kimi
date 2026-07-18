@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentToolResult, RenderResultOptions } from "@oh-my-pi/pi-agent-core";
+import { arkToWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { preloadPluginRoots } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
 import { LspTool } from "@oh-my-pi/pi-coding-agent/lsp";
 import * as lspClient from "@oh-my-pi/pi-coding-agent/lsp/client";
@@ -14,18 +15,19 @@ import {
 	sortAndValidateTextEdits,
 } from "@oh-my-pi/pi-coding-agent/lsp/edits";
 import { renderCall, renderResult } from "@oh-my-pi/pi-coding-agent/lsp/render";
-import type {
-	CodeAction,
-	CreateFile,
-	DeleteFile,
-	Diagnostic,
-	LspClient,
-	LspToolDetails,
-	RenameFile,
-	ServerConfig,
-	SymbolInformation,
-	TextDocumentEdit,
-	WorkspaceEdit,
+import {
+	type CodeAction,
+	type CreateFile,
+	type DeleteFile,
+	type Diagnostic,
+	type LspClient,
+	type LspToolDetails,
+	lspSchema,
+	type RenameFile,
+	type ServerConfig,
+	type SymbolInformation,
+	type TextDocumentEdit,
+	type WorkspaceEdit,
 } from "@oh-my-pi/pi-coding-agent/lsp/types";
 import {
 	applyCodeAction,
@@ -253,10 +255,20 @@ describe("lsp regressions", () => {
 		expect(hasGlobPattern("src/main.ts")).toBe(false);
 	});
 
-	it("clamps LSP timeout to configured bounds", () => {
+	it("supports long LSP timeouts up to the advertised ceiling", () => {
 		expect(clampTimeout("lsp")).toBe(20);
 		expect(clampTimeout("lsp", 1)).toBe(5);
-		expect(clampTimeout("lsp", 1000)).toBe(60);
+		expect(clampTimeout("lsp", 120)).toBe(120);
+		expect(clampTimeout("lsp", 1000)).toBe(300);
+		expect(arkToWireSchema(lspSchema)).toMatchObject({
+			properties: {
+				timeout: {
+					description: "Timeout in seconds (default 20; range 5–300).",
+					maximum: 300,
+					minimum: 5,
+				},
+			},
+		});
 	});
 
 	it("sends the LSP exit notification after shutdown completes", async () => {

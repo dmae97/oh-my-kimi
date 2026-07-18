@@ -13,7 +13,7 @@ export const TOOL_TIMEOUTS = {
 	browser: { default: 30, min: 1, max: 300 },
 	ssh: { default: 60, min: 1, max: 3600 },
 	fetch: { default: 20, min: 1, max: 45 },
-	lsp: { default: 20, min: 5, max: 60 },
+	lsp: { default: 20, min: 5, max: 300 },
 	debug: { default: 30, min: 5, max: 300 },
 } as const satisfies Record<string, ToolTimeoutConfig>;
 
