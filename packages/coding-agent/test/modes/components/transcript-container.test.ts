@@ -388,26 +388,34 @@ describe("TranscriptContainer", () => {
 		expect(container.render(40)).toEqual(["committed", "", "tail"]);
 		expect(committed.renderCount).toBe(2);
 	});
-	it("re-renders a committed finalized block when its version changes", () => {
+	it("compacts a committed version-tracked block and rehydrates its post-commit mutation on replay", () => {
 		const container = new TranscriptContainer();
 		const block = new VersionedFinalizedBlock(["original"]);
+		const tail = new CountingFinalizedBlock(["tail"]);
 		container.addChild(block);
+		container.addChild(tail);
 
-		expect(container.render(40)).toEqual(["original"]);
-		container.setNativeScrollbackCommittedRows(1);
-		expect(container.render(40)).toEqual(["original"]);
+		expect(container.render(40)).toEqual(["original", "", "tail"]);
+		// Commit the block plus its trailing separator: those rows are now
+		// immutable native scrollback the terminal owns, so the container drops
+		// them from the live frame instead of re-walking them every tick.
+		container.setNativeScrollbackCommittedRows(2);
+		expect(container.render(40)).toEqual(["tail"]);
 		expect(block.renderCount).toBe(1);
 
-		// Post-finalize mutation (e.g. setErrorPinned(false) restoring the inline
-		// error) must surface even though the rows sit in committed scrollback —
-		// the render is what lets the TUI's committed-prefix audit re-anchor.
+		// A post-commit mutation (setErrorPinned(false) restoring the inline
+		// error) on a compacted, scrolled-off block must NOT recommit on an
+		// ordinary frame — recommitting immutable history would duplicate it.
 		block.mutate(["original", "Error: boom"]);
-		expect(container.render(40)).toEqual(["original", "Error: boom"]);
-		expect(block.renderCount).toBe(2);
+		expect(container.render(40)).toEqual(["tail"]);
+		expect(block.renderCount).toBe(1);
 
-		// Once observed, the bypass re-engages at the new version.
+		// A destructive full replay (ED3) retires the tape and rehydrates the
+		// complete frame from each block's current render — the mutation surfaces
+		// exactly once, no loss.
+		container.prepareNativeScrollbackReplay();
 		container.setNativeScrollbackCommittedRows(2);
-		expect(container.render(40)).toEqual(["original", "Error: boom"]);
+		expect(container.render(40)).toEqual(["original", "Error: boom", "", "tail"]);
 		expect(block.renderCount).toBe(2);
 	});
 	it("renders once after a block finalizes with rows already inside committed scrollback", () => {

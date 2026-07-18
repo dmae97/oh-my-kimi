@@ -19,11 +19,17 @@ interface FinalizableBlock {
 	/**
 	 * Monotonic content version for blocks that can still mutate *after*
 	 * reporting finalized (e.g. `AssistantMessageComponent`: the inline error
-	 * restored at the next turn's `agent_start`, late tool-result images). The
-	 * committed-scrollback render bypass only replays a block's previous rows
-	 * when the version is unchanged; without this signal a post-finalize
-	 * mutation would stay invisible until a global invalidation. Blocks that
-	 * never mutate post-finalize simply omit the method.
+	 * restored at the next turn's `agent_start`, late tool-result images). While
+	 * the block's rows are still on screen (not yet fully committed), the
+	 * committed-scrollback render bypass replays its previous rows only when the
+	 * version is unchanged; a bump forces a real render so the TUI's
+	 * committed-prefix audit can observe and re-anchor the change. Once the rows
+	 * fully commit to native scrollback they are dropped from the local frame
+	 * (compacted) — a later mutation no longer recommits on an ordinary frame
+	 * (immutable history the terminal owns; recommitting would duplicate it) and
+	 * instead rehydrates on the next destructive full replay
+	 * ({@link "@oh-my-pi/pi-tui".NativeScrollbackReplay}). Blocks that never
+	 * mutate post-finalize simply omit the method.
 	 */
 	getTranscriptBlockVersion?(): number;
 	/**
@@ -124,7 +130,7 @@ interface BlockSegment {
 	sep: number;
 	/** Whether the block reported finalized when this segment was rendered. */
 	finalized: boolean;
-	/** Safe to drop after commit: produced while finalized, without post-finalize version tracking. */
+	/** Safe to drop from the local frame once its rows fully commit to native scrollback: produced while finalized. */
 	compactable: boolean;
 	/** Block version observed when this segment was rendered (see {@link FinalizableBlock}). */
 	version: number | undefined;
@@ -453,7 +459,7 @@ export class TranscriptContainer
 					previous.width === width &&
 					previous.generation === this.#generation);
 			const contribution = reusable ? previous.contribution : stripPlainBlankEdges(raw);
-			const compactable = finalized && version === undefined && previous?.finalized !== false;
+			const compactable = finalized && previous?.finalized !== false;
 
 			// Empty (or stripped-to-nothing) children contribute nothing and never
 			// affect spacing. An empty still-live child still gates the commit
