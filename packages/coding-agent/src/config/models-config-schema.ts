@@ -61,6 +61,7 @@ const OpenAICompatFields = {
 	"supportsImageDetailOriginal?": "boolean",
 	// anthropic-messages compat flags (same `compat` slot, per-api interpretation)
 	"supportsEagerToolInputStreaming?": "boolean",
+	"allowAnthropicHeaderOverrides?": "boolean",
 	"requiresToolResultId?": "boolean",
 	"replayUnsignedThinking?": "boolean",
 } as const;

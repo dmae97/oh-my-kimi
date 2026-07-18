@@ -35,6 +35,10 @@
 - Automatically invalidate and rotate OAuth credentials when an "invalidated oauth token" error occurs
 - Fixed Anthropic usage reports treating the organization response header as the account identity, which caused the 5h/7d status-line segment to disappear for OAuth credentials without stored organization metadata. ([#5698](https://github.com/can1357/oh-my-pi/issues/5698))
 
+### Fixed
+
+- Fixed custom OAuth Anthropic-compatible endpoints with explicit header overrides still receiving generated Claude Code fingerprint headers instead. ([#5888](https://github.com/can1357/oh-my-pi/issues/5888))
+
 ## [17.0.2] - 2026-07-17
 
 ### Fixed
