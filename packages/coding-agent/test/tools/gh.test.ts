@@ -438,6 +438,35 @@ describe("github tool", () => {
 		expect(text).toContain("Topics: cli, github");
 	});
 
+	it("reads repository files through the GitHub contents API", async () => {
+		const textSpy = vi.spyOn(git.github, "text").mockResolvedValue('{"version":"16.3.11"}\n');
+		const tool = new GithubTool(createSession());
+		const result = await tool.execute("file-read", {
+			op: "file_read",
+			repo: "can1357/oh-my-pi",
+			branch: "main",
+			path: "packages/coding-agent/package.json",
+		});
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+		expect(text).toBe('{"version":"16.3.11"}\n');
+		expect(textSpy).toHaveBeenCalledWith(
+			"/tmp/test",
+			[
+				"api",
+				"/repos/can1357/oh-my-pi/contents/packages/coding-agent/package.json",
+				"--method",
+				"GET",
+				"-H",
+				"Accept: application/vnd.github.raw+json",
+				"-f",
+				"ref=main",
+			],
+			undefined,
+			{ repoProvided: true, trimOutput: false },
+		);
+	});
+
 	it("creates a pull request via gh and renders the resulting summary", async () => {
 		const textCalls: string[][] = [];
 		const textSpy = vi.spyOn(git.github, "text").mockImplementation(async (_cwd, args) => {

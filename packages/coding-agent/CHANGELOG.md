@@ -776,6 +776,7 @@
 - Fixed `/handoff` and auto-handoff skipping extension lifecycle hooks by emitting cancellable `session_before_switch` hooks and a `session_switch` with `reason: "handoff"` after the replacement session is ready ([#4434](https://github.com/can1357/oh-my-pi/issues/4434)).
 - Fixed TTSR stream interrupts so only the tool call whose stream matched a rule receives the rule-named abort result; sibling tool-call placeholders now use a neutral abort reason ([#2783](https://github.com/can1357/oh-my-pi/issues/2783)).
 - Fixed auto-compaction dead-ending in a warning loop ("Compaction freed too little context to make progress") when the single most-recent turn is itself over budget so `prepareCompaction` has nothing to summarize (`findCutPoint` never cuts inside a tool result). This `!preparation` short-circuit never ran the artifact-backed `shake` elide rescue that #3786 added to the post-maintenance guard, so snapcompact/context-full maintenance paused with no attempt to shrink the oversized tail. The dead-end now runs the same elide pass, re-prepares on the shrunken branch, and falls through to a normal compaction when the tail became summarizable — only pausing (single warning) when nothing is elide-eligible. ([#4786](https://github.com/can1357/oh-my-pi/issues/4786))
+- Fixed GitHub-hosted repository file reads falling back to `curl` by adding a dedicated `github` file-read operation and explicit tool-routing guidance ([#4805](https://github.com/can1357/oh-my-pi/issues/4805)).
 
 ## [16.3.11] - 2026-07-06
 
