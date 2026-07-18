@@ -227,6 +227,48 @@ describe("AuthStorage codex oauth ranking", () => {
 		expectExclusivePreference(counts, "api-acct-near", "api-acct-far");
 	});
 
+	test("keeps a Codex session pinned after >1h idle", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+		const storage = authStorage;
+
+		await storage.set("openai-codex", [
+			{ type: "oauth", ...createCredential("acct-pinned", "pinned@example.com") },
+			{ type: "oauth", ...createCredential("acct-sibling", "sibling@example.com") },
+		]);
+
+		const base = Date.now();
+		let clockOffset = 0;
+		vi.spyOn(Date, "now").mockImplementation(() => base + clockOffset);
+
+		const setUsage = (pinnedPrimary: number, siblingPrimary: number): void => {
+			usageByAccount.set(
+				"acct-pinned",
+				createCodexUsageReport({
+					accountId: "acct-pinned",
+					primary: { usedFraction: pinnedPrimary, resetInMs: HOUR_MS },
+					secondary: { usedFraction: 0.5, resetInMs: 5 * 24 * HOUR_MS },
+				}),
+			);
+			usageByAccount.set(
+				"acct-sibling",
+				createCodexUsageReport({
+					accountId: "acct-sibling",
+					primary: { usedFraction: siblingPrimary, resetInMs: HOUR_MS },
+					secondary: { usedFraction: 0.5, resetInMs: 5 * 24 * HOUR_MS },
+				}),
+			);
+		};
+
+		setUsage(0.2, 0.9);
+		expect(await storage.getApiKey("openai-codex", "codex-idle-boundary")).toBe("api-acct-pinned");
+
+		// Codex long retention can preserve a prompt cache for 24h, so the
+		// Anthropic-specific 1h gate must not re-rank this still-usable pin.
+		setUsage(0.9, 0.2);
+		clockOffset = 2 * HOUR_MS;
+		expect(await storage.getApiKey("openai-codex", "codex-idle-boundary")).toBe("api-acct-pinned");
+	});
+
 	test("prefers fresh 5h ticker account at 0% usage", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 

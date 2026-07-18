@@ -74,15 +74,14 @@ function fingerprintOAuthBearer(bearer: string): string {
 }
 const SESSION_STICKY_CACHE_PREFIX = "session:sticky:";
 /**
- * Idle window after which a session's pinned credential no longer suppresses
- * usage-based re-ranking. The pin exists to preserve the server-side prompt
- * cache — switching accounts mid-session cold-starts it — but Anthropic caps
- * OAuth prompt-cache retention at `ttl: "1h"` (ephemeral ~5min otherwise), so
- * once a session has gone this long without an Anthropic resolve the
- * conversation-prefix cache the pin protects is no longer guaranteed warm and
- * ranking must run again to restore proactive multi-account load balancing.
+ * Anthropic-only idle window after which a session's pinned credential no
+ * longer suppresses usage-based re-ranking. Anthropic caps OAuth prompt-cache
+ * retention at `ttl: "1h"` (ephemeral ~5min otherwise), so after this long
+ * without an Anthropic resolve the conversation-prefix cache is no longer
+ * guaranteed warm. Other providers retain indefinite stickiness until their
+ * own cache lifetimes are verified.
  */
-const SESSION_STICKY_CACHE_WARM_MS = 60 * 60_000;
+const ANTHROPIC_SESSION_STICKY_CACHE_WARM_MS = 60 * 60_000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Credential Types
@@ -4154,18 +4153,18 @@ export class AuthStorage {
 			sessionPreferredCredential !== undefined &&
 			(sessionPreferredCredential.refresh.trim().length > 0 ||
 				Date.now() + OAUTH_REFRESH_SKEW_MS < sessionPreferredCredential.expires);
-		// Skip ranking only when the session already has a working preferred credential AND that
-		// credential is still "warm" — re-ranking mid-session causes account switches that cold-start
-		// the server-side prompt cache. New sessions (no preference), sessions whose preferred is
-		// blocked, and sessions idle past the prompt-cache TTL ({@link SESSION_STICKY_CACHE_WARM_MS})
-		// still rank, so we pick the account with the most headroom proactively and fall back
-		// intelligently when rate-limited. Legacy pins predating `lastUsedAtMs` count as warm until
-		// the next resolve rewrites the row — no worse than today.
+		// Skip ranking when the session already has a working preferred credential and its prompt
+		// cache may still be warm. Only Anthropic has a verified idle boundary here; unverified
+		// providers retain indefinite stickiness rather than risk switching while their prompt cache
+		// remains warm. New Anthropic sessions (no preference), sessions whose preferred is blocked,
+		// and sessions idle past {@link ANTHROPIC_SESSION_STICKY_CACHE_WARM_MS} still rank. Legacy
+		// pins predating `lastUsedAtMs` count as warm until the next resolve rewrites the row.
 		const sessionPreferredLastUsedAtMs =
 			sessionCredential?.type === "oauth" ? sessionCredential.lastUsedAtMs : undefined;
 		const sessionPreferredIsWarm =
+			provider !== "anthropic" ||
 			sessionPreferredLastUsedAtMs === undefined ||
-			Date.now() - sessionPreferredLastUsedAtMs < SESSION_STICKY_CACHE_WARM_MS;
+			Date.now() - sessionPreferredLastUsedAtMs < ANTHROPIC_SESSION_STICKY_CACHE_WARM_MS;
 		const sessionPreferredIsAvailable =
 			sessionPreferredIndex !== undefined &&
 			sessionPreferredCanRefreshOrUse &&
