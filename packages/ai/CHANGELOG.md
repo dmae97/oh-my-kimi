@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed clockless Anthropic usage windows outranking clocked sibling credentials by scoring their headroom over the full window duration ([#5960](https://github.com/can1357/oh-my-pi/issues/5960)).
+
 ## [17.0.4] - 2026-07-18
 
 ### Fixed
