@@ -36,6 +36,7 @@ describe("print-mode error exit disposes the session before exit", () => {
 			extensionRunner: undefined,
 			subscribe: () => {},
 			state: { messages: [errorMsg] },
+			getLastAssistantMessage: () => errorMsg,
 			prepareForHeadlessAdvisorDrain: () => {},
 			waitForAdvisorCatchup: async () => {
 				order.push("catchup");
