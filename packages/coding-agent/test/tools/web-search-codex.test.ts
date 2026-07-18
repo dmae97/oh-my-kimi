@@ -303,6 +303,27 @@ describe("searchCodex model selection", () => {
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
+	it("validates the credential origin from the registry storage that supplies the key", async () => {
+		process.env.PI_CODEX_WEB_SEARCH_MODEL = "gpt-5.4";
+		const fetchMock = vi.fn();
+		const oauthBackedRegistry = {
+			...proxyModelRegistry,
+			authStorage: oauthOnlyAuthStorage,
+			resolver() {
+				return async () => "official-oauth-token";
+			},
+		} as unknown as ModelRegistry;
+
+		await expect(
+			searchCodex({
+				...makeSearchParams("registry oauth leak", fetchMock),
+				authStorage: proxyAuthStorage,
+				modelRegistry: oauthBackedRegistry,
+			}),
+		).rejects.toThrow("Refusing to send official Codex OAuth credentials");
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
 	it("falls back to the default model when PI_CODEX_WEB_SEARCH_MODEL is blank", async () => {
 		process.env.PI_CODEX_WEB_SEARCH_MODEL = "   ";
 		const result = await searchCodex(makeSearchParams("blank codex model", mockCodexFetch("gpt-5.6-luna")));
