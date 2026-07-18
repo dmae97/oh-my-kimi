@@ -84,13 +84,16 @@ export declare class Process {
 /** Stateful PTY session for interactive stdin/stdout passthrough. */
 export declare class PtySession {
   constructor()
-  /** Start a shell command and stream output chunks via callback. */
-  start(options: PtyStartOptions, onChunk?: ((error: Error | null, chunk: string) => void) | undefined | null): Promise<PtyRunResult>
   /**
-   * Start an executable with separate arguments and stream output chunks via
-   * callback.
+   * Start a shell command, stream output chunks, and report the spawned child
+   * PID.
    */
-  startArgv(options: PtyArgvStartOptions, onChunk?: ((error: Error | null, chunk: string) => void) | undefined | null): Promise<PtyRunResult>
+  start(options: PtyStartOptions, onChunk?: ((error: Error | null, chunk: string) => void) | undefined | null, onStart?: ((error: Error | null, pid: number) => void) | undefined | null): Promise<PtyRunResult>
+  /**
+   * Start an executable with separate arguments, stream output chunks, and
+   * report the spawned child PID.
+   */
+  startArgv(options: PtyArgvStartOptions, onChunk?: ((error: Error | null, chunk: string) => void) | undefined | null, onStart?: ((error: Error | null, pid: number) => void) | undefined | null): Promise<PtyRunResult>
   /** Write raw input bytes to PTY stdin. */
   write(data: string): void
   /** Resize the active PTY. */

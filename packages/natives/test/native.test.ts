@@ -641,6 +641,35 @@ describe("pi-natives", () => {
 			expect(JSON.parse(output.trim())).toEqual(expected);
 		});
 
+		it("reports the child PID as soon as the PTY process starts", async () => {
+			const session = new PtySession();
+			const started = Promise.withResolvers<{ error: Error | null; pid: number }>();
+			const run = session.startArgv(
+				{
+					application: process.execPath,
+					args: ["-e", "process.stdin.resume()"],
+					cwd: testDir,
+					timeoutMs: 5_000,
+					cols: 80,
+					rows: 24,
+				},
+				undefined,
+				(error, pid) => started.resolve({ error, pid }),
+			);
+
+			const spawned = await started.promise;
+			let alive = false;
+			try {
+				process.kill(spawned.pid, 0);
+				alive = true;
+			} catch {}
+			expect(spawned.error).toBeNull();
+			expect(spawned.pid).toBeGreaterThan(0);
+			expect(alive).toBeTrue();
+			session.kill();
+			expect((await run).cancelled).toBeTrue();
+		});
+
 		it("should time out detached background workloads without hanging", async () => {
 			if (process.platform === "win32" || !Bun.which("bash")) {
 				return;

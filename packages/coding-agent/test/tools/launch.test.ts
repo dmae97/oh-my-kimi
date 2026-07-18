@@ -231,6 +231,84 @@ setInterval(() => {}, 1000);
 		await startPtyDaemonWithShell(shellPath, "basic-shell", "compatible-shell");
 	}, 20_000);
 
+	it("returns promptly when a finite PTY child does not write the broker PID file", async () => {
+		if (process.platform === "win32") return;
+		const shellPath = path.join(await tempDir("omp-daemon-no-pid-shell-"), "zsh");
+		await Bun.write(
+			shellPath,
+			`#!/bin/sh
+case "$2" in
+	*process.pid*)
+		command=\${2#*; exec }
+		exec /bin/sh -c "exec $command"
+		;;
+	*)
+		exec /bin/sh "$@"
+		;;
+esac
+`,
+		);
+		await fs.chmod(shellPath, 0o755);
+		const projectDir = await tempDir("omp-daemon-finite-project-");
+		const runtimeDir = await tempDir("omp-daemon-finite-runtime-");
+		const runner = `
+			import { createDaemonBrokerClient } from "./src/launch/client";
+
+			const client = await createDaemonBrokerClient(${JSON.stringify(projectDir)}, {
+				runtimeDir: ${JSON.stringify(runtimeDir)},
+				idleGraceMs: 5_000,
+			});
+			try {
+				const startedAt = performance.now();
+				const started = await client.request({
+					op: "start",
+					spec: {
+						name: "finite-pty",
+						application: "/bin/sh",
+						args: ["-c", "sleep 5"],
+						env: {},
+						cwd: ${JSON.stringify(projectDir)},
+						pty: true,
+						restart: "no",
+						persist: false,
+						detached: false,
+					},
+				});
+				if (started.op !== "start") throw new Error("unexpected start response");
+				process.stdout.write(JSON.stringify({
+					elapsedMs: Math.round(performance.now() - startedAt),
+					state: started.daemon.state,
+					pid: started.daemon.pid,
+				}));
+				if (started.daemon.state === "running") {
+					await client.request({ op: "stop", name: "finite-pty", timeoutMs: 2_000 });
+				}
+			} finally {
+				try {
+					await client.request({ op: "shutdown" });
+				} catch {}
+				client.close();
+			}
+		`;
+		const child = Bun.spawn([process.execPath, "--eval", runner], {
+			cwd: path.resolve(import.meta.dir, "../.."),
+			env: { ...process.env, SHELL: shellPath },
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [exitCode, stdout, stderr] = await Promise.all([
+			child.exited,
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+		]);
+		expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
+		const started = JSON.parse(stdout) as { elapsedMs: number; state: string; pid?: number };
+		// This is cross-process startup latency; fake timers cannot drive the broker or PTY child.
+		expect(started.elapsedMs).toBeLessThan(3_000);
+		expect(started.state).toBe("running");
+		expect(started.pid).toBeGreaterThan(0);
+	}, 20_000);
+
 	it("stops non-persistent daemons after the last project omp exits", async () => {
 		const projectDir = await tempDir("omp-daemon-exit-project-");
 		const runtimeDir = await tempDir("omp-daemon-exit-runtime-");

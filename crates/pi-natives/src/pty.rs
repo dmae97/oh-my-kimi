@@ -132,7 +132,8 @@ impl PtySession {
 		Self { core: Arc::new(Mutex::new(None)) }
 	}
 
-	/// Start a shell command and stream output chunks via callback.
+	/// Start a shell command, stream output chunks, and report the spawned child
+	/// PID.
 	#[napi]
 	pub fn start<'env>(
 		&self,
@@ -140,6 +141,8 @@ impl PtySession {
 		options: PtyStartOptions<'env>,
 		#[napi(ts_arg_type = "((error: Error | null, chunk: string) => void) | undefined | null")]
 		on_chunk: Option<ThreadsafeFunction<String>>,
+		#[napi(ts_arg_type = "((error: Error | null, pid: number) => void) | undefined | null")]
+		on_start: Option<ThreadsafeFunction<u32>>,
 	) -> Result<PromiseRaw<'env, PtyRunResult>> {
 		let run_config = PtyRunConfig {
 			command: PtyCommand::Shell { command: options.command, shell: options.shell },
@@ -148,11 +151,11 @@ impl PtySession {
 			cols:    options.cols.unwrap_or(120).clamp(20, 400),
 			rows:    options.rows.unwrap_or(40).clamp(5, 200),
 		};
-		self.start_config(env, run_config, options.timeout_ms, options.signal, on_chunk)
+		self.start_config(env, run_config, options.timeout_ms, options.signal, on_chunk, on_start)
 	}
 
-	/// Start an executable with separate arguments and stream output chunks via
-	/// callback.
+	/// Start an executable with separate arguments, stream output chunks, and
+	/// report the spawned child PID.
 	#[napi]
 	pub fn start_argv<'env>(
 		&self,
@@ -160,6 +163,8 @@ impl PtySession {
 		options: PtyArgvStartOptions<'env>,
 		#[napi(ts_arg_type = "((error: Error | null, chunk: string) => void) | undefined | null")]
 		on_chunk: Option<ThreadsafeFunction<String>>,
+		#[napi(ts_arg_type = "((error: Error | null, pid: number) => void) | undefined | null")]
+		on_start: Option<ThreadsafeFunction<u32>>,
 	) -> Result<PromiseRaw<'env, PtyRunResult>> {
 		let run_config = PtyRunConfig {
 			command: PtyCommand::Argv { application: options.application, args: options.args },
@@ -168,7 +173,7 @@ impl PtySession {
 			cols:    options.cols.unwrap_or(120).clamp(20, 400),
 			rows:    options.rows.unwrap_or(40).clamp(5, 200),
 		};
-		self.start_config(env, run_config, options.timeout_ms, options.signal, on_chunk)
+		self.start_config(env, run_config, options.timeout_ms, options.signal, on_chunk, on_start)
 	}
 
 	/// Write raw input bytes to PTY stdin.
@@ -201,6 +206,7 @@ impl PtySession {
 		timeout_ms: Option<u32>,
 		signal: Option<Unknown<'env>>,
 		on_chunk: Option<ThreadsafeFunction<String>>,
+		on_start: Option<ThreadsafeFunction<u32>>,
 	) -> Result<PromiseRaw<'env, PtyRunResult>> {
 		let ct = task::CancelToken::new(timeout_ms, signal);
 		let core = Arc::clone(&self.core);
@@ -215,9 +221,10 @@ impl PtySession {
 			*guard = Some(PtySessionCore { control_tx });
 		}
 		task::future(env, "pty.start", async move {
-			let run_result =
-				tokio::task::spawn_blocking(move || run_pty_sync(run_config, on_chunk, control_rx, ct))
-					.await;
+			let run_result = tokio::task::spawn_blocking(move || {
+				run_pty_sync(run_config, on_chunk, on_start, control_rx, ct)
+			})
+			.await;
 
 			let mut guard = core.lock();
 			*guard = None;
@@ -262,6 +269,7 @@ fn terminate_pty_processes(
 fn run_pty_sync(
 	config: PtyRunConfig,
 	on_chunk: Option<ThreadsafeFunction<String>>,
+	on_start: Option<ThreadsafeFunction<u32>>,
 	control_rx: flume::Receiver<ControlMessage>,
 	ct: task::CancelToken,
 ) -> Result<PtyRunResult> {
@@ -343,6 +351,11 @@ fn run_pty_sync(
 		.spawn_command(cmd)
 		.map_err(|err| Error::from_reason(format!("Failed to spawn PTY command: {err}")))?;
 	drop(pair.slave);
+	let child_process_id = child.process_id();
+	let child_pid = child_process_id.and_then(|value| i32::try_from(value).ok());
+	if let Some(callback) = on_start.as_ref() {
+		callback.call(Ok(child_process_id.unwrap_or(0)), ThreadsafeFunctionCallMode::NonBlocking);
+	}
 	ct.heartbeat()
 		.map_err(|err| Error::from_reason(format!("PTY setup cancelled before reader: {err}")))?;
 
@@ -423,9 +436,6 @@ fn run_pty_sync(
 		let _ = reader_tx.send(ReaderEvent::Done);
 	});
 
-	let child_pid = child
-		.process_id()
-		.and_then(|value| i32::try_from(value).ok());
 	#[cfg(unix)]
 	let process_group_id = master.process_group_leader().filter(|pgid| *pgid > 0);
 	#[cfg(not(unix))]
