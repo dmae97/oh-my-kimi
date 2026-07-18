@@ -219,6 +219,9 @@ describe("searchCodex model selection", () => {
 		getProviderHeaders() {
 			return { "X-Proxy-Tenant": "tenant-1" };
 		},
+		hasCommandBackedApiKey() {
+			return false;
+		},
 		resolver() {
 			return async () => "test-proxy-key";
 		},
@@ -322,6 +325,31 @@ describe("searchCodex model selection", () => {
 			}),
 		).rejects.toThrow("Refusing to send official Codex OAuth credentials");
 		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("prefers a command-backed proxy key over stored OAuth on a custom endpoint", async () => {
+		process.env.PI_CODEX_WEB_SEARCH_MODEL = "gpt-5.4";
+		const commandBackedRegistry = {
+			...proxyModelRegistry,
+			authStorage: oauthOnlyAuthStorage,
+			hasCommandBackedApiKey(provider: string) {
+				return provider === "openai-codex";
+			},
+			resolver() {
+				return async () => "command-proxy-key";
+			},
+		} as unknown as ModelRegistry;
+
+		const result = await searchCodex({
+			...makeSearchParams("command proxy key", mockCodexFetch("gpt-5.4")),
+			authStorage: oauthOnlyAuthStorage,
+			modelRegistry: commandBackedRegistry,
+		});
+
+		const headers = new Headers(capturedRequest?.headers);
+		expect(headers.get("authorization")).toBe("Bearer command-proxy-key");
+		expect(headers.has("chatgpt-account-id")).toBe(false);
+		expect(result.answer).toBe("Codex answer");
 	});
 
 	it("falls back to the default model when PI_CODEX_WEB_SEARCH_MODEL is blank", async () => {

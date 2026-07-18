@@ -625,12 +625,13 @@ export async function searchCodex(params: SearchParams): Promise<SearchResponse>
 
 	let result: CodexSearchResult;
 	if (transport.customEndpoint) {
-		// The resolver draws its bearer from the registry's own storage when a
-		// registry is supplied, so validate the credential origin against that
-		// same storage — not a caller-supplied `authStorage` that may differ.
+		// ModelRegistry resolves command-backed provider keys before consulting
+		// its AuthStorage, so a lower-priority OAuth origin is irrelevant when
+		// that command source is configured.
 		const credentialSource = params.modelRegistry?.authStorage ?? params.authStorage;
 		const credentialOrigin = credentialSource.getCredentialOrigin("openai-codex");
-		if (credentialOrigin?.kind === "oauth" || credentialOrigin?.kind === "env") {
+		const hasCommandBackedKey = params.modelRegistry?.hasCommandBackedApiKey("openai-codex") === true;
+		if (!hasCommandBackedKey && (credentialOrigin?.kind === "oauth" || credentialOrigin?.kind === "env")) {
 			throw new SearchProviderError(
 				"codex",
 				`Refusing to send official Codex OAuth credentials to custom endpoint ${transport.baseUrl}. Configure an API key for provider "openai-codex".`,
