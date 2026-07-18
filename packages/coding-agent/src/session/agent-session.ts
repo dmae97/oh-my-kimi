@@ -4497,6 +4497,19 @@ export class AgentSession {
 			} else if (!isError && MID_RUN_TODO_NUDGE_MUTATING_TOOLS[toolName]) {
 				this.#mutationsSinceLastTodoTouch++;
 			}
+			// A tool actually ran. Clear the post-reminder suppression synchronously
+			// too: the settle check (`#checkTodoCompletion` in agent_end maintenance)
+			// can otherwise read the stale flag when a tool result and the terminal
+			// stop land in the same tick, swallowing the earned re-escalation.
+			this.#todoReminderAwaitingProgress = false;
+		}
+		// Track the settled assistant turn synchronously as well: agent_end
+		// maintenance reads `#lastAssistantMessage`, and when a turn's events all
+		// land in one tick its handler can run before this handler's post-emit
+		// bookkeeping — leaving maintenance looking at the previous (e.g.
+		// toolUse) assistant message and skipping settle-only work.
+		if (event.type === "message_end" && event.message.role === "assistant") {
+			this.#lastAssistantMessage = event.message;
 		}
 		// Plan-mode internal transition: stamp `SILENT_ABORT_MARKER` on the
 		// persisted message BEFORE the obfuscator's display-side copy below.
@@ -4703,9 +4716,7 @@ export class AgentSession {
 			}
 			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
-			// Track assistant message for auto-compaction (checked on agent_end)
 			if (event.message.role === "assistant") {
-				this.#lastAssistantMessage = event.message;
 				const assistantMsg = event.message as AssistantMessage;
 				// Fold this turn's timing into per-model perf aggregates (drives the
 				// /models TPS/TTFT display). Errored turns measure nothing; aborted
@@ -4775,10 +4786,6 @@ export class AgentSession {
 				const details = isRecord(event.message.details) ? event.message.details : undefined;
 				const semanticResult = semanticToolResult(toolName, event.message);
 				const semanticDetails = isRecord(semanticResult?.details) ? semanticResult.details : undefined;
-				// A tool actually ran. Clear the post-reminder suppression: the agent did
-				// productive work in response to the prior nudge, so the next text-only stop
-				// is allowed to escalate to the next reminder if todos remain incomplete.
-				this.#todoReminderAwaitingProgress = false;
 				// Invalidate streaming edit cache when edit tool completes to prevent stale data
 				const editedPath = details ? getStringProperty(details, "path") : undefined;
 				if (toolName === "edit" && editedPath) {
