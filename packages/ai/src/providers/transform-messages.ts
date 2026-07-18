@@ -1,5 +1,14 @@
 import { renderDemotedThinking } from "../dialect/demotion";
-import type { Api, AssistantMessage, Message, Model, ToolCall, ToolResultMessage, UserMessage } from "../types";
+import type {
+	Api,
+	AssistantMessage,
+	DeveloperMessage,
+	Message,
+	Model,
+	ToolCall,
+	ToolResultMessage,
+	UserMessage,
+} from "../types";
 import { isDemotedThinking, kDemotedThinking } from "../utils/block-symbols";
 
 const enum ToolCallStatus {
@@ -286,6 +295,156 @@ function normalizeAnthropicTargetToolCallId<TApi extends Api>(
  * - Preserves tool call structure (unlike converting to text summaries)
  * - Injects synthetic "aborted" tool results
  */
+const SENSITIVE_TOKEN_RE =
+	/(?<![a-zA-Z0-9_*-])(gh[opusr]_[a-zA-Z0-9_*]{36,}|github_pat_[a-zA-Z0-9_*]{36,}|glpat-[a-zA-Z0-9_*-]{20,}|sk-proj-[a-zA-Z0-9_*-]{36,}|sk-ant-[a-zA-Z0-9_*-]{36,}|sk-[a-zA-Z0-9_*-]{48,})(?![a-zA-Z0-9_*-])/gi;
+
+function hasPlausibleCredentialEntropy(token: string): boolean {
+	const lower = token.toLowerCase();
+	const prefixLength = lower.startsWith("github_pat_")
+		? "github_pat_".length
+		: lower.startsWith("glpat-")
+			? "glpat-".length
+			: lower.startsWith("sk-proj-")
+				? "sk-proj-".length
+				: lower.startsWith("sk-ant-")
+					? "sk-ant-".length
+					: lower.startsWith("gh")
+						? 4
+						: 3;
+	const secret = token.slice(prefixLength);
+	if (/^\*+$/.test(secret)) return true;
+	return [/[a-z]/, /[A-Z]/, /\d/, /[_-]/].filter(pattern => pattern.test(secret)).length >= 2;
+}
+
+export function redactSensitiveCredentials(text: string): string {
+	return text.replace(SENSITIVE_TOKEN_RE, match => {
+		if (!hasPlausibleCredentialEntropy(match)) return match;
+		const lower = match.toLowerCase();
+		if (lower.startsWith("gh")) {
+			return "[github_token_redacted]";
+		}
+		if (lower.startsWith("gl")) {
+			return "[gitlab_token_redacted]";
+		}
+		if (lower.startsWith("sk-ant-")) {
+			return "[anthropic_token_redacted]";
+		}
+		if (lower.startsWith("sk")) {
+			return "[openai_token_redacted]";
+		}
+		return "[token_redacted]";
+	});
+}
+
+export function redactSensitiveInObject(val: unknown): { result: unknown; changed: boolean } {
+	if (typeof val === "string") {
+		const redacted = redactSensitiveCredentials(val);
+		return { result: redacted, changed: redacted !== val };
+	}
+	if (Array.isArray(val)) {
+		let changed = false;
+		const result = val.map(item => {
+			const res = redactSensitiveInObject(item);
+			if (res.changed) changed = true;
+			return res.result;
+		});
+		return { result, changed };
+	}
+	if (val !== null && typeof val === "object") {
+		let changed = false;
+		const res: Record<string, unknown> = {};
+		for (const [k, v] of Object.entries(val)) {
+			const sub = redactSensitiveInObject(v);
+			if (sub.changed) changed = true;
+			res[k] = sub.result;
+		}
+		return { result: res, changed };
+	}
+	return { result: val, changed: false };
+}
+
+function redactSensitiveCredentialsInMessages(messages: Message[]): Message[] {
+	return messages.map((msg): Message => {
+		if (msg.role === "user" || msg.role === "developer") {
+			const userMsg = msg as UserMessage | DeveloperMessage;
+			if (typeof userMsg.content === "string") {
+				const redacted = redactSensitiveCredentials(userMsg.content);
+				if (redacted === userMsg.content) return msg;
+				return { ...userMsg, content: redacted } as Message;
+			}
+			const contentArray = userMsg.content;
+			let changed = false;
+			const content = contentArray.map((block): UserMessage["content"][number] => {
+				if (block.type === "text") {
+					const redacted = redactSensitiveCredentials(block.text);
+					if (redacted !== block.text) {
+						changed = true;
+						return { ...block, text: redacted };
+					}
+				}
+				return block;
+			});
+			return (changed ? { ...userMsg, content } : userMsg) as Message;
+		}
+
+		if (msg.role === "toolResult") {
+			const toolResultMsg = msg as ToolResultMessage;
+			let changed = false;
+			const content = toolResultMsg.content.map((block): ToolResultMessage["content"][number] => {
+				if (block.type === "text") {
+					const redacted = redactSensitiveCredentials(block.text);
+					if (redacted !== block.text) {
+						changed = true;
+						return { ...block, text: redacted };
+					}
+				}
+				return block;
+			});
+			return (changed ? { ...toolResultMsg, content } : toolResultMsg) as Message;
+		}
+
+		if (msg.role === "assistant") {
+			const assistantMsg = msg as AssistantMessage;
+			let changed = false;
+			const content = assistantMsg.content.map((block): AssistantMessage["content"][number] => {
+				if (block.type === "text") {
+					const redacted = redactSensitiveCredentials(block.text);
+					if (redacted !== block.text) {
+						changed = true;
+						return { ...block, text: redacted };
+					}
+				} else if (block.type === "thinking") {
+					const redacted = redactSensitiveCredentials(block.thinking);
+					if (redacted !== block.thinking) {
+						changed = true;
+						return { ...block, thinking: redacted, thinkingSignature: undefined };
+					}
+				} else if (block.type === "toolCall") {
+					if (block.arguments) {
+						const { result: redactedArgs, changed: argsChanged } = redactSensitiveInObject(block.arguments);
+						if (argsChanged) {
+							changed = true;
+							const castArgs =
+								redactedArgs && typeof redactedArgs === "object" && !Array.isArray(redactedArgs)
+									? (redactedArgs as Record<string, unknown>)
+									: undefined;
+							return {
+								...block,
+								arguments: castArgs,
+								thoughtSignature: undefined,
+							} as AssistantMessage["content"][number];
+						}
+					}
+				}
+				return block;
+			});
+			return (changed ? { ...assistantMsg, content } : assistantMsg) as Message;
+		}
+
+		return msg;
+	});
+}
+
 export function transformMessages<TApi extends Api>(
 	messages: Message[],
 	model: Model<TApi>,
@@ -294,6 +453,10 @@ export function transformMessages<TApi extends Api>(
 	duplicateToolCallIdSuffixPrefix = "_dup",
 	targetCompat: Model<TApi>["compat"] = model.compat,
 ): Message[] {
+	// Redact sensitive credential-like patterns from all outbound messages
+	// to prevent security block errors from LLM providers (e.g. invalid_prompt).
+	messages = redactSensitiveCredentialsInMessages(messages);
+
 	// Drop assistant `toolCall` blocks with empty/whitespace `id` or `name`
 	// (and their matched `toolResult` messages) before anything else looks at
 	// the history. Replays of these would 400 every provider — see
@@ -551,6 +714,13 @@ export function transformMessages<TApi extends Api>(
 					// keep it and let `convertAnthropicMessages` re-check the
 					// per-request opt-in before serializing.
 					if (isAnthropicTarget && model.compat.officialEndpoint) return block;
+					return [];
+				}
+
+				if (block.type === "image") {
+					// Assistant images are display artifacts. No provider accepts them
+					// in an assistant replay turn; the native Responses result remains
+					// in providerPayload for OpenAI replay.
 					return [];
 				}
 

@@ -52,15 +52,14 @@
 	gap: 4px;
 }
 
-.tr-body > .tr-md,
-.tr-body > .tr-text {
+.tr-row--assistant .tr-body {
+	gap: 8px;
+}
+
+.tr-body > .tr-md {
 	align-self: stretch;
 }
 
-.tr-text {
-	white-space: pre-wrap;
-	word-break: break-word;
-}
 
 .tr-row--custom .tr-body {
 	color: var(--fg-muted);

@@ -38,7 +38,7 @@ describe("loadCustomTools per-session binding (#2190 review fix)", () => {
 				"  return {",
 				"    name: 'echo_cwd_' + api.cwd.replace(/[^a-z0-9]/gi, '_'),",
 				"    description: 'returns the cwd the factory was bound to',",
-				"    params: api.typebox.Type.Object({}),",
+				"    parameters: api.typebox.Type.Object({}),",
 				"    async execute() { return { content: [{ type: 'text', text: api.cwd }] }; },",
 				"    __boundApi: api,",
 				"  };",

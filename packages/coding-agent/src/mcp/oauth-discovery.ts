@@ -11,8 +11,21 @@ export interface OAuthEndpoints {
 	authorizationUrl: string;
 	tokenUrl: string;
 	clientId?: string;
+	/** Dynamic client registration endpoint advertised by the authorization server. */
+	registrationUrl?: string;
 	scopes?: string;
 	resource?: string;
+}
+
+function readRegistrationUrl(metadata: Record<string, unknown>): string | undefined {
+	const value =
+		metadata.registration_endpoint ??
+		metadata.registrationEndpoint ??
+		metadata.registration_url ??
+		metadata.registrationUrl ??
+		metadata.registration_uri ??
+		metadata.registrationUri;
+	return typeof value === "string" && value.trim() !== "" ? value : undefined;
 }
 
 export interface AuthDetectionResult {
@@ -102,7 +115,7 @@ export function extractOAuthEndpoints(error: Error): OAuthEndpoints | null {
 			(obj.resource_uri as string | undefined) ||
 			(obj.resourceUri as string | undefined);
 
-		return { authorizationUrl, tokenUrl, clientId, scopes, resource };
+		return { authorizationUrl, tokenUrl, registrationUrl: readRegistrationUrl(obj), clientId, scopes, resource };
 	};
 
 	const clientIdFromAuthUrl = (authorizationUrl: string): string | undefined => {
@@ -175,6 +188,10 @@ export function extractOAuthEndpoints(error: Error): OAuthEndpoints | null {
 			return {
 				authorizationUrl,
 				tokenUrl,
+				registrationUrl:
+					challengeValues.get("registration_endpoint") ||
+					challengeValues.get("registration_url") ||
+					challengeValues.get("registration_uri"),
 				clientId: challengeValues.get("client_id") || clientIdFromAuthUrl(authorizationUrl),
 				scopes: challengeValues.get("scope") || challengeValues.get("scopes") || scopeFromAuthUrl(authorizationUrl),
 				resource,
@@ -415,6 +432,7 @@ export async function discoverOAuthEndpoints(
 			return {
 				authorizationUrl: String(metadata.authorization_endpoint),
 				tokenUrl: String(metadata.token_endpoint),
+				registrationUrl: readRegistrationUrl(metadata),
 				clientId:
 					typeof metadata.client_id === "string"
 						? metadata.client_id
@@ -438,6 +456,7 @@ export async function discoverOAuthEndpoints(
 				return {
 					authorizationUrl: oauthData.authorization_url || String(oauthData.authorizationUrl),
 					tokenUrl: oauthData.token_url || String(oauthData.tokenUrl),
+					registrationUrl: readRegistrationUrl(oauthData),
 					clientId:
 						typeof oauthData.client_id === "string"
 							? oauthData.client_id

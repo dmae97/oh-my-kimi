@@ -46,10 +46,14 @@ MODELS = {
 }
 FONTS = {
     "7x14": FontCfg("7x14", "7x14", 7, 14),  # aligned: pitch = 14 px patch
-    "8x16": FontCfg("8x16", "spleen-8x16", 8, 16),  # aligned: native 16 px font (Spleen)
+    "8x16": FontCfg(
+        "8x16", "spleen-8x16", 8, 16
+    ),  # aligned: native 16 px font (Spleen)
     "8on16": FontCfg("8on16", "8x13", 8, 16),  # aligned: 8x13 glyphs, pitch 16 cell
     "6on7x14": FontCfg("6on7x14", "6x12", 7, 14),  # aligned: 6x12 glyphs, 7x14 cell
-    "7x13": FontCfg("7x13", "7x13", 7, 13),  # control for 7x14 (same glyph budget, pitch 13)
+    "7x13": FontCfg(
+        "7x13", "7x13", 7, 13
+    ),  # control for 7x14 (same glyph budget, pitch 13)
     "8x13": FontCfg("8x13", "8x13", 8, 13),  # control for 8x16/8on16
 }
 SPLEEN_URL = "https://raw.githubusercontent.com/fcambus/spleen/master/spleen-8x16.bdf"
@@ -99,10 +103,20 @@ def ensure_spleen() -> None:
     tmp.replace(path)
 
 
-def run_cell_chunk(model: str, cond: str, size: int, start: int, end: int, ctx: dict) -> list[dict]:
+def run_cell_chunk(
+    model: str, cond: str, size: int, start: int, end: int, ctx: dict
+) -> list[dict]:
     """One (model, condition, size, chunk) unit: render carrier, QA, score."""
-    args, flow, paras, offsets, keys = ctx["args"], ctx["flow"], ctx["paras"], ctx["offsets"], ctx["keys"]
-    questions = squad.sample_chunk_questions(paras, offsets, start, end, args.qpc, args.seed)
+    args, flow, paras, offsets, keys = (
+        ctx["args"],
+        ctx["flow"],
+        ctx["paras"],
+        ctx["offsets"],
+        ctx["keys"],
+    )
+    questions = squad.sample_chunk_questions(
+        paras, offsets, start, end, args.qpc, args.seed
+    )
     if not questions:
         return []
     chunk_text = flow[start:end]
@@ -126,11 +140,19 @@ def run_cell_chunk(model: str, cond: str, size: int, start: int, end: int, ctx: 
         }
     ]
     qa = cached(
-        model, "exp01-qa", {"messages": messages, "size": size, "effort": args.effort},
+        model,
+        "exp01-qa",
+        {"messages": messages, "size": size, "effort": args.effort},
         lambda: dict(
             zip(
                 ("text", "usage", "stop"),
-                llm_complete(keys, model, messages, max_tokens=args.max_tokens, effort=args.effort),
+                llm_complete(
+                    keys,
+                    model,
+                    messages,
+                    max_tokens=args.max_tokens,
+                    effort=args.effort,
+                ),
             )
         ),
         args.fresh,
@@ -164,8 +186,13 @@ def aggregate(records: list[dict], price_in: float, price_out: float) -> dict:
     mean_f1 = sum(f1s) / n
     se = (sum((x - mean_f1) ** 2 for x in f1s) / (n * (n - 1))) ** 0.5 if n > 1 else 0.0
     us = [u for r in records if "usage" in r for u in r["usage"]]
-    tok = {k: sum(u.get(k, 0) for u in us) for k in ("in", "out", "cache_w", "cache_r", "reasoning")}
-    cost_in = (tok["in"] + 1.25 * tok["cache_w"] + 0.1 * tok["cache_r"]) / 1e6 * price_in
+    tok = {
+        k: sum(u.get(k, 0) for u in us)
+        for k in ("in", "out", "cache_w", "cache_r", "reasoning")
+    }
+    cost_in = (
+        (tok["in"] + 1.25 * tok["cache_w"] + 0.1 * tok["cache_r"]) / 1e6 * price_in
+    )
     cost_out = tok["out"] / 1e6 * price_out
     return {
         "n": n,
@@ -190,7 +217,11 @@ def main() -> None:
     ap.add_argument("--max-tokens", type=int, default=32768)
     ap.add_argument("--effort", default=None)
     ap.add_argument("--fresh", action="store_true")
-    ap.add_argument("--report", action="store_true", help="reprint from cache only (re-runs cells; all should hit cache)")
+    ap.add_argument(
+        "--report",
+        action="store_true",
+        help="reprint from cache only (re-runs cells; all should hit cache)",
+    )
     ap.add_argument("--env", default="~/.env")
     args = ap.parse_args()
 
@@ -213,18 +244,32 @@ def main() -> None:
     for length in lengths:
         paras = all_paras[:length]
         flow, offsets = squad.build_flow(paras)
-        ctx = {"args": args, "flow": flow, "paras": paras, "offsets": offsets, "keys": keys, "length": length}
+        ctx = {
+            "args": args,
+            "flow": flow,
+            "paras": paras,
+            "offsets": offsets,
+            "keys": keys,
+            "length": length,
+        }
         for model in models:
             for cond, size in GRID:
                 budget = capacity(FONTS[parse_img_condition(cond)[0]], size)[2]
                 for start in range(0, len(flow), budget):
-                    tasks.append((model, cond, size, start, min(start + budget, len(flow)), ctx))
-    print(f"grid: {len(models)} models x {len(lengths)} lengths x {len(GRID)} cells = {len(tasks)} chunk tasks")
+                    tasks.append(
+                        (model, cond, size, start, min(start + budget, len(flow)), ctx)
+                    )
+    print(
+        f"grid: {len(models)} models x {len(lengths)} lengths x {len(GRID)} cells = {len(tasks)} chunk tasks"
+    )
 
     records: list[dict] = []
     done = 0
     with ThreadPoolExecutor(args.workers) as pool:
-        futures = [pool.submit(run_cell_chunk, m, c, sz, s, e, ctx) for m, c, sz, s, e, ctx in tasks]
+        futures = [
+            pool.submit(run_cell_chunk, m, c, sz, s, e, ctx)
+            for m, c, sz, s, e, ctx in tasks
+        ]
         for fut in futures:
             records.extend(fut.result())
             done += 1
@@ -240,8 +285,12 @@ def main() -> None:
         for length in lengths:
             for cond, size in GRID:
                 sub = [
-                    r for r in records
-                    if r["model"] == model and r["length"] == length and r["cond"] == cond and r["size"] == size
+                    r
+                    for r in records
+                    if r["model"] == model
+                    and r["length"] == length
+                    and r["cond"] == cond
+                    and r["size"] == size
                 ]
                 if not sub:
                     continue
@@ -253,7 +302,9 @@ def main() -> None:
                         **aggregate(sub, *MODELS[model]),
                     }
                 )
-    (out_dir / "summary.json").write_text(json.dumps({"args": vars(args), "cells": cells}, indent=1))
+    (out_dir / "summary.json").write_text(
+        json.dumps({"args": vars(args), "cells": cells}, indent=1)
+    )
     with (out_dir / "matrix.csv").open("w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=list(cells[0].keys()))
         writer.writeheader()
@@ -268,7 +319,13 @@ def main() -> None:
             row = f"{label:<22}"
             for model in models:
                 cell = next(
-                    (c for c in cells if c["model"] == model and c["length"] == length and c["condition"] == label),
+                    (
+                        c
+                        for c in cells
+                        if c["model"] == model
+                        and c["length"] == length
+                        and c["condition"] == label
+                    ),
                     None,
                 )
                 row += (

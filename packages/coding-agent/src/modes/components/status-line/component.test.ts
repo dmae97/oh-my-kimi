@@ -4,15 +4,44 @@ import type { AgentSession } from "../../../session/agent-session";
 import { getThemeByName, setThemeInstance } from "../../theme/theme";
 import { StatusLineComponent } from "./component";
 
-function makeSessionWithLastMessage(lastMessage: unknown) {
+function makeSessionWithLastMessage(lastMessage: unknown, prewalkArmed: boolean = false) {
 	return {
-		messages: [lastMessage],
+		messages: lastMessage ? [lastMessage] : [],
 		model: { contextWindow: 128000 },
 		contextUsageRevision: 0,
 		systemPrompt: [],
 		agent: { state: { tools: [] } },
 		skills: [],
 		getContextUsage: () => ({ tokens: 42, contextWindow: 128000 }),
+		state: {
+			messages: lastMessage ? [lastMessage] : [],
+			model: { contextWindow: 128000 },
+		},
+		sessionManager: {
+			getUsageStatistics: () => ({
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				orchestrationInput: 0,
+				orchestrationOutput: 0,
+				orchestrationCacheRead: 0,
+				premiumRequests: 0,
+				cost: 0,
+				tokensPerSecond: null,
+			}),
+			getSessionName: () => "test-session",
+		},
+		getPrewalkState: () => (prewalkArmed ? { target: { id: "cheap-model", provider: "openai" } } : undefined),
+		getAsyncJobSnapshot: () => undefined,
+		isAdvisorActive: () => false,
+		getAdvisorStatusOverview: () => ({ configured: false, advisors: [] }),
+		isFastModeActive: () => false,
+		configuredThinkingLevel: () => undefined,
+		modelRegistry: {
+			isUsingOAuth: () => false,
+		},
 	};
 }
 
@@ -40,5 +69,16 @@ describe("StatusLineComponent", () => {
 		);
 
 		expect(statusLine.getCachedContextBreakdown()).toEqual({ usedTokens: 42, contextWindow: 128000 });
+	});
+
+	it("renders Prewalk annotation when prewalk is armed", () => {
+		const statusLine = new StatusLineComponent(makeSessionWithLastMessage(null, true) as unknown as AgentSession);
+
+		// By default preset, 'mode' segment is included in left/right segments.
+		// Let's get the border and see if Prewalk is rendered.
+		const border = statusLine.getTopBorder(100);
+		// SGR codes might be included, so we check if the stripped content contains "Prewalk"
+		const stripped = border.content.replace(/\x1b\[[0-9;]*m/g, "");
+		expect(stripped).toContain("Prewalk");
 	});
 });

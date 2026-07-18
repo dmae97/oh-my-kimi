@@ -27,6 +27,7 @@ export interface InternalUrlExpansionOptions {
 	noEscape?: boolean;
 	internalRouter?: InternalUrlResolver;
 	localOptions?: LocalProtocolOptions;
+	cwd?: string;
 	ensureLocalParentDirs?: boolean;
 }
 
@@ -141,7 +142,14 @@ function unquoteToken(token: string): string {
 }
 
 function isInsideShellQuote(command: string, index: number): boolean {
-	let quote: "'" | '"' | undefined;
+	type ShellQuote = "'" | '"' | undefined;
+	interface CommandSubstitution {
+		outerQuote: ShellQuote;
+		depth: number;
+	}
+
+	let quote: ShellQuote;
+	const substitutions: CommandSubstitution[] = [];
 	for (let i = 0; i < index; i++) {
 		const char = command[i];
 		if (char === "\\" && quote !== "'") {
@@ -154,6 +162,25 @@ function isInsideShellQuote(command: string, index: number): boolean {
 		}
 		if (char === '"' && quote !== "'") {
 			quote = quote === '"' ? undefined : '"';
+			continue;
+		}
+		if (char === "$" && command[i + 1] === "(" && quote !== "'") {
+			substitutions.push({ outerQuote: quote, depth: 1 });
+			quote = undefined;
+			i++;
+			continue;
+		}
+		if (quote !== undefined) continue;
+
+		const substitution = substitutions.at(-1);
+		if (!substitution) continue;
+		if (char === "(") {
+			substitution.depth++;
+		} else if (char === ")") {
+			substitution.depth--;
+			if (substitution.depth === 0) {
+				quote = substitutions.pop()?.outerQuote;
+			}
 		}
 	}
 	return quote !== undefined;
@@ -175,6 +202,7 @@ async function resolveInternalUrlToPath(
 	internalRouter?: InternalUrlResolver,
 	localOptions?: LocalProtocolOptions,
 	ensureLocalParentDirs?: boolean,
+	cwd?: string,
 ): Promise<string> {
 	const url = normalizeLocalScheme(rawUrl);
 	const scheme = extractScheme(url);
@@ -208,7 +236,7 @@ async function resolveInternalUrlToPath(
 
 	let resource: InternalResource;
 	try {
-		resource = await internalRouter.resolve(url, { pathOnly: true });
+		resource = await internalRouter.resolve(url, { cwd, pathOnly: true });
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		throw new ToolError(`Failed to resolve ${scheme}:// URL in bash command: ${url}\n${message}`);
@@ -268,6 +296,7 @@ export async function expandInternalUrls(command: string, options: InternalUrlEx
 				options.internalRouter,
 				options.localOptions,
 				options.ensureLocalParentDirs,
+				options.cwd,
 			);
 		} catch {
 			continue;

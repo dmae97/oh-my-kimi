@@ -1,10 +1,12 @@
 from __future__ import annotations
+
 # OMP prelude helpers (loaded once into the runner namespace)
 if "__omp_prelude_loaded__" not in globals():
     __omp_prelude_loaded__ = True
     from pathlib import Path
     import os, json, math, re
     from urllib.parse import unquote
+
     INTENT_FIELD = "i"
 
     # __omp_display is injected by runner.py before the prelude executes; it
@@ -40,7 +42,6 @@ if "__omp_prelude_loaded__" not in globals():
         """Emit structured status event for TUI rendering."""
         _omp_display({"application/x-omp-status": {"op": op, **data}}, raw=True)
 
-
     def env(key: str | None = None, value: str | None = None):
         """Get/set environment variables."""
         if key is None:
@@ -56,6 +57,27 @@ if "__omp_prelude_loaded__" not in globals():
         return val
 
     _OMP_INTERNAL_URL_RE = re.compile(r"^([a-z][a-z0-9+.-]*)://(.*)$", re.IGNORECASE)
+
+    def _should_delegate_read(path: str | Path) -> bool:
+        return (
+            isinstance(path, str)
+            and _OMP_INTERNAL_URL_RE.match(path) is not None
+            and not path.lower().startswith("local://")
+        )
+
+    def _read_line_selector(offset: int, limit: int | None) -> str | None:
+        if offset <= 1 and limit is None:
+            return None
+        start = max(1, offset)
+        if limit is None:
+            return f"{start}-"
+        return f"{start}-{start + limit - 1}"
+
+    def _read_tool_text(path: str) -> str:
+        result = _bridge_call("read", {"path": path})
+        if isinstance(result, dict) and "text" in result:
+            return result["text"]
+        return result
 
     def _resolve_omp_path(path: str | Path) -> Path:
         """Map a helper path to a real filesystem Path.
@@ -94,7 +116,13 @@ if "__omp_prelude_loaded__" not in globals():
         return Path(resolved)
 
     def read(path: str | Path, offset: int = 1, limit: int | None = None) -> str:
-        """Read file contents. offset/limit are 1-indexed line numbers."""
+        """Read file or read-tool URI contents. offset/limit are 1-indexed lines."""
+        if _should_delegate_read(path):
+            if limit is not None and limit <= 0:
+                return ""
+            selector = _read_line_selector(offset, limit)
+            tool_path = path if selector is None else f"{path}:{selector}"
+            return _read_tool_text(tool_path)
         p = _resolve_omp_path(path)
         data = p.read_text(encoding="utf-8")
         lines = data.splitlines(keepends=True)
@@ -123,18 +151,18 @@ if "__omp_prelude_loaded__" not in globals():
         limit: int | None = None,
     ) -> str | dict | list[dict]:
         """Read task/agent output by ID. Returns text or JSON depending on format.
-        
+
         Args:
             *ids: Output IDs to read (e.g., 'explore_0', 'reviewer_1')
             format: 'raw' (default), 'json' (dict with metadata), 'stripped' (no ANSI)
             query: jq-like query for JSON outputs (e.g., '.endpoints[0].file')
             offset: Line number to start reading from (1-indexed)
             limit: Maximum number of lines to read
-        
+
         Returns:
             Single ID: str (format='raw'/'stripped') or dict (format='json')
             Multiple IDs: list of dict with 'id' and 'content'/'data' keys
-        
+
         Examples:
             output('explore_0')  # Read as raw text
             output('reviewer_0', format='json')  # Read with metadata
@@ -153,33 +181,35 @@ if "__omp_prelude_loaded__" not in globals():
                 raise RuntimeError("No session - output artifacts unavailable")
             artifacts_dir = session_file.rsplit(".", 1)[0]  # Strip .jsonl extension
         if not Path(artifacts_dir).exists():
-            _emit_status("output", error="Artifacts directory not found", path=artifacts_dir)
+            _emit_status(
+                "output", error="Artifacts directory not found", path=artifacts_dir
+            )
             raise RuntimeError(f"No artifacts directory found: {artifacts_dir}")
-        
+
         if not ids:
             _emit_status("output", error="No IDs provided")
             raise ValueError("At least one output ID is required")
-        
+
         if query and (offset is not None or limit is not None):
             _emit_status("output", error="query cannot be combined with offset/limit")
             raise ValueError("query cannot be combined with offset/limit")
-        
+
         results: list[dict] = []
         not_found: list[str] = []
-        
+
         for output_id in ids:
             output_path = Path(artifacts_dir) / f"{output_id}.md"
             if not output_path.exists():
                 not_found.append(output_id)
                 continue
-            
+
             raw_content = output_path.read_text(encoding="utf-8")
             raw_lines = raw_content.splitlines()
             total_lines = len(raw_lines)
-            
+
             selected_content = raw_content
             range_info: dict | None = None
-            
+
             # Handle query
             if query:
                 try:
@@ -187,39 +217,60 @@ if "__omp_prelude_loaded__" not in globals():
                 except json.JSONDecodeError as e:
                     _emit_status("output", id=output_id, error=f"Not valid JSON: {e}")
                     raise ValueError(f"Output {output_id} is not valid JSON: {e}")
-                
+
                 # Apply jq-like query
                 result_value = _apply_query(json_value, query)
                 try:
-                    selected_content = json.dumps(result_value, indent=2) if result_value is not None else "null"
+                    selected_content = (
+                        json.dumps(result_value, indent=2)
+                        if result_value is not None
+                        else "null"
+                    )
                 except (TypeError, ValueError):
                     selected_content = str(result_value)
-            
+
             # Handle offset/limit
             elif offset is not None or limit is not None:
                 start_line = max(1, offset or 1)
                 if start_line > total_lines:
-                    _emit_status("output", id=output_id, error=f"Offset {start_line} beyond end ({total_lines} lines)")
-                    raise ValueError(f"Offset {start_line} is beyond end of output ({total_lines} lines) for {output_id}")
-                
-                effective_limit = limit if limit is not None else total_lines - start_line + 1
+                    _emit_status(
+                        "output",
+                        id=output_id,
+                        error=f"Offset {start_line} beyond end ({total_lines} lines)",
+                    )
+                    raise ValueError(
+                        f"Offset {start_line} is beyond end of output ({total_lines} lines) for {output_id}"
+                    )
+
+                effective_limit = (
+                    limit if limit is not None else total_lines - start_line + 1
+                )
                 end_line = min(total_lines, start_line + effective_limit - 1)
                 selected_lines = raw_lines[start_line - 1 : end_line]
                 selected_content = "\n".join(selected_lines)
-                range_info = {"start_line": start_line, "end_line": end_line, "total_lines": total_lines}
-            
+                range_info = {
+                    "start_line": start_line,
+                    "end_line": end_line,
+                    "total_lines": total_lines,
+                }
+
             # Strip ANSI codes if requested
             if format == "stripped":
                 import re
+
                 selected_content = re.sub(r"\x1b\[[0-9;]*m", "", selected_content)
-            
+
             # Build result
             if format == "json":
                 result_data = {
                     "id": output_id,
                     "path": str(output_path),
-                    "line_count": total_lines if not query else len(selected_content.splitlines()),
-                    "char_count": len(raw_content) if not query else len(selected_content),
+                    "line_count": total_lines
+                    if not query
+                    else len(selected_content.splitlines()),
+                    "char_count": len(raw_content)
+                    if not query
+                    else len(selected_content),
                     "content": selected_content,
                 }
                 if range_info:
@@ -229,12 +280,10 @@ if "__omp_prelude_loaded__" not in globals():
                 results.append(result_data)
             else:
                 results.append({"id": output_id, "content": selected_content})
-        
+
         # Handle not found
         if not_found:
-            available = sorted(
-                [f.stem for f in Path(artifacts_dir).glob("*.md")]
-            )
+            available = sorted([f.stem for f in Path(artifacts_dir).glob("*.md")])
             error_msg = f"Output not found: {', '.join(not_found)}"
             if available:
                 error_msg += f"\n\nAvailable outputs: {', '.join(available[:20])}"
@@ -242,7 +291,7 @@ if "__omp_prelude_loaded__" not in globals():
                     error_msg += f" (and {len(available) - 20} more)"
             _emit_status("output", not_found=not_found, available_count=len(available))
             raise FileNotFoundError(error_msg)
-        
+
         # Return format
         if len(ids) == 1:
             if format == "json":
@@ -250,13 +299,13 @@ if "__omp_prelude_loaded__" not in globals():
                 return results[0]
             _emit_status("output", id=ids[0], chars=len(results[0]["content"]))
             return results[0]["content"]
-        
+
         # Multiple IDs
         if format == "json":
             total_chars = sum(r["char_count"] for r in results)
             _emit_status("output", count=len(results), total_chars=total_chars)
             return results
-        
+
         combined_output: list[dict] = []
         for r in results:
             combined_output.append({"id": r["id"], "content": r["content"]})
@@ -268,13 +317,13 @@ if "__omp_prelude_loaded__" not in globals():
         """Apply jq-like query to data. Supports .key, [index], and chaining."""
         if not query:
             return data
-        
+
         query = query.strip()
         if query.startswith("."):
             query = query[1:]
         if not query:
             return data
-        
+
         # Parse query into tokens
         tokens = []
         current_token = ""
@@ -293,7 +342,7 @@ if "__omp_prelude_loaded__" not in globals():
                 j = i + 1
                 while j < len(query) and query[j] != "]":
                     j += 1
-                bracket_content = query[i+1:j]
+                bracket_content = query[i + 1 : j]
                 if bracket_content.startswith('"') and bracket_content.endswith('"'):
                     tokens.append(("key", bracket_content[1:-1]))
                 else:
@@ -304,7 +353,7 @@ if "__omp_prelude_loaded__" not in globals():
             i += 1
         if current_token:
             tokens.append(("key", current_token))
-        
+
         # Apply tokens
         current = data
         for token_type, value in tokens:
@@ -316,9 +365,8 @@ if "__omp_prelude_loaded__" not in globals():
                 if not isinstance(current, dict) or value not in current:
                     return None
                 current = current[value]
-        
-        return current
 
+        return current
 
     def _tool_proxy_from_env() -> tuple[str, str, str]:
         base = os.environ.get("PI_TOOL_BRIDGE_URL")
@@ -331,9 +379,14 @@ if "__omp_prelude_loaded__" not in globals():
     def _bridge_call(name: str, args: dict):
         """POST one request to the host tool bridge and return its `value`."""
         import urllib.request, urllib.error
+
         base, token, session = _tool_proxy_from_env()
         _run_id_getter = globals().get("__omp_current_run_id__")
-        _run_id = _run_id_getter() if callable(_run_id_getter) else globals().get("__omp_run_id__")
+        _run_id = (
+            _run_id_getter()
+            if callable(_run_id_getter)
+            else globals().get("__omp_run_id__")
+        )
         payload = json.dumps(
             {"session": session, "run": _run_id, "name": name, "args": args}
         ).encode("utf-8")
@@ -402,7 +455,11 @@ if "__omp_prelude_loaded__" not in globals():
 
         def __repr__(self) -> str:
             session = os.environ.get("PI_TOOL_BRIDGE_SESSION")
-            return f"<tool proxy session={session}>" if session else "<tool proxy unavailable>"
+            return (
+                f"<tool proxy session={session}>"
+                if session
+                else "<tool proxy unavailable>"
+            )
 
     tool = _ToolProxy()
 
@@ -423,44 +480,24 @@ if "__omp_prelude_loaded__" not in globals():
         text = res.get("text") if isinstance(res, dict) else res
         return json.loads(text) if schema is not None else text
 
-    def agent(prompt, *, agent="task", model=None, label=None, schema=None, isolated=None, apply=None, merge=None, handle=False):
-        """Run a subagent and return its final output.
+    def agent(
+        prompt,
+        *,
+        agent="task",
+        model=None,
+        label=None,
+        schema=None,
+        schema_mode=None,
+        isolated=None,
+        apply=None,
+        merge=None,
+        handle=False,
+    ):
+        """Run a subagent and return its final output or structured data.
 
-        `agent` selects the subagent definition (default "task"). Pass
-        `model` to override that agent's model, `label` for the output artifact
-        id, and `schema` to request structured JSON output; when `schema` is
-        supplied the parsed object is returned. Share background by writing a
-        local:// file and referencing it in the prompt.
-
-        Pass `isolated=True` to run the subagent inside an isolation worktree
-        (copy-on-write of the parent repo) so parallel `agent()` spawns can
-        edit overlapping files safely. Strict opt-in, mirroring the `task`
-        tool: the default is non-isolated regardless of `task.isolation.mode`.
-        `isolated=True` while the setting is `"none"` errors out instead of
-        silently downgrading.
-
-        When isolated, `apply=False` keeps captured changes inside the
-        worktree and surfaces the root patch path, branch name, and nested
-        repository patches through the DAG node dict (combine with
-        `handle=True` to receive them — see below; the bare return type
-        stays bytes/string/parsed object and has nowhere to expose artifacts).
-        `merge=False` forces patch mode even when `task.isolation.merge` is
-        `"branch"`, avoiding the per-call git lock + repo mutation that branch
-        mode performs.
-
-        Set `handle=True` to receive a DAG node dict instead of bare
-        text: ``{"text", "output", "handle", "id", "agent"}`` where ``handle``
-        is the spawned agent's recoverable ``agent://<id>`` URI. A downstream
-        ``pipeline``/``parallel`` stage embeds that ``handle`` (or ``output``)
-        in its prompt so a large transcript flows through the graph by
-        reference, never re-inlined. When ``schema`` is also set the parsed
-        object lands under ``"data"``. When the spawn ran isolated the node
-        also carries ``"isolated"`` and, when present, ``"patch_path"``,
-        ``"branch_name"``, ``"nested_patches"``, ``"changes_applied"``
-        (``True``/``False``/``None`` — ``None`` means ``apply=False``), and
-        ``"isolation_summary"``. If
-        the bridge returns no recoverable id the node still resolves with
-        ``handle=None`` — the helper never throws.
+        `schema` overrides agent and session schemas. `schema_mode` is
+        `"permissive"` or `"strict"`. `handle=True` returns the child output
+        reference and metadata, with parsed data under `"data"` when available.
         """
         args = {"prompt": prompt}
         if agent is not None:
@@ -471,6 +508,8 @@ if "__omp_prelude_loaded__" not in globals():
             args["label"] = label
         if schema is not None:
             args["schema"] = schema
+        if schema_mode is not None:
+            args["schemaMode"] = schema_mode
         if isolated is not None:
             args["isolated"] = bool(isolated)
         if apply is not None:
@@ -481,12 +520,19 @@ if "__omp_prelude_loaded__" not in globals():
             args["handle"] = True
         res = _bridge_call("__agent__", args)
         text = res.get("text") if isinstance(res, dict) else res
-        parsed = json.loads(text) if schema is not None else text
+        has_data = isinstance(res, dict) and "data" in res
+        parsed = res["data"] if has_data else json.loads(text) if schema is not None else text
         if not handle:
             return parsed
         details = res.get("details") if isinstance(res, dict) else None
         if not isinstance(details, dict) or details.get("id") is None:
-            return {"text": text, "output": text, "handle": None, "id": None, "agent": None}
+            return {
+                "text": text,
+                "output": text,
+                "handle": None,
+                "id": None,
+                "agent": None,
+            }
         node = {
             "text": text,
             "output": text,
@@ -494,7 +540,7 @@ if "__omp_prelude_loaded__" not in globals():
             "id": details["id"],
             "agent": details.get("agent"),
         }
-        if schema is not None:
+        if has_data or schema is not None:
             node["data"] = parsed
         for src_key, dst_key in (
             ("isolated", "isolated"),
@@ -532,6 +578,7 @@ if "__omp_prelude_loaded__" not in globals():
         pool width tracks ``task.maxConcurrency`` (0 = run every item at once).
         """
         import concurrent.futures, contextvars
+
         items = list(items)
         if not items:
             return []

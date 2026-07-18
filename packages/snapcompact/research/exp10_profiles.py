@@ -61,10 +61,10 @@ BASELINE = {  # img-6x10-sent from results/optimal-{gpt55,gemini}/matrix.csv
 # Phase A screening cells (length 150). Sibling winners + variant probe at
 # 8x13 + the 6x12 bridge. img-6x10-sent is the baseline -- not re-run.
 SCREEN = (
-    "img-6x12-dim",       # fable's winner
-    "img-8x13-bw",        # opus's winner
+    "img-6x12-dim",  # fable's winner
+    "img-8x13-bw",  # opus's winner
     "img-8x13-sent-dim",  # kimi's winner
-    "img-8x13-dark-sent", # glm's winner
+    "img-8x13-dark-sent",  # glm's winner
     "img-8x13-sent",
     "img-8x13-dim",
     "img-6x12-sent",
@@ -110,11 +110,21 @@ def render_png(chunk_text: str, font: str, variant: str, size: int) -> Path:
     return png
 
 
-def run_cell_chunk(model: str, cond: str, start: int, end: int, ctx: dict) -> list[dict]:
+def run_cell_chunk(
+    model: str, cond: str, start: int, end: int, ctx: dict
+) -> list[dict]:
     """One (model, condition, chunk): render carrier image, QA, score.
     Copied from final.run_cell_chunk, image conditions only."""
-    args, flow, paras, offsets, keys = ctx["args"], ctx["flow"], ctx["paras"], ctx["offsets"], ctx["keys"]
-    questions = squad.sample_chunk_questions(paras, offsets, start, end, args.qpc, args.seed)
+    args, flow, paras, offsets, keys = (
+        ctx["args"],
+        ctx["flow"],
+        ctx["paras"],
+        ctx["offsets"],
+        ctx["keys"],
+    )
+    questions = squad.sample_chunk_questions(
+        paras, offsets, start, end, args.qpc, args.seed
+    )
     if not questions:
         return []
     chunk_text = flow[start:end]
@@ -133,11 +143,14 @@ def run_cell_chunk(model: str, cond: str, start: int, end: int, ctx: dict) -> li
         }
     ]
     qa = cached(
-        model, {"messages": messages, "extra": None, "effort": None},
+        model,
+        {"messages": messages, "extra": None, "effort": None},
         lambda: dict(
             zip(
                 ("text", "usage", "stop"),
-                llm_complete(keys, model, messages, max_tokens=args.max_tokens, effort=None),
+                llm_complete(
+                    keys, model, messages, max_tokens=args.max_tokens, effort=None
+                ),
             )
         ),
         args.fresh,
@@ -170,8 +183,13 @@ def aggregate(records: list[dict], price_in: float, price_out: float) -> dict:
     mean_f1 = sum(f1s) / n
     se = (sum((x - mean_f1) ** 2 for x in f1s) / (n * (n - 1))) ** 0.5 if n > 1 else 0.0
     us = [u for r in records if "usage" in r for u in r["usage"]]
-    tok = {k: sum(u.get(k, 0) for u in us) for k in ("in", "out", "cache_w", "cache_r", "reasoning")}
-    cost_in = (tok["in"] + 1.25 * tok["cache_w"] + 0.1 * tok["cache_r"]) / 1e6 * price_in
+    tok = {
+        k: sum(u.get(k, 0) for u in us)
+        for k in ("in", "out", "cache_w", "cache_r", "reasoning")
+    }
+    cost_in = (
+        (tok["in"] + 1.25 * tok["cache_w"] + 0.1 * tok["cache_r"]) / 1e6 * price_in
+    )
     cost_out = tok["out"] / 1e6 * price_out
     return {
         "n": n,
@@ -200,8 +218,12 @@ class Runner:
             paras = self.all_paras[:length]
             flow, offsets = squad.build_flow(paras)
             self.ctxs[length] = {
-                "args": self.args, "flow": flow, "paras": paras,
-                "offsets": offsets, "keys": self.keys, "length": length,
+                "args": self.args,
+                "flow": flow,
+                "paras": paras,
+                "offsets": offsets,
+                "keys": self.keys,
+                "length": length,
             }
         return self.ctxs[length]
 
@@ -224,11 +246,30 @@ class Runner:
                 self.records.extend(fut.result())
 
     def cell(self, model: str, length: int, cond: str) -> dict | None:
-        sub = [r for r in self.records if r["model"] == model and r["length"] == length and r["cond"] == cond]
-        return {"model": model, "length": length, "condition": cond, **aggregate(sub, *MODELS[model])} if sub else None
+        sub = [
+            r
+            for r in self.records
+            if r["model"] == model and r["length"] == length and r["cond"] == cond
+        ]
+        return (
+            {
+                "model": model,
+                "length": length,
+                "condition": cond,
+                **aggregate(sub, *MODELS[model]),
+            }
+            if sub
+            else None
+        )
 
     def cells_for(self, model: str, length: int) -> list[dict]:
-        conds = sorted({r["cond"] for r in self.records if r["model"] == model and r["length"] == length})
+        conds = sorted(
+            {
+                r["cond"]
+                for r in self.records
+                if r["model"] == model and r["length"] == length
+            }
+        )
         return [c for cond in conds if (c := self.cell(model, length, cond))]
 
 
@@ -258,7 +299,9 @@ def main() -> None:
     runner.run([(m, 150, c) for m in models for c in SCREEN], "A screen")
 
     # -- phase B: density ladder at each model's best variant ---------------
-    ladder = [(m, 150, "img-6x10-sent") for m in models]  # baseline; free via shared cache
+    ladder = [
+        (m, 150, "img-6x10-sent") for m in models
+    ]  # baseline; free via shared cache
     best_variant = {}
     for m in models:
         top = max(runner.cells_for(m, 150), key=lambda c: c["f1"])
@@ -269,12 +312,20 @@ def main() -> None:
 
     # -- phase C: cross-profile transfer (each model on the other's optimum) -
     top150 = {m: max(runner.cells_for(m, 150), key=lambda c: c["f1"]) for m in models}
-    cross = [(other, 150, top150[m]["condition"]) for m in models for other in models if other != m]
+    cross = [
+        (other, 150, top150[m]["condition"])
+        for m in models
+        for other in models
+        if other != m
+    ]
     runner.run(cross, "C cross")
     top150 = {m: max(runner.cells_for(m, 150), key=lambda c: c["f1"]) for m in models}
 
     # -- phase D: confirm top cell at lengths 50 and 250 ---------------------
-    runner.run([(m, ln, top150[m]["condition"]) for m in models for ln in (50, 250)], "D confirm")
+    runner.run(
+        [(m, ln, top150[m]["condition"]) for m in models for ln in (50, 250)],
+        "D confirm",
+    )
 
     # -- outputs --------------------------------------------------------------
     with (OUT_DIR / "records.jsonl").open("w") as fh:
@@ -316,16 +367,25 @@ def main() -> None:
                 "f1_se_at_150": round(top["f1_se"], 4),
                 "cost_usd_at_150": top["cost_usd"],
                 "confirm": {
-                    str(ln): {"f1": round(c["f1"], 4), "se": round(c["f1_se"], 4), "cost_usd": c["cost_usd"]}
-                    for ln, c in confirm.items() if c
+                    str(ln): {
+                        "f1": round(c["f1"], 4),
+                        "se": round(c["f1_se"], 4),
+                        "cost_usd": c["cost_usd"],
+                    }
+                    for ln, c in confirm.items()
+                    if c
                 },
             },
             "baseline_img_6x10_sent_f1_at_150": BASELINE[(m, 150)][0],
-            "transfer_f1_on_other_model_at_150": round(transfer["f1"], 4) if transfer else None,
+            "transfer_f1_on_other_model_at_150": round(transfer["f1"], 4)
+            if transfer
+            else None,
         }
     (OUT_DIR / "profiles.json").write_text(json.dumps(profiles, indent=1))
     (OUT_DIR / "summary.json").write_text(
-        json.dumps({"args": vars(args), "best_variant": best_variant, "cells": cells}, indent=1)
+        json.dumps(
+            {"args": vars(args), "best_variant": best_variant, "cells": cells}, indent=1
+        )
     )
 
     # -- console report -------------------------------------------------------
@@ -333,14 +393,18 @@ def main() -> None:
     for m in models:
         print(f"\n== {m} (length 150 screening, sorted by F1) ==")
         base_f1, base_se, base_cost = BASELINE[(m, 150)]
-        print(f"{'condition':<22}{'n':>5}{'EM':>7}{'F1':>7}{'se':>7}{'abst':>6}{'cost$':>8}{'dF1':>8}")
+        print(
+            f"{'condition':<22}{'n':>5}{'EM':>7}{'F1':>7}{'se':>7}{'abst':>6}{'cost$':>8}{'dF1':>8}"
+        )
         for c in sorted(runner.cells_for(m, 150), key=lambda c: -c["f1"]):
             spend += c["cost_usd"]
             print(
                 f"{c['condition']:<22}{c['n']:>5}{c['em']:>7.3f}{c['f1']:>7.3f}{c['f1_se']:>7.3f}"
                 f"{c['abstained']:>6}{c['cost_usd']:>8.3f}{c['f1'] - base_f1:>+8.3f}"
             )
-        print(f"{'img-6x10-sent [base]':<22}{'':>5}{'':>7}{base_f1:>7.3f}{base_se:>7.3f}{'':>6}{base_cost:>8.3f}{0:>+8.3f}")
+        print(
+            f"{'img-6x10-sent [base]':<22}{'':>5}{'':>7}{base_f1:>7.3f}{base_se:>7.3f}{'':>6}{base_cost:>8.3f}{0:>+8.3f}"
+        )
         for ln in (50, 250):
             c = runner.cell(m, ln, top150[m]["condition"])
             if c:

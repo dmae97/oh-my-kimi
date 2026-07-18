@@ -43,7 +43,7 @@ import type { AuthStorage, OAuthAccountIdentity } from "../../session/auth-stora
 import type { CompactMode } from "../../session/compact-modes";
 import type { NewSessionOptions } from "../../session/session-entries";
 import { formatShakeSummary, type ShakeMode, type ShakeResult } from "../../session/shake-types";
-import { limitMatchesActiveAccount } from "../../slash-commands/helpers/active-oauth-account";
+import { formatActiveAccountLabel, limitMatchesActiveAccount } from "../../slash-commands/helpers/active-oauth-account";
 import { outputMeta } from "../../tools/output-meta";
 import { resolveToCwd, stripOuterDoubleQuotes } from "../../tools/path-utils";
 import { replaceTabs, truncateToWidth } from "../../tools/render-utils";
@@ -64,7 +64,7 @@ function showMarkdownPanel(ctx: InteractiveModeContext, title: string, markdown:
 	block.addChild(new Spacer(1));
 	block.addChild(new Markdown(markdown.trim(), 1, 1, getMarkdownTheme()));
 	block.addChild(new DynamicBorder());
-	ctx.present(block);
+	ctx.presentCommandOutput(block);
 }
 
 export class CommandController {
@@ -349,46 +349,119 @@ export class CommandController {
 		this.ctx.present([new Spacer(1), new Text(info, 1, 0)]);
 	}
 
+	static readonly #advisorStatusGlyph: Record<string, string> = {
+		running: "●",
+		paused: "○",
+		no_model: "○",
+		quota_exhausted: "✕",
+		error: "✕",
+	};
+
+	static readonly #advisorStatusLabel: Record<string, string> = {
+		running: "running",
+		paused: "off",
+		no_model: "no model",
+		quota_exhausted: "quota exhausted",
+		error: "error",
+	};
+
 	async handleAdvisorStatusCommand(): Promise<void> {
 		const stats = this.ctx.session.getAdvisorStats();
-		if (!stats.active) {
-			this.ctx.present([
-				new Spacer(1),
-				new Text(
-					stats.configured
-						? "Advisor setting is enabled, but no model is assigned to the 'advisor' role."
-						: "Advisor is disabled.",
-					1,
-					0,
-				),
-			]);
+		if (!stats.configured) {
+			this.ctx.present([new Spacer(1), new Text("Advisor is disabled.", 1, 0)]);
 			return;
 		}
-		if (stats.advisors.length > 1) {
+		// Fetch live quota data (cached 5 min by the auth-gateway) so we can show
+		// real usage windows/reset timers per advisor provider. Non-fatal when absent.
+		const usageProvider = this.ctx.session as { fetchUsageReports?: () => Promise<UsageReport[] | null> };
+		let usageReports: UsageReport[] | null = null;
+		if (usageProvider.fetchUsageReports) {
+			try {
+				usageReports = await usageProvider.fetchUsageReports();
+			} catch {
+				// Network/auth failure is non-fatal — just skip the quota line.
+			}
+		}
+		// Resolve the active OAuth identity for each advisor's provider so quota
+		// filtering matches the credential actually in use (not sibling accounts).
+		const resolveActiveAdvisorAccount = (provider: string, sessionId?: string): OAuthAccountIdentity | undefined =>
+			this.ctx.session.modelRegistry.authStorage.getOAuthAccountIdentity(
+				provider,
+				sessionId ?? this.ctx.session.sessionId,
+			);
+		const nowMs = Date.now();
+		// Roster view: show every configured advisor with its status, even when
+		// none are live (all paused/no-model). The old code returned a generic
+		// message that hid the per-advisor state the user needs to act on.
+		if (stats.advisors.length > 1 || (stats.configured && !stats.active)) {
 			let info = `${theme.bold("Advisor Status")} (${stats.advisors.length} advisors)\n`;
 			for (const a of stats.advisors) {
-				const ctx =
-					a.contextWindow > 0
-						? `${a.contextTokens.toLocaleString()} / ${a.contextWindow.toLocaleString()} (${Math.round((a.contextTokens / a.contextWindow) * 100)}%)`
-						: `${a.contextTokens.toLocaleString()}`;
-				info += `\n${theme.bold(a.name)}\n`;
-				info += `${theme.fg("dim", "Model:")} ${a.model.provider}/${a.model.id}\n`;
-				info += `${theme.fg("dim", "Context:")} ${ctx}\n`;
-				info += `${theme.fg("dim", "Messages:")} ${a.messages.total.toLocaleString()}\n`;
-				info += `${theme.fg("dim", "Spend:")} ${a.tokens.input.toLocaleString()} in / ${a.tokens.output.toLocaleString()} out`;
-				if (a.cost > 0) info += `, $${a.cost.toFixed(4)}`;
-				info += "\n";
+				const glyph = CommandController.#advisorStatusGlyph[a.status] ?? "?";
+				const label = CommandController.#advisorStatusLabel[a.status] ?? a.status;
+				const color =
+					a.status === "running"
+						? "success"
+						: a.status === "quota_exhausted" || a.status === "error"
+							? "error"
+							: "dim";
+				info += `\n${theme.fg(color, glyph)} ${theme.bold(a.name)} ${theme.fg("dim", `[${label}]`)}\n`;
+				if (a.model) {
+					info += `${theme.fg("dim", "Model:")} ${a.model.provider}/${a.model.id}\n`;
+				}
+				if (a.model && usageReports) {
+					const quota = formatCompactQuota(
+						a.model.provider,
+						usageReports,
+						nowMs,
+						resolveActiveAdvisorAccount(a.model.provider, a.sessionId),
+					);
+					if (quota) info += `${theme.fg("dim", quota)}\n`;
+				}
+				if (a.status === "running" || a.status === "quota_exhausted") {
+					const ctx =
+						a.contextWindow > 0
+							? `${a.contextTokens.toLocaleString()} / ${a.contextWindow.toLocaleString()} (${Math.round((a.contextTokens / a.contextWindow) * 100)}%)`
+							: `${a.contextTokens.toLocaleString()}`;
+					info += `${theme.fg("dim", "Context:")} ${ctx}\n`;
+					info += `${theme.fg("dim", "Messages:")} ${a.messages.total.toLocaleString()}\n`;
+					info += `${theme.fg("dim", "Spend:")} ${a.tokens.input.toLocaleString()} in / ${a.tokens.output.toLocaleString()} out`;
+					if (a.cost > 0) info += `, $${a.cost.toFixed(4)}`;
+					info += "\n";
+				}
 			}
-			info += `\n${theme.bold("Totals")}\n`;
-			info += `${theme.fg("dim", "Tokens:")} ${stats.tokens.total.toLocaleString()}\n`;
-			if (stats.cost > 0) info += `${theme.fg("dim", "Cost:")} $${stats.cost.toFixed(4)}\n`;
+			if (stats.active) {
+				info += `\n${theme.bold("Totals")}\n`;
+				info += `${theme.fg("dim", "Tokens:")} ${stats.tokens.total.toLocaleString()}\n`;
+				if (stats.cost > 0) info += `${theme.fg("dim", "Cost:")} $${stats.cost.toFixed(4)}\n`;
+			}
 			this.ctx.present([new Spacer(1), new Text(info, 1, 0)]);
 			return;
 		}
-		const model = stats.model!;
+		// Single active advisor — detailed view.
+		const model = stats.model;
 		let info = `${theme.bold("Advisor Status")}\n\n`;
-		info += `${theme.bold("Provider")}\n`;
-		info += `${theme.fg("dim", "Model:")} ${model.provider}/${model.id}\n`;
+		if (stats.advisors.length === 1) {
+			const a = stats.advisors[0];
+			const glyph = CommandController.#advisorStatusGlyph[a.status] ?? "?";
+			const label = CommandController.#advisorStatusLabel[a.status] ?? a.status;
+			info += `${theme.fg(a.status === "running" ? "success" : "error", glyph)} ${a.name} ${theme.fg("dim", `[${label}]`)}\n\n`;
+		}
+		if (model) {
+			info += `${theme.bold("Provider")}\n`;
+			info += `${theme.fg("dim", "Model:")} ${model.provider}/${model.id}\n`;
+		}
+		if (model && usageReports) {
+			const quota = formatCompactQuota(
+				model.provider,
+				usageReports,
+				nowMs,
+				resolveActiveAdvisorAccount(model.provider, stats.advisors[0]?.sessionId),
+			);
+			if (quota) {
+				info += `\n${theme.bold("Quota")}\n`;
+				info += `${theme.fg("dim", quota)}\n`;
+			}
+		}
 		info += `\n${theme.bold("Messages")}\n`;
 		info += `${theme.fg("dim", "User:")} ${stats.messages.user.toLocaleString()}\n`;
 		info += `${theme.fg("dim", "Assistant:")} ${stats.messages.assistant.toLocaleString()}\n`;
@@ -406,14 +479,7 @@ export class CommandController {
 		if (stats.tokens.cacheRead > 0) {
 			info += `${theme.fg("dim", "Cache Read:")} ${stats.tokens.cacheRead.toLocaleString()}\n`;
 		}
-		if (stats.tokens.cacheWrite > 0) {
-			info += `${theme.fg("dim", "Cache Write:")} ${stats.tokens.cacheWrite.toLocaleString()}\n`;
-		}
-		info += `${theme.fg("dim", "Total:")} ${stats.tokens.total.toLocaleString()}\n`;
-		if (stats.cost > 0) {
-			info += `\n${theme.bold("Cost")}\n`;
-			info += `${theme.fg("dim", "Total:")} $${stats.cost.toFixed(4)}\n`;
-		}
+		if (stats.cost > 0) info += `${theme.fg("dim", "Cost:")} $${stats.cost.toFixed(4)}\n`;
 		this.ctx.present([new Spacer(1), new Text(info, 1, 0)]);
 	}
 
@@ -515,7 +581,10 @@ export class CommandController {
 	}
 
 	handleToolsCommand(): void {
-		const tools = buildToolsMarkdown({ tools: this.ctx.session.agent.state.tools });
+		const tools = buildToolsMarkdown({
+			tools: this.ctx.session.agent.state.tools,
+			xdevTools: this.ctx.session.getXdevToolEntries(),
+		});
 		showMarkdownPanel(this.ctx, "Available Tools", tools);
 	}
 
@@ -990,6 +1059,12 @@ export class CommandController {
 				return;
 			}
 		}
+		try {
+			await this.ctx.settings.flush();
+		} catch (err) {
+			this.ctx.showError(`Failed to save pending settings: ${err instanceof Error ? err.message : String(err)}`);
+			return;
+		}
 
 		try {
 			await this.ctx.sessionManager.moveTo(resolvedPath);
@@ -997,7 +1072,6 @@ export class CommandController {
 			this.ctx.showError(`Move failed: ${err instanceof Error ? err.message : String(err)}`);
 			return;
 		}
-
 		await this.ctx.applyCwdChange(resolvedPath);
 
 		this.ctx.updateEditorBorderColor();
@@ -1200,7 +1274,15 @@ export class CommandController {
 			this.ctx.rebuildChatFromMessages();
 
 			this.ctx.statusLine.invalidate();
-			this.ctx.ui.requestRender();
+			// Same as the auto-compaction rebuild: a collapsed transcript is an
+			// intentional replacement, so drop the stale pre-compaction scrollback
+			// instead of repainting the shrunken frame below it. With collapse
+			// disabled the full history stays inline and scrollback is kept.
+			if (this.ctx.settings.get("display.collapseCompacted")) {
+				this.ctx.ui.requestRender(true, { clearScrollback: true });
+			} else {
+				this.ctx.ui.requestRender();
+			}
 		} catch (error) {
 			if (error instanceof CompactionCancelledError) {
 				outcome = "cancelled";
@@ -1292,7 +1374,7 @@ export class CommandController {
 }
 
 const BAR_WIDTH_MAX = 24;
-const BAR_WIDTH_MIN = 4;
+const COLUMN_WIDTH_MIN = 4;
 
 function renderJobLine(job: AsyncJobSnapshotItem, now: number): string {
 	const duration = formatDuration(Math.max(0, now - job.startTime));
@@ -1380,14 +1462,22 @@ function formatWindowSuffix(label: string, windowLabel: string, uiTheme: typeof 
 	return uiTheme.fg("dim", `(${windowLabel})`);
 }
 
+/** ` (org)` suffix when the report is org-attributed — two subscriptions can share one email. */
+function orgSuffix(report: UsageReport): string {
+	const orgName = report.metadata?.orgName;
+	const orgId = report.metadata?.orgId;
+	const org = typeof orgName === "string" && orgName ? orgName : typeof orgId === "string" ? orgId : undefined;
+	return org ? ` (${org})` : "";
+}
+
 function formatAccountLabel(limit: UsageLimit, report: UsageReport, index: number): string {
 	const email = report.metadata?.email;
-	if (typeof email === "string" && email) return email;
+	if (typeof email === "string" && email) return `${email}${orgSuffix(report)}`;
 	const accountId =
 		typeof report.metadata?.accountId === "string" && report.metadata.accountId
 			? report.metadata.accountId
 			: limit.scope.accountId || undefined;
-	if (accountId) return accountId;
+	if (accountId) return `${accountId}${orgSuffix(report)}`;
 	const projectId =
 		typeof report.metadata?.projectId === "string" && report.metadata.projectId
 			? report.metadata.projectId
@@ -1398,9 +1488,9 @@ function formatAccountLabel(limit: UsageLimit, report: UsageReport, index: numbe
 
 function formatUnlimitedReportLabel(report: UsageReport, index: number): string {
 	const email = report.metadata?.email;
-	if (typeof email === "string" && email) return email;
+	if (typeof email === "string" && email) return `${email}${orgSuffix(report)}`;
 	const accountId = report.metadata?.accountId;
-	if (typeof accountId === "string" && accountId) return accountId;
+	if (typeof accountId === "string" && accountId) return `${accountId}${orgSuffix(report)}`;
 	const projectId = report.metadata?.projectId;
 	if (typeof projectId === "string" && projectId) return projectId;
 	return `account ${index + 1}`;
@@ -1518,6 +1608,57 @@ function resolveResetRange(limits: UsageLimit[], nowMs: number): string | null {
 	}
 	return `resets in ${formatDuration(minReset)}`;
 }
+/**
+ * Compact one-line quota summary for a single advisor's provider.
+ * Returns `null` when the provider has no usage data.
+ * When `activeAccount` is provided, only limits matching that credential
+ * are shown (mirrors `renderUsageReports`'s account-stickiness filtering).
+ * Example output: `Quota: 7d window · 67% used · resets in 3.2d`
+ */
+export function formatCompactQuota(
+	provider: string,
+	reports: UsageReport[],
+	nowMs: number,
+	activeAccount?: OAuthAccountIdentity,
+): string | null {
+	const providerReports = reports.filter(r => r.provider === provider);
+	if (providerReports.length === 0) return null;
+	// Group limits by window id so we show BOTH the 5-hour and 7-day windows
+	// (or any other distinct windows the provider exposes). Within each window,
+	// pick the highest used fraction across accounts — that's the most pressing.
+	const byWindow = new Map<string, { limit: UsageLimit; fraction: number }>();
+	for (const report of providerReports) {
+		for (const limit of report.limits) {
+			// Skip limits that belong to a different credential than the one
+			// the advisor is actually using, so we don't alarm the user with
+			// an exhausted account that isn't theirs.
+			if (activeAccount && !limitMatchesActiveAccount(report, limit, activeAccount)) continue;
+			const fraction = resolveUsedFraction(limit);
+			if (fraction === undefined) continue;
+			const key = limit.window?.id ?? limit.scope.windowId ?? "—";
+			const existing = byWindow.get(key);
+			if (!existing || fraction > existing.fraction) byWindow.set(key, { limit, fraction });
+		}
+	}
+	if (byWindow.size === 0) return null;
+	// Sort windows by urgency (highest fraction first) so the most pressing
+	// quota is always the first thing the user sees.
+	const entries = [...byWindow.values()].sort((a, b) => b.fraction - a.fraction);
+	const lines: string[] = [];
+	for (const { limit, fraction } of entries) {
+		const pct = Math.round(fraction * 100);
+		const windowLabel = limit.window?.label ?? limit.scope.windowId ?? "—";
+		// Include the limit label (account/tier) when it carries identity beyond
+		// the window name, so the user can tell which credential's quota is shown.
+		const identity = limit.label.trim();
+		const header = identity && identity !== windowLabel ? `${windowLabel} (${identity})` : windowLabel;
+		const parts = [`${header}: ${pct}% used`];
+		const reset = resolveResetRange([limit], nowMs);
+		if (reset) parts.push(reset);
+		lines.push(parts.join(" · "));
+	}
+	return `Quota: ${lines.join(" │ ")}`;
+}
 
 function resolveStatusIcon(status: UsageLimit["status"], uiTheme: typeof theme): string {
 	if (status === "exhausted") return uiTheme.fg("error", uiTheme.status.error);
@@ -1552,7 +1693,7 @@ function renderUsageBar(limit: UsageLimit, uiTheme: typeof theme, barWidth: numb
 }
 
 /**
- * Pick a per-column width so n bars + a trailing amount string fit in `available` columns.
+ * Pick a per-account column width so the columns and trailing amount fit in `available`.
  * Falls back to the minimum when the terminal is too narrow rather than wrapping.
  */
 function resolveColumnWidth(count: number, available: number, trailing: number): number {
@@ -1561,10 +1702,7 @@ function resolveColumnWidth(count: number, available: number, trailing: number):
 	const gaps = count - 1;
 	const spaceForBars = available - indent - gaps - (trailing > 0 ? trailing + 1 : 0);
 	const ideal = Math.floor(spaceForBars / count);
-	const min = BAR_WIDTH_MIN;
-	const max = BAR_WIDTH_MAX;
-	if (ideal < min) return min;
-	if (ideal > max) return max;
+	if (ideal < COLUMN_WIDTH_MIN) return COLUMN_WIDTH_MIN;
 	return ideal;
 }
 
@@ -1623,7 +1761,7 @@ export function renderUsageReports(
 		}
 
 		lines.push(uiTheme.bold(uiTheme.fg("accent", providerName)));
-		const activeAccountLabel = activeAccount?.email ?? activeAccount?.accountId ?? activeAccount?.projectId;
+		const activeAccountLabel = formatActiveAccountLabel(activeAccount);
 		if (activeAccountLabel) {
 			lines.push(`  ${uiTheme.fg("accent", "in use by this session:")} ${activeAccountLabel}`);
 		}
@@ -1700,6 +1838,7 @@ export function renderUsageReports(
 		const sectionCount = renderableGroups.reduce((max, g) => Math.max(max, g.sortedLimits.length), 0);
 		const sectionTrailing = renderableGroups.reduce((max, g) => Math.max(max, visibleWidth(g.amountText)), 0);
 		const sectionColumnWidth = resolveColumnWidth(sectionCount, availableWidth, sectionTrailing);
+		const sectionBarWidth = Math.min(sectionColumnWidth, BAR_WIDTH_MAX);
 
 		for (const { group, sortedLimits, sortedReports, amountText } of renderableGroups) {
 			const status = resolveAggregateStatus(sortedLimits);
@@ -1717,7 +1856,7 @@ export function renderUsageReports(
 			);
 			lines.push(`  ${accountLabels.join(" ")}`.trimEnd());
 			const bars = sortedLimits.map(limit =>
-				padColumn(renderUsageBar(limit, uiTheme, sectionColumnWidth), sectionColumnWidth),
+				padColumn(renderUsageBar(limit, uiTheme, sectionBarWidth), sectionColumnWidth),
 			);
 			lines.push(`  ${bars.join(" ")} ${amountText}`.trimEnd());
 			const resetText = sortedLimits.length <= 1 ? resolveResetRange(sortedLimits, nowMs) : null;

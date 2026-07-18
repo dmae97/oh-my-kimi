@@ -11,6 +11,8 @@ export interface RecordingHandle {
 }
 
 const isWindows = process.platform === "win32";
+const linuxFFmpegFormats = new Map<string, "pulse" | "alsa">();
+const ffmpegCaptureFlags = ["-hide_banner", "-loglevel", "error", "-nostats"];
 
 /**
  * Returns available recording tools in priority order.
@@ -36,6 +38,36 @@ async function detectWindowsAudioDevice(bin: string): Promise<string> {
 	return audioDevices[0];
 }
 
+async function ffmpegInputArgs(bin: string): Promise<string[]> {
+	if (isWindows) {
+		return ["-f", "dshow", "-i", `audio=${await detectWindowsAudioDevice(bin)}`];
+	}
+	if (process.platform === "darwin") {
+		return ["-f", "avfoundation", "-i", ":default"];
+	}
+
+	let format = linuxFFmpegFormats.get(bin);
+	if (!format) {
+		const result = await $`${bin} -hide_banner -demuxers`.quiet().nothrow();
+		if (result.exitCode !== 0) {
+			const stderr = result.stderr.toString().trim();
+			throw new Error(
+				`Could not inspect ffmpeg input formats (code ${result.exitCode}): ${stderr || "(no output)"}`,
+			);
+		}
+		const demuxers = result.stdout.toString();
+		if (/^\s*D\s+(?:d\s+)?pulse(?:\s|$)/m.test(demuxers)) {
+			format = "pulse";
+		} else if (/^\s*D\s+(?:d\s+)?alsa(?:\s|$)/m.test(demuxers)) {
+			format = "alsa";
+		} else {
+			throw new Error("ffmpeg supports neither PulseAudio nor ALSA input on Linux");
+		}
+		linuxFFmpegFormats.set(bin, format);
+	}
+	return ["-f", format, "-i", "default"];
+}
+
 // ── Recording implementations ──────────────────────────────────────
 
 async function startSoxRecording(bin: string, outputPath: string): Promise<RecordingHandle> {
@@ -44,7 +76,7 @@ async function startSoxRecording(bin: string, outputPath: string): Promise<Recor
 
 	const proc = Bun.spawn([bin, ...inputArgs, "-r", "16000", "-c", "1", "-b", "16", "-t", "wav", outputPath], {
 		stdout: "pipe",
-		stderr: "ignore",
+		stderr: "pipe",
 	});
 	await verifyProcessAlive(proc, "sox");
 	return {
@@ -56,48 +88,24 @@ async function startSoxRecording(bin: string, outputPath: string): Promise<Recor
 }
 
 async function startFFmpegRecording(bin: string, outputPath: string): Promise<RecordingHandle> {
-	let args: string[];
-	if (isWindows) {
-		const device = await detectWindowsAudioDevice(bin);
-		args = [
-			bin,
-			"-f",
-			"dshow",
-			"-i",
-			`audio=${device}`,
-			"-ar",
-			"16000",
-			"-ac",
-			"1",
-			"-sample_fmt",
-			"s16",
-			"-y",
-			outputPath,
-		];
-	} else if (process.platform === "darwin") {
-		args = [
-			bin,
-			"-f",
-			"avfoundation",
-			"-i",
-			":default",
-			"-ar",
-			"16000",
-			"-ac",
-			"1",
-			"-sample_fmt",
-			"s16",
-			"-y",
-			outputPath,
-		];
-	} else {
-		args = [bin, "-f", "pulse", "-i", "default", "-ar", "16000", "-ac", "1", "-sample_fmt", "s16", "-y", outputPath];
-	}
+	const args = [
+		bin,
+		...ffmpegCaptureFlags,
+		...(await ffmpegInputArgs(bin)),
+		"-ar",
+		"16000",
+		"-ac",
+		"1",
+		"-sample_fmt",
+		"s16",
+		"-y",
+		outputPath,
+	];
 
 	const proc = Bun.spawn(args, {
 		stdin: "pipe",
 		stdout: "pipe",
-		stderr: "ignore",
+		stderr: "pipe",
 	});
 	await verifyProcessAlive(proc, "ffmpeg");
 
@@ -119,7 +127,7 @@ async function startFFmpegRecording(bin: string, outputPath: string): Promise<Re
 async function startArecordRecording(bin: string, outputPath: string): Promise<RecordingHandle> {
 	const proc = Bun.spawn([bin, "-f", "S16_LE", "-r", "16000", "-c", "1", outputPath], {
 		stdout: "pipe",
-		stderr: "ignore",
+		stderr: "pipe",
 	});
 	await verifyProcessAlive(proc, "arecord");
 	return {
@@ -260,20 +268,19 @@ async function startPowerShellRecording(outputPath: string): Promise<RecordingHa
 
 // ── Health check ───────────────────────────────────────────────────
 
-type RecorderProcess = Subprocess<"ignore" | "pipe", "pipe", "ignore">;
+type RecorderProcess = Subprocess<"ignore" | "pipe", "pipe", "pipe">;
 
 async function verifyProcessAlive(proc: RecorderProcess, tool: string): Promise<void> {
 	await Bun.sleep(300);
 
 	const exited = await Promise.race([proc.exited.then(code => code), Bun.sleep(0).then(() => "running" as const)]);
-
-	if (exited !== "running") {
-		let stderr = "";
-		if (proc.stderr && typeof proc.stderr !== "number") {
-			stderr = await new Response(proc.stderr as ReadableStream).text();
-		}
-		throw new Error(`${tool} exited immediately (code ${exited}): ${stderr.trim() || "(no output)"}`);
+	if (exited === "running") {
+		void proc.stderr.pipeTo(new WritableStream<Uint8Array>()).catch(() => {});
+		return;
 	}
+
+	const stderr = await new Response(proc.stderr).text();
+	throw new Error(`${tool} exited immediately (code ${exited}): ${stderr.trim() || "(no output)"}`);
 }
 
 // ── Public API ─────────────────────────────────────────────────────
@@ -415,12 +422,18 @@ async function streamingRecorderArgs(recorder: ResolvedRecorder): Promise<string
 		case "arecord":
 			return [bin, "-f", "S16_LE", "-r", "16000", "-c", "1", "-t", "raw", "-"];
 		case "ffmpeg": {
-			const input = isWindows
-				? ["-f", "dshow", "-i", `audio=${await detectWindowsAudioDevice(bin)}`]
-				: process.platform === "darwin"
-					? ["-f", "avfoundation", "-i", ":default"]
-					: ["-f", "pulse", "-i", "default"];
-			return [bin, ...input, "-ar", "16000", "-ac", "1", "-f", "s16le", "pipe:1"];
+			return [
+				bin,
+				...ffmpegCaptureFlags,
+				...(await ffmpegInputArgs(bin)),
+				"-ar",
+				"16000",
+				"-ac",
+				"1",
+				"-f",
+				"s16le",
+				"pipe:1",
+			];
 		}
 		case "powershell":
 			throw new Error("PowerShell recorder cannot stream PCM to a pipe");
@@ -439,7 +452,7 @@ async function startStreamingRecordingWithRecorder(
 ): Promise<StreamingRecordingHandle> {
 	const args = await streamingRecorderArgs(recorder);
 	logger.debug("Starting streaming audio recording", { tool: recorder.tool, bin: recorder.bin });
-	const proc = Bun.spawn(args, { stdin: "pipe", stdout: "pipe", stderr: "ignore" });
+	const proc = Bun.spawn(args, { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
 
 	// Read s16le bytes off stdout, carrying any trailing odd byte across chunk
 	// boundaries so a sample is never split. Runs until the process closes stdout.

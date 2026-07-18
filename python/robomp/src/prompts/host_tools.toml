@@ -72,6 +72,22 @@ reason = "Internal diagnosis for the operator. Concrete, specific, blameless. NE
 [fetch_issue_thread]
 description = "Refetch the originating issue and its comments. Use sparingly."
 
+[gh_search_issues]
+description = "Search issues AND pull requests in the current repo. Served from a local index of every issue/PR (webhook-fed, periodically reconciled), so calls are free — search liberally during triage to find duplicates and already-merged fixes before classifying."
+
+[gh_search_issues.parameters]
+query = "GitHub issue-search syntax: bare keywords plus qualifiers like `is:pr`, `is:closed`, `is:merged`, `label:bug`, `author:<login>`. NEVER include a `repo:` qualifier — scope is applied automatically."
+limit = "Max results, 1-20. Default 10."
+
+[search_commits]
+description = "Search the default branch's commit history. `mode=message` greps commit messages (case-insensitive regex); `mode=patch` finds commits whose diff adds/removes the literal query string — use it to check whether the broken code path was already touched by a fix."
+
+[search_commits.parameters]
+query = "Regex for `mode=message`; literal string for `mode=patch`."
+mode = "`message` (default) searches commit messages; `patch` pickaxe-searches diff content."
+paths = "Optional path filters (files or directories) to narrow the walk."
+limit = "Max commits, 1-30. Default 10."
+
 [set_issue_labels]
 description = "Append labels to the originating issue/PR. NEVER removes existing labels."
 
@@ -88,10 +104,11 @@ functional = "Zero or more functional labels. Unknown values dropped silently; o
 provider = "Only when provider-scoped; format `provider:<name>`. Omit otherwise."
 platform = "Only when platform materially affects reproduction; one of `platform:linux|macos|windows|wsl`. Omit otherwise."
 rationale = "One sentence explaining the classification."
-branch_slug = "Kebab-case slug, 1-50 chars `[a-z0-9-]`, no leading/trailing/double hyphen. Replaces the auto-generated slug in the working branch name. Provide for `bug`/`documentation`. Omit for non-PR workflows (`question`, `enhancement`, `proposal`, `invalid`, `duplicate`)."
+branch_slug = "Kebab-case slug, 1-50 chars `[a-z0-9-]`, no leading/trailing/double hyphen. Replaces the auto-generated slug in the working branch name. Provide for `bug`/`documentation`. Omit for non-PR workflows (`question`, `enhancement`, `proposal`, `wontfix`, `invalid`, `duplicate`)."
 
 [classify_issue.next_steps]
 bug = "reproduce → diagnose → fix → PR"
+wontfix = "post one gh_post_comment explaining the design rationale or upstream cause and what evidence would change the assessment; no repro, no PR; the maintainer decides whether to close"
 documentation = "fix the docs and open a PR using the four-section template"
 question = "answer in a single gh_post_comment; no PR, no repro"
 enhancement = "post one thoughtful gh_post_comment on feasibility/scope; no PR"

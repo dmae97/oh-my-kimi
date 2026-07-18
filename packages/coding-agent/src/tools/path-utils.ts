@@ -35,6 +35,7 @@ const INTERNAL_SCHEMES_WITH_SELECTORS: Record<string, true> = {
 	agent: true,
 	artifact: true,
 	issue: true,
+	history: true,
 	local: true,
 	memory: true,
 	omp: true,
@@ -147,8 +148,17 @@ export function expandTilde(filePath: string, home?: string): string {
 }
 
 export function expandPath(filePath: string): string {
+	// Some models intermittently prefix an otherwise-valid path with a stray
+	// `:` (e.g. `:/abs/path`, `:../rel`, or the Windows forms `:C:\repo\file`
+	// and `:.\src`). No real path starts with `:` and it never begins a
+	// selector against an absolute/relative path, so strip it before
+	// resolution — mirroring the `@`-prefix normalization above and the
+	// implicit stripping `write` already tolerates (issues #5508, #5624). The
+	// lookahead admits POSIX (`/`, `~`, `./`, `../`) and Windows (`\`, `.\`,
+	// `..\`, drive-letter `C:`) path shapes.
+	const deColoned = /^:(?=[/\\~]|\.\.?[/\\]|[A-Za-z]:)/.test(filePath) ? filePath.slice(1) : filePath;
 	const normalized = stripWindowsExtendedLengthPathPrefix(
-		stripFileUrl(normalizeUnicodeSpaces(normalizeAtPrefix(filePath))),
+		stripFileUrl(normalizeUnicodeSpaces(normalizeAtPrefix(deColoned))),
 	);
 	return expandTilde(normalized);
 }

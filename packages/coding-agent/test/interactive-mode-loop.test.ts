@@ -137,4 +137,35 @@ describe("InteractiveMode loop auto-submit", () => {
 		expect(resolved).toHaveLength(1);
 		expect(resolved[0].text).toBe("deliver this");
 	});
+
+	it("reports waiting, running, paused, resumed, and disabled loop states", async () => {
+		const setLoopModeStatus = vi.spyOn(mode.statusLine, "setLoopModeStatus");
+
+		await mode.handleLoopCommand("3");
+		expect(setLoopModeStatus).toHaveBeenLastCalledWith({
+			state: "waiting",
+			limit: { kind: "iterations", initial: 3, remaining: 3 },
+		});
+
+		mode.setLoopPrompt("repeat this");
+		expect(setLoopModeStatus).toHaveBeenLastCalledWith({
+			state: "running",
+			limit: { kind: "iterations", initial: 3, remaining: 3 },
+		});
+
+		mode.pauseLoop();
+		expect(setLoopModeStatus).toHaveBeenLastCalledWith({
+			state: "paused",
+			limit: { kind: "iterations", initial: 3, remaining: 3 },
+		});
+
+		mode.setLoopPrompt("resume this");
+		expect(setLoopModeStatus).toHaveBeenLastCalledWith({
+			state: "running",
+			limit: { kind: "iterations", initial: 3, remaining: 3 },
+		});
+
+		mode.disableLoopMode();
+		expect(setLoopModeStatus).toHaveBeenLastCalledWith(undefined);
+	});
 });

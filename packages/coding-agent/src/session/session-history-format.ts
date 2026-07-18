@@ -46,6 +46,15 @@ export interface HistoryFormatOptions {
 	 * this so it sees what changed without re-reading the file.
 	 */
 	expandEditDiffs?: boolean;
+	/**
+	 * Chunked rendering support: a caller formatting one logical transcript in
+	 * several calls (the advisor's chunked delta render) passes a result index
+	 * built over the WHOLE delta plus one shared consumed-id set, so a toolCall
+	 * finds its toolResult across chunk boundaries and the result is never
+	 * re-rendered as an orphan in a later chunk.
+	 */
+	toolResultIndex?: ReadonlyMap<string, ToolResultMessage>;
+	consumedToolCallIds?: Set<string>;
 }
 
 /** Max length of the primary-arg summary inside `→ tool(...)` lines. */
@@ -273,13 +282,19 @@ export function formatSessionHistoryMarkdown(messages: unknown[], opts?: History
 	}
 
 	// Index tool results by call id so each toolCall collapses to one line.
-	const resultsByCallId = new Map<string, ToolResultMessage>();
-	for (const msg of typed) {
-		if (msg.role === "toolResult") {
-			resultsByCallId.set(msg.toolCallId, msg);
+	// Chunked callers supply a whole-delta index + shared consumed set so
+	// call/result pairs resolve across chunk boundaries.
+	let resultsByCallId = opts?.toolResultIndex;
+	if (!resultsByCallId) {
+		const local = new Map<string, ToolResultMessage>();
+		for (const msg of typed) {
+			if (msg.role === "toolResult") {
+				local.set(msg.toolCallId, msg);
+			}
 		}
+		resultsByCallId = local;
 	}
-	const consumed = new Set<string>();
+	const consumed = opts?.consumedToolCallIds ?? new Set<string>();
 	// In watched mode, consecutive same-role messages collapse under one label
 	// (the watched agent emits one assistant message per tool call, so otherwise
 	// every call repeats `**agent**:`). Cleared whenever a

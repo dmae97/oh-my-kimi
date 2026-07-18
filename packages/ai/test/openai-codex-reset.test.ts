@@ -5,7 +5,7 @@
  * drift (and so we never need to spend a real credit to verify it):
  *
  *   GET  /wham/rate-limit-reset-credits
- *   POST /wham/rate-limit-reset-credits/consume  { credit_id, redeem_request_id }
+ *   POST /wham/rate-limit-reset-credits/consume  { credit_id, redeem_request_id, account_id? }
  */
 import { describe, expect, it } from "bun:test";
 import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
@@ -93,7 +93,11 @@ describe("consumeCodexResetCredit", () => {
 		expect(result.code).toBe("reset");
 		expect(calls[0]?.method).toBe("POST");
 		expect(calls[0]?.url).toBe("https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume");
-		expect(calls[0]?.body).toEqual({ credit_id: "RateLimitResetCredit_abc", redeem_request_id: "req-123" });
+		expect(calls[0]?.body).toEqual({
+			credit_id: "RateLimitResetCredit_abc",
+			redeem_request_id: "req-123",
+			account_id: "acct-1",
+		});
 		expect(calls[0]?.headers["Content-Type"]).toBe("application/json");
 	});
 

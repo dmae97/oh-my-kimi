@@ -2,7 +2,7 @@
 // purpose: anything `unknown` here is something the backend explicitly does
 // not promise to keep stable.
 
-export type EventState = "queued" | "running" | "done" | "failed" | "skipped";
+export type EventState = "queued" | "deferred" | "running" | "done" | "failed" | "skipped";
 
 export type IssueState =
   | "new"
@@ -157,6 +157,7 @@ export const LEVEL_ORDER: Readonly<Record<string, number>> = {
 
 export const EVENT_STATE_ORDER: readonly EventState[] = [
   "queued",
+  "deferred",
   "running",
   "done",
   "failed",

@@ -392,22 +392,21 @@ unless defined?($__omp_prelude_loaded) && $__omp_prelude_loaded
     schema.nil? ? text : JSON.parse(text)
   end
 
-  def agent(prompt, agent: "task", model: nil, label: nil, schema: nil, isolated: nil, apply: nil, merge: nil, handle: false)
+  def agent(prompt, agent: "task", model: nil, label: nil, schema: nil, schema_mode: nil, isolated: nil, apply: nil, merge: nil, handle: false)
     args = { "prompt" => prompt }
     args["agent"] = agent unless agent.nil?
     args["model"] = model unless model.nil?
     args["label"] = label unless label.nil?
     args["schema"] = schema unless schema.nil?
-    # Isolation knobs mirror the `task` tool: strict opt-in via `isolated`,
-    # with `apply`/`merge` controlling the post-run patch/branch merge.
+    args["schemaMode"] = schema_mode unless schema_mode.nil?
     args["isolated"] = !!isolated unless isolated.nil?
     args["apply"] = !!apply unless apply.nil?
     args["merge"] = !!merge unless merge.nil?
-    # Tell the bridge a handle is wanted so it preserves the backing artifacts.
     args["handle"] = true if handle
     res = OmpBridge.call("__agent__", args)
     text = res.is_a?(Hash) ? res["text"] : res
-    parsed = schema.nil? ? text : JSON.parse(text)
+    has_data = res.is_a?(Hash) && res.key?("data")
+    parsed = has_data ? res["data"] : (schema.nil? ? text : JSON.parse(text))
     return parsed unless handle
     details = res.is_a?(Hash) ? res["details"] : nil
     if !details.is_a?(Hash) || details["id"].nil?
@@ -420,7 +419,7 @@ unless defined?($__omp_prelude_loaded) && $__omp_prelude_loaded
       "id" => details["id"],
       "agent" => details["agent"],
     }
-    node["data"] = parsed unless schema.nil?
+    node["data"] = parsed if has_data || !schema.nil?
     {
       "isolated" => "isolated",
       "patchPath" => "patch_path",

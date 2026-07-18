@@ -2,10 +2,11 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import { Agent, type AgentMessage, type AgentTool } from "@oh-my-pi/pi-agent-core";
-import { z } from "@oh-my-pi/pi-ai";
+import { type ThinkingContent, z } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { type SettingPath, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
@@ -67,9 +68,19 @@ function thinkingOnlyStop(): MockResponse {
 	};
 }
 
+function signedThinkingOnlyStop(): MockResponse {
+	const content: ThinkingContent = { type: "thinking", thinking: "", thinkingSignature: "nonempty" };
+	return {
+		content: [content],
+		stopReason: "stop",
+		usage: { output: 1, cacheRead: 100 },
+	};
+}
+
 async function createHarness(
 	responses: MockResponse[],
 	settingsOverrides: SettingsOverrides = {},
+	options: { persistSession?: boolean; extensionRunner?: ExtensionRunner } = {},
 ): Promise<Harness & { mock: MockModel }> {
 	const tempDir = TempDir.createSync("@pi-empty-stop-guard-");
 	const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
@@ -87,7 +98,9 @@ async function createHarness(
 	});
 	settings.setModelRole("default", `${mock.provider}/${mock.id}`);
 
-	const sessionManager = SessionManager.inMemory(tempDir.path());
+	const sessionManager = options.persistSession
+		? SessionManager.create(tempDir.path(), tempDir.path())
+		: SessionManager.inMemory(tempDir.path());
 	const tools = [recordTool as AgentTool];
 	const agent = new Agent({
 		getApiKey: () => "test-key",
@@ -107,6 +120,7 @@ async function createHarness(
 		settings,
 		modelRegistry,
 		toolRegistry: new Map(tools.map(tool => [tool.name, tool])),
+		extensionRunner: options.extensionRunner,
 	});
 	const harness = { session, authStorage, tempDir };
 	activeHarnesses.push(harness);
@@ -223,6 +237,20 @@ describe("AgentSession empty stop guard", () => {
 		expect(emptyAssistantStops(session.agent.state.messages)).toHaveLength(0);
 	});
 
+	it("accepts a signed thinking-only stop without retrying", async () => {
+		const { session, mock } = await createHarness([
+			signedThinkingOnlyStop(),
+			{ content: ["must not be requested"], stopReason: "stop" },
+		]);
+
+		await session.prompt("finish with signed thinking");
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(1);
+		expect(reminderMessages(session.agent.state.messages)).toHaveLength(0);
+		expect(session.agent.state.messages.at(-1)?.role).toBe("assistant");
+	});
+
 	it("removes orphaned tool-use stops even when retry cap is hit", async () => {
 		const { session, mock } = await createHarness([
 			recordCall("gamma", "call-record-gamma"),
@@ -247,7 +275,7 @@ describe("AgentSession empty stop guard", () => {
 		);
 		expect(orphanedToolUseStops).toHaveLength(0);
 	});
-	it("caps empty stop retries at three attempts", async () => {
+	it("caps empty stop retries at three attempts and discards the final empty turn", async () => {
 		const { session, mock } = await createHarness([
 			recordCall("beta", "call-record-beta"),
 			emptyStop(),
@@ -261,13 +289,79 @@ describe("AgentSession empty stop guard", () => {
 
 		expect(mock.calls).toHaveLength(5);
 		expect(reminderMessages(session.agent.state.messages)).toHaveLength(3);
-		expect(emptyAssistantStops(session.agent.state.messages)).toHaveLength(1);
+		expect(emptyAssistantStops(session.agent.state.messages)).toHaveLength(0);
 
 		const activeBranchMessages = session.sessionManager
 			.getBranch()
 			.filter(entry => entry.type === "message")
 			.map(entry => entry.message as AgentMessage);
-		expect(emptyAssistantStops(activeBranchMessages)).toHaveLength(1);
+		expect(emptyAssistantStops(activeBranchMessages)).toHaveLength(0);
+	});
+
+	it("waits for capped empty-stop persistence before removing the active branch entry", async () => {
+		const releaseMessageEnd = Promise.withResolvers<void>();
+		const finalMessageEndEntered = Promise.withResolvers<void>();
+		let assistantMessageEnds = 0;
+		const extensionRunner = {
+			hasHandlers: vi.fn((eventType: string) => eventType === "message_end"),
+			emitBeforeAgentStart: vi.fn(async () => undefined),
+			emit: vi.fn(async (event: { type: string; message?: AgentMessage }) => {
+				if (event.type !== "message_end" || event.message?.role !== "assistant") return undefined;
+				assistantMessageEnds++;
+				if (assistantMessageEnds !== 4) return undefined;
+				finalMessageEndEntered.resolve();
+				await releaseMessageEnd.promise;
+				return undefined;
+			}),
+		} as unknown as ExtensionRunner;
+		const { session } = await createHarness(
+			[emptyStop(), emptyStop(), emptyStop(), emptyStop()],
+			{},
+			{ extensionRunner },
+		);
+
+		let promptSettled = false;
+		const prompt = session.prompt("answer after delayed persistence");
+		void prompt.then(
+			() => {
+				promptSettled = true;
+			},
+			() => {
+				promptSettled = true;
+			},
+		);
+		await finalMessageEndEntered.promise;
+		await scheduler.yield();
+		expect(promptSettled).toBe(false);
+
+		releaseMessageEnd.resolve();
+		await prompt;
+		await session.waitForIdle();
+
+		const activeBranchMessages = session.sessionManager
+			.getBranch()
+			.filter(entry => entry.type === "message")
+			.map(entry => entry.message as AgentMessage);
+		expect(emptyAssistantStops(activeBranchMessages)).toHaveLength(0);
+	});
+
+	it("does not let a capped empty stop anchor the next context estimate", async () => {
+		const billedEmptyStops = Array.from(
+			{ length: 4 },
+			(): MockResponse => ({
+				content: [],
+				stopReason: "stop",
+				usage: { input: 172_000, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 172_001 },
+			}),
+		);
+		const { session, mock } = await createHarness(billedEmptyStops);
+
+		await expectPromptCompletes(session.prompt("answer from compacted context"));
+		await session.waitForIdle();
+
+		expect(mock.calls).toHaveLength(4);
+		expect(session.getContextUsage()?.tokens).toBeLessThan(10_000);
+		expect(emptyAssistantStops(session.agent.state.messages)).toHaveLength(0);
 	});
 
 	it("emits failed auto-retry end when repeated empty stops exhaust the retry cap", async () => {
@@ -289,7 +383,7 @@ describe("AgentSession empty stop guard", () => {
 			success: false,
 			attempt: 3,
 		});
-		expect(retryEndEvents[0]?.finalError).toContain("empty stop");
+		expect(retryEndEvents[0]?.finalError).toContain("/shake images");
 	});
 
 	it("ends auto-retry state when empty stop retries hit the cap", async () => {
@@ -331,7 +425,7 @@ describe("AgentSession empty stop guard", () => {
 		});
 		expect(retryEndEvents[0]?.finalError).toContain("empty stop");
 		expect(reminderMessages(session.agent.state.messages)).toHaveLength(3);
-		expect(emptyAssistantStops(session.agent.state.messages)).toHaveLength(1);
+		expect(emptyAssistantStops(session.agent.state.messages)).toHaveLength(0);
 
 		mock.push({ content: ["fresh unrelated success"], stopReason: "stop" });
 		await session.prompt("start unrelated turn after cap");

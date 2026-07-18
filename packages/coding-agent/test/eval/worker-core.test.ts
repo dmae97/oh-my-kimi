@@ -10,6 +10,7 @@ import type {
 	WorkerInbound,
 	WorkerOutbound,
 } from "@oh-my-pi/pi-coding-agent/eval/js/worker-protocol";
+import { postmortem } from "@oh-my-pi/pi-utils";
 
 interface WorkerHarness {
 	send(message: WorkerInbound): void;
@@ -31,7 +32,10 @@ function createWorkerHarness(): WorkerHarness {
 		},
 		close: () => {},
 	};
-	new WorkerCore(transport);
+	new WorkerCore(transport, {
+		mode: "inline",
+		interceptUnhandledRejections: postmortem.interceptUnhandledRejections,
+	});
 	return {
 		send(message) {
 			queueMicrotask(() => {
@@ -355,6 +359,108 @@ describe("WorkerCore", () => {
 				.__omp_worker_core_gate;
 			first.send({ type: "close" });
 			second.send({ type: "close" });
+		}
+	});
+
+	it("keeps the process cwd while another cell is mid-run", async () => {
+		const dirA = await fs.mkdtemp(path.join(os.tmpdir(), "omp-cwd-a-"));
+		const dirB = await fs.mkdtemp(path.join(os.tmpdir(), "omp-cwd-b-"));
+		const chdirs: string[] = [];
+		const hostListeners = new Set<(message: WorkerOutbound) => void>();
+		const workerListeners = new Set<(message: WorkerInbound) => void>();
+		const transport: Transport = {
+			send: message => {
+				queueMicrotask(() => {
+					for (const listener of hostListeners) listener(message);
+				});
+			},
+			onMessage: handler => {
+				workerListeners.add(handler);
+				return () => workerListeners.delete(handler);
+			},
+			close: () => {},
+		};
+		new WorkerCore(transport, { mode: "isolated", chdir: cwd => chdirs.push(cwd) });
+		const harness: WorkerHarness = {
+			send(message) {
+				queueMicrotask(() => {
+					for (const listener of workerListeners) listener(message);
+				});
+			},
+			onMessage(handler) {
+				hostListeners.add(handler);
+				return () => hostListeners.delete(handler);
+			},
+		};
+
+		const gate = Promise.withResolvers<void>();
+		const entered = Promise.withResolvers<void>();
+		(globalThis as { __omp_worker_cwd_gate?: { entered(): void; wait: Promise<void> } }).__omp_worker_cwd_gate = {
+			entered: () => entered.resolve(),
+			wait: gate.promise,
+		};
+		try {
+			await initializeWorker(harness, { cwd: dirA, sessionId: "cwd-race", localRoots: {} });
+			expect(chdirs).toEqual([dirA]);
+
+			const holdResult = waitForMessage(
+				harness,
+				message => message.type === "result" && message.runId === "cwd-hold",
+			);
+			harness.send({
+				type: "run",
+				runId: "cwd-hold",
+				code: "globalThis.__omp_worker_cwd_gate.entered(); await globalThis.__omp_worker_cwd_gate.wait;",
+				filename: "[cwd-race-hold].js",
+				snapshot: { cwd: dirA, sessionId: "cwd-race", localRoots: {} },
+			});
+			await entered.promise;
+
+			// A second cell with a different cwd while the first is suspended must
+			// not move the realm-wide process cwd out from under the live cell.
+			const skipLog = waitForMessage(
+				harness,
+				message => message.type === "log" && message.msg.includes("kept its process cwd"),
+			);
+			const overlapResult = waitForMessage(
+				harness,
+				message => message.type === "result" && message.runId === "cwd-overlap",
+			);
+			harness.send({
+				type: "run",
+				runId: "cwd-overlap",
+				code: "1 + 1;",
+				filename: "[cwd-race-overlap].js",
+				snapshot: { cwd: dirB, sessionId: "cwd-race", localRoots: {} },
+			});
+			expect(await overlapResult).toMatchObject({ type: "result", runId: "cwd-overlap", ok: true });
+			expect(chdirs).not.toContain(dirB);
+			await skipLog;
+
+			gate.resolve();
+			expect(await holdResult).toMatchObject({ type: "result", runId: "cwd-hold", ok: true });
+
+			// With the realm quiet again, the next cell lands the deferred move.
+			const soloResult = waitForMessage(
+				harness,
+				message => message.type === "result" && message.runId === "cwd-solo",
+			);
+			harness.send({
+				type: "run",
+				runId: "cwd-solo",
+				code: "2 + 2;",
+				filename: "[cwd-race-solo].js",
+				snapshot: { cwd: dirB, sessionId: "cwd-race", localRoots: {} },
+			});
+			expect(await soloResult).toMatchObject({ type: "result", runId: "cwd-solo", ok: true });
+			expect(chdirs.at(-1)).toBe(dirB);
+		} finally {
+			gate.resolve();
+			delete (globalThis as { __omp_worker_cwd_gate?: { entered(): void; wait: Promise<void> } })
+				.__omp_worker_cwd_gate;
+			harness.send({ type: "close" });
+			await fs.rm(dirA, { recursive: true, force: true });
+			await fs.rm(dirB, { recursive: true, force: true });
 		}
 	});
 

@@ -2,6 +2,7 @@
 description: "Do not leave `@deprecated` shims behind after refactors — update call sites and remove the old API"
 condition: "@deprecated"
 scope: "tool:edit(*.ts), tool:edit(*.tsx), tool:write(*.ts), tool:write(*.tsx)"
+interruptMode: never
 ---
 
 Do not use `@deprecated` as a substitute for finishing a refactor. If an API is obsolete inside the code you control, update every call site and remove the old name in the same change.

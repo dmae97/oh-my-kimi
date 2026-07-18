@@ -64,9 +64,17 @@ const validModes: Record<Mode, true> = {
 // under the CI runner's OOM ceiling (a single 170–370-file invocation gets
 // SIGKILLed at 137). The singleton/global-state bucket is left whole: its suites
 // co-locate in one process to exercise process-wide state, so they must not split.
+//
+// The UI/TUI bucket uses a smaller chunk (5) than the others: its suites build up
+// native ghostty-vt cells, and bun 1.3.14's GC aborts (SIGTRAP/SIGABRT, exit
+// 133/134 inside DOMGCOutputConstraint marking) once ~10 such files share a heap,
+// even with the GC-marker knobs below. Bisection showed no single file is at
+// fault — the crash is cumulative heap volume. Under a 256MB-forced heap, a
+// 10-file chunk aborts ~50% of runs while either 5-file half is 0/20; halving the
+// chunk keeps each process under the threshold.
 const codingAgentBucketPlans: Record<CodingAgentBucket, { label: string; parallel: number; chunkSize?: number }> = {
 	singleton: { label: "singleton/global-state bucket", parallel: 1 },
-	ui: { label: "UI/TUI bucket", parallel: 1, chunkSize: 10 },
+	ui: { label: "UI/TUI bucket", parallel: 1, chunkSize: 5 },
 	runtime: { label: "runtime/session bucket", parallel: 1, chunkSize: 10 },
 	native: { label: "native/tooling/browser/unit bucket", parallel: 1, chunkSize: 10 },
 };

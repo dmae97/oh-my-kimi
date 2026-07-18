@@ -19,6 +19,7 @@ whichever comes first.
 
 Outputs scripts/session-stats/out/search-relevance.png.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -36,8 +37,8 @@ import numpy as np
 DB_PATH = Path.home() / ".omp" / "stats.db"
 OUT_DIR = Path(__file__).resolve().parent / "out"
 
-DEFAULT_SINCE = "2026-04-01"   # search/grep traffic before this is sparse
-LOOKAHEAD = 30                 # max tool calls to scan after a search
+DEFAULT_SINCE = "2026-04-01"  # search/grep traffic before this is sparse
+LOOKAHEAD = 30  # max tool calls to scan after a search
 
 
 # --------------------------------------------------------------------------- #
@@ -107,6 +108,7 @@ def extract_paths(result_text: str | None) -> tuple[list[str], dict[str, int]]:
 # --------------------------------------------------------------------------- #
 # Tool-call helpers
 
+
 def search_signature(arg_obj: dict) -> tuple:
     """Stable identity key for a search/grep call: (pattern, path-scope).
 
@@ -153,6 +155,7 @@ def read_path(arg_obj: dict) -> str | None:
 
 # --------------------------------------------------------------------------- #
 # Per-session walk
+
 
 def classify_sessions(conn: sqlite3.Connection, since_ms: int) -> list[dict]:
     """Walks each session in seq order, classifying every search/grep call."""
@@ -301,23 +304,33 @@ def report(records: list[dict]) -> None:
         coverage = deepest_1b / result_counts
         engaged_n = np.array([r["engaged_count"] for r in engaged], dtype=np.int64)
         print(f"\nfor engaged-read calls (n={len(engaged):,}):")
-        print(f"  deepest index reached       p50={int(np.median(deepest_1b))}  "
-              f"p75={int(np.percentile(deepest_1b,75))}  "
-              f"p90={int(np.percentile(deepest_1b,90))}  "
-              f"max={int(deepest_1b.max())}")
-        print(f"  result list length          p50={int(np.median(result_counts))}  "
-              f"p90={int(np.percentile(result_counts,90))}  "
-              f"max={int(result_counts.max())}")
-        print(f"  deepest / list size         p50={np.median(coverage)*100:.0f}%  "
-              f"p25={np.percentile(coverage,25)*100:.0f}%")
-        print(f"  reads per result list       p50={int(np.median(engaged_n))}  "
-              f"p90={int(np.percentile(engaged_n,90))}")
+        print(
+            f"  deepest index reached       p50={int(np.median(deepest_1b))}  "
+            f"p75={int(np.percentile(deepest_1b, 75))}  "
+            f"p90={int(np.percentile(deepest_1b, 90))}  "
+            f"max={int(deepest_1b.max())}"
+        )
+        print(
+            f"  result list length          p50={int(np.median(result_counts))}  "
+            f"p90={int(np.percentile(result_counts, 90))}  "
+            f"max={int(result_counts.max())}"
+        )
+        print(
+            f"  deepest / list size         p50={np.median(coverage) * 100:.0f}%  "
+            f"p25={np.percentile(coverage, 25) * 100:.0f}%"
+        )
+        print(
+            f"  reads per result list       p50={int(np.median(engaged_n))}  "
+            f"p90={int(np.percentile(engaged_n, 90))}"
+        )
 
     next_page = sum(1 for r in records if r["next_page"])
     refined = sum(1 for r in records if r["refined"])
     print(f"\nbehaviours (not exclusive):")
-    print(f"  any next-page request   : {next_page:,}  ({100*next_page/total:.1f}%)")
-    print(f"  any refined-query       : {refined:,}  ({100*refined/total:.1f}%)")
+    print(
+        f"  any next-page request   : {next_page:,}  ({100 * next_page / total:.1f}%)"
+    )
+    print(f"  any refined-query       : {refined:,}  ({100 * refined / total:.1f}%)")
 
     # Shape of result lists — files per result, matches per file, and whether
     # diversity (files-per-result / matches-per-file) correlates with engagement.
@@ -327,26 +340,39 @@ def report(records: list[dict]) -> None:
         dtype=np.int64,
     )
     print(f"\nresult shape across all {total:,} calls:")
-    print(f"  files per result            "
-          f"p50={int(np.median(files_per_result))}  "
-          f"p75={int(np.percentile(files_per_result,75))}  "
-          f"p90={int(np.percentile(files_per_result,90))}  "
-          f"p99={int(np.percentile(files_per_result,99))}  "
-          f"max={int(files_per_result.max())}")
+    print(
+        f"  files per result            "
+        f"p50={int(np.median(files_per_result))}  "
+        f"p75={int(np.percentile(files_per_result, 75))}  "
+        f"p90={int(np.percentile(files_per_result, 90))}  "
+        f"p99={int(np.percentile(files_per_result, 99))}  "
+        f"max={int(files_per_result.max())}"
+    )
     if matches_per_file_flat.size:
-        print(f"  matches per file (flat)     "
-              f"p50={int(np.median(matches_per_file_flat))}  "
-              f"p75={int(np.percentile(matches_per_file_flat,75))}  "
-              f"p90={int(np.percentile(matches_per_file_flat,90))}  "
-              f"p99={int(np.percentile(matches_per_file_flat,99))}  "
-              f"max={int(matches_per_file_flat.max())}")
+        print(
+            f"  matches per file (flat)     "
+            f"p50={int(np.median(matches_per_file_flat))}  "
+            f"p75={int(np.percentile(matches_per_file_flat, 75))}  "
+            f"p90={int(np.percentile(matches_per_file_flat, 90))}  "
+            f"p99={int(np.percentile(matches_per_file_flat, 99))}  "
+            f"max={int(matches_per_file_flat.max())}"
+        )
 
     # Engagement vs shape: is the model more likely to read at all when there
     # are more distinct files? When matches are more concentrated per file?
     print(f"\nengagement vs result shape:")
-    print(f"  {'files-per-result':<22} {'n calls':>9}  {'engaged %':>10}  {'p50 deepest':>12}")
-    bins = [(1, 1, "1"), (2, 2, "2"), (3, 5, "3-5"), (6, 10, "6-10"),
-            (11, 20, "11-20"), (21, 50, "21-50"), (51, 10**9, "51+")]
+    print(
+        f"  {'files-per-result':<22} {'n calls':>9}  {'engaged %':>10}  {'p50 deepest':>12}"
+    )
+    bins = [
+        (1, 1, "1"),
+        (2, 2, "2"),
+        (3, 5, "3-5"),
+        (6, 10, "6-10"),
+        (11, 20, "11-20"),
+        (21, 50, "21-50"),
+        (51, 10**9, "51+"),
+    ]
     for lo, hi, label in bins:
         bucket = [r for r in records if lo <= r["n_results"] <= hi]
         if not bucket:
@@ -359,13 +385,22 @@ def report(records: list[dict]) -> None:
             p50_deep = 0
         print(f"  {label:<22} {len(bucket):>9,}  {eng_share:>9.1f}%  {p50_deep:>12}")
 
-    print(f"\n  {'max matches/file':<22} {'n calls':>9}  {'engaged %':>10}  {'p50 deepest':>12}")
-    bins = [(1, 1, "1"), (2, 5, "2-5"), (6, 20, "6-20"),
-            (21, 100, "21-100"), (101, 10**9, "100+")]
+    print(
+        f"\n  {'max matches/file':<22} {'n calls':>9}  {'engaged %':>10}  {'p50 deepest':>12}"
+    )
+    bins = [
+        (1, 1, "1"),
+        (2, 5, "2-5"),
+        (6, 20, "6-20"),
+        (21, 100, "21-100"),
+        (101, 10**9, "100+"),
+    ]
     for lo, hi, label in bins:
-        bucket = [r for r in records
-                  if r["matches_per_file"]
-                  and lo <= max(r["matches_per_file"]) <= hi]
+        bucket = [
+            r
+            for r in records
+            if r["matches_per_file"] and lo <= max(r["matches_per_file"]) <= hi
+        ]
         if not bucket:
             continue
         eng = [r for r in bucket if r["outcome"] == "engaged-read"]
@@ -379,6 +414,7 @@ def report(records: list[dict]) -> None:
 
 # --------------------------------------------------------------------------- #
 # Plot
+
 
 def plot(records: list[dict], since: str) -> Path | None:
     if not records:
@@ -400,8 +436,14 @@ def plot(records: list[dict], since: str) -> Path | None:
     colors = [OUTCOME_COLORS[o] for o in ordered]
     bars = ax.bar(ordered, pct, color=colors, edgecolor="#1f2937", linewidth=0.5)
     for b, p, n in zip(bars, pct, nvals):
-        ax.text(b.get_x() + b.get_width() / 2, p + 1.5,
-                f"{p:.1f}%\nn={n:,}", ha="center", va="bottom", fontsize=9)
+        ax.text(
+            b.get_x() + b.get_width() / 2,
+            p + 1.5,
+            f"{p:.1f}%\nn={n:,}",
+            ha="center",
+            va="bottom",
+            fontsize=9,
+        )
     ax.set_title(f"search outcome (n={total:,})")
     ax.set_ylabel("share of calls")
     ax.set_ylim(0, max(pct) + 12)
@@ -419,8 +461,14 @@ def plot(records: list[dict], since: str) -> Path | None:
         pct = 100 * hist / deepest.size
         bars = ax.bar(labels, pct, color="#0f766e", edgecolor="#134e4a", linewidth=0.5)
         for b, p, n in zip(bars, pct, hist):
-            ax.text(b.get_x() + b.get_width() / 2, p + 1.2,
-                    f"{p:.1f}%\nn={n:,}", ha="center", va="bottom", fontsize=8)
+            ax.text(
+                b.get_x() + b.get_width() / 2,
+                p + 1.2,
+                f"{p:.1f}%\nn={n:,}",
+                ha="center",
+                va="bottom",
+                fontsize=8,
+            )
         ax.set_title("deepest result index the model read")
         ax.set_ylabel("share of engaged-read calls")
         ax.set_ylim(0, max(pct) + 12)
@@ -437,8 +485,12 @@ def plot(records: list[dict], since: str) -> Path | None:
         coverage.sort()
         cdf = np.arange(1, coverage.size + 1) / coverage.size
         ax.plot(coverage, cdf, color="#7c3aed", linewidth=2.0)
-        ax.axvline(0.1, color="#9ca3af", linestyle="--", linewidth=1, label="10% of list")
-        ax.axvline(0.5, color="#9ca3af", linestyle=":", linewidth=1, label="50% of list")
+        ax.axvline(
+            0.1, color="#9ca3af", linestyle="--", linewidth=1, label="10% of list"
+        )
+        ax.axvline(
+            0.5, color="#9ca3af", linestyle=":", linewidth=1, label="50% of list"
+        )
         ax.set_title("coverage CDF — deepest read / list size")
         ax.set_xlabel("fraction of list reached")
         ax.set_ylabel("CDF of engaged-read calls")
@@ -454,9 +506,14 @@ def plot(records: list[dict], since: str) -> Path | None:
         sizes = [r["n_results"] for r in records if r["outcome"] == outcome]
         if not sizes:
             continue
-        ax.hist(sizes, bins=bins, histtype="step", linewidth=1.8,
-                color=OUTCOME_COLORS[outcome],
-                label=f"{outcome} (p50={int(np.median(sizes))})")
+        ax.hist(
+            sizes,
+            bins=bins,
+            histtype="step",
+            linewidth=1.8,
+            color=OUTCOME_COLORS[outcome],
+            label=f"{outcome} (p50={int(np.median(sizes))})",
+        )
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.set_xlabel("result list size")
@@ -467,8 +524,15 @@ def plot(records: list[dict], since: str) -> Path | None:
 
     # Panel E — engagement rate vs files-per-result, with p50 deepest overlay.
     ax = axes[2, 0]
-    bins = [(1, 1, "1"), (2, 2, "2"), (3, 5, "3-5"), (6, 10, "6-10"),
-            (11, 20, "11-20"), (21, 50, "21-50"), (51, 10**9, "51+")]
+    bins = [
+        (1, 1, "1"),
+        (2, 2, "2"),
+        (3, 5, "3-5"),
+        (6, 10, "6-10"),
+        (11, 20, "11-20"),
+        (21, 50, "21-50"),
+        (51, 10**9, "51+"),
+    ]
     labels = []
     eng_share = []
     deep_p50 = []
@@ -481,13 +545,27 @@ def plot(records: list[dict], since: str) -> Path | None:
         n_calls.append(len(bucket))
         engs = [r for r in bucket if r["outcome"] == "engaged-read"]
         eng_share.append(100 * len(engs) / len(bucket))
-        deep_p50.append(int(np.median([r["deepest_index"] + 1 for r in engs])) if engs else 0)
+        deep_p50.append(
+            int(np.median([r["deepest_index"] + 1 for r in engs])) if engs else 0
+        )
     x = np.arange(len(labels))
-    bars = ax.bar(x, eng_share, color="#16a34a", edgecolor="#14532d",
-                  linewidth=0.5, label="engaged %")
+    bars = ax.bar(
+        x,
+        eng_share,
+        color="#16a34a",
+        edgecolor="#14532d",
+        linewidth=0.5,
+        label="engaged %",
+    )
     for b, p, n in zip(bars, eng_share, n_calls):
-        ax.text(b.get_x() + b.get_width() / 2, p + 0.8,
-                f"{p:.0f}%\nn={n:,}", ha="center", va="bottom", fontsize=8)
+        ax.text(
+            b.get_x() + b.get_width() / 2,
+            p + 0.8,
+            f"{p:.0f}%\nn={n:,}",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+        )
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
     ax.set_ylabel("engaged %", color="#15803d")
@@ -496,37 +574,64 @@ def plot(records: list[dict], since: str) -> Path | None:
     ax.set_title("engagement vs files-per-result")
     ax.set_xlabel("files in result")
     ax2 = ax.twinx()
-    ax2.plot(x, deep_p50, color="#7c3aed", marker="o", linewidth=1.8,
-             label="p50 deepest index")
+    ax2.plot(
+        x,
+        deep_p50,
+        color="#7c3aed",
+        marker="o",
+        linewidth=1.8,
+        label="p50 deepest index",
+    )
     ax2.set_ylabel("p50 deepest index", color="#5b21b6")
     ax2.tick_params(axis="y", labelcolor="#5b21b6")
     ax.grid(True, axis="y", alpha=0.25, linestyle="--")
 
     # Panel F — engagement rate vs max matches-per-file.
     ax = axes[2, 1]
-    bins = [(1, 1, "1"), (2, 5, "2-5"), (6, 20, "6-20"),
-            (21, 100, "21-100"), (101, 10**9, "100+")]
+    bins = [
+        (1, 1, "1"),
+        (2, 5, "2-5"),
+        (6, 20, "6-20"),
+        (21, 100, "21-100"),
+        (101, 10**9, "100+"),
+    ]
     labels = []
     eng_share = []
     deep_p50 = []
     n_calls = []
     for lo, hi, label in bins:
-        bucket = [r for r in records
-                  if r["matches_per_file"]
-                  and lo <= max(r["matches_per_file"]) <= hi]
+        bucket = [
+            r
+            for r in records
+            if r["matches_per_file"] and lo <= max(r["matches_per_file"]) <= hi
+        ]
         if not bucket:
             continue
         labels.append(label)
         n_calls.append(len(bucket))
         engs = [r for r in bucket if r["outcome"] == "engaged-read"]
         eng_share.append(100 * len(engs) / len(bucket))
-        deep_p50.append(int(np.median([r["deepest_index"] + 1 for r in engs])) if engs else 0)
+        deep_p50.append(
+            int(np.median([r["deepest_index"] + 1 for r in engs])) if engs else 0
+        )
     x = np.arange(len(labels))
-    bars = ax.bar(x, eng_share, color="#dc2626", edgecolor="#7f1d1d",
-                  linewidth=0.5, label="engaged %")
+    bars = ax.bar(
+        x,
+        eng_share,
+        color="#dc2626",
+        edgecolor="#7f1d1d",
+        linewidth=0.5,
+        label="engaged %",
+    )
     for b, p, n in zip(bars, eng_share, n_calls):
-        ax.text(b.get_x() + b.get_width() / 2, p + 0.8,
-                f"{p:.0f}%\nn={n:,}", ha="center", va="bottom", fontsize=8)
+        ax.text(
+            b.get_x() + b.get_width() / 2,
+            p + 0.8,
+            f"{p:.0f}%\nn={n:,}",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+        )
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
     ax.set_ylabel("engaged %", color="#991b1b")
@@ -535,13 +640,20 @@ def plot(records: list[dict], since: str) -> Path | None:
     ax.set_title("engagement vs concentration (max matches in one file)")
     ax.set_xlabel("max matches in single file")
     ax2 = ax.twinx()
-    ax2.plot(x, deep_p50, color="#7c3aed", marker="o", linewidth=1.8,
-             label="p50 deepest index")
+    ax2.plot(
+        x,
+        deep_p50,
+        color="#7c3aed",
+        marker="o",
+        linewidth=1.8,
+        label="p50 deepest index",
+    )
     ax2.set_ylabel("p50 deepest index", color="#5b21b6")
     ax2.tick_params(axis="y", labelcolor="#5b21b6")
     ax.grid(True, axis="y", alpha=0.25, linestyle="--")
-    fig.suptitle(f"search/grep result relevance — calls since {since}",
-                 fontsize=13, y=1.0)
+    fig.suptitle(
+        f"search/grep result relevance — calls since {since}", fontsize=13, y=1.0
+    )
     fig.tight_layout()
     p = OUT_DIR / "search-relevance.png"
     fig.savefig(p, bbox_inches="tight")
@@ -552,10 +664,14 @@ def plot(records: list[dict], since: str) -> Path | None:
 # --------------------------------------------------------------------------- #
 # Entry
 
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="search/grep result relevance analysis")
-    ap.add_argument("--since", default=DEFAULT_SINCE,
-                    help=f"only calls after this date (default {DEFAULT_SINCE})")
+    ap.add_argument(
+        "--since",
+        default=DEFAULT_SINCE,
+        help=f"only calls after this date (default {DEFAULT_SINCE})",
+    )
     args = ap.parse_args()
 
     since = datetime.strptime(args.since, "%Y-%m-%d").replace(tzinfo=timezone.utc)

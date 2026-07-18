@@ -41,11 +41,13 @@ export function buildAutoLearnInstructions(available: { manageSkill: boolean; le
 export interface AutoLearnControllerOptions {
 	session: AgentSession;
 	settings: Settings;
+	capture: (content: string) => Promise<void>;
 }
 
 export class AutoLearnController {
 	readonly #session: AgentSession;
 	readonly #settings: Settings;
+	readonly #capture: (content: string) => Promise<void>;
 	#toolCalls = 0;
 	/**
 	 * Whether the in-flight turn BEGAN while goal mode was active. Captured at
@@ -54,12 +56,15 @@ export class AutoLearnController {
 	 * would let a goal-continuation turn slip through and get nudged.
 	 */
 	#turnStartedInGoalMode = false;
-	/** Swallow the agent_end produced by an auto-run capture turn so it cannot re-trigger. */
-	#suppressNext = false;
+	/** Prevent overlapping private capture runs while real primary turns continue. */
+	#captureInFlight = false;
+	/** One newer eligible primary stop arrived while capture was running. */
+	#capturePending = false;
 
 	constructor(options: AutoLearnControllerOptions) {
 		this.#session = options.session;
 		this.#settings = options.settings;
+		this.#capture = options.capture;
 		// The listener closure captures `this`, so the session's listener array
 		// keeps the controller alive — no stored unsubscribe needed.
 		this.#session.subscribe(event => this.#onEvent(event));
@@ -76,11 +81,11 @@ export class AutoLearnController {
 			return;
 		}
 		if (event.type === "agent_end") {
-			this.#onAgentEnd();
+			this.#onAgentEnd(event);
 		}
 	}
 
-	#onAgentEnd(): void {
+	#onAgentEnd(event: Extract<AgentSessionEvent, { type: "agent_end" }>): void {
 		// Snapshot and reset every turn: the counter describes only the
 		// just-finished turn, so below-threshold, disabled, and plan-mode stops
 		// must not let tool calls accumulate into a later turn.
@@ -91,9 +96,17 @@ export class AutoLearnController {
 		const startedInGoalMode = this.#turnStartedInGoalMode;
 		this.#turnStartedInGoalMode = false;
 
-		if (this.#suppressNext) {
-			this.#suppressNext = false;
-			return;
+		// Never nudge a turn that ended in an abort (ESC, cancel, etc.). The
+		// abort flag on the session is unreliable by the time agent_end is
+		// deferred to subscribers; read stopReason from the event messages.
+		for (let i = event.messages.length - 1; i >= 0; i--) {
+			const message = event.messages[i];
+			if (message && typeof message === "object" && "role" in message && message.role === "assistant") {
+				if ("stopReason" in message && message.stopReason === "aborted") {
+					return;
+				}
+				break;
+			}
 		}
 		// Honor a live opt-out: the subscription outlives the setting, so re-check
 		// the current flag rather than trusting install-time state.
@@ -116,30 +129,24 @@ export class AutoLearnController {
 		const autoContinue = this.#settings.get("autolearn.autoContinue") === true;
 		if (!autoContinue) return;
 
-		const content = AUTOLEARN_NUDGE_AUTOCONTINUE;
-		// Arm suppression synchronously: the synthetic capture turn's agent_end
-		// fires inside sendCustomMessage (before it resolves), so the flag must be
-		// set before then. Disarm when no turn actually started — a deferred/queued
-		// dispatch or a failed send produces no agent_end, and a latched flag would
-		// otherwise swallow the next real stop.
-		this.#suppressNext = true;
+		if (this.#captureInFlight) {
+			this.#capturePending = true;
+			return;
+		}
+		this.#startCapture();
+	}
 
-		this.#session
-			.sendCustomMessage(
-				{
-					customType: "autolearn-nudge",
-					content,
-					display: false,
-					attribution: "user",
-				},
-				{ deliverAs: "nextTurn", triggerTurn: true },
-			)
-			.then(started => {
-				if (!started) this.#suppressNext = false;
-			})
+	#startCapture(): void {
+		this.#captureInFlight = true;
+		void this.#capture(AUTOLEARN_NUDGE_AUTOCONTINUE)
 			.catch(err => {
-				this.#suppressNext = false;
-				logger.warn("auto-learn nudge delivery failed", { err });
+				logger.warn("auto-learn capture failed", { err });
+			})
+			.finally(() => {
+				this.#captureInFlight = false;
+				if (!this.#capturePending) return;
+				this.#capturePending = false;
+				this.#startCapture();
 			});
 	}
 }

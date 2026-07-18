@@ -4,7 +4,7 @@
  * Commands are sent as JSON lines on stdin.
  * Responses and events are emitted as JSON lines on stdout.
  */
-import type { AgentMessage, AgentToolResult, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import type { AgentMessage, AgentToolResult, ThinkingLevel, ToolLoadMode } from "@oh-my-pi/pi-agent-core";
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Effort, ImageContent, Model, ToolExample } from "@oh-my-pi/pi-ai";
 import type { BashResult } from "../../exec/bash-executor";
@@ -394,6 +394,8 @@ export interface RpcHostToolDefinition {
 	description: string;
 	parameters: Record<string, unknown>;
 	hidden?: boolean;
+	/** How this host tool is presented when enabled; omission normalizes to `"discoverable"` at the adapter boundary. */
+	loadMode?: ToolLoadMode;
 }
 
 /** Emitted by the RPC server when it needs the host to execute a registered tool. */

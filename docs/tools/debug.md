@@ -122,19 +122,19 @@ Side-channel artifacts outside the model tool result:
 1. Tool registration is conditional: `DebugTool.createIf()` in `packages/coding-agent/src/tools/debug.ts` returns `null` unless `session.settings.get("debug.enabled")` is true. `packages/coding-agent/src/tools/index.ts` wires the factory and rechecks the same setting in tool filtering.
 2. `DebugTool.execute()` clamps `params.timeout` through `clampTimeout("debug", params.timeout)` and composes the caller `AbortSignal` with `AbortSignal.timeout(...)`.
 3. `launch` and `attach` resolve cwd/program paths, select an adapter in `packages/coding-agent/src/dap/config.ts`, then delegate to `dapSessionManager.launch()` / `.attach()`.
-4. `DapSessionManager.launch()` / `.attach()` enforce the single-session rule with `#ensureLaunchSlot()`, spawn the adapter through `DapClient.spawn()`, register listeners, send `initialize`, cache capabilities, start listening for an initial stop event before sending `launch`/`attach`, then complete the `initialized` → `configurationDone` handshake in `#completeConfigurationHandshake()`.
-5. `DapClient.spawn()` starts the adapter detached with `NON_INTERACTIVE_ENV`. Most adapters use stdio; socket-mode adapters (`dlv`) use `#spawnSocketUnix()` on Linux or `#spawnSocketClientAddr()` on macOS/other.
+4. `DapSessionManager.launch()` / `.attach()` enforce one root session, spawn the adapter through `DapClient.spawn()`, register listeners, send `initialize`, cache capabilities, subscribe for tree-wide stop events, send `launch`/`attach`, then complete the `initialized` → `configurationDone` handshake.
+5. `DapClient.spawn()` starts adapters detached with `NON_INTERACTIVE_ENV`. Most adapters use stdio; socket-mode adapters (`dlv`) use an adapter-specific Unix/TCP transport, while TCP server adapters start with `${port}` substituted in their args. Child sessions reuse the root TCP server through `DapClient.connect()`.
 6. `#registerSession()` in `packages/coding-agent/src/dap/session.ts` installs reverse-request handlers:
    - `runInTerminal`: spawns the requested debuggee command detached via `ptree.spawn()` and returns `{ processId }`
-   - `startDebugging`: logs the child-session request and returns `{}`; it does not create nested sessions
-   - events: `output`, `initialized`, `stopped`, `continued`, `exited`, `terminated` update cached session state
-7. Operational actions (`set_breakpoint`, `evaluate`, `threads`, `read_memory`, `custom_request`, and similar) call `dapSessionManager` methods. Most flow through `#sendRequestWithConfig()`, which first sends `configurationDone` when required, then sends the DAP request, then updates `lastUsedAt`.
-8. Breakpoint actions maintain local cached breakpoint sets in `DapSessionManager` and remap adapter responses back onto those cached records.
-9. `continue` and the three step actions clear cached stop state, subscribe for `stopped`/`terminated`/`exited` before sending the DAP request, then `#awaitStopOutcome()` either returns the new stopped location or reports that the program is still running after timeout.
+   - `startDebugging`: connects a child DAP client to the root TCP server, forwards the requested `launch`/`attach` configuration, binds root breakpoints before `configurationDone`, and recursively installs the same handlers
+   - events: `output`, `initialized`, `stopped`, `continued`, `exited`, and `terminated` update cached session state; stopped children become the active target
+7. Operational actions (`set_breakpoint`, `evaluate`, `threads`, `read_memory`, `custom_request`, and similar) call `dapSessionManager` methods. Most flow through `#sendRequestWithConfig()`, which first sends `configurationDone` when required, then sends the DAP request and refreshes the active session plus its ancestors.
+8. Breakpoint actions synchronize desired breakpoint sets across the live root/child tree. New children receive those sets before their `configurationDone` request.
+9. `continue` and the three step actions clear cached stop state, subscribe for a stop/termination event anywhere in the session tree before sending the DAP request, then `#awaitStopOutcome()` returns the active child’s stopped location or reports that the target remains running after timeout.
 10. `pause` sends DAP `pause`, waits for a stopped event if needed, and reuses cached stop state if the program was already stopped.
-11. `stack_trace`, `scopes`, `variables`, and `evaluate` default to the current stopped thread/frame when the caller omits ids and cached state is available.
-12. `output` reads the in-memory output ring from `DapSessionManager.getOutput()`. `terminate` sends `terminate` when supported, always attempts `disconnect`, marks the session terminated, and disposes the client.
-13. `sessions` reads the manager’s current map and formats all summaries. Although the manager stores a map, only one active session can exist because new launch/attach calls are blocked until the active one is terminated or cleaned up.
+11. `stack_trace`, `scopes`, `variables`, and `evaluate` default to the current stopped child/thread/frame when the caller omits ids and cached state is available.
+12. `output` reads the in-memory output ring from the active `DapSession`. `terminate` walks from the root through every child, sends best-effort `terminate`/`disconnect`, and disposes the complete tree even when an adapter times out.
+13. `sessions` reads the manager’s current map and formats root and child summaries. Only one root tree can exist; recursive adapter-requested children are tracked with `parentSessionId` / `childSessionIds`.
 14. The interactive selector in `packages/coding-agent/src/debug/index.ts` builds a `SelectList` of fixed values and dispatches each to a handler:
    - `performance`: `startCpuProfile()`, wait for Enter/Escape, stop profiling, read a 30-second work profile with `getWorkProfile(30)`, then bundle via `createReportBundle()`
    - `work`: read `getWorkProfile(30)`, write a temp SVG, open it externally
@@ -320,12 +320,13 @@ Example `.omp/dap.json`:
 - `collectSystemInfo()` is best-effort for CPU probing; failure there falls back to `Unknown CPU`.
 
 ## Notes
-- `packages/coding-agent/src/prompts/tools/debug.md` tells the model only one active session is supported; that is not advisory, it is enforced in code.
-- `configurationDone` is sent automatically both during launch/attach handshake and lazily before later requests if the adapter required it and the initial handshake did not complete.
-- `startDebugging` reverse requests are acknowledged but not implemented; child debug sessions are not spawned.
-- `output` exposes the merged `output` event stream only; the tool does not distinguish stdout, stderr, and console categories.
-- Session summaries expose `needsConfigurationDone`; this is derived from adapter capabilities and whether `configurationDone` has been sent.
-- Source breakpoint file paths are normalized with `path.resolve()` before caching and sending to the adapter.
+- `packages/coding-agent/src/prompts/tools/debug.md` tells the model only one active root session is supported. Adapter-requested child sessions belong to that root tree.
+- The default JavaScript/TypeScript adapter runs vscode-js-debug’s `dapDebugServer.js` over TCP. Install it with Mason or set `JS_DEBUG_DAP_SERVER` to a release-tarball server path.
+- `configurationDone` is sent automatically during root and child launch/attach handshakes and lazily before later requests if the initial handshake did not complete.
+- `startDebugging` reverse requests create recursive child sessions on the same TCP server; a stopped child becomes the target for thread-level actions.
+- `output` exposes the active session’s merged `output` event stream only; the tool does not distinguish stdout, stderr, and console categories.
+- Session summaries expose `needsConfigurationDone`, `parentSessionId`, and `childSessionIds`.
+- Source breakpoint file paths are normalized with `path.resolve()` before caching and synchronizing across the tree.
 - `evaluate` defaults to `repl`, so the tool can forward raw debugger commands when the adapter supports them.
 - `disassemble` resolves its target from `memory_reference` first, then the current stopped session's `instructionPointerReference`; it throws if neither is present.
 - `RawSseDebugBuffer.recordEvent()` increments `totalEvents` before bounded retention. A snapshot can therefore show fewer retained records than total observed events.

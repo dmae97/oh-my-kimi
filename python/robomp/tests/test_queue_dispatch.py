@@ -92,3 +92,61 @@ async def test_dispatch_pr_synchronize_is_noop(
     await _make_pool(settings, db)._dispatch(_pr_row("synchronize"))  # noqa: SLF001
 
     assert called is False
+
+
+@pytest.mark.asyncio
+async def test_claim_promotes_deferred_submission_after_window_frees(settings: Settings, db: Database) -> None:
+    assert db.record_submission(delivery_id="accepted", login="alice", repo="octo/widget")
+    assert db.defer_submission_event(
+        delivery_id="deferred",
+        event_type="issues",
+        login="alice",
+        repo="octo/widget",
+        issue_key="octo/widget#8",
+        payload={"action": "opened", "issue": {"number": 8}},
+        cap=1,
+        reason="rate limit",
+    )
+    settings.rate_limit_window_seconds = -1
+
+    row = await _make_pool(settings, db)._claim_next_unique()  # noqa: SLF001
+
+    assert row is not None
+    assert row.delivery_id == "deferred"
+    assert row.state == "running"
+
+
+@pytest.mark.asyncio
+async def test_deferred_promotion_sweep_runs_while_queue_is_busy(settings: Settings, db: Database) -> None:
+    """A sustained ordinary queue must not starve deferred events forever.
+
+    The empty-queue path never fires when `claim_next_event` keeps returning
+    work, so the independent sweep is the only thing that re-admits a deferred
+    submission after its rolling window frees.
+    """
+    # Ordinary queued work for another issue keeps `claim_next_event` busy.
+    assert db.record_event(
+        delivery_id="busy",
+        event_type="issues",
+        repo="octo/widget",
+        issue_key="octo/widget#1",
+        payload={"action": "opened"},
+    )
+    assert db.record_submission(delivery_id="accepted", login="alice", repo="octo/widget")
+    assert db.defer_submission_event(
+        delivery_id="deferred",
+        event_type="issues",
+        login="alice",
+        repo="octo/widget",
+        issue_key="octo/widget#8",
+        payload={"action": "opened", "issue": {"number": 8}},
+        cap=1,
+        reason="rate limit",
+    )
+    settings.rate_limit_window_seconds = -1
+
+    pool = _make_pool(settings, db)
+    promoted = await pool._promote_deferred()  # noqa: SLF001
+
+    assert promoted == 1
+    assert db.get_event("deferred").state == "queued"

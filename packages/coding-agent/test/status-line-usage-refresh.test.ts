@@ -158,4 +158,46 @@ describe("StatusLineComponent usage refresh", () => {
 
 		expect(plain(component.getTopBorder(80).content)).toContain("5h 42%");
 	});
+
+	it("re-fetches usage immediately when the session rotates to another org under the same email", async () => {
+		let calls = 0;
+		let orgId = "org-team";
+		const base = makeSession(async () => {
+			calls++;
+			return usageReport(10);
+		}) as unknown as Record<string, unknown>;
+		// Same provider + email + account throughout — only the org rotates.
+		base.state = {
+			messages: [],
+			model: { contextWindow: 200_000, provider: "anthropic" },
+		};
+		base.modelRegistry = {
+			authStorage: {
+				getOAuthAccountIdentity: () => ({
+					email: "shared@example.com",
+					accountId: "account-shared",
+					orgId,
+				}),
+			},
+		};
+		const component = new StatusLineComponent(base as unknown as AgentSession);
+
+		component.refreshUsageInBackground();
+		vi.advanceTimersByTime(0);
+		await flushMicrotasks();
+		expect(calls).toBe(1);
+
+		// Same org within the cache TTL: served from cache, no refetch.
+		component.refreshUsageInBackground();
+		vi.advanceTimersByTime(0);
+		await flushMicrotasks();
+		expect(calls).toBe(1);
+
+		// Org rotation under the same email/account must invalidate the cache.
+		orgId = "org-max";
+		component.refreshUsageInBackground();
+		vi.advanceTimersByTime(0);
+		await flushMicrotasks();
+		expect(calls).toBe(2);
+	});
 });

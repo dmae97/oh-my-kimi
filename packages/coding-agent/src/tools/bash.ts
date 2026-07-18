@@ -36,12 +36,18 @@ import {
 	stripRawOutputArtifactNotice,
 } from "./output-meta";
 import { resolveToCwd } from "./path-utils";
-import { capPreviewLines, formatToolWorkingDirectory, previewWindowRows, replaceTabs } from "./render-utils";
+import {
+	capPreviewLines,
+	DEFAULT_TERMINAL_PREVIEW_LINES,
+	formatToolWorkingDirectory,
+	previewWindowRows,
+	replaceTabs,
+} from "./render-utils";
 import { ToolAbortError, ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 import { clampTimeout, TOOL_TIMEOUTS } from "./tool-timeouts";
 
-export const BASH_DEFAULT_PREVIEW_LINES = 10;
+export const BASH_DEFAULT_PREVIEW_LINES = DEFAULT_TERMINAL_PREVIEW_LINES;
 
 const BASH_ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const DEFAULT_AUTO_BACKGROUND_THRESHOLD_MS = 60_000;
@@ -171,6 +177,8 @@ export interface BashToolDetails {
 	wallTimeMs?: number;
 	/** Exit code of a command that ran to completion but failed (non-zero). */
 	exitCode?: number;
+	/** True when the command was killed by its timeout deadline (not a failure). */
+	timedOut?: boolean;
 	terminalId?: string;
 	async?: {
 		state: "running" | "completed" | "failed";
@@ -193,18 +201,13 @@ type ManagedBashJobCompletion =
 
 interface ManagedBashJobHandle {
 	jobId: string;
-	label: string;
 	completion: Promise<ManagedBashJobCompletion>;
 	getLatestText: () => string;
-	setBackgrounded: (backgrounded: boolean) => void;
+	stopUpdates: () => void;
 }
 
 function normalizeResultOutput(result: BashResult | BashInteractiveResult): string {
 	return result.output || "";
-}
-
-function isInteractiveResult(result: BashResult | BashInteractiveResult): result is BashInteractiveResult {
-	return "timedOut" in result;
 }
 
 function normalizeBashEnv(env: Record<string, string> | undefined): Record<string, string> | undefined {
@@ -327,6 +330,10 @@ function formatExitCodeNotice(exitCode: number): string {
 	return `Command exited with code ${exitCode}`;
 }
 
+function formatBackgroundNotice(jobId: string): string {
+	return `Backgrounded as job ${jobId}; result will be delivered automatically.`;
+}
+
 /**
  * Strip the trailing occurrence of `notice` (plus a single surrounding newline
  * on each side) so the TUI can echo the value via a styled footer label
@@ -353,6 +360,11 @@ function stripWallTimeNotice(text: string, wallTimeMs: number | undefined): stri
 function stripExitCodeNotice(text: string, exitCode: number | undefined): string {
 	if (exitCode === undefined) return text;
 	return stripTrailingNotice(text, formatExitCodeNotice(exitCode));
+}
+
+function stripBackgroundNotice(text: string, async: BashToolDetails["async"] | undefined): string {
+	if (async?.state !== "running") return text;
+	return stripTrailingNotice(text, formatBackgroundNotice(async.jobId));
 }
 
 /**
@@ -389,6 +401,7 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 			hasGrep: isToolActive("grep", this.session.settings.get("grep.enabled")),
 			hasGlob: isToolActive("glob", this.session.settings.get("glob.enabled")),
 			hasRead: isToolActive("read", true),
+			hasLaunch: isToolActive("hub", this.session.settings.get("launch.enabled")),
 			hasEval: isToolActive(
 				"eval",
 				evalBackends.python || evalBackends.js || evalBackends.ruby || evalBackends.julia,
@@ -424,12 +437,15 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 	}
 
 	/**
-	 * Throw for outcomes that are *not* a completed command: user/timeout
-	 * aborts and a missing exit status. The foreground and bridge callers plus
-	 * the async job manager rely on these throwing so cancellations surface as
-	 * aborts and jobs are recorded as failed. A definite non-zero exit is a
-	 * completed command that failed; #buildCompletedResult surfaces it as an
-	 * error *result* (carrying execution details) rather than a throw.
+	 * Throw for outcomes that are *not* a completed command: user aborts and a
+	 * missing exit status. Timeouts are handled separately by
+	 * #buildCompletedResult, which returns a non-throwing error result with
+	 * details.timedOut=true so the renderer can show a warning border. The
+	 * foreground and bridge callers plus the async job manager rely on these
+	 * throwing so cancellations surface as aborts and jobs are recorded as
+	 * failed. A definite non-zero exit is a completed command that failed;
+	 * #buildCompletedResult surfaces it as an error *result* (carrying
+	 * execution details) rather than a throw.
 	 */
 	#throwIfUnfinished(
 		result: BashResult | BashInteractiveResult,
@@ -437,13 +453,14 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 		outputText: string,
 	): void {
 		if (result.cancelled) {
-			// executeBash output already carries a `[Command cancelled]` notice from
-			// the sink; PTY/bridge interactive output does not, so annotate it here.
+			// Local executor output already carries a leading `[Command cancelled]`
+			// notice from the sink; PTY/bridge output does not, so annotate only
+			// the latter.
 			const out = normalizeResultOutput(result);
-			const annotated = isInteractiveResult(result) && out ? `${out}\n\n[Command aborted]` : out;
+			const annotated = out.startsWith("[Command cancelled]") ? out : out ? `${out}\n\n[Command aborted]` : out;
 			throw new ToolError(annotated || "Command aborted");
 		}
-		if (isInteractiveResult(result) && result.timedOut) {
+		if (result.timedOut === true) {
 			const out = normalizeResultOutput(result);
 			const message =
 				timeoutSec === undefined ? "Command timed out" : `Command timed out after ${timeoutSec} seconds`;
@@ -481,8 +498,12 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 		if (failedExit) outputLines.push("", formatExitCodeNotice(exitCode));
 		const outputText = outputLines.join("\n");
 
-		// Aborts / timeouts / missing-status still propagate as thrown errors.
-		this.#throwIfUnfinished(result, timeoutSec, outputText);
+		// Timeouts are not failures — the command ran its course. Return an error
+		// result (isError=true for the model) but flag timedOut so the renderer
+		// uses a warning border instead of error red. Both interactive and
+		// non-interactive results carry an explicit `timedOut` field from the
+		// executor/PTY layer.
+		const isTimeout = result.timedOut === true;
 
 		const details: BashToolDetails = {};
 		if (timeoutSec === undefined) {
@@ -502,6 +523,29 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 		if (failedExit) {
 			details.exitCode = exitCode;
 		}
+
+		if (isTimeout) {
+			details.timedOut = true;
+			const message =
+				timeoutSec === undefined ? "Command timed out" : `Command timed out after ${timeoutSec} seconds`;
+			// executeBash has already emitted this leading sink notice. PTY output
+			// has not, so provide the LLM-facing annotation exactly once.
+			if (!normalizeResultOutput(result).startsWith(`[${message}]\n`)) {
+				outputLines.push("", `[${message}]`);
+			}
+			const timeoutOutputText = await enforceInlineByteCap(outputLines.join("\n"), {
+				saveArtifact: full => saveBashOriginalArtifact(this.session, full),
+			});
+			return toolResult(details)
+				.text(timeoutOutputText)
+				.truncationFromSummary(result, { direction: "tail" })
+				.error()
+				.done();
+		}
+
+		// Non-timeout cancellations and missing exit status still propagate as thrown errors.
+		this.#throwIfUnfinished(result, timeoutSec, outputText);
+
 		// Final defense at the tool-result boundary: no bash path (client bridge,
 		// head-retention spill, minimizer miss) may emit more than
 		// ~DEFAULT_MAX_BYTES inline. No-op for already-bounded output.
@@ -518,7 +562,6 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 
 	#buildBackgroundStartResult(
 		jobId: string,
-		label: string,
 		previewText: string,
 		timeoutSec: number | undefined,
 		options: { requestedTimeoutSec?: number; notices?: readonly string[] } = {},
@@ -542,11 +585,7 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 		if (options.notices?.length) {
 			lines.push(...options.notices, "");
 		}
-		lines.push(`Background job ${jobId} started: ${label}`);
-		lines.push("Result will be delivered automatically when complete.");
-		lines.push(
-			`You can use \`job\` to poll until complete, but prefer to continue with another task in the meanwhile if it's not blocking.`,
-		);
+		lines.push(formatBackgroundNotice(jobId));
 		return {
 			content: [{ type: "text", text: lines.join("\n") }],
 			details,
@@ -567,7 +606,7 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 
 		resolvedEnv?: Record<string, string>;
 		onUpdate?: AgentToolUpdateCallback<BashToolDetails>;
-		startBackgrounded: boolean;
+		forwardUpdates: boolean;
 	}): ManagedBashJobHandle {
 		const manager = this.session.asyncJobManager;
 		if (!manager) {
@@ -576,7 +615,7 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 
 		const label = options.command.length > 120 ? `${options.command.slice(0, 117)}...` : options.command;
 		let latestText = "";
-		let backgrounded = options.startBackgrounded;
+		let forwardUpdates = options.forwardUpdates;
 		const completion = Promise.withResolvers<ManagedBashJobCompletion>();
 
 		const jobId = manager.register(
@@ -632,11 +671,12 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 			},
 			{
 				ownerId: this.session.getAgentId?.() ?? undefined,
-				onProgress: async (text, details) => {
+				onProgress: async text => {
 					latestText = text;
+					if (!forwardUpdates) return;
 					await options.onUpdate?.({
 						content: [{ type: "text", text }],
-						details: backgrounded ? ((details ?? {}) as BashToolDetails) : {},
+						details: {},
 					});
 				},
 			},
@@ -644,11 +684,10 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 
 		return {
 			jobId,
-			label,
 			completion: completion.promise,
 			getLatestText: () => latestText,
-			setBackgrounded: (nextBackgrounded: boolean) => {
-				backgrounded = nextBackgrounded;
+			stopUpdates: () => {
+				forwardUpdates = false;
 			},
 		};
 	}
@@ -741,6 +780,7 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 		const internalUrlOptions: InternalUrlExpansionOptions = {
 			skills: this.session.skills ?? [],
 			internalRouter: InternalUrlRouter.instance(),
+			cwd: this.session.cwd,
 			localOptions: {
 				getArtifactsDir: this.session.getArtifactsDir,
 				getSessionId: this.session.getSessionId,
@@ -813,9 +853,9 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 
 				resolvedEnv,
 				onUpdate,
-				startBackgrounded: true,
+				forwardUpdates: false,
 			});
-			return this.#buildBackgroundStartResult(job.jobId, job.label, "", timeoutSec, {
+			return this.#buildBackgroundStartResult(job.jobId, "", timeoutSec, {
 				requestedTimeoutSec,
 				notices: pendingNotices,
 			});
@@ -851,10 +891,10 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 
 				resolvedEnv,
 				onUpdate,
-				startBackgrounded,
+				forwardUpdates: !startBackgrounded,
 			});
 			if (startBackgrounded) {
-				return this.#buildBackgroundStartResult(job.jobId, job.label, "", timeoutSec, {
+				return this.#buildBackgroundStartResult(job.jobId, "", timeoutSec, {
 					requestedTimeoutSec,
 					notices: pendingNotices,
 				});
@@ -874,9 +914,9 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 				autoBgManager.cancel(job.jobId);
 				throw new ToolAbortError(job.getLatestText() || "Command aborted");
 			}
-			job.setBackgrounded(true);
+			job.stopUpdates();
 			autoBgManager.resumeDeliveries([job.jobId]);
-			return this.#buildBackgroundStartResult(job.jobId, job.label, job.getLatestText(), timeoutSec, {
+			return this.#buildBackgroundStartResult(job.jobId, job.getLatestText(), timeoutSec, {
 				requestedTimeoutSec,
 				notices: pendingNotices,
 			});
@@ -981,12 +1021,8 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 								outputLines: current.output.length > 0 ? current.output.split("\n").length : 0,
 								outputBytes: current.output.length,
 							};
-							return this.#buildCompletedResult(timedOutResult, timeoutSec, {
-								requestedTimeoutSec,
-								notices: pendingNotices,
-								terminalId: handle.terminalId,
-								wallTimeMs: performance.now() - bridgeWallTimeStart,
-							});
+							this.#throwIfUnfinished(timedOutResult, timeoutSec, this.#formatResultOutput(timedOutResult));
+							throw new ToolError("Command timed out");
 						}
 
 						if (raced.kind === "exit") {
@@ -1091,20 +1127,27 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 				});
 		const wallTimeMs = performance.now() - wallTimeStart;
 		if (result.cancelled) {
-			const out = normalizeResultOutput(result);
-			// PTY output carries no cancel/timeout notice of its own; annotate so
-			// the model can tell an abort from a plain failure.
-			const message = isInteractiveResult(result) && out ? `${out}\n\n[Command aborted]` : out || "Command aborted";
-			if (signal?.aborted) {
-				throw new ToolAbortError(message);
+			// A cancelled result is either a timeout (the command's deadline fired)
+			// or a user/system abort. Timeouts are handled by #buildCompletedResult
+			// which returns a non-throwing error result with details.timedOut=true
+			// so the renderer can show a warning border instead of error red.
+			// Both interactive and non-interactive results carry an explicit
+			// `timedOut` field from the executor/PTY layer.
+			const isTimeout = result.timedOut === true;
+			if (!isTimeout) {
+				const out = normalizeResultOutput(result);
+				// The local executor already prepends `[Command cancelled]`; PTY
+				// output does not, so preserve one cancellation notice in either case.
+				const message = out.startsWith("[Command cancelled]")
+					? out
+					: out
+						? `${out}\n\n[Command aborted]`
+						: "Command aborted";
+				if (signal?.aborted) {
+					throw new ToolAbortError(message);
+				}
+				throw new ToolError(message);
 			}
-			throw new ToolError(message);
-		}
-		if (isInteractiveResult(result) && result.timedOut) {
-			const out = normalizeResultOutput(result);
-			const message =
-				timeoutSec === undefined ? "Command timed out" : `Command timed out after ${timeoutSec} seconds`;
-			throw new ToolError(out ? `${out}\n\n[${message}]` : message);
 		}
 		return this.#buildCompletedResult(result, timeoutSec, {
 			requestedTimeoutSec,
@@ -1242,6 +1285,8 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 			const isError = result.isError === true;
 			const isPartial = options.isPartial === true;
 			const success = !isPartial && !isError;
+			const details = result.details;
+			const isTimeout = details?.timedOut === true;
 			const header =
 				config.showHeader === false
 					? undefined
@@ -1252,12 +1297,11 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 										title: config.resolveTitle(args, options),
 									}
 								: {
-										icon: isPartial ? "pending" : "error",
+										icon: isPartial ? "pending" : isTimeout ? "warning" : "error",
 										title: config.resolveTitle(args, options),
 									},
 							uiTheme,
 						);
-			const details = result.details;
 			const outputBlock = new CachedOutputBlock();
 
 			// Per-instance cache for the expensive inner lines computation. Mirrors
@@ -1303,7 +1347,8 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					) {
 						return cachedLines;
 					}
-					const strippedOutput = stripOutputNotice(rawOutput, details?.meta);
+					const withoutBackground = stripBackgroundNotice(rawOutput, details?.async);
+					const strippedOutput = stripOutputNotice(withoutBackground, details?.meta);
 					const withoutExit = stripExitCodeNotice(strippedOutput, details?.exitCode);
 					const withoutWall = stripWallTimeNotice(withoutExit, details?.wallTimeMs);
 					const rawOutputArtifact = stripRawOutputArtifactNotice(withoutWall);
@@ -1317,6 +1362,9 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					const requestedTimeoutSeconds = details?.requestedTimeoutSeconds;
 					const wallTimeMs = details?.wallTimeMs;
 					const statsParts: string[] = [];
+					if (details?.async?.state === "running") {
+						statsParts.push(`Backgrounded: ${details.async.jobId}`);
+					}
 					if (wallTimeMs !== undefined) {
 						statsParts.push(`Wall: ${formatWallTimeSeconds(wallTimeMs)}s`);
 					}
@@ -1393,7 +1441,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					const framed = outputBlock.render(
 						{
 							header,
-							state: isPartial ? "pending" : isError ? "error" : "success",
+							state: isPartial ? "pending" : isError ? (isTimeout ? "warning" : "error") : "success",
 							sections: [
 								{
 									// Viewport-sized tail window in every state — streaming and final

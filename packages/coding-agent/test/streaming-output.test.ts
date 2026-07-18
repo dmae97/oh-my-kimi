@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -15,6 +15,7 @@ import {
 	truncateTail,
 	truncateTailBytes,
 } from "@oh-my-pi/pi-coding-agent/session/streaming-output";
+import { formatOutputNotice, outputMeta } from "@oh-my-pi/pi-coding-agent/tools/output-meta";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 const createdTempDirs: string[] = [];
@@ -32,6 +33,7 @@ function byteLength(text: string): number {
 }
 
 afterEach(async () => {
+	vi.useRealTimers();
 	for (const dir of createdTempDirs.splice(0)) {
 		await removeWithRetries(dir);
 	}
@@ -225,6 +227,20 @@ describe("OutputSink", () => {
 		expect(chunks).toEqual(["abc", "def"]);
 	});
 
+	test("normalizes carriage-return progress frames across chunk boundaries", async () => {
+		const chunks: string[] = [];
+		const sink = new OutputSink({ onChunk: chunk => chunks.push(chunk) });
+
+		sink.push("start\r");
+		sink.push("one\r");
+		sink.push("two\r");
+		sink.push("\n");
+		const dumped = await sink.dump();
+
+		expect(chunks.join("")).toBe("start\none\ntwo\n");
+		expect(dumped.output).toBe("start\none\ntwo\n");
+	});
+
 	test("preserves SIXEL chunks when passthrough gates are enabled", async () => {
 		const sixel = "\x1bPqabc\x1b\\";
 		Bun.env.PI_FORCE_IMAGE_PROTOCOL = "sixel";
@@ -315,6 +331,48 @@ describe("OutputSink", () => {
 		// First push fires immediately; dump flushes the coalesced remainder.
 		expect(chunks).toEqual(["a", "bc"]);
 		expect(dumped.output).toBe("abc");
+	});
+
+	test("throttled onChunk emits a quiet tail at the throttle boundary", () => {
+		vi.useFakeTimers();
+		const chunks: string[] = [];
+		const sink = new OutputSink({ onChunk: chunk => chunks.push(chunk), chunkThrottleMs: 20 });
+
+		sink.push("a");
+		sink.push("b");
+		expect(chunks).toEqual(["a"]);
+
+		vi.advanceTimersByTime(20);
+
+		expect(chunks).toEqual(["a", "b"]);
+	});
+
+	test("dump flushes a throttled tail once and cancels its timer", async () => {
+		vi.useFakeTimers();
+		const chunks: string[] = [];
+		const sink = new OutputSink({ onChunk: chunk => chunks.push(chunk), chunkThrottleMs: 20 });
+
+		sink.push("a");
+		sink.push("b");
+		expect((await sink.dump()).output).toBe("ab");
+		expect(chunks).toEqual(["a", "b"]);
+
+		vi.advanceTimersByTime(20);
+
+		expect(chunks).toEqual(["a", "b"]);
+	});
+
+	test("replace cancels a throttled tail and discards its pending preview", () => {
+		vi.useFakeTimers();
+		const chunks: string[] = [];
+		const sink = new OutputSink({ onChunk: chunk => chunks.push(chunk), chunkThrottleMs: 20 });
+
+		sink.push("a");
+		sink.push("superseded");
+		sink.replace("replacement");
+		vi.advanceTimersByTime(20);
+
+		expect(chunks).toEqual(["a"]);
 	});
 
 	test("caps artifact-on-disk size: head + notice + tail when stream exceeds cap", async () => {
@@ -636,7 +694,11 @@ describe("OutputSink maxColumns (per-line cap)", () => {
 		await sink.push(`short\n${"x".repeat(50)}\nfooter`);
 
 		const dumped = await sink.dump();
-		expect(dumped.truncated).toBe(true);
+		// A per-line column cap trims individual lines but does not truncate the
+		// output window: every line is still present, so `truncated` stays false.
+		// (Regression: column-cap-only output was misreported as a byte-window
+		// truncation, producing a bogus "Showing lines X-Y … limit" footer — #4735.)
+		expect(dumped.truncated).toBe(false);
 		expect(dumped.output).toContain("short\n");
 		expect(dumped.output).toContain("\nfooter");
 		expect(dumped.output).toContain("…");
@@ -644,8 +706,30 @@ describe("OutputSink maxColumns (per-line cap)", () => {
 		expect(dumped.output).not.toContain("x".repeat(50));
 		expect(dumped.columnTruncatedLines).toBe(1);
 		expect(dumped.columnDroppedBytes ?? 0).toBeGreaterThan(0);
+		expect(dumped.columnMax).toBe(8);
 		// totalBytes still reflects the raw stream, not the post-cap view.
 		expect(dumped.totalBytes).toBe(byteLength(`short\n${"x".repeat(50)}\nfooter`));
+	});
+
+	test("column-cap-only output surfaces a column notice, not a window/byte truncation footer", async () => {
+		// Regression for #4735: fully-shown output whose only trimming was the
+		// per-line column cap must not emit "Showing lines X-Y of Z (…B limit).
+		// Read artifact://… for full output" — every line is present.
+		const sink = new OutputSink({ maxColumns: 8, spillThreshold: 100_000 });
+		const lines = ["a", "b", "c", "x".repeat(50), "d"];
+		await sink.push(`${lines.join("\n")}\n`);
+		const dumped = await sink.dump();
+
+		const meta = outputMeta().truncationFromSummary(dumped, { direction: "tail" }).get();
+		// No window truncation → no styled TUI warning and no range/limit footer.
+		expect(meta?.truncation).toBeUndefined();
+		expect(meta?.limits?.columnTruncated).toEqual({ maxColumn: 8 });
+
+		const notice = formatOutputNotice(meta);
+		expect(notice).toContain("Some lines truncated to 8 chars");
+		expect(notice).not.toContain("Showing lines");
+		expect(notice).not.toContain("limit");
+		expect(notice).not.toContain("artifact://");
 	});
 
 	test("persists per-line state across chunk boundaries", async () => {

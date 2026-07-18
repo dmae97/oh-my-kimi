@@ -273,7 +273,7 @@ export class StatusLineComponent implements Component {
 	 */
 	#activeMeters: WeakMap<AgentSession, ActiveMeter> = new WeakMap();
 	#planModeStatus: { enabled: boolean; paused: boolean } | null = null;
-	#loopModeStatus: { enabled: boolean } | null = null;
+	#loopModeStatus: SegmentContext["loopMode"] = null;
 	#goalModeStatus: { enabled: boolean; paused: boolean } | null = null;
 	#vibeModeStatus: { enabled: boolean } | null = null;
 	#collabStatus: CollabStatus | null = null;
@@ -496,7 +496,7 @@ export class StatusLineComponent implements Component {
 		this.#planModeStatus = status ?? null;
 	}
 
-	setLoopModeStatus(status: { enabled: boolean } | undefined): void {
+	setLoopModeStatus(status: NonNullable<SegmentContext["loopMode"]> | undefined): void {
 		this.#loopModeStatus = status ?? null;
 	}
 
@@ -780,7 +780,16 @@ export class StatusLineComponent implements Component {
 		const activeProvider = session.state.model?.provider ?? session.model?.provider ?? "";
 		if (!activeProvider) return "";
 		const identity = session.modelRegistry?.authStorage?.getOAuthAccountIdentity(activeProvider, session.sessionId);
-		return [activeProvider, identity?.accountId ?? "", identity?.email ?? "", identity?.projectId ?? ""].join("\0");
+		// orgId is part of the key: rotating between two same-email Anthropic
+		// subscriptions must invalidate the cached usage immediately instead of
+		// showing the previous org's quota for the rest of the cache TTL.
+		return [
+			activeProvider,
+			identity?.accountId ?? "",
+			identity?.email ?? "",
+			identity?.projectId ?? "",
+			identity?.orgId ?? "",
+		].join("\0");
 	}
 
 	/**
@@ -1051,6 +1060,10 @@ export class StatusLineComponent implements Component {
 			compactThinkingLevel: this.#resolveSettings().compactThinkingLevel ?? false,
 			planMode: this.#planModeStatus,
 			loopMode: this.#loopModeStatus,
+			prewalk:
+				typeof this.session.getPrewalkState === "function" && this.session.getPrewalkState()
+					? { enabled: true }
+					: null,
 			goalMode: this.#goalModeStatus,
 			vibeMode: this.#vibeModeStatus,
 			collab: this.#collabStatus,
@@ -1321,10 +1334,8 @@ export class StatusLineComponent implements Component {
 			return [];
 		}
 
-		const sortedStatuses = Array.from(this.#hookStatuses.entries())
+		return Array.from(this.#hookStatuses.entries())
 			.sort(([a], [b]) => a.localeCompare(b))
-			.map(([, text]) => sanitizeStatusText(text));
-		const hookLine = sortedStatuses.join(" ");
-		return [truncateToWidth(hookLine, width)];
+			.map(([, text]) => truncateToWidth(sanitizeStatusText(text), width));
 	}
 }

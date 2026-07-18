@@ -1,4 +1,4 @@
-import { getPuppeteerDir, logger, postmortem, Snowflake, workerHostEntry } from "@oh-my-pi/pi-utils";
+import { getPuppeteerDir, logger, postmortem, Snowflake, withTimeout, workerHostEntry } from "@oh-my-pi/pi-utils";
 import type { Page, Target } from "puppeteer-core";
 import { callSessionTool } from "../../eval/js/tool-bridge";
 import { webpExclusionForModel } from "../../utils/image-loading";
@@ -123,6 +123,8 @@ export interface RunInTabOptions {
 
 export interface ReleaseTabOptions {
 	kill?: boolean;
+	/** Maximum time for each asynchronous cleanup resource before close fails with diagnostics. */
+	timeoutMs?: number;
 }
 
 const tabs = new Map<string, TabSession>();
@@ -131,6 +133,27 @@ const tabs = new Map<string, TabSession>();
 // awaits) cannot interleave and leak a worker + browser refCount.
 const acquireChains = new Map<string, Promise<void>>();
 const GRACE_MS = 750;
+// Names of tabs the supervisor force-killed (timeout past grace, failed recycle),
+// mapped to the kill reason. Lets the next `run` on that name explain WHY the tab
+// vanished instead of a bare "not alive". Cleared when the name is opened again.
+const killedTabs = new Map<string, string>();
+const DEFAULT_TAB_CLOSE_TIMEOUT_MS = 5_000;
+class RecoverableWorkerError extends ToolError {}
+
+async function waitForTabCleanup<T>(
+	tab: TabSession,
+	timeoutMs: number,
+	pendingResource: string,
+	promise: Promise<T>,
+): Promise<T> {
+	const message = `Timed out after ${timeoutMs}ms closing ${tab.kindTag} browser tab ${JSON.stringify(tab.name)}; pending resource: ${pendingResource}`;
+	try {
+		return await withTimeout(promise, timeoutMs, message);
+	} catch (error) {
+		if (error instanceof Error && error.message === message) throw new ToolError(message);
+		throw error;
+	}
+}
 
 export function getTab(name: string): TabSession | undefined {
 	return tabs.get(name);
@@ -161,6 +184,7 @@ async function acquireTabImpl(
 	if (opts.signal?.aborted) {
 		throw new ToolAbortError("Browser tab open aborted");
 	}
+	killedTabs.delete(name);
 	// Temporary refCount hold so releasing an existing tab on the SAME browser
 	// below cannot drop it to refCount 0 and dispose the instance we are about
 	// to reuse (e.g. reopening the sole tab with a different dialogs policy).
@@ -386,7 +410,14 @@ async function runInTabWithSnapshot(
 	snapshot: SessionSnapshot,
 ): Promise<RunResultOk> {
 	const tab = tabs.get(name);
-	if (!tab || tab.state === "dead") throw new ToolError(`Tab ${JSON.stringify(name)} is not alive. Reopen it.`);
+	if (!tab || tab.state === "dead") {
+		const killed = killedTabs.get(name);
+		throw new ToolError(
+			killed
+				? `Tab ${JSON.stringify(name)} was killed: ${killed}. Reopen it.`
+				: `Tab ${JSON.stringify(name)} is not alive. Open it first with action:"open".`,
+		);
+	}
 	if (tab.pending.size > 0) throw new ToolError(`Tab ${JSON.stringify(name)} is busy`);
 	const id = Snowflake.next();
 	const { promise, resolve, reject } = Promise.withResolvers<RunResultOk>();
@@ -458,16 +489,23 @@ async function runInTabWithSnapshot(
 				async reason => await forceKillTab(name, reason),
 			);
 		} catch (error) {
-			if (error instanceof ToolError && error.message.startsWith("Browser code execution timed out after ")) {
+			const runTimedOut =
+				error instanceof ToolError && error.message.startsWith("Browser code execution timed out after ");
+			if (runTimedOut || error instanceof RecoverableWorkerError) {
 				try {
-					if (tab.worker.mode === "inline")
-						await forceKillTab(name, "Browser code execution timed out; tab killed");
-					else await recycleTimedOutWorkerTab(tab, opts.timeoutMs + GRACE_MS);
+					if (tab.worker.mode === "inline") {
+						const reason = runTimedOut
+							? "Browser code execution timed out; tab killed"
+							: "Browser request interception cleanup failed; tab killed";
+						await forceKillTab(name, reason);
+					} else {
+						await recycleTimedOutWorkerTab(tab, opts.timeoutMs + GRACE_MS);
+					}
 				} catch (recycleError) {
-					logger.warn("Failed to recycle timed-out browser tab worker; killing tab", {
+					logger.warn("Failed to recycle browser tab worker; killing tab", {
 						error: recycleError instanceof Error ? recycleError.message : String(recycleError),
 					});
-					await forceKillTab(name, "Browser code execution timed out; tab killed");
+					await forceKillTab(name, "Browser tab worker recovery failed; tab killed");
 				}
 			}
 			throw error;
@@ -507,26 +545,42 @@ export async function releaseTab(name: string, opts: ReleaseTabOptions = {}): Pr
 		pending.reject(closeError);
 	}
 	tab.pending.clear();
+	const timeoutMs = opts.timeoutMs ?? DEFAULT_TAB_CLOSE_TIMEOUT_MS;
 	if (tab.backend === "cmux") {
-		let nonLastCloseError: unknown;
+		let closeError: unknown;
 		if (wasAlive && tab.cmuxOwnsSurface) {
 			try {
-				await tab.browser.client.request("surface.close", { surface_id: tab.targetId });
+				await waitForTabCleanup(
+					tab,
+					timeoutMs,
+					`cmux surface ${JSON.stringify(tab.targetId)} (surface.close)`,
+					tab.browser.client.request("surface.close", { surface_id: tab.targetId }, { timeoutMs }),
+				);
 			} catch (err) {
 				if (isLastSurfaceCloseError(err)) {
 					logger.debug("Leaving cmux browser surface open because it is the last surface in the workspace", {
 						error: err instanceof Error ? err.message : String(err),
 					});
 				} else {
-					nonLastCloseError = err;
+					closeError = err;
 				}
 			}
 		}
-		await releaseBrowser(tab.browser, { kill: opts.kill ?? false });
-		tabs.delete(name);
-		if (nonLastCloseError) throw nonLastCloseError;
+		try {
+			await releaseBrowser(tab.browser, {
+				kill: opts.kill ?? false,
+				timeoutMs,
+				resource: `tab ${JSON.stringify(name)}`,
+			});
+		} catch (error) {
+			closeError ??= error;
+		} finally {
+			tabs.delete(name);
+		}
+		if (closeError) throw closeError;
 		return true;
 	}
+	let cleanupError: unknown;
 	let forced = false;
 	if (wasAlive) {
 		try {
@@ -537,9 +591,30 @@ export async function releaseTab(name: string, opts: ReleaseTabOptions = {}): Pr
 		}
 	}
 	await tab.worker.terminate().catch(() => undefined);
-	if (forced && tab.kindTag === "headless") await closeOrphanTarget(tab);
-	await releaseBrowser(tab.browser, { kill: opts.kill ?? false });
-	tabs.delete(name);
+	if (forced && tab.kindTag === "headless") {
+		try {
+			await waitForTabCleanup(
+				tab,
+				timeoutMs,
+				`orphan CDP target ${JSON.stringify(tab.targetId)} (Page.close)`,
+				closeOrphanTarget(tab),
+			);
+		} catch (error) {
+			cleanupError = error;
+		}
+	}
+	try {
+		await releaseBrowser(tab.browser, {
+			kill: opts.kill ?? false,
+			timeoutMs,
+			resource: `tab ${JSON.stringify(name)}`,
+		});
+	} catch (error) {
+		cleanupError ??= error;
+	} finally {
+		tabs.delete(name);
+	}
+	if (cleanupError) throw cleanupError;
 	return true;
 }
 
@@ -712,6 +787,9 @@ async function recycleTimedOutWorkerTab(tab: WorkerTabSession, timeoutMs: number
 		safeDir: getPuppeteerDir(),
 		targetId: tab.targetId,
 		dialogs: tab.dialogPolicy,
+		// Unblock a wedged page (open JS dialog, hung navigation) before adopting it —
+		// otherwise init stalls, times out, and the tab gets force-killed.
+		recover: true,
 	};
 	let worker = await spawnTabWorker();
 	try {
@@ -743,6 +821,7 @@ async function recycleTimedOutWorkerTab(tab: WorkerTabSession, timeoutMs: number
 async function forceKillTab(name: string, reason: string): Promise<void> {
 	const tab = tabs.get(name);
 	if (!tab) return;
+	killedTabs.set(name, reason);
 	tab.state = "dead";
 	const error = postmortem.markExpectedCleanupError(new ToolError(reason));
 	for (const pending of tab.pending.values()) pending.reject(error);
@@ -802,11 +881,13 @@ async function targetIdForTarget(target: Target): Promise<string> {
 }
 
 function errorFromPayload(payload: RunErrorPayload): Error {
-	const error = payload.isAbort
-		? new ToolAbortError()
-		: payload.isToolError
-			? new ToolError(payload.message)
-			: new Error(payload.message);
+	const error = payload.recoverTab
+		? new RecoverableWorkerError(payload.message)
+		: payload.isAbort
+			? new ToolAbortError()
+			: payload.isToolError
+				? new ToolError(payload.message)
+				: new Error(payload.message);
 	error.name = payload.name;
 	if (payload.stack) error.stack = payload.stack;
 	return error;

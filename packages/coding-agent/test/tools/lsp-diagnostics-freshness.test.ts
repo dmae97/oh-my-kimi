@@ -294,6 +294,55 @@ describe("LSP diagnostics freshness", () => {
 		expect(result?.messages.some(m => m.includes("stale error"))).toBe(false);
 	});
 
+	it("returns completed pull diagnostics inside the inline write window", async () => {
+		const filePath = path.join(tempDir.path(), "pull-only.ts");
+		const uri = fileToUri(filePath);
+		const client = createClient(tempDir.path(), TEST_SERVER);
+		client.openFiles.set(uri, { version: 1, languageId: "typescript" });
+		client.serverCapabilities = { diagnosticProvider: true };
+
+		vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: {}, idleTimeoutMs: undefined });
+		vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["test-lsp", TEST_SERVER]]);
+		vi.spyOn(lspClient, "getOrCreateClient").mockResolvedValue(client);
+		vi.spyOn(lspClient, "syncContent").mockImplementation(async (mockClient, syncedFilePath) => {
+			const syncedUri = fileToUri(syncedFilePath);
+			mockClient.diagnostics.delete(syncedUri);
+			const openFile = mockClient.openFiles.get(syncedUri);
+			if (openFile) {
+				openFile.version += 1;
+			} else {
+				mockClient.openFiles.set(syncedUri, { version: 1, languageId: "typescript" });
+			}
+		});
+		vi.spyOn(lspClient, "notifySaved").mockResolvedValue();
+		vi.spyOn(lspClient, "sendRequest").mockResolvedValue({
+			kind: "full",
+			items: [createDiagnostic("pull error")],
+		});
+		const onDeferredDiagnostics = vi.fn();
+		const deferredController = new AbortController();
+		const handle = {
+			onDeferredDiagnostics,
+			signal: deferredController.signal,
+			finalize: () => {},
+		};
+
+		const writethrough = createLspWritethrough(tempDir.path(), { enableFormat: false, enableDiagnostics: true });
+		const inline = await writethrough(
+			filePath,
+			"export const value: number = 'x';\n",
+			undefined,
+			undefined,
+			undefined,
+			() => handle,
+		);
+		deferredController.abort();
+
+		expect(inline?.errored).toBe(true);
+		expect(inline?.messages.some(message => message.includes("pull error"))).toBe(true);
+		expect(onDeferredDiagnostics).not.toHaveBeenCalled();
+	});
+
 	it("returns promptly and delivers diagnostics via the deferred channel when the server is slow", async () => {
 		const filePath = path.join(tempDir.path(), "example.ts");
 		const uri = fileToUri(filePath);

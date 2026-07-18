@@ -1,10 +1,10 @@
 pub mod cancel;
 mod coreutils;
 mod fd;
-pub mod fixup;
 pub mod minimizer;
 pub mod process;
 pub mod shell;
+mod which;
 #[cfg(windows)]
 pub mod windows;
 

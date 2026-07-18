@@ -14,7 +14,7 @@ from fastapi import Body, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from robomp import github_events
+from robomp import github_events, issue_index
 from robomp.autoclose import AutocloseScheduler
 from robomp.config import Settings, get_settings
 from robomp.dashboard import render_index, static_dir, tail_jsonl
@@ -29,6 +29,7 @@ from robomp.db import (
 )
 from robomp.github_backend import GitHubBackend
 from robomp.github_client import GitHubError, IssueSummary
+from robomp.issue_index import IssueIndexSync
 from robomp.manual_triage import (
     InvalidIssueRef,
     ManualTriageConflict,
@@ -252,6 +253,7 @@ def _build_state(settings: Settings) -> dict[str, Any]:
     )
     pool = WorkerPool(settings=settings, db=db, github=github, sandbox=sandbox, git_transport=git_transport)
     autoclose = AutocloseScheduler(settings=settings, db=db, github=github)
+    index_sync = IssueIndexSync(settings=settings, db=db, github=github)
     return {
         "settings": settings,
         "db": db,
@@ -262,6 +264,7 @@ def _build_state(settings: Settings) -> dict[str, Any]:
         "pool": pool,
         "issue_browse_cache": _IssueBrowseCache(),
         "autoclose": autoclose,
+        "issue_index_sync": index_sync,
     }
 
 
@@ -278,9 +281,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await pool.start()
         autoclose: AutocloseScheduler = app.state.bag["autoclose"]
         await autoclose.start()
+        index_sync: IssueIndexSync = app.state.bag["issue_index_sync"]
+        await index_sync.start()
         try:
             yield
         finally:
+            await index_sync.stop()
             await autoclose.stop()
             await pool.stop(
                 drain_timeout=cfg.shutdown_drain_timeout_seconds,
@@ -328,6 +334,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             payload=payload,
             allowlist=cfg.repo_allowlist,
         )
+        # Keep the local search index fresh from every delivery that carries an
+        # issue/PR object — including ones the router will skip.
+        if x_github_event in ("issues", "issue_comment") or x_github_event.startswith("pull_request"):
+            repo_full = str((payload.get("repository") or {}).get("full_name") or "")
+            if repo_full and repo_full in cfg.repo_allowlist:
+                try:
+                    issue_index.ingest_webhook_payload(db, repo_full, x_github_event, payload)
+                except Exception:
+                    log.exception("issue index webhook ingest failed", extra={"repo": repo_full})
 
         def _resolve(repo_full: str, pr_number: int) -> str | None:
             row = db.find_issue_by_pr(repo_full, pr_number)
@@ -419,6 +434,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 cap=cap,
             )
             if not admission.accepted:
+                assert cap is not None
                 window = int(cfg.rate_limit_window_seconds)
                 reason = f"rate limit: @{submitter} has used {admission.used}/{cap} submissions in the last {window}s"
                 log.info(
@@ -432,17 +448,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "cap": cap,
                     },
                 )
-                db.record_event(
+                deferred = db.defer_submission_event(
                     delivery_id=x_github_delivery,
                     event_type=x_github_event,
+                    login=submitter,
                     repo=decision.repo,
                     issue_key=decision.issue_key,
                     payload=payload,
-                    state="skipped",
-                    last_error=reason,
+                    cap=cap,
+                    reason=reason,
                 )
+                event_state = "deferred" if deferred else "skipped"
+                if deferred:
+                    bag["pool"].wake()
                 return JSONResponse(
-                    {"delivery": x_github_delivery, "state": "skipped", "reason": "rate_limited"},
+                    {"delivery": x_github_delivery, "state": event_state, "reason": "rate_limited"},
                     status_code=202,
                 )
 
@@ -656,7 +676,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if event is None:
             raise HTTPException(404, f"unknown delivery {delivery_id}")
         if event.state != "running":
-            raise HTTPException(409, f"delivery {delivery_id} is {event.state}; only running deliveries can be cancelled")
+            raise HTTPException(
+                409, f"delivery {delivery_id} is {event.state}; only running deliveries can be cancelled"
+            )
 
         pool: WorkerPool = bag["pool"]
         fired = await pool.cancel_event(delivery_id)

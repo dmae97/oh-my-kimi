@@ -184,11 +184,9 @@ RUN bun install --frozen-lockfile --ignore-scripts
 # hoisted node_modules that `bun install` just produced.
 COPY . /pi/
 
-# Regenerate the docs index and tool views that `--ignore-scripts` skipped
-# above. The root package.json's `prepare` script normally handles these on a
-# vanilla install.
-RUN bun --cwd=packages/coding-agent run gen:docs \
-    && bun --cwd=/pi/packages/coding-agent run gen:tool-views
+# Regenerate the tool views that `--ignore-scripts` skipped above. The root
+# package.json's `prepare` script normally handles these on a vanilla install.
+RUN bun --cwd=packages/coding-agent run gen:tool-views
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/omp"]
 CMD ["--help"]

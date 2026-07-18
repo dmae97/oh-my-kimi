@@ -637,6 +637,10 @@ async function readOptionalText(filePath: string): Promise<string | null> {
 	return retryOnEintr(async () => await Bun.file(filePath).text());
 }
 
+async function readOptionalBytes(filePath: string): Promise<Uint8Array | null> {
+	return retryOnEintr(async () => await Bun.file(filePath).bytes());
+}
+
 function parseGitDirPointer(content: string): string | null {
 	const match = /^gitdir:\s*(.+)\s*$/iu.exec(content.trim());
 	return match?.[1] ?? null;
@@ -1377,6 +1381,239 @@ export async function readTree(
 /** Write the current index as a tree and return its object id. */
 export async function writeTree(cwd: string, options: Pick<CommandOptions, "env" | "signal"> = {}): Promise<string> {
 	return (await runText(cwd, ["write-tree"], options)).trim();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// API: worktree isolation
+// ════════════════════════════════════════════════════════════════════════════
+
+/** Outcome of {@link detachGitDir}. */
+export type DetachGitDirResult =
+	/** `worktreeRoot` had no `.git`; nothing to detach. */
+	| "no-git"
+	/** `.git` already resolves to an independent object DB — left untouched. */
+	| "independent"
+	/** Detached into a standalone repo borrowing `sourceCommonDir`'s objects. */
+	| "detached";
+
+/**
+ * Sever a copied/mounted working tree from the git metadata it shares with a
+ * source checkout, turning it into a standalone repository that borrows the
+ * source object database through `objects/info/alternates`.
+ *
+ * Isolation backends (reflink/apfs/btrfs/rcopy…) materialise `merged` by
+ * copying `worktreeRoot` byte-for-byte. When `worktreeRoot` is a **linked git
+ * worktree** its `.git` is a pointer file (`gitdir: …/worktrees/<name>`), so
+ * the copy still resolves HEAD/index/refs through the source repo — a task's
+ * `git checkout`/`commit` inside the isolation then mutates the *parent*
+ * checkout. The rcopy `git worktree add` path leaks the other way: task
+ * branches land in the shared ref namespace and stack on each other.
+ *
+ * After detaching, the working tree keeps its files verbatim while:
+ * - HEAD, refs, and the index are frozen to the snapshot at call time;
+ * - all commits/branches the task creates stay private to the isolation;
+ * - objects resolve against `sourceCommonDir` via alternates, so history reads
+ *   and later `git fetch <merged>` object transfer keep working;
+ * - the source checkout's HEAD, branch, index, and working tree are untouched.
+ *
+ * A full-copy `.git` (non-worktree source) already owns its object DB and is
+ * returned as `"independent"` without modification. `worktreeRoot` without a
+ * `.git` yields `"no-git"`.
+ */
+export async function detachGitDir(worktreeRoot: string, sourceCommonDir: string): Promise<DetachGitDirResult> {
+	ensureAvailable();
+	const gitEntry = path.join(worktreeRoot, ".git");
+	let entryStat: fs.Stats;
+	try {
+		entryStat = await fs.promises.lstat(gitEntry);
+	} catch (err) {
+		if (isEnoent(err)) return "no-git";
+		throw err;
+	}
+	// Canonicalize both sides before comparing: `rev-parse` resolves symlinks
+	// (macOS `/tmp` → `/private/tmp`) while callers derive `sourceCommonDir`
+	// lexically from the session cwd. A lexical mismatch here would silently
+	// classify a shared linked-worktree copy as "independent" and skip the
+	// detach entirely — leaving the parent-mutation leak in place.
+	const parentCommon = await fs.promises.realpath(sourceCommonDir).catch(() => path.resolve(sourceCommonDir));
+	const isoCommonRaw = (
+		await runText(worktreeRoot, ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+			readOnly: true,
+		})
+	).trim();
+	const isoCommon = await fs.promises.realpath(isoCommonRaw).catch(() => path.resolve(isoCommonRaw));
+	// A full-copy `.git` already resolves to its own object DB — leave it alone.
+	if (isoCommon !== parentCommon) return "independent";
+
+	// Snapshot the state the standalone repo must preserve. HEAD may be a branch
+	// ref (normal checkout), detached, or unborn (a fresh/orphan branch with no
+	// commits — a linked worktree still shares the parent ref namespace, so it
+	// must be severed too). Refs are frozen so `baseSha..branch` ranges and
+	// history reads keep resolving after the source moves on.
+	const headSha = (await tryText(worktreeRoot, ["rev-parse", "HEAD"], { readOnly: true }))?.trim() ?? "";
+	const headRef = (await tryText(worktreeRoot, ["symbolic-ref", "-q", "HEAD"], { readOnly: true }))?.trim() ?? "";
+	const refDump = headSha
+		? (
+				await runText(worktreeRoot, ["for-each-ref", "--format=%(objectname) %(refname)"], {
+					readOnly: true,
+				})
+			).trim()
+		: "";
+	const objectFormat =
+		(await tryText(worktreeRoot, ["rev-parse", "--show-object-format"], { readOnly: true }))?.trim() || "sha1";
+	const userName = await config.get(worktreeRoot, "user.name");
+	const userEmail = await config.get(worktreeRoot, "user.email");
+
+	// Preserve the index verbatim rather than round-tripping through
+	// write-tree/read-tree: the raw index carries skip-worktree bits (sparse
+	// checkout), assume-unchanged flags, and exact stage entries. A rebuilt
+	// index drops skip-worktree, so files intentionally absent from a sparse
+	// working tree would read as deletions and delta capture would apply those
+	// deletions back to the parent. Sparse config + patterns are carried too so
+	// later git operations in the isolation keep honouring the sparse view.
+	const indexPath = (
+		await runText(worktreeRoot, ["rev-parse", "--path-format=absolute", "--git-path", "index"], {
+			readOnly: true,
+		})
+	).trim();
+	const indexBytes = await readOptionalBytes(indexPath);
+	const sparseCheckout = await config.get(worktreeRoot, "core.sparseCheckout");
+	const sparseCone = await config.get(worktreeRoot, "core.sparseCheckoutCone");
+	const sparsePatternPath = (
+		await runText(worktreeRoot, ["rev-parse", "--path-format=absolute", "--git-path", "info/sparse-checkout"], {
+			readOnly: true,
+		})
+	).trim();
+	const sparsePatterns = await readOptionalText(sparsePatternPath);
+	// Status parity with the source: an explicit core.filemode (e.g. false on
+	// mounts ignoring the executable bit) must carry over, or the re-inited
+	// repo's platform default makes clean files read as mode-changed and delta
+	// capture would apply bogus chmod diffs back to the parent.
+	const fileMode = await config.get(worktreeRoot, "core.fileMode");
+	// A split index references sharedindex.* files beside the source index;
+	// restoring the raw index without them makes every git read fail. Carry the
+	// shared files (and the config) alongside the verbatim index bytes.
+	const splitIndex = await config.get(worktreeRoot, "core.splitIndex");
+	const sharedIndexFiles: Array<{ name: string; bytes: Uint8Array }> = [];
+	if (indexBytes) {
+		const indexDir = path.dirname(indexPath);
+		let entries: string[] = [];
+		try {
+			entries = await fs.promises.readdir(indexDir);
+		} catch {}
+		for (const name of entries) {
+			if (!name.startsWith("sharedindex.")) continue;
+			const bytes = await readOptionalBytes(path.join(indexDir, name));
+			if (bytes) sharedIndexFiles.push({ name, bytes });
+		}
+	}
+	// A shallow source deliberately lacks parents beyond its `shallow` boundary
+	// file; without it, history traversal over the borrowed objects treats the
+	// boundary commit's missing parent as corruption.
+	const shallowBoundary = await readOptionalText(path.join(parentCommon, "shallow"));
+
+	// A pointer `.git` file whose worktree-admin dir back-references this exact
+	// tree is the rcopy `git worktree add` registration. Remove that admin entry
+	// so the source repo's worktree list stops tracking the isolation. A pointer
+	// referencing the *source's* admin (a copied linked-worktree `.git`) is not
+	// ours to delete — only the local pointer file is discarded. Compare via
+	// realpath: git canonicalizes the back-reference (e.g. macOS `/var` →
+	// `/private/var`), so a lexical path comparison would miss the match and
+	// leave a stale registration in the source repo's worktree list.
+	let ownWorktreeAdmin: string | undefined;
+	if (entryStat.isFile()) {
+		const pointer = parseGitDirPointer((await readOptionalText(gitEntry)) ?? "");
+		if (pointer) {
+			const adminDir = path.resolve(path.dirname(gitEntry), pointer);
+			const backRef = (await readOptionalText(path.join(adminDir, "gitdir")))?.trim();
+			if (backRef) {
+				const [realBackRef, realGitEntry] = await Promise.all([
+					fs.promises.realpath(backRef).catch(() => path.resolve(backRef)),
+					fs.promises.realpath(gitEntry).catch(() => path.resolve(gitEntry)),
+				]);
+				if (realBackRef === realGitEntry) ownWorktreeAdmin = adminDir;
+			}
+		}
+	}
+
+	await fs.promises.rm(gitEntry, { recursive: true, force: true });
+	if (ownWorktreeAdmin) await fs.promises.rm(ownWorktreeAdmin, { recursive: true, force: true });
+
+	// Preserve the checked-out branch name so an unborn HEAD (fresh/orphan
+	// branch with no commits) keeps its symbolic ref after `init` rather than
+	// snapping to the init default; born HEADs get the ref rewritten below anyway.
+	const initArgs = ["init", "--object-format", objectFormat, "-q"];
+	const initialBranch = headRef.startsWith(LOCAL_BRANCH_PREFIX) ? headRef.slice(LOCAL_BRANCH_PREFIX.length) : "";
+	if (initialBranch) initArgs.push("-b", initialBranch);
+	await runEffect(worktreeRoot, initArgs);
+	const objectsInfo = path.join(gitEntry, "objects", "info");
+	await fs.promises.mkdir(objectsInfo, { recursive: true });
+	const alternates = [path.join(parentCommon, "objects")];
+	const chained = await readOptionalText(path.join(parentCommon, "objects", "info", "alternates"));
+	if (chained) {
+		for (const line of chained.split("\n")) {
+			const entry = line.trim();
+			if (!entry) continue;
+			alternates.push(path.isAbsolute(entry) ? entry : path.resolve(parentCommon, "objects", entry));
+		}
+	}
+	await Bun.write(path.join(objectsInfo, "alternates"), `${alternates.join("\n")}\n`);
+
+	// Freeze refs when HEAD is born. Point HEAD at the raw SHA first so
+	// `update-ref` writes land even for the branch HEAD currently names, then
+	// restore the symbolic HEAD. An unborn HEAD has no refs to freeze; `init -b`
+	// above already set the symbolic HEAD to the unborn branch.
+	if (headSha) {
+		await Bun.write(path.join(gitEntry, "HEAD"), `${headSha}\n`);
+		if (refDump) {
+			const commands = refDump
+				.split("\n")
+				.filter(Boolean)
+				.map(line => {
+					const sep = line.indexOf(" ");
+					return `create ${line.slice(sep + 1)} ${line.slice(0, sep)}`;
+				})
+				.join("\n");
+			await runEffect(worktreeRoot, ["update-ref", "--stdin"], { stdin: `${commands}\n` });
+		}
+		if (headRef) await Bun.write(path.join(gitEntry, "HEAD"), `ref: ${headRef}\n`);
+	} else if (headRef && !initialBranch) {
+		// Unborn detached HEAD (no branch, no commit) — restore the raw ref target.
+		await Bun.write(path.join(gitEntry, "HEAD"), `ref: ${headRef}\n`);
+	}
+
+	// Carry the source identity so isolated commits have an author.
+	if (userName) await config.set(worktreeRoot, "user.name", userName);
+	if (userEmail) await config.set(worktreeRoot, "user.email", userEmail);
+	if (fileMode !== undefined) await config.set(worktreeRoot, "core.fileMode", fileMode);
+	if (splitIndex !== undefined) await config.set(worktreeRoot, "core.splitIndex", splitIndex);
+	// Preserve the shallow boundary so history traversal over the borrowed
+	// object DB stops at the boundary instead of failing on missing parents.
+	if (shallowBoundary !== null) await Bun.write(path.join(gitEntry, "shallow"), shallowBoundary);
+
+	// Restore sparse-checkout state before the index so skip-worktree entries
+	// keep resolving against the carried patterns.
+	if (sparseCheckout) await config.set(worktreeRoot, "core.sparseCheckout", sparseCheckout);
+	if (sparseCone) await config.set(worktreeRoot, "core.sparseCheckoutCone", sparseCone);
+	if (sparsePatterns !== null) {
+		const infoDir = path.join(gitEntry, "info");
+		await fs.promises.mkdir(infoDir, { recursive: true });
+		await Bun.write(path.join(infoDir, "sparse-checkout"), sparsePatterns);
+	}
+
+	// Restore the index verbatim (skip-worktree, assume-unchanged, exact stage
+	// entries) so the working tree's dirty set — including sparse-excluded files
+	// — matches the source. Fall back to rebuilding from HEAD only when the
+	// source had no index (a bare-ish/never-staged checkout).
+	if (indexBytes) {
+		for (const shared of sharedIndexFiles) {
+			await Bun.write(path.join(gitEntry, shared.name), shared.bytes);
+		}
+		await Bun.write(path.join(gitEntry, "index"), indexBytes);
+	} else if (headSha) {
+		await readTree(worktreeRoot, headSha);
+	}
+	return "detached";
 }
 
 // ════════════════════════════════════════════════════════════════════════════

@@ -2,6 +2,7 @@
 description: Use Promise.withResolvers() instead of new Promise() constructor
 condition: "new Promise\\("
 scope: "tool:edit(*.ts), tool:edit(*.tsx), tool:write(*.ts), tool:write(*.tsx)"
+interruptMode: never
 ---
 
 Use `Promise.withResolvers()` instead of `new Promise((resolve, reject) => ...)`. It keeps control flow linear and exposes typed resolver functions without callback nesting.

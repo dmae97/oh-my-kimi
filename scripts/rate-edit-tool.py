@@ -48,7 +48,7 @@ MODELS = [
     "openrouter/moonshotai/kimi-k2.5",
     "openrouter/anthropic/claude-haiku-4.5",
     "openrouter/z-ai/glm-4.7",
-    "openai-codex/gpt-5.4"
+    "openai-codex/gpt-5.4",
 ]
 
 ORACLE_MODEL = "openrouter/anthropic/claude-opus-4.6"
@@ -1472,14 +1472,18 @@ async def run_all(args: argparse.Namespace) -> int:
                 )
             except (RpcError, RpcProcessExitError) as exc:
                 err = f"{type(exc).__name__}: {exc}"
-                (results_dir / "oracle_error.txt").write_text(err + "\n", encoding="utf-8")
+                (results_dir / "oracle_error.txt").write_text(
+                    err + "\n", encoding="utf-8"
+                )
                 print(f"Oracle synthesis FAILED: {err}", file=sys.stderr)
                 print(f"Saved error to {results_dir}/oracle_error.txt", file=sys.stderr)
                 return 2
             print(synthesis)
             return 0
         combined = format_combined_reviews(sources)
-        (results_dir / "combined_reviews.md").write_text(combined + "\n", encoding="utf-8")
+        (results_dir / "combined_reviews.md").write_text(
+            combined + "\n", encoding="utf-8"
+        )
         print(combined)
         return 0
 

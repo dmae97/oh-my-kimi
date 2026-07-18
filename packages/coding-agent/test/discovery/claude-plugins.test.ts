@@ -124,6 +124,44 @@ describe("listClaudePluginRoots", () => {
 		});
 	});
 
+	test("isolates local plugins to their canonical project", async () => {
+		const pluginsDir = path.join(tempDir, ".claude", "plugins");
+		const projectA = path.join(tempDir, "project-a");
+		const projectB = path.join(tempDir, "project-b");
+		const projectBAlias = path.join(tempDir, "project-b-alias");
+		const projectBSubdir = path.join(projectB, "packages", "app");
+		await Promise.all([
+			fs.mkdir(pluginsDir, { recursive: true }),
+			fs.mkdir(path.join(projectA, ".git"), { recursive: true }),
+			fs.mkdir(path.join(projectB, ".git"), { recursive: true }),
+			fs.mkdir(projectBSubdir, { recursive: true }),
+		]);
+		await fs.symlink(projectB, projectBAlias, "dir");
+
+		const entry = (scope: "user" | "local", installPath: string, projectPath?: string) => ({
+			scope,
+			installPath,
+			projectPath,
+			version: "1.0.0",
+			installedAt: "2025-01-01T00:00:00Z",
+			lastUpdated: "2025-01-01T00:00:00Z",
+		});
+		const registry = {
+			version: 2,
+			plugins: {
+				"user-plugin@market": [entry("user", "/plugins/user")],
+				"active-plugin@market": [entry("local", "/plugins/active", projectB)],
+				"foreign-plugin@market": [entry("local", "/plugins/foreign", projectA)],
+			},
+		};
+		await fs.writeFile(path.join(pluginsDir, "installed_plugins.json"), JSON.stringify(registry));
+
+		const result = await listClaudePluginRoots(tempDir, path.join(projectBAlias, "packages", "app"));
+
+		expect(result.roots.map(root => root.id)).toEqual(["user-plugin@market", "active-plugin@market"]);
+		expect(result.roots.find(root => root.id === "active-plugin@market")?.scope).toBe("project");
+	});
+
 	test("parses plugin with project scope", async () => {
 		const pluginsDir = path.join(tempDir, ".claude", "plugins");
 		await fs.mkdir(pluginsDir, { recursive: true });
@@ -451,6 +489,57 @@ describe("listClaudePluginRoots", () => {
 			if (originalUrl === undefined) delete process.env.OMP_PLUGIN_MCP_URL;
 			else process.env.OMP_PLUGIN_MCP_URL = originalUrl;
 		}
+	});
+
+	test("resolves relative path-like command and cwd against the plugin config directory", async () => {
+		const pluginsDir = path.join(tempDir, ".claude", "plugins");
+		const pluginPath = path.join(tempDir, "plugins", "computer-use");
+		await fs.mkdir(pluginsDir, { recursive: true });
+		await fs.mkdir(pluginPath, { recursive: true });
+		await fs.writeFile(
+			path.join(pluginsDir, "installed_plugins.json"),
+			JSON.stringify({
+				version: 2,
+				plugins: {
+					"computer-use@openai-bundled": [
+						{
+							scope: "user",
+							installPath: pluginPath,
+							version: "1.0.0",
+							installedAt: "2026-06-01T00:00:00Z",
+							lastUpdated: "2026-06-01T00:00:00Z",
+						},
+					],
+				},
+			}),
+		);
+		await fs.writeFile(
+			path.join(pluginPath, ".mcp.json"),
+			JSON.stringify({
+				mcpServers: {
+					"computer-use": { command: "./bin/SkyComputerUseClient", args: ["mcp"], cwd: "." },
+					bare: { command: "npx", args: ["-y", "@some/mcp"] },
+					invalidCwd: { command: "npx", cwd: 1 },
+				},
+			}),
+		);
+
+		// Session cwd is deliberately outside the plugin directory.
+		const result = await loadCapability<MCPServer>(mcpCapability.id, {
+			cwd: path.join(tempDir, "elsewhere"),
+			providers: ["claude-plugins"],
+		});
+		const local = result.all.find(item => item.name === "computer-use:computer-use");
+		const bare = result.all.find(item => item.name === "computer-use:bare");
+		const invalidCwd = result.all.find(item => item.name === "computer-use:invalidCwd");
+
+		expect(local?.command).toBe(path.join(pluginPath, "bin", "SkyComputerUseClient"));
+		expect(local?.cwd).toBe(pluginPath);
+		// Bare executables must keep resolving through PATH, not the plugin dir.
+		expect(bare?.command).toBe("npx");
+		expect(bare?.cwd).toBeUndefined();
+		expect(invalidCwd?.command).toBe("npx");
+		expect(invalidCwd?.cwd).toBeUndefined();
 	});
 
 	test("reads slash commands directory from plugin manifest slash-commands field", async () => {

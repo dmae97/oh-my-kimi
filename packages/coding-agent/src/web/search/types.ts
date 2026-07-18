@@ -39,7 +39,12 @@ export const SEARCH_PROVIDER_OPTIONS = [
 	{ value: "tavily", label: "Tavily", description: "Requires TAVILY_API_KEY" },
 	{ value: "firecrawl", label: "Firecrawl", description: "Requires FIRECRAWL_API_KEY" },
 	{ value: "brave", label: "Brave", description: "Requires BRAVE_API_KEY" },
-	{ value: "kimi", label: "Kimi", description: "Requires MOONSHOT_SEARCH_API_KEY or MOONSHOT_API_KEY" },
+	{
+		value: "kimi",
+		label: "Kimi",
+		description:
+			"Kimi Code search (requires a Kimi Code Console key via KIMI_SEARCH_API_KEY/MOONSHOT_SEARCH_API_KEY or /login kimi-code; not MOONSHOT_API_KEY)",
+	},
 	{ value: "parallel", label: "Parallel", description: "Requires PARALLEL_API_KEY" },
 	{ value: "synthetic", label: "Synthetic", description: "Requires SYNTHETIC_API_KEY" },
 	{ value: "searxng", label: "SearXNG", description: "Requires SEARXNG_ENDPOINT or searxng.endpoint" },
@@ -52,16 +57,6 @@ export const SEARCH_PROVIDER_OPTIONS = [
 		value: "duckduckgo",
 		label: "DuckDuckGo",
 		description: "Credential-free best-effort fallback; may be bot-challenged on datacenter/shared-egress IPs",
-	},
-	{
-		value: "bing",
-		label: "Bing",
-		description: "Credential-free HTML scrape of Bing results; may be bot-challenged",
-	},
-	{
-		value: "yahoo",
-		label: "Yahoo",
-		description: "Credential-free HTML scrape of Yahoo (Bing-backed) results",
 	},
 	{
 		value: "ecosia",

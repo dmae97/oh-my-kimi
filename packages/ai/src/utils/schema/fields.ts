@@ -37,6 +37,9 @@ export const UNSUPPORTED_SCHEMA_FIELDS: Record<string, true> = {
 	multipleOf: true,
 	pattern: true,
 	format: true,
+	dependencies: true,
+	dependentSchemas: true,
+	dependentRequired: true,
 };
 
 /**

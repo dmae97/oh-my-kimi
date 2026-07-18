@@ -7,6 +7,7 @@ import type { OAuthCredentials } from "@oh-my-pi/pi-ai/oauth/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import type { OpenAICompat } from "@oh-my-pi/pi-catalog/types";
+import { applyLlamaCppQwenThinking } from "@oh-my-pi/pi-coding-agent/config/model-discovery";
 import { kNoAuth, ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -964,6 +965,128 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(llama?.contextWindow).toBe(262144);
 		expect(llama?.maxTokens).toBe(262144);
 		expect(llama?.input).toEqual(["text", "image"]);
+	});
+
+	test("llama.cpp discovery routes Qwen models to chat-completions with the chat-template disable dialect", async () => {
+		const fetchMock: FetchImpl = async input => {
+			const url = String(input);
+			if (url === "http://127.0.0.1:8080/models") {
+				return new Response(
+					JSON.stringify({
+						data: [{ id: "qwen3-8b" }, { id: "ternary-bonsai-27b-q2_0" }, { id: "llama-3.1-8b" }],
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			if (url === "http://127.0.0.1:8080/props") {
+				return new Response(
+					JSON.stringify({
+						default_generation_settings: { n_ctx: 32768, params: { max_tokens: -1, n_predict: -1 } },
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		};
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		await registry.refresh();
+
+		type DialectFields = { thinkingFormat?: string; reasoningDisableMode?: string; qwenPreserveThinking?: boolean };
+		for (const id of ["qwen3-8b", "ternary-bonsai-27b-q2_0"]) {
+			const qwen = registry.find("llama.cpp", id);
+			expect(qwen?.reasoning).toBe(true);
+			expect(qwen?.api).toBe("openai-completions");
+			expect(qwen?.baseUrl).toBe("http://127.0.0.1:8080/v1");
+			const compat = qwen?.compat as DialectFields | undefined;
+			expect(compat?.thinkingFormat).toBe("qwen-chat-template");
+			expect(compat?.reasoningDisableMode).toBe("qwen-template-false");
+			expect(compat?.qwenPreserveThinking).toBe(true);
+		}
+
+		const plain = registry.find("llama.cpp", "llama-3.1-8b");
+		expect(plain?.reasoning).toBe(false);
+		expect(plain?.api).toBe("openai-responses");
+		expect(plain?.baseUrl).toBe("http://127.0.0.1:8080");
+		expect((plain?.compat as DialectFields | undefined)?.reasoningDisableMode).not.toBe("qwen-template-false");
+	});
+
+	test("configured llama.cpp Qwen model keeps its /v1 runtime URL despite a native-root baseUrl override", async () => {
+		writeRawModelsJson({
+			"llama.cpp": {
+				baseUrl: "http://127.0.0.1:8080",
+				api: "openai-responses",
+				auth: "none",
+				discovery: { type: "llama.cpp" },
+			},
+		});
+		const fetchMock: FetchImpl = async input => {
+			const url = String(input);
+			if (url === "http://127.0.0.1:8080/models") {
+				return Response.json({ data: [{ id: "qwen3-8b" }] });
+			}
+			if (url === "http://127.0.0.1:8080/props") {
+				return Response.json({ default_generation_settings: { n_ctx: 32768 } });
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		};
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		await registry.refresh();
+
+		// The configured provider's native-root baseUrl wins in mergeDiscoveredModel,
+		// so without the outermost re-application the routed completions model would
+		// revert to `http://127.0.0.1:8080` and POST to `/chat/completions`.
+		const qwen = registry.find("llama.cpp", "qwen3-8b");
+		expect(qwen?.api).toBe("openai-completions");
+		expect(qwen?.baseUrl).toBe("http://127.0.0.1:8080/v1");
+	});
+
+	test("applyLlamaCppQwenThinking keeps a pi-native gateway base URL without doubling /v1", () => {
+		const upgraded = applyLlamaCppQwenThinking(
+			buildModel({
+				id: "qwen3-8b",
+				name: "qwen3-8b",
+				api: "openai-responses",
+				provider: "llama.cpp",
+				baseUrl: "http://gw:4000",
+				transport: "pi-native",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 32_768,
+				maxTokens: 4096,
+			}),
+		);
+		// streamPiNative appends `/v1/pi/stream`, so the gateway URL must stay bare
+		// rather than gaining a `/v1` that would double to `.../v1/v1/pi/stream`.
+		expect(upgraded.baseUrl).toBe("http://gw:4000");
+		expect(upgraded.transport).toBe("pi-native");
+		expect(upgraded.reasoning).toBe(true);
+		expect((upgraded.compat as { reasoningDisableMode?: string }).reasoningDisableMode).toBe("qwen-template-false");
+	});
+
+	test("runtime metadata refresh probes native /models for a /v1-routed Qwen model", async () => {
+		const requested: string[] = [];
+		const fetchMock: FetchImpl = async input => {
+			const url = String(input);
+			requested.push(url);
+			if (url === "http://127.0.0.1:8080/models") {
+				return Response.json({ data: [{ id: "qwen3-8b" }] });
+			}
+			if (url === "http://127.0.0.1:8080/props") {
+				return Response.json({ default_generation_settings: { n_ctx: 32_768 } });
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		};
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		await registry.refresh();
+		const qwen = registry.find("llama.cpp", "qwen3-8b");
+		expect(qwen?.baseUrl).toBe("http://127.0.0.1:8080/v1");
+
+		await registry.refreshSelectedModelMetadata(qwen!);
+		// The routed model carries a /v1 base URL, but the native metadata probe
+		// (meta/status.args/architecture.input_modalities) must stay on /models.
+		expect(requested).toContain("http://127.0.0.1:8080/models");
+		expect(requested).not.toContain("http://127.0.0.1:8080/v1/models");
 	});
 
 	test("llama.cpp discovery marks per-model architecture image modalities as vision-capable", async () => {

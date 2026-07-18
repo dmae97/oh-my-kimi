@@ -1,3 +1,4 @@
+import { scheduler } from "node:timers/promises";
 import { hostMatchesUrl } from "@oh-my-pi/pi-catalog/hosts";
 import { $flag, logger, structuredCloneJSON } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
@@ -38,6 +39,7 @@ import {
 	adaptSchemaForStrict,
 	findStrictToolSchemaViolation,
 	NO_STRICT,
+	normalizeSchemaForMoonshot,
 	sanitizeSchemaForOpenAIResponses,
 	toolWireSchema,
 } from "../utils/schema";
@@ -154,6 +156,33 @@ const OPENAI_RESPONSES_FIRST_EVENT_TIMEOUT_MESSAGE =
 	"OpenAI responses stream timed out while waiting for the first event";
 /** Consecutive stale-previous-response failures before chaining is disabled for the session. */
 const OPENAI_RESPONSES_CHAIN_STALE_FAILURE_LIMIT = 3;
+const OPENAI_RESPONSES_MAX_TRANSIENT_STREAM_RETRIES = 1;
+const OPENAI_RESPONSES_TRANSIENT_STREAM_RETRY_DELAY_MS = 500;
+
+function isOpenAIResponsesReplayUnsafeEvent(event: ResponseStreamEvent): boolean {
+	switch (event.type) {
+		case "response.output_text.delta":
+		case "response.refusal.delta":
+		case "response.reasoning_summary_text.delta":
+		case "response.reasoning_text.delta":
+		case "response.function_call_arguments.delta":
+		case "response.custom_tool_call_input.delta":
+			return typeof event.delta === "string" && event.delta.length > 0;
+		case "response.reasoning_summary_part.done":
+			return true;
+		case "response.output_item.done":
+			return true;
+		default:
+			return false;
+	}
+}
+
+function isRetryableOpenAIResponsesStreamFailure(error: unknown): boolean {
+	return (
+		AIError.isTransientStreamParseError(error) ||
+		(error instanceof AIError.ProviderResponseError && error.kind === "incomplete-stream")
+	);
+}
 
 interface OpenAIResponsesProviderSessionState
 	extends ProviderSessionState,
@@ -452,7 +481,7 @@ const streamOpenAIResponsesOnce = (
 				return payload;
 			};
 			chained = { ...chained, params: await applyPayloadReplacement(chained.params) };
-			rawRequestDump = {
+			const activeRawRequestDump: RawHttpRequestDump = {
 				provider: model.provider,
 				api: output.api,
 				model: model.id,
@@ -460,6 +489,7 @@ const streamOpenAIResponsesOnce = (
 				url: requestUrl,
 				body: chained.params,
 			};
+			rawRequestDump = activeRawRequestDump;
 			const openResponsesStream = (requestParams: OpenAIResponsesSamplingParams) => {
 				activeReasoningEffortFallbackKey = createOpenAIReasoningEffortFallbackKey(
 					"responses",
@@ -507,183 +537,257 @@ const streamOpenAIResponsesOnce = (
 					{ provider: model.provider, signal: requestSignal },
 				);
 			};
-			let openaiStream: AsyncIterable<ResponseStreamEvent>;
 			let strictRetryAvailable = true;
 			let activeStrictToolsApplied = builtParams.strictToolsApplied;
 			let forceDisableStrictTools = false;
-			while (true) {
-				try {
-					openaiStream = await openResponsesStream(chained.params);
-					if (pendingReasoningEffortFallback) {
-						rememberOpenAIReasoningEffortFallback(
-							providerSessionState,
-							pendingReasoningEffortFallback.key,
-							pendingReasoningEffortFallback.fallback,
-						);
-						pendingReasoningEffortFallback = undefined;
-					}
-					break;
-				} catch (error) {
-					const capturedErrorResponse = error instanceof OpenAIHttpError ? error.captured : undefined;
-					const reasoningEffortFallback =
-						activeReasoningEffortFallbackKey && activeRequestParams && !requestSignal.aborted
-							? resolveOpenAIReasoningEffortFallback(error, capturedErrorResponse, activeRequestParams, {
-									explicitDisable: options?.disableReasoning === true && options.reasoning === undefined,
-								})
-							: undefined;
-					if (reasoningEffortFallback !== undefined && activeReasoningEffortFallbackKey) {
-						const retryMarker = `${activeReasoningEffortFallbackKey}:${String(reasoningEffortFallback)}`;
-						if (attemptedReasoningEffortFallbacks.has(retryMarker)) throw error;
-						attemptedReasoningEffortFallbacks.add(retryMarker);
-						requestReasoningEffortFallbacks.set(activeReasoningEffortFallbackKey, reasoningEffortFallback);
-						applyOpenAIReasoningEffortFallback(chained.params, reasoningEffortFallback);
-						applyOpenAIReasoningEffortFallback(activeParams, reasoningEffortFallback);
-						rawRequestDump.body = chained.params;
-						pendingReasoningEffortFallback = {
-							key: activeReasoningEffortFallbackKey,
-							fallback: reasoningEffortFallback,
-						};
-						continue;
-					}
-					const compiledGrammarTooLarge =
-						isOpenRouterAnthropicModel(model) &&
-						isCompiledGrammarTooLargeStrictError(error, capturedErrorResponse);
-					const canRetryWithoutStrictTools =
-						strictRetryAvailable &&
-						!requestSignal.aborted &&
-						(compiledGrammarTooLarge ||
-							shouldRetryWithoutStrictTools(
-								error,
-								capturedErrorResponse,
-								activeStrictToolsApplied,
-								context.tools,
-							));
-					if (canRetryWithoutStrictTools) {
-						strictRetryAvailable = false;
-						forceDisableStrictTools = true;
-						disableStrictToolsForScope(providerSessionState, strictToolsScope);
-						const fallbackBuilt = buildParams(
+			const openResponsesStreamWithFallbacks = async (): Promise<AsyncIterable<ResponseStreamEvent>> => {
+				let openaiStream: AsyncIterable<ResponseStreamEvent>;
+				while (true) {
+					try {
+						openaiStream = await openResponsesStream(chained.params);
+						if (pendingReasoningEffortFallback) {
+							rememberOpenAIReasoningEffortFallback(
+								providerSessionState,
+								pendingReasoningEffortFallback.key,
+								pendingReasoningEffortFallback.fallback,
+							);
+							pendingReasoningEffortFallback = undefined;
+						}
+						break;
+					} catch (error) {
+						const capturedErrorResponse = error instanceof OpenAIHttpError ? error.captured : undefined;
+						const reasoningEffortFallback =
+							activeReasoningEffortFallbackKey && activeRequestParams && !requestSignal.aborted
+								? resolveOpenAIReasoningEffortFallback(error, capturedErrorResponse, activeRequestParams, {
+										explicitDisable: options?.disableReasoning === true && options.reasoning === undefined,
+									})
+								: undefined;
+						if (reasoningEffortFallback !== undefined && activeReasoningEffortFallbackKey) {
+							const retryMarker = `${activeReasoningEffortFallbackKey}:${String(reasoningEffortFallback)}`;
+							if (attemptedReasoningEffortFallbacks.has(retryMarker)) throw error;
+							attemptedReasoningEffortFallbacks.add(retryMarker);
+							requestReasoningEffortFallbacks.set(activeReasoningEffortFallbackKey, reasoningEffortFallback);
+							applyOpenAIReasoningEffortFallback(chained.params, reasoningEffortFallback);
+							applyOpenAIReasoningEffortFallback(activeParams, reasoningEffortFallback);
+							activeRawRequestDump.body = chained.params;
+							pendingReasoningEffortFallback = {
+								key: activeReasoningEffortFallbackKey,
+								fallback: reasoningEffortFallback,
+							};
+							continue;
+						}
+						const compiledGrammarTooLarge =
+							isOpenRouterAnthropicModel(model) &&
+							isCompiledGrammarTooLargeStrictError(error, capturedErrorResponse);
+						const canRetryWithoutStrictTools =
+							strictRetryAvailable &&
+							!requestSignal.aborted &&
+							(compiledGrammarTooLarge ||
+								shouldRetryWithoutStrictTools(
+									error,
+									capturedErrorResponse,
+									activeStrictToolsApplied,
+									context.tools,
+								));
+						if (canRetryWithoutStrictTools) {
+							strictRetryAvailable = false;
+							forceDisableStrictTools = true;
+							disableStrictToolsForScope(providerSessionState, strictToolsScope);
+							const fallbackBuilt = buildParams(
+								model,
+								context,
+								options,
+								providerSessionState,
+								strictToolsScope,
+								true,
+							);
+							const fallbackParams = fallbackBuilt.params;
+							if (chainState && !chainState.disabled) fallbackParams.store = true;
+							let fallbackChained: OpenAIResponsesChainedParams =
+								chainState && !chainState.disabled
+									? buildOpenAIResponsesChainedParams(fallbackParams, chainState)
+									: { params: fallbackParams };
+							sentPreviousResponseId = fallbackChained.previousResponseId;
+							fallbackChained = {
+								...fallbackChained,
+								params: await applyPayloadReplacement(fallbackChained.params),
+							};
+							chained = fallbackChained;
+							activeRawRequestDump.body = chained.params;
+							activeParams = fallbackParams;
+							activeStrictToolsApplied = fallbackBuilt.strictToolsApplied;
+							continue;
+						}
+						if (!chainState || !sentPreviousResponseId || requestSignal.aborted) {
+							throw error;
+						}
+						const zdrRejection =
+							error instanceof Error &&
+							/previous[ _]?response/i.test(error.message) &&
+							/zero[ _-]?data[ _-]?retention/i.test(error.message);
+						const isPromptBlocked =
+							error instanceof Error &&
+							((error as { code?: string }).code === "invalid_prompt" ||
+								/invalid_prompt|Request blocked/i.test(error.message));
+						if (!zdrRejection && !isPromptBlocked && !isOpenAIResponsesStalePreviousResponseError(error)) {
+							throw error;
+						}
+						// Server rejected the chain baseline: reset, count the failure (or
+						// disable categorically on ZDR), and retry once with the full
+						// transcript. Structurally cannot loop — the retry carries no
+						// previous_response_id.
+						if (zdrRejection) {
+							markOpenAIResponsesChainZeroDataRetention(chainState, error);
+							// ZDR orgs cannot store responses; the retry uses `store: false`.
+						} else {
+							registerOpenAIResponsesChainStaleFailure(chainState, error);
+						}
+						sentPreviousResponseId = undefined;
+						const currentBuilt = buildParams(
 							model,
 							context,
 							options,
 							providerSessionState,
 							strictToolsScope,
-							true,
+							forceDisableStrictTools,
 						);
-						const fallbackParams = fallbackBuilt.params;
-						if (chainState && !chainState.disabled) fallbackParams.store = true;
-						let fallbackChained: OpenAIResponsesChainedParams =
-							chainState && !chainState.disabled
-								? buildOpenAIResponsesChainedParams(fallbackParams, chainState)
-								: { params: fallbackParams };
-						sentPreviousResponseId = fallbackChained.previousResponseId;
-						fallbackChained = {
-							...fallbackChained,
-							params: await applyPayloadReplacement(fallbackChained.params),
-						};
-						chained = fallbackChained;
-						rawRequestDump.body = chained.params;
-						activeParams = fallbackParams;
-						activeStrictToolsApplied = fallbackBuilt.strictToolsApplied;
-						continue;
+						const currentParams = currentBuilt.params;
+						// Only ZDR forces `store: false` (the org never persists responses). A
+						// non-ZDR stale baseline is transient, so keep storing: the full-context
+						// retry must be chainable next turn, and the consecutive stale-failure
+						// breaker only trips when each retry stores and the next turn re-chains.
+						currentParams.store = !zdrRejection;
+						const retryParams = await applyPayloadReplacement(currentParams);
+						chained = { params: retryParams };
+						activeRawRequestDump.body = retryParams;
+						activeParams = currentParams;
+						activeStrictToolsApplied = currentBuilt.strictToolsApplied;
 					}
-					if (!chainState || !sentPreviousResponseId || requestSignal.aborted) {
-						throw error;
-					}
-					const zdrRejection =
-						error instanceof Error &&
-						/previous[ _]?response/i.test(error.message) &&
-						/zero[ _-]?data[ _-]?retention/i.test(error.message);
-					if (!zdrRejection && !isOpenAIResponsesStalePreviousResponseError(error)) {
-						throw error;
-					}
-					// Server rejected the chain baseline: reset, count the failure (or
-					// disable categorically on ZDR), and retry once with the full
-					// transcript. Structurally cannot loop — the retry carries no
-					// previous_response_id.
-					if (zdrRejection) {
-						markOpenAIResponsesChainZeroDataRetention(chainState, error);
-						// ZDR orgs cannot store responses; the retry uses `store: false`.
-					} else {
-						registerOpenAIResponsesChainStaleFailure(chainState, error);
-					}
-					sentPreviousResponseId = undefined;
-					const currentBuilt = buildParams(
-						model,
-						context,
-						options,
-						providerSessionState,
-						strictToolsScope,
-						forceDisableStrictTools,
-					);
-					const currentParams = currentBuilt.params;
-					// Only ZDR forces `store: false` (the org never persists responses). A
-					// non-ZDR stale baseline is transient, so keep storing: the full-context
-					// retry must be chainable next turn, and the consecutive stale-failure
-					// breaker only trips when each retry stores and the next turn re-chains.
-					currentParams.store = !zdrRejection;
-					const retryParams = await applyPayloadReplacement(currentParams);
-					chained = { params: retryParams };
-					rawRequestDump.body = retryParams;
-					activeParams = currentParams;
-					activeStrictToolsApplied = currentBuilt.strictToolsApplied;
 				}
-			}
+				return openaiStream;
+			};
+			let openaiStream = await openResponsesStreamWithFallbacks();
 			if (premiumRequestsTotal !== undefined) output.usage.premiumRequests = premiumRequestsTotal;
 			stream.push({ type: "start", partial: output });
 
 			const nativeOutputItems: Array<Record<string, unknown>> = [];
-			let sawTerminalResponseEvent = false;
-			const timedOpenaiStream = iterateWithIdleTimeout(openaiStream, {
-				idleTimeoutMs,
-				firstItemTimeoutMs: firstEventTimeoutMs,
-				firstItemErrorMessage: OPENAI_RESPONSES_FIRST_EVENT_TIMEOUT_MESSAGE,
-				errorMessage: "OpenAI responses stream stalled while waiting for the next event",
-				onFirstItemTimeout: () => abortTracker.abortLocally(firstEventTimeoutAbortError),
-				onIdle: () => requestAbortController.abort(),
-				abortSignal: options?.signal,
-				isProgressItem: isOpenAIResponsesProgressEvent,
-			});
-			await processResponsesStream(timedOpenaiStream, output, stream, model, {
-				onFirstToken: () => {
-					if (!firstTokenTime) firstTokenTime = performance.now();
-				},
-				onOutputItemDone: item => {
-					// `processResponsesStream` hands over a private clone already; no
-					// second deep copy needed (reasoning items carry multi-KB blobs).
-					nativeOutputItems.push(item as unknown as Record<string, unknown>);
-				},
-				onCompleted: () => {
-					sawTerminalResponseEvent = true;
-				},
-				requestServiceTier: options?.serviceTier,
-			});
-
-			const localAbortReason = abortTracker.getLocalAbortReason();
-			if (localAbortReason) {
-				throw localAbortReason;
-			}
-			if (abortTracker.wasCallerAbort()) {
-				throw new AIError.AbortError();
-			}
-
-			// Detect premature stream closure: the HTTP stream ended without the
-			// provider sending a recognized terminal response event.
-			// Custom/proxy providers may drop the connection mid-stream; without
-			// this guard the incomplete output is silently surfaced as a successful
-			// "stop".
-			if (!sawTerminalResponseEvent) {
-				throw new AIError.ProviderResponseError(
-					"OpenAI responses stream closed before a terminal response event was received",
-					{ provider: model.provider, kind: "incomplete-stream" },
-				);
-			}
-
-			if (output.stopReason === "aborted" || output.stopReason === "error") {
-				throw new AIError.ProviderResponseError(output.errorMessage ?? "An unknown error occurred", {
-					provider: model.provider,
-					kind: "runtime",
+			let transientStreamRetryAttempt = 0;
+			while (true) {
+				let sawReplayUnsafeOutput = false;
+				let sawTerminalResponseEvent = false;
+				const attemptStream = new AssistantMessageEventStream();
+				let forwardAttemptLive = false;
+				const forwardAttemptEvents = () => {
+					for (const event of attemptStream.queue) stream.push(event);
+					attemptStream.queue.length = 0;
+				};
+				nativeOutputItems.length = 0;
+				const timedOpenaiStream = iterateWithIdleTimeout(openaiStream, {
+					idleTimeoutMs,
+					firstItemTimeoutMs: firstEventTimeoutMs,
+					firstItemErrorMessage: OPENAI_RESPONSES_FIRST_EVENT_TIMEOUT_MESSAGE,
+					errorMessage: "OpenAI responses stream stalled while waiting for the next event",
+					onFirstItemTimeout: () => abortTracker.abortLocally(firstEventTimeoutAbortError),
+					onIdle: () => requestAbortController.abort(),
+					abortSignal: options?.signal,
+					isProgressItem: isOpenAIResponsesProgressEvent,
 				});
+				const observedOpenaiStream = (async function* (): AsyncGenerator<ResponseStreamEvent> {
+					for await (const event of timedOpenaiStream) {
+						if (isOpenAIResponsesReplayUnsafeEvent(event)) {
+							sawReplayUnsafeOutput = true;
+							if (!forwardAttemptLive) {
+								forwardAttemptEvents();
+								forwardAttemptLive = true;
+							}
+						}
+						yield event;
+						if (forwardAttemptLive) forwardAttemptEvents();
+					}
+				})();
+
+				try {
+					await processResponsesStream(observedOpenaiStream, output, attemptStream, model, {
+						onFirstToken: () => {
+							if (!firstTokenTime) firstTokenTime = performance.now();
+						},
+						onOutputItemDone: item => {
+							// `processResponsesStream` hands over a private clone already; no
+							// second deep copy needed (reasoning items carry multi-KB blobs).
+							nativeOutputItems.push(item as unknown as Record<string, unknown>);
+						},
+						onCompleted: () => {
+							sawTerminalResponseEvent = true;
+						},
+						requestServiceTier: options?.serviceTier,
+					});
+
+					const localAbortReason = abortTracker.getLocalAbortReason();
+					if (localAbortReason) throw localAbortReason;
+					if (abortTracker.wasCallerAbort()) throw new AIError.AbortError();
+
+					// Detect premature stream closure: the HTTP stream ended without the
+					// provider sending a recognized terminal response event.
+					if (!sawTerminalResponseEvent) {
+						throw new AIError.ProviderResponseError(
+							"OpenAI responses stream closed before a terminal response event was received",
+							{ provider: model.provider, kind: "incomplete-stream" },
+						);
+					}
+
+					if (output.stopReason === "aborted" || output.stopReason === "error") {
+						throw new AIError.ProviderResponseError(output.errorMessage ?? "An unknown error occurred", {
+							provider: model.provider,
+							kind: "runtime",
+						});
+					}
+					forwardAttemptEvents();
+					break;
+				} catch (error) {
+					const streamFailure = abortTracker.getLocalAbortReason() ?? error;
+					const canRetry =
+						!sawReplayUnsafeOutput &&
+						!requestSignal.aborted &&
+						!abortTracker.wasCallerAbort() &&
+						transientStreamRetryAttempt < OPENAI_RESPONSES_MAX_TRANSIENT_STREAM_RETRIES &&
+						isRetryableOpenAIResponsesStreamFailure(streamFailure);
+					if (!canRetry) {
+						forwardAttemptEvents();
+						throw streamFailure;
+					}
+
+					transientStreamRetryAttempt++;
+					logger.debug("OpenAI responses stream ended before replay-unsafe output; retrying", {
+						provider: model.provider,
+						model: model.id,
+						attempt: transientStreamRetryAttempt,
+						error: streamFailure instanceof Error ? streamFailure.message : String(streamFailure),
+					});
+					const retryOutput = createInitialResponsesAssistantMessage(model.api, model.provider, model.id);
+					output.content.length = 0;
+					output.responseId = undefined;
+					output.upstreamProvider = undefined;
+					output.errorMessage = undefined;
+					output.errorStatus = undefined;
+					output.errorId = undefined;
+					output.stopDetails = undefined;
+					output.providerPayload = undefined;
+					output.usage = retryOutput.usage;
+					if (premiumRequestsTotal !== undefined) output.usage.premiumRequests = premiumRequestsTotal;
+					output.stopReason = "stop";
+					output.duration = undefined;
+					output.ttft = undefined;
+					firstTokenTime = undefined;
+					nativeOutputItems.length = 0;
+
+					if (options?.providerRetryWait) {
+						await options.providerRetryWait(OPENAI_RESPONSES_TRANSIENT_STREAM_RETRY_DELAY_MS, options.signal);
+					} else {
+						await scheduler.wait(OPENAI_RESPONSES_TRANSIENT_STREAM_RETRY_DELAY_MS, { signal: options?.signal });
+					}
+					if (abortTracker.wasCallerAbort()) throw new AIError.AbortError();
+					openaiStream = await openResponsesStreamWithFallbacks();
+				}
 			}
 
 			output.providerPayload = createOpenAIResponsesHistoryPayload(model.provider, nativeOutputItems);
@@ -995,7 +1099,15 @@ export function convertTools(
 		}
 		const strict = !NO_STRICT && strictMode && tool.strict !== false;
 		const baseParameters = toolWireSchema(tool);
-		const responseParameters = sanitizeSchemaForOpenAIResponses(baseParameters);
+		// MFJS must run AFTER the Responses sanitizer: the sanitizer normalizes
+		// `{}` → `true` (issue #1179), and Moonshot's validator rejects boolean
+		// subschemas ("property schema … must be an object"), so the Moonshot
+		// pass re-coerces them last.
+		const sanitized = sanitizeSchemaForOpenAIResponses(baseParameters);
+		const responseParameters =
+			model.compat.toolSchemaFlavor === "moonshot-mfjs"
+				? (normalizeSchemaForMoonshot(sanitized) as Record<string, unknown>)
+				: sanitized;
 		const { schema: parameters, strict: effectiveStrict } = adaptSchemaForStrict(responseParameters, strict);
 		// Quarantine a tool whose emitted schema carries a provider-rejecting
 		// enum/const-vs-type contradiction: dropping just that tool keeps the rest

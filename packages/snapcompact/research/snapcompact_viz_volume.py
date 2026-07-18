@@ -44,7 +44,9 @@ def robust01(values: np.ndarray, q: float = 0.985) -> np.ndarray:
 
 
 def tinted_cmap(name: str, low: str, high: str) -> LinearSegmentedColormap:
-    return LinearSegmentedColormap.from_list(name, [(0.0, BG), (0.24, low), (1.0, high)], N=256)
+    return LinearSegmentedColormap.from_list(
+        name, [(0.0, BG), (0.24, low), (1.0, high)], N=256
+    )
 
 
 def load_volume(data_dir: Path) -> tuple[np.ndarray, dict, list[str]]:
@@ -59,7 +61,9 @@ def load_volume(data_dir: Path) -> tuple[np.ndarray, dict, list[str]]:
     return volume, summary, labels
 
 
-def cube_edges(x0: float, x1: float, y0: float, y1: float, z0: float, z1: float) -> list[list[tuple[float, float, float]]]:
+def cube_edges(
+    x0: float, x1: float, y0: float, y1: float, z0: float, z1: float
+) -> list[list[tuple[float, float, float]]]:
     p = {
         "000": (x0, y0, z0),
         "100": (x1, y0, z0),
@@ -71,9 +75,18 @@ def cube_edges(x0: float, x1: float, y0: float, y1: float, z0: float, z1: float)
         "111": (x1, y1, z1),
     }
     return [
-        [p["000"], p["100"]], [p["010"], p["110"]], [p["001"], p["101"]], [p["011"], p["111"]],
-        [p["000"], p["010"]], [p["100"], p["110"]], [p["001"], p["011"]], [p["101"], p["111"]],
-        [p["000"], p["001"]], [p["100"], p["101"]], [p["010"], p["011"]], [p["110"], p["111"]],
+        [p["000"], p["100"]],
+        [p["010"], p["110"]],
+        [p["001"], p["101"]],
+        [p["011"], p["111"]],
+        [p["000"], p["010"]],
+        [p["100"], p["110"]],
+        [p["001"], p["011"]],
+        [p["101"], p["111"]],
+        [p["000"], p["001"]],
+        [p["100"], p["101"]],
+        [p["010"], p["011"]],
+        [p["110"], p["111"]],
     ]
 
 
@@ -99,7 +112,11 @@ def style_3d(ax) -> None:
 
 
 def add_volume(ax, volume: np.ndarray) -> None:
-    cmaps = [tinted_cmap("answer_ct", "#063842", CYAN), tinted_cmap("random_ct", "#461813", RED), tinted_cmap("ratio_ct", "#3c2b05", AMBER)]
+    cmaps = [
+        tinted_cmap("answer_ct", "#063842", CYAN),
+        tinted_cmap("random_ct", "#461813", RED),
+        tinted_cmap("ratio_ct", "#3c2b05", AMBER),
+    ]
     edge_colors = [CYAN, RED, AMBER]
     layers = np.arange(volume.shape[1])
     bins = np.arange(volume.shape[2])
@@ -111,16 +128,42 @@ def add_volume(ax, volume: np.ndarray) -> None:
         rgba = cmap(vals)
         rgba[..., 3] = 0.08 + 0.68 * np.power(vals, 1.55)
         y = np.full_like(x, cond, dtype=np.float32)
-        ax.plot_surface(x, y, z, facecolors=rgba, rstride=1, cstride=1, linewidth=0, antialiased=False, shade=False)
+        ax.plot_surface(
+            x,
+            y,
+            z,
+            facecolors=rgba,
+            rstride=1,
+            cstride=1,
+            linewidth=0,
+            antialiased=False,
+            shade=False,
+        )
 
         # Bright activation voxels above each condition's 98th percentile.
         threshold = float(np.quantile(vals, 0.982))
         zz, xx = np.where(vals >= threshold)
         yy = np.full(xx.shape, cond, dtype=np.float32)
         strength = vals[zz, xx]
-        ax.scatter(xx, yy, zz, s=10 + 90 * strength, c=edge_colors[cond], marker="s", alpha=0.58, depthshade=False, linewidths=0)
+        ax.scatter(
+            xx,
+            yy,
+            zz,
+            s=10 + 90 * strength,
+            c=edge_colors[cond],
+            marker="s",
+            alpha=0.58,
+            depthshade=False,
+            linewidths=0,
+        )
 
-    ax.add_collection3d(Line3DCollection(cube_edges(0, 179, -0.23, 2.23, 0, 18), colors=(0.42, 0.72, 0.82, 0.22), linewidths=0.9))
+    ax.add_collection3d(
+        Line3DCollection(
+            cube_edges(0, 179, -0.23, 2.23, 0, 18),
+            colors=(0.42, 0.72, 0.82, 0.22),
+            linewidths=0.9,
+        )
+    )
 
     # Crosshair slices through the strongest answer/random separation.
     ratio = volume[2]
@@ -128,15 +171,44 @@ def add_volume(ax, volume: np.ndarray) -> None:
     bin_profile = ratio.mean(axis=0)
     peak_layer = int(layer_profile.argmax())
     peak_bin = int(bin_profile.argmax())
-    ax.plot([peak_bin, peak_bin], [-0.28, 2.28], [peak_layer, peak_layer], color=GREEN, alpha=0.9, linewidth=1.5)
-    ax.plot([0, 179], [2.28, 2.28], [peak_layer, peak_layer], color=GREEN, alpha=0.45, linewidth=1.1)
-    ax.text(peak_bin + 3, 2.35, peak_layer + 0.2, "hottest ratio slice", color=GREEN, fontsize=8)
+    ax.plot(
+        [peak_bin, peak_bin],
+        [-0.28, 2.28],
+        [peak_layer, peak_layer],
+        color=GREEN,
+        alpha=0.9,
+        linewidth=1.5,
+    )
+    ax.plot(
+        [0, 179],
+        [2.28, 2.28],
+        [peak_layer, peak_layer],
+        color=GREEN,
+        alpha=0.45,
+        linewidth=1.1,
+    )
+    ax.text(
+        peak_bin + 3,
+        2.35,
+        peak_layer + 0.2,
+        "hottest ratio slice",
+        color=GREEN,
+        fontsize=8,
+    )
 
 
 def add_projection_panel(ax, volume: np.ndarray, labels: list[str]) -> None:
     ax.set_facecolor(PANEL)
     cmap = tinted_cmap("small_ct", "#10252f", "#f2d87b")
-    strip = np.vstack([volume[0], np.full((2, volume.shape[2]), np.nan), volume[1], np.full((2, volume.shape[2]), np.nan), volume[2]])
+    strip = np.vstack(
+        [
+            volume[0],
+            np.full((2, volume.shape[2]), np.nan),
+            volume[1],
+            np.full((2, volume.shape[2]), np.nan),
+            volume[2],
+        ]
+    )
     masked = np.ma.masked_invalid(strip)
     cmap.set_bad(PANEL)
     ax.imshow(masked, aspect="auto", interpolation="nearest", cmap=cmap, vmin=0, vmax=1)
@@ -155,7 +227,13 @@ def add_layer_panel(ax, volume: np.ndarray) -> None:
     names = ["answer", "random", "ratio"]
     for cond, color in enumerate(colors):
         profile = volume[cond].mean(axis=1)
-        ax.plot(np.arange(profile.size), profile, color=color, linewidth=2.0, label=names[cond])
+        ax.plot(
+            np.arange(profile.size),
+            profile,
+            color=color,
+            linewidth=2.0,
+            label=names[cond],
+        )
         ax.fill_between(np.arange(profile.size), profile, 0, color=color, alpha=0.08)
     ax.set_xlim(0, 18)
     ax.set_ylim(0, 1.0)
@@ -169,21 +247,67 @@ def add_layer_panel(ax, volume: np.ndarray) -> None:
         spine.set_color("#27323a")
 
 
-def render(volume: np.ndarray, summary: dict, labels: list[str], out_path: Path) -> None:
+def render(
+    volume: np.ndarray, summary: dict, labels: list[str], out_path: Path
+) -> None:
     fig = plt.figure(figsize=(18, 11), dpi=180, facecolor=BG)
-    gs = fig.add_gridspec(3, 5, width_ratios=[1.35, 1.35, 1.35, 0.95, 0.95], height_ratios=[0.12, 1.0, 0.42], wspace=0.22, hspace=0.24)
+    gs = fig.add_gridspec(
+        3,
+        5,
+        width_ratios=[1.35, 1.35, 1.35, 0.95, 0.95],
+        height_ratios=[0.12, 1.0, 0.42],
+        wspace=0.22,
+        hspace=0.24,
+    )
 
     title_ax = fig.add_subplot(gs[0, :])
     title_ax.axis("off")
-    title_ax.text(0.0, 0.70, "SNAPCOMPACT ACTIVATION CT", color=INK, fontsize=27, fontweight="bold", transform=title_ax.transAxes)
-    title_ax.text(0.0, 0.24, "volumetric tensor cube: 19 layers × 180 image-token bins × 3 conditions", color=MUTED, fontsize=11, transform=title_ax.transAxes)
-    title_ax.text(0.985, 0.58, f"PaddleOCR-VL · Q: {summary['question']['q']}", color=MUTED, fontsize=9, ha="right", transform=title_ax.transAxes)
-    title_ax.text(0.985, 0.24, f"gold answer {summary['question']['answer_text']} · answer/random mean Δ {summary['answer_over_random_delta']:.2f}×", color=AMBER, fontsize=10, ha="right", transform=title_ax.transAxes)
+    title_ax.text(
+        0.0,
+        0.70,
+        "SNAPCOMPACT ACTIVATION CT",
+        color=INK,
+        fontsize=27,
+        fontweight="bold",
+        transform=title_ax.transAxes,
+    )
+    title_ax.text(
+        0.0,
+        0.24,
+        "volumetric tensor cube: 19 layers × 180 image-token bins × 3 conditions",
+        color=MUTED,
+        fontsize=11,
+        transform=title_ax.transAxes,
+    )
+    title_ax.text(
+        0.985,
+        0.58,
+        f"PaddleOCR-VL · Q: {summary['question']['q']}",
+        color=MUTED,
+        fontsize=9,
+        ha="right",
+        transform=title_ax.transAxes,
+    )
+    title_ax.text(
+        0.985,
+        0.24,
+        f"gold answer {summary['question']['answer_text']} · answer/random mean Δ {summary['answer_over_random_delta']:.2f}×",
+        color=AMBER,
+        fontsize=10,
+        ha="right",
+        transform=title_ax.transAxes,
+    )
 
     ax3d = fig.add_subplot(gs[1:, :3], projection="3d")
     style_3d(ax3d)
     add_volume(ax3d, volume)
-    ax3d.set_title("MRI-style scan of hidden-state deltas", color=INK, fontsize=15, loc="left", pad=12)
+    ax3d.set_title(
+        "MRI-style scan of hidden-state deltas",
+        color=INK,
+        fontsize=15,
+        loc="left",
+        pad=12,
+    )
 
     ax_proj = fig.add_subplot(gs[1, 3:])
     add_projection_panel(ax_proj, volume, labels)
@@ -191,8 +315,20 @@ def render(volume: np.ndarray, summary: dict, labels: list[str], out_path: Path)
     ax_layer = fig.add_subplot(gs[2, 3:])
     add_layer_panel(ax_layer, volume)
 
-    fig.text(0.055, 0.055, "source: heatmaps.npz arrays answer_binned, random_binned, ratio_binned · quantile normalized per condition", color="#617078", fontsize=8)
-    fig.text(0.055, 0.033, "cyan=answer evidence · red=random control · gold=answer/random amplification · green=crosshair at peak ratio slice", color="#617078", fontsize=8)
+    fig.text(
+        0.055,
+        0.055,
+        "source: heatmaps.npz arrays answer_binned, random_binned, ratio_binned · quantile normalized per condition",
+        color="#617078",
+        fontsize=8,
+    )
+    fig.text(
+        0.055,
+        0.033,
+        "cyan=answer evidence · red=random control · gold=answer/random amplification · green=crosshair at peak ratio slice",
+        color="#617078",
+        fontsize=8,
+    )
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, facecolor=BG, bbox_inches="tight", pad_inches=0.22)
@@ -210,7 +346,11 @@ def write_source_data(volume: np.ndarray, summary: dict, out_dir: Path) -> None:
     )
     payload = {
         "description": "Quantile-normalized tensor cube used by snapcompact_viz_volume.py.",
-        "shape": {"condition": 3, "layers": int(volume.shape[1]), "image_token_bins": int(volume.shape[2])},
+        "shape": {
+            "condition": 3,
+            "layers": int(volume.shape[1]),
+            "image_token_bins": int(volume.shape[2]),
+        },
         "conditions": ["answer_delta", "random_delta", "answer_over_random_ratio"],
         "question": summary["question"],
         "answer_over_random_delta": summary["answer_over_random_delta"],

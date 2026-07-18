@@ -72,6 +72,7 @@ function createContext(
 		streamingMessage: undefined,
 		pendingTools: new Map<string, unknown>(),
 		flushPendingModelSwitch: async () => {},
+		flushPendingCommandOutput: () => {},
 		ui: { requestRender: vi.fn() },
 		chatContainer: { removeChild: vi.fn() },
 		statusContainer: { clear: vi.fn() },

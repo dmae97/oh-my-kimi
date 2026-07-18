@@ -64,12 +64,14 @@ export default class Token extends Command {
 				}
 				if (flags.list) {
 					for (const acct of accounts) {
-						const label =
+						const base =
 							acct.email ??
 							acct.accountId ??
 							acct.projectId ??
 							acct.enterpriseUrl ??
 							`credential #${acct.credentialId}`;
+						const org = acct.orgName ?? acct.orgId;
+						const label = org && org !== base ? `${base} (${org})` : base;
 						process.stdout.write(`${acct.position + 1}. ${label}\n`);
 					}
 					return;

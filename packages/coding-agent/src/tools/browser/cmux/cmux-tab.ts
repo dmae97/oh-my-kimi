@@ -9,10 +9,15 @@ import type { ToolSession } from "../../index";
 import { resolveToCwd } from "../../path-utils";
 import { formatScreenshot } from "../../render-utils";
 import { ToolAbortError, ToolError, throwIfAborted } from "../../tool-errors";
-import { type AriaSnapshotOptions, buildAriaSnapshotScript } from "../aria/aria-snapshot";
+import { type AriaSnapshotOptions, assertSelectorString, buildAriaSnapshotScript } from "../aria/aria-snapshot";
 import { DEFAULT_VIEWPORT } from "../launch";
 import { extractReadableFromHtml, type ReadableFormat } from "../readable";
-import { bindBrowserRunFacade, waitForBrowserRun } from "../run-cancellation";
+import {
+	bindBrowserRunFacade,
+	resolvePredicateTimeout,
+	type WaitPredicateOptions,
+	waitForBrowserRun,
+} from "../run-cancellation";
 import { cloneSafe, RunOutput } from "../run-output";
 import type { Observation, ReadyInfo, RunResultOk, ScreenshotResult, SessionSnapshot } from "../tab-protocol";
 import {
@@ -1010,6 +1015,7 @@ export class CmuxTab {
 	}
 
 	#selectorSpec(selector: string): SelectorSpec {
+		assertSelectorString(selector);
 		const raw = selector;
 		let normalized = selector;
 		if (normalized.startsWith("p-text/")) normalized = `text/${normalized.slice("p-text/".length)}`;
@@ -1352,7 +1358,17 @@ export async function runCmuxCode(tab: CmuxTab, opts: RunCmuxCodeOptions): Promi
 			assert: (cond: unknown, text?: string): void => {
 				if (!cond) throw new ToolError(text ?? "Assertion failed");
 			},
-			wait: (ms: number): Promise<void> => waitForBrowserRun(ms, signal),
+			wait: (msOrPredicate: number | (() => unknown), waitOpts?: WaitPredicateOptions): Promise<unknown> =>
+				waitForBrowserRun(
+					msOrPredicate,
+					signal,
+					typeof msOrPredicate === "number"
+						? waitOpts
+						: {
+								timeout: resolvePredicateTimeout(opts.timeoutMs, waitOpts?.timeout),
+								interval: waitOpts?.interval,
+							},
+				),
 		});
 
 		const hooks: RuntimeHooks = {

@@ -4,7 +4,7 @@ exclude = ["crates/vendor/brush-core", "crates/vendor/brush-builtins"]
 resolver = "3"
 
 [workspace.package]
-version = "16.4.4"
+version = "17.0.4"
 edition = "2024"
 license = "MIT"
 authors = ["Can Boluk"]
@@ -237,10 +237,6 @@ smallvec = { version = "1.15.1", features = [
 # ──────────────────────────────────────────────────────────────────────────────
 xxhash-rust = { version = "0.8", features = ["xxh64"] }
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Memory Mapping
-# ──────────────────────────────────────────────────────────────────────────────
-memmap2 = "0.9"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # System & Platform

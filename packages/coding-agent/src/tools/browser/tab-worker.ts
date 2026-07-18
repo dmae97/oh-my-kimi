@@ -2,10 +2,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { postmortem, Snowflake, untilAborted } from "@oh-my-pi/pi-utils";
+import { postmortem, Snowflake, untilAborted, withTimeout } from "@oh-my-pi/pi-utils";
 import type { HTMLElement } from "linkedom";
 import type {
 	Browser,
+	CDPSession,
 	Dialog,
 	ElementHandle,
 	ElementScreenshotOptions,
@@ -23,6 +24,7 @@ import { formatScreenshot } from "../render-utils";
 import { ToolAbortError, ToolError, throwIfAborted } from "../tool-errors";
 import {
 	type AriaSnapshotOptions,
+	assertSelectorString,
 	captureAriaSnapshot,
 	parseAriaRefSelector,
 	resolveAriaRefHandle,
@@ -35,7 +37,13 @@ import {
 	loadPuppeteerInWorker,
 } from "./launch";
 import { extractReadableFromHtml, type ReadableFormat } from "./readable";
-import { markHandled, waitForBrowserRun } from "./run-cancellation";
+import {
+	CELL_BUDGET_SLACK_MS,
+	markHandled,
+	resolvePredicateTimeout,
+	type WaitPredicateOptions,
+	waitForBrowserRun,
+} from "./run-cancellation";
 import { cloneSafe, RunOutput } from "./run-output";
 import type {
 	Observation,
@@ -49,6 +57,13 @@ import type {
 	WorkerInbound,
 	WorkerInitPayload,
 } from "./tab-protocol";
+
+declare module "puppeteer-core" {
+	interface Frame {
+		/** Puppeteer's main JavaScript realm, retained by our pinned runtime patch. */
+		mainRealm(): Realm;
+	}
+}
 
 declare global {
 	interface Element extends HTMLElement {}
@@ -105,6 +120,11 @@ const PLAYWRIGHT_ONLY_SELECTOR_RE =
 type DialogPolicy = "accept" | "dismiss";
 type DragTarget = string | { readonly x: number; readonly y: number };
 type ActionabilityResult = { ok: true; x: number; y: number } | { ok: false; reason: string };
+/** Last JS dialog seen on the page; kept for timeout attribution until handled or navigation. */
+interface OpenDialogInfo {
+	type: string;
+	message: string;
+}
 
 /**
  * Per-op fail-fast ceilings for `tab.*` helpers. All are kept strictly under the cell
@@ -125,8 +145,10 @@ type ActionabilityResult = { ok: true; x: number; y: number } | { ok: false; rea
  */
 const QUICK_OP_TIMEOUT_MS = 20_000;
 const ACTION_OP_TIMEOUT_MS = 8_000;
+/** Maximum wait for a renderer acknowledgement after a wheel event is queued. */
+const SCROLL_ACK_TIMEOUT_MS = 2_000;
 /** Headroom subtracted from the cell budget so a per-op deadline fires before it. */
-const OP_DEADLINE_SLACK_MS = 1_000;
+const OP_DEADLINE_SLACK_MS = CELL_BUDGET_SLACK_MS;
 /**
  * A selector op whose selector has matched nothing for this long fails fast with the
  * zero-match hint instead of burning the rest of its deadline: a wrong selector or a
@@ -136,6 +158,8 @@ const OP_DEADLINE_SLACK_MS = 1_000;
 const ZERO_MATCH_FAIL_FAST_MS = 2_000;
 /** Poll cadence for the zero-match watchdog. */
 const ZERO_MATCH_POLL_MS = 250;
+/** Cleanup must settle inside the supervisor's 750ms post-run grace window. */
+const REQUEST_INTERCEPTION_CLEANUP_TIMEOUT_MS = 500;
 
 export interface OpTimeouts {
 	/** Largest per-op deadline allowed — strictly below the cell budget. */
@@ -154,6 +178,21 @@ export function resolveOpTimeouts(cellTimeoutMs: number): OpTimeouts {
 		quickOpMs: Math.min(budgetBound, QUICK_OP_TIMEOUT_MS),
 		actionOpMs: Math.min(budgetBound, ACTION_OP_TIMEOUT_MS),
 	};
+}
+
+/** Queue a wheel event without treating a delayed renderer acknowledgement as dispatch failure. */
+export async function dispatchScroll(
+	dispatch: () => Promise<void>,
+	ackTimeoutMs = SCROLL_ACK_TIMEOUT_MS,
+): Promise<void> {
+	const deadline = Promise.withResolvers<void>();
+	const timer = setTimeout(() => deadline.resolve(), ackTimeoutMs);
+	timer.unref();
+	try {
+		await Promise.race([dispatch(), deadline.promise]);
+	} finally {
+		clearTimeout(timer);
+	}
 }
 
 /**
@@ -227,6 +266,7 @@ interface TabApi {
 }
 
 export function normalizeSelector(selector: string): string {
+	assertSelectorString(selector);
 	if (!selector) return selector;
 	if (
 		!SELECTOR_HANDLER_PREFIXES.some(prefix => selector.startsWith(prefix)) &&
@@ -315,12 +355,125 @@ function redactUrlCredentials(url: string): string {
 	}
 }
 
+class RequestInterceptionCleanupError extends ToolError {}
+
+interface RunPageScope {
+	page: Page;
+	cleanup(): Promise<void>;
+}
+
+/**
+ * Expose the tab page while retaining the request handlers created by this run.
+ * Puppeteer's Page wraps an internal emitter, so `removeAllListeners("request")`
+ * would also remove its forwarding listener; the facade removes only user handlers.
+ */
+function createRunPageScope(page: Page): RunPageScope {
+	const requestHandlers: unknown[] = [];
+	const on = page.on;
+	const off = page.off;
+	const once = page.once;
+	const removeAllListeners = page.removeAllListeners;
+	const onDescriptor = Object.getOwnPropertyDescriptor(page, "on");
+	const offDescriptor = Object.getOwnPropertyDescriptor(page, "off");
+	const onceDescriptor = Object.getOwnPropertyDescriptor(page, "once");
+	const removeAllDescriptor = Object.getOwnPropertyDescriptor(page, "removeAllListeners");
+
+	Object.defineProperties(page, {
+		on: {
+			configurable: true,
+			value: (type: unknown, handler: unknown): Page => {
+				Reflect.apply(on, page, [type, handler]);
+				if (type === "request") requestHandlers.push(handler);
+				return page;
+			},
+		},
+		once: {
+			configurable: true,
+			value: (type: unknown, handler: unknown): Page => {
+				if (type !== "request" || typeof handler !== "function") {
+					Reflect.apply(once, page, [type, handler]);
+					return page;
+				}
+				const wrapper = (event: unknown): void => {
+					const index = requestHandlers.lastIndexOf(wrapper);
+					if (index >= 0) requestHandlers.splice(index, 1);
+					Reflect.apply(off, page, ["request", wrapper]);
+					Reflect.apply(handler, page, [event]);
+				};
+				requestHandlers.push(wrapper);
+				Reflect.apply(on, page, [type, wrapper]);
+				return page;
+			},
+		},
+		off: {
+			configurable: true,
+			value: (type: unknown, handler?: unknown): Page => {
+				Reflect.apply(off, page, [type, handler]);
+				if (type === "request") {
+					if (handler === undefined) requestHandlers.length = 0;
+					else {
+						const index = requestHandlers.lastIndexOf(handler);
+						if (index >= 0) requestHandlers.splice(index, 1);
+					}
+				}
+				return page;
+			},
+		},
+		removeAllListeners: {
+			configurable: true,
+			value: (type?: unknown): Page => {
+				Reflect.apply(removeAllListeners, page, [type]);
+				if (type === undefined || type === "request") requestHandlers.length = 0;
+				return page;
+			},
+		},
+	});
+
+	return {
+		page,
+		async cleanup() {
+			if (onDescriptor) Object.defineProperty(page, "on", onDescriptor);
+			else Reflect.deleteProperty(page, "on");
+			if (offDescriptor) Object.defineProperty(page, "off", offDescriptor);
+			else Reflect.deleteProperty(page, "off");
+			if (onceDescriptor) Object.defineProperty(page, "once", onceDescriptor);
+			else Reflect.deleteProperty(page, "once");
+			if (removeAllDescriptor) Object.defineProperty(page, "removeAllListeners", removeAllDescriptor);
+			else Reflect.deleteProperty(page, "removeAllListeners");
+			for (const handler of requestHandlers) Reflect.apply(off, page, ["request", handler]);
+			requestHandlers.length = 0;
+			try {
+				await withTimeout(
+					page.setRequestInterception(false),
+					REQUEST_INTERCEPTION_CLEANUP_TIMEOUT_MS,
+					"Timed out clearing browser request interception",
+				);
+			} catch (error) {
+				throw new RequestInterceptionCleanupError(
+					"Failed to clear browser request interception after browser.run",
+					{
+						error: error instanceof Error ? error.message : String(error),
+					},
+				);
+			}
+		},
+	};
+}
+
 function errorPayload(error: unknown): RunErrorPayload {
+	const recoverTab = error instanceof RequestInterceptionCleanupError || undefined;
 	if (error instanceof ToolAbortError) {
 		return { name: error.name, message: error.message, stack: error.stack, isToolError: false, isAbort: true };
 	}
 	if (error instanceof ToolError) {
-		return { name: error.name, message: error.message, stack: error.stack, isToolError: true, isAbort: false };
+		return {
+			name: error.name,
+			message: error.message,
+			stack: error.stack,
+			isToolError: true,
+			isAbort: false,
+			recoverTab,
+		};
 	}
 	if (error instanceof Error) {
 		return { name: error.name, message: error.message, stack: error.stack, isToolError: false, isAbort: false };
@@ -595,6 +748,7 @@ export class WorkerCore {
 	#mode?: WorkerInitPayload["mode"];
 	#dialogPolicy?: DialogPolicy;
 	#dialogHandler?: (dialog: Dialog) => void;
+	#openDialog?: OpenDialogInfo;
 
 	constructor(transport: Transport) {
 		this.#transport = transport;
@@ -648,6 +802,7 @@ export class WorkerCore {
 			});
 			if (payload.mode === "headless") {
 				this.#page = await this.#browser.newPage();
+				this.#observeDialogs();
 				await applyStealthPatches(this.#browser, this.#page, { browserSession: null, override: null });
 				await applyViewport(this.#page, payload.viewport);
 				if (payload.dialogs) this.#applyDialogPolicy(payload.dialogs);
@@ -659,7 +814,15 @@ export class WorkerCore {
 					});
 				}
 			} else {
-				this.#page = await this.#findAttachedPage(payload.targetId);
+				const target = await this.#findAttachedTarget(payload.targetId);
+				// Post-timeout recycle: unblock the target BEFORE adopting the page — an open
+				// modal dialog or hung navigation can stall `target.page()` / ready info, and a
+				// stalled init used to time out and force-kill the tab.
+				if (payload.recover) await this.#recoverAttachedTarget(target);
+				const page = await target.page();
+				if (!page) throw new ToolError(`Target ${payload.targetId} is no longer available on the attached browser`);
+				this.#page = page;
+				this.#observeDialogs();
 				if (payload.dialogs) this.#applyDialogPolicy(payload.dialogs);
 			}
 			this.#targetId = await targetIdForPage(this.#page);
@@ -669,15 +832,52 @@ export class WorkerCore {
 		}
 	}
 
-	async #findAttachedPage(targetId: string): Promise<Page> {
+	async #findAttachedTarget(targetId: string): Promise<Target> {
 		if (!this.#browser) throw new ToolError("Browser is not connected");
 		for (const target of this.#browser.targets()) {
 			if ((await targetIdForTarget(target).catch(() => "")) !== targetId) continue;
-			const page = await target.page();
-			if (!page) break;
-			return page;
+			return target;
 		}
 		throw new ToolError(`Target ${targetId} is no longer available on the attached browser`);
+	}
+
+	/**
+	 * Best-effort unblocking of a wedged target during post-timeout recovery: dismiss any
+	 * open JS dialog and stop a pending navigation over a raw CDP session (created on the
+	 * target, not the page, so it works while the page itself is unresponsive). Every step
+	 * tolerates "nothing to do".
+	 */
+	async #recoverAttachedTarget(target: Target): Promise<void> {
+		let session: CDPSession | undefined;
+		try {
+			session = await target.createCDPSession();
+			await session.send("Page.enable").catch(() => undefined);
+			await session.send("Page.handleJavaScriptDialog", { accept: false }).catch(() => undefined);
+			await session.send("Page.stopLoading").catch(() => undefined);
+			await session.send("Fetch.disable").catch(() => undefined);
+		} catch (error) {
+			this.#log("debug", "Recovery CDP session failed; proceeding with attach", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		} finally {
+			await session?.detach().catch(() => undefined);
+		}
+	}
+
+	/**
+	 * Record JS dialogs for timeout attribution without handling them (semantics of an
+	 * unset `dialogs` policy are unchanged — the page stays blocked until user code or
+	 * the policy handler acts). Cleared when the policy handler settles the dialog or a
+	 * main-frame navigation proves the modal is gone.
+	 */
+	#observeDialogs(): void {
+		const page = this.#requirePage();
+		page.on("dialog", dialog => {
+			this.#openDialog = { type: dialog.type(), message: dialog.message() };
+		});
+		page.on("framenavigated", frame => {
+			if (frame === page.mainFrame()) this.#openDialog = undefined;
+		});
 	}
 
 	async #currentReadyInfo(): Promise<ReadyInfo> {
@@ -698,11 +898,15 @@ export class WorkerCore {
 		if (this.#dialogHandler) page.off("dialog", this.#dialogHandler);
 		const handler = (dialog: Dialog): void => {
 			const action = policy === "accept" ? dialog.accept() : dialog.dismiss();
-			void action.catch(err =>
-				this.#log("debug", "Dialog auto-handler failed", {
-					policy,
-					error: err instanceof Error ? err.message : String(err),
-				}),
+			void action.then(
+				() => {
+					this.#openDialog = undefined;
+				},
+				err =>
+					this.#log("debug", "Dialog auto-handler failed", {
+						policy,
+						error: err instanceof Error ? err.message : String(err),
+					}),
 			);
 		};
 		page.on("dialog", handler);
@@ -747,21 +951,38 @@ export class WorkerCore {
 			opCounter: 0,
 		};
 		this.#active = active;
+		let completed = false;
+		let returnValue: unknown;
+		let failure: { error: unknown } | undefined;
+		let runPage: RunPageScope | undefined;
 		try {
 			throwIfAborted(signal);
-			const page = this.#requirePage();
+			runPage = createRunPageScope(this.#requirePage());
 			const browser = this.#requireBrowser();
 			const tabApi = this.#createTabApi(msg.name, msg.timeoutMs, signal, msg.session, output, screenshots, active);
 			const runtime = this.#ensureRuntime(msg.session);
 			runtime.setCwd(msg.session.cwd);
 			runtime.setRunScope({
-				page,
+				page: runPage.page,
 				browser,
 				tab: tabApi,
 				assert: (cond: unknown, text?: string): void => {
 					if (!cond) throw new ToolError(text ?? "Assertion failed");
 				},
-				wait: (ms: number): Promise<void> => waitForBrowserRun(ms, signal),
+				// Both wait forms register in the in-flight map so a cell that dies while
+				// sleeping/polling names the culprit instead of a bare whole-cell timeout.
+				wait: (msOrPredicate: number | (() => unknown), opts?: WaitPredicateOptions): Promise<unknown> => {
+					const label = typeof msOrPredicate === "number" ? `wait(${msOrPredicate}ms)` : "wait(predicate)";
+					const resolved =
+						typeof msOrPredicate === "number"
+							? undefined
+							: { timeout: resolvePredicateTimeout(msg.timeoutMs, opts?.timeout), interval: opts?.interval };
+					return markHandled(
+						this.#runOp(active, label, signal, Number.POSITIVE_INFINITY, sig =>
+							waitForBrowserRun(msOrPredicate, sig, resolved),
+						),
+					);
+				},
 			});
 			const { promise: cancelRejection, reject: rejectCancel } = Promise.withResolvers<never>();
 			const onCancel = (): void => {
@@ -771,9 +992,13 @@ export class WorkerCore {
 						: new ToolAbortError(undefined, { cause: signal.reason });
 				if (timeoutSignal.aborted) {
 					const stalled = describeInflight(active.inflight);
+					const dialog = this.#openDialog;
+					const dialogNote = dialog
+						? `; a ${dialog.type}(${JSON.stringify(dialog.message.slice(0, 80))}) dialog opened during this run and may still block the page — reopen the tab with dialogs:"accept"|"dismiss" or handle page.on('dialog')`
+						: "";
 					rejectCancel(
 						new ToolError(
-							`Browser code execution timed out after ${msg.timeoutMs}ms${stalled ? ` (stalled on ${stalled})` : ""}`,
+							`Browser code execution timed out after ${msg.timeoutMs}ms${stalled ? ` (stalled on ${stalled})` : ""}${dialogNote}`,
 						),
 					);
 				} else {
@@ -793,25 +1018,37 @@ export class WorkerCore {
 			try {
 				const hooks = this.#hooksForActiveRun();
 				if (!hooks) throw new ToolError("Browser runtime started without an active run");
-				const returnValue = await Promise.race([
+				returnValue = await Promise.race([
 					runtime.run(msg.code, `browser-run-${msg.id}.js`, hooks, { runId: msg.id, cwd: msg.session.cwd }),
 					cancelRejection,
 				]);
-				await this.#postReadyInfo();
-				this.#transport.send({
-					type: "result",
-					id: msg.id,
-					ok: true,
-					payload: { displays: output.finish(), returnValue: cloneSafe(returnValue), screenshots },
-				});
+				completed = true;
 			} finally {
 				signal.removeEventListener("abort", onCancel);
 			}
 		} catch (error) {
-			this.#transport.send({ type: "result", id: msg.id, ok: false, error: errorPayload(error) });
+			failure = { error };
 		} finally {
-			if (this.#active?.id === msg.id) this.#active = null;
 			runAc.abort(postmortem.markExpectedCleanupError(new ToolAbortError("Browser run ended")));
+			try {
+				await runPage?.cleanup();
+			} catch (error) {
+				failure = { error };
+			}
+			if (this.#active?.id === msg.id) this.#active = null;
+		}
+		if (failure) {
+			this.#transport.send({ type: "result", id: msg.id, ok: false, error: errorPayload(failure.error) });
+			return;
+		}
+		if (completed) {
+			await this.#postReadyInfo();
+			this.#transport.send({
+				type: "result",
+				id: msg.id,
+				ok: true,
+				payload: { displays: output.finish(), returnValue: cloneSafe(returnValue), screenshots },
+			});
 		}
 	}
 
@@ -985,7 +1222,7 @@ export class WorkerCore {
 		active: ActiveRun,
 	): TabApi {
 		const page = this.#requirePage();
-		const { quickOpMs, actionOpMs } = resolveOpTimeouts(timeoutMs);
+		const { budgetBound, quickOpMs, actionOpMs } = resolveOpTimeouts(timeoutMs);
 		const waitMs = (explicit?: number): number => resolveWaitTimeout(timeoutMs, explicit);
 		const INF = Number.POSITIVE_INFINITY;
 		const op = <T>(
@@ -1003,10 +1240,24 @@ export class WorkerCore {
 			goto: (url, opts) =>
 				op(`tab.goto(${JSON.stringify(url)})`, INF, async sig => {
 					this.#clearElementCache();
-					// Default to "load" because dev servers with HMR/WS never reach networkidle.
-					await untilAborted(sig, () =>
-						page.goto(url, { waitUntil: opts?.waitUntil ?? "load", timeout: timeoutMs }),
-					);
+					try {
+						// Default to "load" because dev servers with HMR/WS never reach networkidle.
+						// budgetBound (not the full cell) so a hung navigation fails named and
+						// catchable inside the run instead of dying with the whole cell.
+						await untilAborted(sig, () =>
+							page.goto(url, { waitUntil: opts?.waitUntil ?? "load", timeout: budgetBound }),
+						);
+					} catch (err) {
+						if (err instanceof Error && err.name === "TimeoutError") {
+							// Abandon the hung navigation NOW — a still-pending load stalls every
+							// later op on this page and cascades into more opaque timeouts.
+							await this.#stopLoading();
+							throw new ToolError(
+								`tab.goto(${JSON.stringify(url)}) timed out after ${budgetBound}ms; pending navigation stopped — retry with a longer tool timeout or waitUntil:"domcontentloaded"`,
+							);
+						}
+						throw err;
+					}
 				}),
 			observe: opts => op("tab.observe()", quickOpMs, sig => this.#collectObservation({ ...opts, signal: sig })),
 			ariaSnapshot: (selector, opts) =>
@@ -1112,11 +1363,22 @@ export class WorkerCore {
 			press: (key, opts) =>
 				op(`tab.press(${JSON.stringify(key)})`, actionOpMs, async sig => {
 					const selector = opts?.selector;
-					if (selector) await untilAborted(sig, () => page.focus(normalizeSelector(selector)));
+					if (selector) {
+						if (parseAriaRefSelector(selector) !== null) {
+							const handle = await this.#resolveAriaRef(selector);
+							try {
+								await untilAborted(sig, () => handle.focus());
+							} finally {
+								await handle.dispose().catch(() => undefined);
+							}
+						} else await untilAborted(sig, () => page.focus(normalizeSelector(selector)));
+					}
 					await untilAborted(sig, () => page.keyboard.press(key));
 				}),
 			scroll: (deltaX, deltaY) =>
-				op("tab.scroll()", actionOpMs, sig => untilAborted(sig, () => page.mouse.wheel({ deltaX, deltaY }))),
+				op("tab.scroll()", actionOpMs, sig =>
+					untilAborted(sig, () => dispatchScroll(() => page.mouse.wheel({ deltaX, deltaY }))),
+				),
 			drag: (from, to) => op("tab.drag()", actionOpMs, sig => this.#drag(from, to, sig)),
 			waitFor: (selector, opts) => {
 				const w = waitMs(opts?.timeout);
@@ -1164,8 +1426,11 @@ export class WorkerCore {
 				op("tab.evaluate()", INF, sig =>
 					untilAborted(sig, () =>
 						typeof fn === "string"
-							? page.evaluate(fn)
-							: page.evaluate(fn as (...a: unknown[]) => unknown, ...args),
+							? page.mainFrame().mainRealm().evaluate(fn)
+							: page
+									.mainFrame()
+									.mainRealm()
+									.evaluate(fn as (...a: unknown[]) => unknown, ...args),
 					),
 				) as never,
 			scrollIntoView: selector =>
@@ -1284,9 +1549,10 @@ export class WorkerCore {
 		const captureMime = `image/${captureType}` as const;
 		let buffer: Buffer;
 		if (opts.selector) {
-			const handle = (await untilAborted(signal, () =>
-				page.$(normalizeSelector(opts.selector!)),
-			)) as ElementHandle | null;
+			const handle =
+				parseAriaRefSelector(opts.selector) !== null
+					? await this.#resolveAriaRef(opts.selector)
+					: asElementHandle(await untilAborted(signal, () => page.$(normalizeSelector(opts.selector!))));
 			if (!handle) throw new ToolError("Screenshot selector did not resolve to an element");
 			try {
 				// Bring the element into view with a single instant scroll instead of puppeteer's
@@ -1359,9 +1625,10 @@ export class WorkerCore {
 			role: "from" | "to",
 		): Promise<{ x: number; y: number; handle?: ElementHandle }> => {
 			if (typeof target === "string") {
-				const handle = (await untilAborted(signal, () =>
-					page.$(normalizeSelector(target)),
-				)) as ElementHandle | null;
+				const handle =
+					parseAriaRefSelector(target) !== null
+						? await this.#resolveAriaRef(target)
+						: asElementHandle(await untilAborted(signal, () => page.$(normalizeSelector(target))));
 				if (!handle) throw new ToolError(`Drag ${role} selector did not resolve: ${target}`);
 				const box = (await untilAborted(signal, () => handle.boundingBox())) as {
 					x: number;
@@ -1402,10 +1669,7 @@ export class WorkerCore {
 	}
 
 	async #select(selector: string, values: string[], timeoutMs: number, signal: AbortSignal): Promise<string[]> {
-		const page = this.#requirePage();
-		const handle = (await untilAborted(signal, () =>
-			page.locator(normalizeSelector(selector)).setTimeout(timeoutMs).waitHandle({ signal }),
-		)) as ElementHandle;
+		const handle = await this.#resolveActionHandle(selector, timeoutMs, signal);
 		try {
 			return (await untilAborted(signal, () =>
 				handle.evaluate((el, vals) => {
@@ -1424,10 +1688,17 @@ export class WorkerCore {
 						globalThis as unknown as { Event: new (type: string, init?: { bubbles: boolean }) => unknown }
 					).Event;
 					const wanted = new Set(vals as string[]);
-					const selected: string[] = [];
+					// Assign the full selection first, then read back: on a single
+					// <select>, un-selecting the current option mid-loop leaves the
+					// browser reporting it selected until another option takes over,
+					// which double-counted the old value in the returned list.
 					for (let i = 0; i < select.options.length; i++) {
 						const opt = select.options[i] as SelectOption;
 						opt.selected = wanted.has(opt.value);
+					}
+					const selected: string[] = [];
+					for (let i = 0; i < select.options.length; i++) {
+						const opt = select.options[i] as SelectOption;
 						if (opt.selected) selected.push(opt.value);
 					}
 					select.dispatchEvent(new EventCtor("input", { bubbles: true }));
@@ -1448,10 +1719,7 @@ export class WorkerCore {
 		session: SessionSnapshot,
 	): Promise<void> {
 		if (!filePaths.length) throw new ToolError("tab.uploadFile() requires at least one file path");
-		const page = this.#requirePage();
-		const handle = (await untilAborted(signal, () =>
-			page.locator(normalizeSelector(selector)).setTimeout(timeoutMs).waitHandle({ signal }),
-		)) as ElementHandle;
+		const handle = await this.#resolveActionHandle(selector, timeoutMs, signal);
 		try {
 			const absolute = filePaths.map(filePath => resolveToCwd(filePath, session.cwd));
 			const upload = handle as unknown as { uploadFile: (...paths: string[]) => Promise<void> };
@@ -1551,6 +1819,22 @@ export class WorkerCore {
 		this.#elementCache.clear();
 		this.#elementCounter = 0;
 		for (const handle of handles) void handle.dispose().catch(() => undefined);
+	}
+
+	/** Best-effort `Page.stopLoading` so an abandoned navigation cannot stall later ops. */
+	async #stopLoading(): Promise<void> {
+		try {
+			const session = await this.#requirePage().createCDPSession();
+			try {
+				await session.send("Page.stopLoading");
+			} finally {
+				await session.detach().catch(() => undefined);
+			}
+		} catch (error) {
+			this.#log("debug", "Page.stopLoading failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
 	}
 
 	async #close(): Promise<void> {

@@ -18,6 +18,7 @@ import {
 	type AgentRunRequest,
 	AgentServerMessageSchema,
 	ExecServerMessageSchema,
+	McpArgsSchema,
 	ReadArgsSchema,
 } from "@oh-my-pi/pi-catalog/discovery/cursor-gen/agent_pb";
 
@@ -34,9 +35,23 @@ const cursorModel: Model<"cursor-agent"> = buildModel({
 	maxTokens: 1,
 });
 
-function captureCursorPayload(context: Context): Promise<AgentRunRequest> {
+const cursorMaxModeModel: Model<"cursor-agent"> = buildModel({
+	id: "cursor-composer-2.5-max",
+	name: "Cursor Composer 2.5 Max",
+	api: "cursor-agent",
+	provider: "cursor",
+	baseUrl: "",
+	reasoning: false,
+	input: ["text"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 1,
+	maxTokens: 1,
+	cursorMaxMode: true,
+});
+
+function captureCursorPayload(context: Context, model: Model<"cursor-agent"> = cursorModel): Promise<AgentRunRequest> {
 	const { promise, resolve, reject } = Promise.withResolvers<AgentRunRequest>();
-	streamCursor(cursorModel, context, {
+	streamCursor(model, context, {
 		apiKey: "test-token",
 		onPayload: payload => {
 			if (isAgentRunRequest(payload)) {
@@ -174,6 +189,19 @@ describe("Cursor request action encoding", () => {
 		});
 
 		expect(payload.action?.action.case).toBe("userMessageAction");
+	});
+
+	it("sends Cursor max-mode metadata on model details and requested model", async () => {
+		const payload = await captureCursorPayload(
+			{
+				messages: [{ role: "user", content: "continue", timestamp: 0 }],
+			},
+			cursorMaxModeModel,
+		);
+
+		expect(payload.modelDetails?.maxMode).toBe(true);
+		expect(payload.requestedModel?.modelId).toBe("cursor-composer-2.5-max");
+		expect(payload.requestedModel?.maxMode).toBe(true);
 	});
 
 	it("uses a resume action when a tool result is the final context message", async () => {
@@ -407,6 +435,7 @@ function newBlockState(): BlockState {
 		get currentToolCall() {
 			return toolCall;
 		},
+		resolvedMcpToolCallIds: new Set(),
 		firstTokenTime: undefined,
 		setTextBlock: b => {
 			textBlock = b;
@@ -485,6 +514,60 @@ describe("Cursor exec local-work tracking (issue #4593)", () => {
 		expect(stream.hasPendingLocalWork).toBe(false);
 		// The read result went back out on the exec channel.
 		expect(written.length).toBe(1);
+	});
+
+	it("marks an MCP call as resolved before its streamed block arrives", async () => {
+		const output = cursorAssistantMessage();
+		const stream = new AssistantMessageEventStream();
+		const state = newBlockState();
+		const h2Request = { write: () => true } as unknown as Parameters<typeof handleServerMessage>[5];
+		const serverMsg = create(AgentServerMessageSchema, {
+			message: {
+				case: "execServerMessage",
+				value: create(ExecServerMessageSchema, {
+					id: 1,
+					execId: "exec-mcp-1",
+					message: {
+						case: "mcpArgs",
+						value: create(McpArgsSchema, {
+							name: "mcp__fixture_report",
+							toolName: "mcp__fixture_report",
+							toolCallId: "call-mcp-1",
+							providerIdentifier: "pi-agent",
+						}),
+					},
+				}),
+			},
+		});
+		const execHandlers: CursorExecHandlers = {
+			async mcp(args) {
+				return {
+					role: "toolResult",
+					toolCallId: args.toolCallId,
+					toolName: args.toolName,
+					content: [{ type: "text", text: "reported" }],
+					isError: false,
+					timestamp: 1,
+				};
+			},
+		};
+
+		await handleServerMessage(
+			serverMsg,
+			output,
+			stream,
+			state,
+			new Map(),
+			h2Request,
+			execHandlers,
+			undefined,
+			{
+				sawTokenDelta: false,
+			},
+			[],
+		);
+
+		expect(state.resolvedMcpToolCallIds.has("call-mcp-1")).toBe(true);
 	});
 
 	it("survives a local exec tool outliving the lazy idle budget end to end", async () => {

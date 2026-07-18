@@ -184,6 +184,42 @@ describe("task live progress rendering", () => {
 		expect(collapsedText).not.toContain("line 1");
 		expect(collapsedText).not.toContain("raw output:");
 	});
+	it("sanitizes control sequences from expanded subagent recent output", () => {
+		setViewportRows(40);
+		const progress = makeProgress(["safe after \x1b[2Kclear", "raw\rprompt"]);
+
+		const text = renderProgressText(progress, true, uiTheme);
+
+		expect(text).toContain("safe after clear");
+		expect(text).toContain("rawprompt");
+		expect(text).not.toContain("\x1b[2K");
+		expect(text).not.toContain("\r");
+	});
+	it("sanitizes control sequences from finalized subagent results", () => {
+		const output = JSON.stringify({ "\x1b[2Kkey": "safe value" });
+		const details: TaskToolDetails = {
+			projectAgentsDir: null,
+			results: [
+				makeSingleResult(0, {
+					id: "Final\x1b[2KAgent",
+					description: "description\rtext",
+					aborted: true,
+					abortReason: "aborted \x1b[2Kreason",
+					output,
+				}),
+			],
+			totalDurationMs: 1,
+		};
+
+		const text = renderResultText(details, true, uiTheme);
+
+		expect(text).toContain("FinalAgent");
+		expect(text).toContain("descriptiontext");
+		expect(text).toContain("aborted reason");
+		expect(text).toContain("key");
+		expect(text).not.toContain("\x1b[2K");
+		expect(text).not.toContain("\r");
+	});
 
 	it("caps collapsed nested task progress at four rows plus an elision line", () => {
 		setViewportRows(40);

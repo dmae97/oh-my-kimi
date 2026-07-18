@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Reused a live stats dashboard on the requested port and reclaimed only confirmed stale omp stats listeners instead of failing with `EADDRINUSE` ([#5970](https://github.com/can1357/oh-my-pi/issues/5970)).
+
+## [17.0.2] - 2026-07-17
+
+### Fixed
+
+- Fixed the Recent Errors list to honor the selected dashboard time range before returning the newest 50 failures.
+
+## [16.4.7] - 2026-07-12
+
+### Fixed
+
+- Fixed a `SQLITE_CONSTRAINT_NOTNULL` crash (`messages.stop_reason`) aborting the entire session sync when a persisted assistant message lacks a `stopReason`. Malformed entries — missing stop reason, token counts, or message timestamp — are now coerced at the parser boundary, and entries with no usage or model attribution are skipped instead of failing the batch insert.
+
 ## [16.4.2] - 2026-07-10
 
 ### Fixed

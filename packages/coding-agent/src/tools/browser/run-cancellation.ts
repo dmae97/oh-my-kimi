@@ -1,5 +1,5 @@
 import { untilAborted } from "@oh-my-pi/pi-utils";
-import { throwIfAborted } from "../tool-errors";
+import { ToolError, throwIfAborted } from "../tool-errors";
 
 /**
  * Marks a run-scoped promise as observed without changing its behavior for awaited callers.
@@ -16,12 +16,72 @@ export function markHandled<T>(promise: Promise<T>): Promise<T> {
 	return promise;
 }
 
-/** Sleeps inside evaluated browser code while honoring the owning run's cancellation signal. */
-export function waitForBrowserRun(ms: number, signal: AbortSignal): Promise<void> {
-	const promise = (async (): Promise<void> => {
+/** Headroom subtracted from the cell budget so an in-run deadline fires before the opaque whole-cell timeout. */
+export const CELL_BUDGET_SLACK_MS = 1_000;
+
+/** Default poll deadline for `wait(predicate)` before clamping to the cell budget. */
+export const DEFAULT_PREDICATE_TIMEOUT_MS = 30_000;
+
+/** Options for the predicate form of the run-scoped `wait()` helper. */
+export interface WaitPredicateOptions {
+	/** Max time to poll before failing, in ms (default 30s, clamped to the cell budget). */
+	timeout?: number;
+	/** Poll interval in ms (default 100, floor 10). */
+	interval?: number;
+}
+
+/**
+ * Effective `wait(predicate)` deadline for a given cell budget. Always strictly below
+ * the cell budget so the named `wait(predicate) timed out` error wins the race against
+ * the opaque whole-cell "Browser code execution timed out". `0`/`Infinity` ("disable")
+ * map to the largest bounded deadline; negative/NaN garbage falls back to the default.
+ */
+export function resolvePredicateTimeout(cellTimeoutMs: number, explicit?: number): number {
+	const budgetBound = Math.max(1, cellTimeoutMs - CELL_BUDGET_SLACK_MS);
+	if (explicit === 0 || explicit === Number.POSITIVE_INFINITY) return budgetBound;
+	if (explicit !== undefined && Number.isFinite(explicit) && explicit > 0) return Math.min(explicit, budgetBound);
+	return Math.min(DEFAULT_PREDICATE_TIMEOUT_MS, budgetBound);
+}
+
+/**
+ * Run-scoped `wait()` helper for evaluated browser code, honoring the owning run's
+ * cancellation signal.
+ *
+ * - `wait(ms)` sleeps for `ms` milliseconds.
+ * - `wait(fn, { timeout?, interval? })` polls `fn` (sync or async) until it returns a
+ *   truthy value and resolves with that value; throws a named `ToolError` on timeout
+ *   instead of stalling into the whole-cell deadline. Predicate errors propagate.
+ */
+export function waitForBrowserRun(
+	msOrPredicate: number | (() => unknown),
+	signal: AbortSignal,
+	opts?: WaitPredicateOptions,
+): Promise<unknown> {
+	const promise = (async (): Promise<unknown> => {
 		throwIfAborted(signal);
-		await untilAborted(signal, () => Bun.sleep(ms));
-		throwIfAborted(signal);
+		if (typeof msOrPredicate === "number") {
+			await untilAborted(signal, async () => await Bun.sleep(msOrPredicate));
+			throwIfAborted(signal);
+			return undefined;
+		}
+		if (typeof msOrPredicate !== "function") {
+			throw new ToolError("wait(...) expects milliseconds (number) or a predicate function to poll");
+		}
+		const timeout =
+			opts?.timeout !== undefined && Number.isFinite(opts.timeout) && opts.timeout > 0
+				? opts.timeout
+				: DEFAULT_PREDICATE_TIMEOUT_MS;
+		const interval = Math.max(opts?.interval ?? 100, 10);
+		const deadline = Date.now() + timeout;
+		for (;;) {
+			const value = await untilAborted(signal, async () => await msOrPredicate());
+			throwIfAborted(signal);
+			if (value) return value;
+			if (Date.now() + interval > deadline) {
+				throw new ToolError(`wait(predicate) timed out after ${timeout}ms — predicate never returned truthy`);
+			}
+			await untilAborted(signal, async () => await Bun.sleep(interval));
+		}
 	})();
 	return markHandled(promise);
 }

@@ -210,7 +210,8 @@ export async function executeHashlineSingle(
 		batchRequest: options.batchRequest,
 	});
 	const snapshots = getFileSnapshotStore(options.session);
-	const patcher = new Patcher({ fs, snapshots, blockResolver: nativeBlockResolver });
+	const enforceSeenLines = options.session.settings.get("edit.enforceSeenLines");
+	const patcher = new Patcher({ fs, snapshots, blockResolver: nativeBlockResolver, enforceSeenLines });
 
 	// Single-section fast path: prepare, commit, render.
 	const inputHash = hashPatchInput(options.input);

@@ -59,6 +59,12 @@ export type WorkerInitPayload =
 			safeDir: string;
 			targetId: string;
 			dialogs?: "accept" | "dismiss";
+			/**
+			 * Post-timeout recycle: before adopting the page, dismiss any open JS dialog and
+			 * stop a pending navigation so a blocked target cannot stall worker init (which
+			 * previously force-killed the tab). Never set for first-time Electron attach.
+			 */
+			recover?: boolean;
 	  };
 
 export type ToolReply = { ok: true; value: unknown } | { ok: false; error: RunErrorPayload };
@@ -89,6 +95,8 @@ export interface RunErrorPayload {
 	stack?: string;
 	isToolError: boolean;
 	isAbort: boolean;
+	/** The worker could not restore tab-scoped browser state and must be recycled. */
+	recoverTab?: boolean;
 }
 
 export type WorkerOutbound =

@@ -1,4 +1,5 @@
 import type { ElementHandle, JSHandle, Page } from "puppeteer-core";
+import { ToolError } from "../../tool-errors";
 import ariaBundle from "./aria-snapshot.bundle.txt" with { type: "text" };
 // `aria-snapshot.bundle.txt` is a generated, committed artifact: Playwright's
 // injected ARIA-snapshot sources (pinned, Apache-2.0) bundled to a CJS module.
@@ -69,15 +70,41 @@ export async function resolveAriaRefHandle(page: Page, ref: string): Promise<Ele
 const ARIA_REF_PREFIXES = ["aria-ref=", "aria-ref/", "ariaref/"];
 
 /**
- * Recognize the explicit `[ref=eN]` selector forms and return the bare ref id,
- * else null. Accepts `aria-ref=e5` (Playwright-MCP style), `aria-ref/e5`, and
- * `ariaref/e5` — lets `tab.click("aria-ref=e5")` etc. act on snapshot refs. A
- * bare `e5` is intentionally NOT a ref selector: the cmux backend already uses
- * bare `eN`/`@eN` for its own observe ids, so requiring the prefix keeps action
- * selectors meaning the same thing on both backends. (`tab.ref("e5")` still
- * accepts a bare id directly.)
+ * Guard the selector funnels: `tab.click`/`type`/`fill`/`waitFor*`/`scrollIntoView`
+ * take string selectors only, but user `run` code routinely passes the ElementHandle
+ * from `tab.id(n)`/`tab.ref(...)` (or an un-awaited Promise of one) straight in.
+ * Without this the value reaches `.trim()`/`.startsWith()` and throws the opaque,
+ * minified `A.trim is not a function` instead of a recovery-naming ToolError.
+ */
+export function assertSelectorString(selector: unknown): asserts selector is string {
+	if (typeof selector === "string") return;
+	let kind: string;
+	if (selector !== null && typeof selector === "object") {
+		kind =
+			"then" in selector && typeof selector.then === "function" ? "a Promise (missing await?)" : "an ElementHandle";
+	} else {
+		kind = `a ${typeof selector}`;
+	}
+	throw new ToolError(
+		`Browser selector must be a string; got ${kind}. ` +
+			"tab.click/type/fill/waitFor take string selectors only — " +
+			'call the handle method directly (e.g. (await tab.id(n)).click()) or pass a string like "aria-ref=eN".',
+	);
+}
+
+/**
+ * Recognize a snapshot-ref selector and return the bare ref id, else null.
+ * Accepts `aria-ref=e5` (Playwright-MCP style), `aria-ref/e5`, `ariaref/e5`,
+ * and bare `e5`/`@e5`: agents copy ids straight out of the snapshot YAML
+ * (`[ref=e5]`), so `tab.click("e5")` must act on the ref instead of falling
+ * through to a CSS tag selector that can never match. Bare ids are safe to
+ * claim here — an eN tag name is not real HTML, and the tab-worker backend's
+ * observe ids are numeric (`tab.id(7)`), so refs are its only eN namespace.
+ * (The cmux backend parses selectors itself and routes bare `eN` to its own
+ * observe ids; either way `eN` means "the id from the last page dump".)
  */
 export function parseAriaRefSelector(selector: string): string | null {
+	assertSelectorString(selector);
 	const trimmed = selector.trim();
 	for (const prefix of ARIA_REF_PREFIXES) {
 		if (trimmed.startsWith(prefix)) {
@@ -85,7 +112,8 @@ export function parseAriaRefSelector(selector: string): string | null {
 			return /^e\d+$/.test(id) ? id : null;
 		}
 	}
-	return null;
+	const bare = /^@?(e\d+)$/.exec(trimmed);
+	return bare ? bare[1]! : null;
 }
 
 /**

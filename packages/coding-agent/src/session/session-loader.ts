@@ -252,6 +252,15 @@ async function resolvePersistedBlobRefs(value: unknown, blobStore: BlobStore, ke
 	}
 
 	if (typeof value !== "object" || value === null) return;
+	if (
+		"type" in value &&
+		value.type === "image_generation_call" &&
+		"result" in value &&
+		typeof value.result === "string" &&
+		isBlobRef(value.result)
+	) {
+		value.result = await resolveImageData(blobStore, value.result);
+	}
 
 	if (hasImageUrl(value) && isBlobRef(value.image_url)) {
 		value.image_url = await resolveImageDataUrl(blobStore, value.image_url);
@@ -262,10 +271,38 @@ async function resolvePersistedBlobRefs(value: unknown, blobStore: BlobStore, ke
 	);
 }
 
+/**
+ * Cheap synchronous precheck: does this value's tree contain any `blob:sha256:` string?
+ * Early-exits on the first hit and allocates no promises, so blob-free entries skip the
+ * async {@link resolvePersistedBlobRefs} descent entirely. Conservative — a blob ref in a
+ * non-resolved position still returns true, which only costs an extra (no-op) walk.
+ */
+function containsBlobRef(value: unknown): boolean {
+	if (typeof value === "string") return isBlobRef(value);
+	if (Array.isArray(value)) {
+		for (const item of value) {
+			if (containsBlobRef(item)) return true;
+		}
+		return false;
+	}
+	if (typeof value !== "object" || value === null) return false;
+	for (const key in value) {
+		if (containsBlobRef((value as Record<string, unknown>)[key])) return true;
+	}
+	return false;
+}
+
 export async function resolveBlobRefsInEntries(entries: FileEntry[], blobStore: BlobStore): Promise<void> {
-	await Promise.all(
-		entries.filter(entry => entry.type !== "session").map(entry => resolvePersistedBlobRefs(entry, blobStore)),
-	);
+	const pending: Promise<void>[] = [];
+	// Interleave precheck + initiation per entry so a positive entry begins resolution at the same
+	// relative point as the old filter+map schedule (no scan-all-first pass that could observe a
+	// later entry before an earlier resolution mutates it).
+	for (const entry of entries) {
+		if (entry.type === "session") continue;
+		if (!containsBlobRef(entry)) continue;
+		pending.push(resolvePersistedBlobRefs(entry, blobStore));
+	}
+	await Promise.all(pending);
 }
 
 /**

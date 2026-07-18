@@ -60,7 +60,7 @@ describe("createExtensionModelQuery", () => {
 			getModelRole: (role: string) => (role === "slow" ? "anthropic/claude-opus-4-8" : undefined),
 		} as unknown as Settings;
 		const q = createExtensionModelQuery(registry(), settings, () => undefined);
-		expect(q.resolve("pi/slow")).toBe(claude);
+		expect(q.resolve("@slow")).toBe(claude);
 	});
 
 	test("family() groups a vendor's point releases and separates vendors", () => {

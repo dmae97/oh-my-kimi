@@ -342,6 +342,63 @@ describe("boundary-balance repair", () => {
 		expect(text).toBe(["setup();", "a();", "B();", "C();"].join("\n"));
 		expect(warnings.some(warning => /boundary echo/.test(warning))).toBe(true);
 	});
+	// A one-sided echo whose payload cannot fill the widened range is rejected,
+	// not repaired: dropping the echo would silently delete the range's far
+	// boundary line (here the `return threadError(...)`), leaving a dangling
+	// `if`. The PyThreadRuntime incident: SWAP 654.=655 restating line 653.
+	it("rejects a leading keeper echo when the payload cannot fill the widened range", () => {
+		const file = [
+			"{",
+			"    auto* handle = payloadFor<PyThreadHandle>(self);",
+			"    if (!handle)",
+			'        return threadError(globalObject, "thread not started");',
+			"    handle->setDone();",
+			"}",
+		].join("\n");
+		const diff = [
+			"SWAP 3.=4:",
+			"+    auto* handle = payloadFor<PyThreadHandle>(self);",
+			"+    if (!handle || !handle->isStarted())",
+		].join("\n");
+		expect(() => apply(file, diff)).toThrow(/rejected: the body opens by restating/);
+	});
+
+	// Mirror direction: trailing echo, payload one line short of the widened
+	// range — repairing would delete `c();` even though the payload never
+	// mentions it.
+	it("rejects a trailing keeper echo when the payload cannot fill the widened range", () => {
+		const file = ["a();", "b();", "c();", "keep();"].join("\n");
+		const diff = ["SWAP 2.=3:", "+B();", "+keep();"].join("\n");
+		expect(() => apply(file, diff)).toThrow(/rejected: the body ends by restating/);
+	});
+
+	// A statement swapped onto a lone closer at the closer's own depth claims
+	// no position inside the block: sparing the closer would land the payload
+	// after `return;` as dead code. The PyThreadRuntime setIdent incident:
+	// SWAP 718.=718 on the `}` of an early-return block.
+	it("rejects sparing a deleted closer when the payload claims no position inside the block", () => {
+		const file = [
+			"        if (!global) {",
+			"            handle->setDone();",
+			"            return;",
+			"        }",
+			"        handle->setIdent(currentIdent());",
+		].join("\n");
+		const diff = ["SWAP 4.=4:", "+        after();"].join("\n");
+		expect(() => apply(file, diff)).toThrow(/before or after the closer is ambiguous/);
+	});
+
+	// Contrast with the rejection above: a payload indented deeper than the
+	// spared closer claims the inside of the block, so the spare still fires.
+	it("still spares a closer when the payload indentation claims the block interior", () => {
+		const file = ["if (!global) {", "    setDone();", "    return;", "}", "after();"].join("\n");
+		const diff = ["SWAP 4.=4:", "+    setIdent();"].join("\n");
+		const { text, warnings } = apply(file, diff);
+		expect(text).toBe(
+			["if (!global) {", "    setDone();", "    return;", "    setIdent();", "}", "after();"].join("\n"),
+		);
+		expect(warnings.filter(warning => /structural closing line/.test(warning))).toHaveLength(1);
+	});
 	// #3142: the range's deleted `}` is matched by an opener another hunk deletes
 	// (`DEL 1`). The patch nets to balanced, so the closer must stay deleted —
 	// the per-group repair wrongly kept it, leaving a stray `}`.
@@ -550,8 +607,8 @@ describe("boundary-balance repair through stale-snapshot recovery", () => {
 	// Recovery composes `applyEdits` to compute the intended change, so the
 	// boundary repair runs there too. The snapshot (what the model read)
 	// carries the structure; the live file has drifted far from the edit
-	// region, so the stale-hash 3-way merge succeeds and the repaired
-	// (de-duplicated) hunk lands without doubling the closer.
+	// region, so anchor recovery succeeds and the repaired (de-duplicated)
+	// hunk lands without doubling the closer.
 	it("de-duplicates a closer while recovering from a drifted file", () => {
 		const snapshotLines = [
 			'import { x } from "y";',
@@ -571,7 +628,7 @@ describe("boundary-balance repair through stale-snapshot recovery", () => {
 		];
 		const snapshotText = `${snapshotLines.join("\n")}\n`;
 		// Live file drifted only at the tail (line 13) — far outside the edit
-		// region (lines 4-6), so the 3-way merge applies cleanly.
+		// region (lines 4-6), so unchanged-anchor recovery succeeds.
 		const currentText = snapshotText.replace("const tail = 0;", "const tail = 99;");
 
 		const store = new InMemorySnapshotStore();

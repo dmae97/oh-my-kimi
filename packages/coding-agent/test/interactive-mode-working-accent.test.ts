@@ -96,11 +96,15 @@ describe("InteractiveMode working-message session accent cache", () => {
 		const getHex = vi.spyOn(sessionColor, "getSessionAccentHex");
 		const getAnsi = vi.spyOn(sessionColor, "getSessionAccentAnsi");
 
+		// Colorizers run lazily at render time (loader layout cache); the accent
+		// computation is observable only after a render.
 		startStableLoader(mode);
+		renderLoader(mode);
 		expect(getHex).toHaveBeenCalledTimes(1);
 		expect(getAnsi).toHaveBeenCalledTimes(2);
 
 		mode.loadingAnimation?.setMessage("Still working");
+		renderLoader(mode);
 		expect(getHex).toHaveBeenCalledTimes(1);
 		expect(getAnsi).toHaveBeenCalledTimes(2);
 	});
@@ -130,13 +134,13 @@ describe("InteractiveMode working-message session accent cache", () => {
 		const getHex = vi.spyOn(sessionColor, "getSessionAccentHex");
 
 		startStableLoader(mode);
-		expect(getHex).toHaveBeenCalledTimes(1);
 		expect(renderLoader(mode)).toContain(initialAnsi);
+		expect(getHex).toHaveBeenCalledTimes(1);
 
 		await sessionManager.setSessionName(renamedName, "user");
 		mode.loadingAnimation?.setMessage("Renamed session");
-		expect(getHex).toHaveBeenCalledTimes(2);
 		expect(renderLoader(mode)).toContain(renamedAnsi);
+		expect(getHex).toHaveBeenCalledTimes(2);
 	});
 
 	it("keys cached accents by theme accent-surface luminance", async () => {
@@ -147,6 +151,7 @@ describe("InteractiveMode working-message session accent cache", () => {
 
 		try {
 			startStableLoader(mode);
+			renderLoader(mode);
 			expect(getHex).toHaveBeenCalledTimes(1);
 			expect(getHex.mock.calls[0]).toEqual([sessionName, theme.getMajorThemeColorHexes(), undefined]);
 
@@ -154,6 +159,7 @@ describe("InteractiveMode working-message session accent cache", () => {
 			const restoreLight = shadowAccentSurfaceLuminance(0.72);
 			try {
 				mode.loadingAnimation?.setMessage("Light theme");
+				renderLoader(mode);
 				expect(getHex).toHaveBeenCalledTimes(2);
 				expect(getHex.mock.calls[1]).toEqual([sessionName, theme.getMajorThemeColorHexes(), 0.72]);
 			} finally {
@@ -179,17 +185,17 @@ describe("InteractiveMode working-message session accent cache", () => {
 		const getHex = vi.spyOn(sessionColor, "getSessionAccentHex");
 
 		startStableLoader(mode);
-		expect(getHex).toHaveBeenCalledTimes(1);
 		expect(renderLoader(mode)).toContain(accentAnsi);
+		expect(getHex).toHaveBeenCalledTimes(1);
 
 		settings.set("statusLine.sessionAccent", false);
 		mode.loadingAnimation?.setMessage("Accent disabled");
-		expect(getHex).toHaveBeenCalledTimes(1);
 		expect(renderLoader(mode)).not.toContain(accentAnsi);
+		expect(getHex).toHaveBeenCalledTimes(1);
 
 		settings.set("statusLine.sessionAccent", true);
 		mode.loadingAnimation?.setMessage("Accent enabled");
-		expect(getHex).toHaveBeenCalledTimes(2);
 		expect(renderLoader(mode)).toContain(accentAnsi);
+		expect(getHex).toHaveBeenCalledTimes(2);
 	});
 });

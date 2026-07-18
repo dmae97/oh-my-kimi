@@ -13,16 +13,35 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 SCALAR_TYPES = {
-    1: "double", 2: "float", 3: "int64", 4: "uint64", 5: "int32",
-    6: "fixed64", 7: "fixed32", 8: "bool", 9: "string", 10: "group",
-    11: "message", 12: "bytes", 13: "uint32", 14: "enum",
-    15: "sfixed32", 16: "sfixed64", 17: "sint32", 18: "sint64",
+    1: "double",
+    2: "float",
+    3: "int64",
+    4: "uint64",
+    5: "int32",
+    6: "fixed64",
+    7: "fixed32",
+    8: "bool",
+    9: "string",
+    10: "group",
+    11: "message",
+    12: "bytes",
+    13: "uint32",
+    14: "enum",
+    15: "sfixed32",
+    16: "sfixed64",
+    17: "sint32",
+    18: "sint64",
 }
 
 WEBPACK_NOISE = [
-    '__webpack_require__', 'harmony export', 'harmony import',
-    'use strict', 'WEBPACK_IMPORTED_MODULE', 'binding',
+    "__webpack_require__",
+    "harmony export",
+    "harmony import",
+    "use strict",
+    "WEBPACK_IMPORTED_MODULE",
+    "binding",
 ]
+
 
 @dataclass
 class FieldDef:
@@ -36,11 +55,13 @@ class FieldDef:
     oneof: Optional[str] = None
     map_key: Optional[int] = None
 
+
 @dataclass
 class MessageDef:
     type_name: str
     fields: list[FieldDef] = field(default_factory=list)
     comment: str = ""
+
 
 @dataclass
 class EnumValueDef:
@@ -48,11 +69,13 @@ class EnumValueDef:
     no: int
     comment: str = ""
 
+
 @dataclass
 class EnumDef:
     type_name: str
     values: list[EnumValueDef] = field(default_factory=list)
     comment: str = ""
+
 
 @dataclass
 class MethodDef:
@@ -62,11 +85,13 @@ class MethodDef:
     kind: str
     comment: str = ""
 
+
 @dataclass
 class ServiceDef:
     type_name: str
     methods: list[MethodDef] = field(default_factory=list)
     comment: str = ""
+
 
 @dataclass
 class ProtoFile:
@@ -90,24 +115,24 @@ def extract_jsdoc_comment(text: str) -> str:
         return ""
 
     lines = []
-    for line in text.split('\n'):
+    for line in text.split("\n"):
         line = line.strip()
-        if line.startswith('*'):
+        if line.startswith("*"):
             line = line[1:].strip()
-        if line.startswith('/**') or line.endswith('*/'):
+        if line.startswith("/**") or line.endswith("*/"):
             continue
-        if '@generated' in line:
+        if "@generated" in line:
             continue
         if is_webpack_noise(line):
             continue
-        if line.startswith('case:') or '= { case:' in line:
+        if line.startswith("case:") or "= { case:" in line:
             continue
-        if line == '/' or line == '//' or len(line) <= 2:
+        if line == "/" or line == "//" or len(line) <= 2:
             continue
         if line:
             lines.append(line)
 
-    result = ' '.join(lines)
+    result = " ".join(lines)
     if is_webpack_noise(result):
         return ""
     if len(result) <= 2:
@@ -117,16 +142,16 @@ def extract_jsdoc_comment(text: str) -> str:
 
 def parse_type_reference(rest: str) -> str:
     """Parse the T: field to extract the type reference."""
-    webpack_comment = re.search(r'T:\s*[^,]+/\*\s*\.?(\w+)\s*\*/', rest)
+    webpack_comment = re.search(r"T:\s*[^,]+/\*\s*\.?(\w+)\s*\*/", rest)
     if webpack_comment:
         return webpack_comment.group(1)
 
-    type_match = re.search(r'T:\s*(\d+|[A-Za-z_][A-Za-z0-9_]*)', rest)
+    type_match = re.search(r"T:\s*(\d+|[A-Za-z_][A-Za-z0-9_]*)", rest)
     if type_match:
         t = type_match.group(1)
         if t.isdigit():
             return SCALAR_TYPES.get(int(t), f"scalar_{t}")
-        if is_webpack_noise(t) or t.startswith('_'):
+        if is_webpack_noise(t) or t.startswith("_"):
             return "unknown"
         return t
 
@@ -136,23 +161,31 @@ def parse_type_reference(rest: str) -> str:
 def parse_field_list(fields_str: str, field_comments: dict[str, str]) -> list[FieldDef]:
     """Parse the fields array from newFieldList."""
     fields = []
-    pattern = r'\{\s*no:\s*(\d+)\s*,\s*name:\s*"([^"]+)"\s*,\s*kind:\s*"([^"]+)"([^}]*)\}'
+    pattern = (
+        r'\{\s*no:\s*(\d+)\s*,\s*name:\s*"([^"]+)"\s*,\s*kind:\s*"([^"]+)"([^}]*)\}'
+    )
 
     for m in re.finditer(pattern, fields_str):
         no, name, kind, rest = int(m.group(1)), m.group(2), m.group(3), m.group(4)
         type_ref = parse_type_reference(rest)
 
-        fields.append(FieldDef(
-            no=no,
-            name=name,
-            kind=kind,
-            type_ref=type_ref,
-            comment=field_comments.get(name, ""),
-            opt='opt: true' in rest,
-            repeated='repeated: true' in rest,
-            oneof=m2.group(1) if (m2 := re.search(r'oneof:\s*"([^"]+)"', rest)) else None,
-            map_key=int(m2.group(1)) if (m2 := re.search(r'mapKey:\s*(\d+)', rest)) else None,
-        ))
+        fields.append(
+            FieldDef(
+                no=no,
+                name=name,
+                kind=kind,
+                type_ref=type_ref,
+                comment=field_comments.get(name, ""),
+                opt="opt: true" in rest,
+                repeated="repeated: true" in rest,
+                oneof=m2.group(1)
+                if (m2 := re.search(r'oneof:\s*"([^"]+)"', rest))
+                else None,
+                map_key=int(m2.group(1))
+                if (m2 := re.search(r"mapKey:\s*(\d+)", rest))
+                else None,
+            )
+        )
 
     return fields
 
@@ -160,19 +193,23 @@ def parse_field_list(fields_str: str, field_comments: dict[str, str]) -> list[Fi
 def extract_field_comments(class_body: str) -> dict[str, str]:
     """Extract field comments from class property declarations."""
     comments = {}
-    pattern = r'/\*\*([\s\S]*?)@generated from field:[^*]*\*/\s*\n?\s*(\w+)'
+    pattern = r"/\*\*([\s\S]*?)@generated from field:[^*]*\*/\s*\n?\s*(\w+)"
 
     for m in re.finditer(pattern, class_body):
         comment_text = extract_jsdoc_comment(m.group(1))
         field_name_camel = m.group(2)
-        field_name_snake = re.sub(r'([A-Z])', r'_\1', field_name_camel).lower().lstrip('_')
+        field_name_snake = (
+            re.sub(r"([A-Z])", r"_\1", field_name_camel).lower().lstrip("_")
+        )
         if comment_text and not is_webpack_noise(comment_text):
             comments[field_name_snake] = comment_text
 
     return comments
 
 
-def find_file_for_pos(file_ranges: dict[str, list[tuple[int, int]]], pos: int) -> str | None:
+def find_file_for_pos(
+    file_ranges: dict[str, list[tuple[int, int]]], pos: int
+) -> str | None:
     """Find which file a position belongs to."""
     for fp, segments in file_ranges.items():
         for start, end in segments:
@@ -181,19 +218,21 @@ def find_file_for_pos(file_ranges: dict[str, list[tuple[int, int]]], pos: int) -
     return None
 
 
-def extract_messages(content: str, file_ranges: dict[str, list[tuple[int, int]]]) -> dict[str, list[MessageDef]]:
+def extract_messages(
+    content: str, file_ranges: dict[str, list[tuple[int, int]]]
+) -> dict[str, list[MessageDef]]:
     """Extract all message definitions grouped by file."""
     messages_by_file: dict[str, list[MessageDef]] = {}
     seen_types: set[str] = set()
 
     pattern = re.compile(
-        r'/\*\*([\s\S]*?)@generated from message ([^\s*]+)[\s\S]*?\*/'
-        r'[\s\S]*?class (\w+) extends [^{]+\{'
-        r'([\s\S]*?)'
+        r"/\*\*([\s\S]*?)@generated from message ([^\s*]+)[\s\S]*?\*/"
+        r"[\s\S]*?class (\w+) extends [^{]+\{"
+        r"([\s\S]*?)"
         r'static typeName\s*=\s*"([^"]+)"'
-        r'[\s\S]*?'
-        r'static fields\s*=\s*[^(]+\(\(\)\s*=>\s*\[([\s\S]*?)\]\)',
-        re.MULTILINE
+        r"[\s\S]*?"
+        r"static fields\s*=\s*[^(]+\(\(\)\s*=>\s*\[([\s\S]*?)\]\)",
+        re.MULTILINE,
     )
 
     for m in pattern.finditer(content):
@@ -218,16 +257,18 @@ def extract_messages(content: str, file_ranges: dict[str, list[tuple[int, int]]]
     return messages_by_file
 
 
-def extract_enums(content: str, file_ranges: dict[str, list[tuple[int, int]]]) -> dict[str, list[EnumDef]]:
+def extract_enums(
+    content: str, file_ranges: dict[str, list[tuple[int, int]]]
+) -> dict[str, list[EnumDef]]:
     """Extract all enum definitions grouped by file."""
     enums_by_file: dict[str, list[EnumDef]] = {}
     seen_types: set[str] = set()
 
     enum_block_pattern = re.compile(
-        r'/\*\*([\s\S]*?)@generated from enum ([^\s*]+)[\s\S]*?\*/'
-        r'[\s\S]*?'
+        r"/\*\*([\s\S]*?)@generated from enum ([^\s*]+)[\s\S]*?\*/"
+        r"[\s\S]*?"
         r'setEnumType\([^,]+,\s*"([^"]+)",\s*\[([\s\S]*?)\]\)',
-        re.MULTILINE
+        re.MULTILINE,
     )
 
     for m in enum_block_pattern.finditer(content):
@@ -257,24 +298,26 @@ def extract_enums(content: str, file_ranges: dict[str, list[tuple[int, int]]]) -
 
 def resolve_webpack_type(ref: str) -> str:
     """Resolve a webpack type reference like 'agent_service_pb/* AgentClientMessage */.KS'."""
-    webpack_comment = re.search(r'/\*\s*(\w+)\s*\*/', ref)
+    webpack_comment = re.search(r"/\*\s*(\w+)\s*\*/", ref)
     if webpack_comment:
         return webpack_comment.group(1)
-    parts = ref.replace(',', '').strip().split('.')
+    parts = ref.replace(",", "").strip().split(".")
     return parts[-1] if parts else ref
 
 
-def extract_services(content: str, file_ranges: dict[str, list[tuple[int, int]]]) -> dict[str, list[ServiceDef]]:
+def extract_services(
+    content: str, file_ranges: dict[str, list[tuple[int, int]]]
+) -> dict[str, list[ServiceDef]]:
     """Extract all service definitions grouped by file."""
     services_by_file: dict[str, list[ServiceDef]] = {}
     seen_types: set[str] = set()
 
     service_pattern = re.compile(
-        r'/\*\*([^*]|\*[^/])*@generated from service ([^\s*]+)([^*]|\*[^/])*\*/'
-        r'\s*(?:const|var)\s+\w+\s*=\s*\{'
+        r"/\*\*([^*]|\*[^/])*@generated from service ([^\s*]+)([^*]|\*[^/])*\*/"
+        r"\s*(?:const|var)\s+\w+\s*=\s*\{"
         r'[^}]*typeName:\s*"([^"]+)"'
-        r'[^}]*methods:\s*\{([\s\S]*?)\}\s*\}',
-        re.MULTILINE
+        r"[^}]*methods:\s*\{([\s\S]*?)\}\s*\}",
+        re.MULTILINE,
     )
 
     for m in service_pattern.finditer(content):
@@ -293,31 +336,33 @@ def extract_services(content: str, file_ranges: dict[str, list[tuple[int, int]]]
 
         # Extract comment from the match text before @generated
         full_match = m.group(0)
-        comment_end = full_match.find('@generated')
+        comment_end = full_match.find("@generated")
         comment_text = full_match[3:comment_end] if comment_end > 0 else ""
         comment = extract_jsdoc_comment(comment_text)
 
         methods = []
         method_pattern = re.compile(
-            r'/\*\*([\s\S]*?)@generated from rpc [^\s*]+\.(\w+)[\s\S]*?\*/'
-            r'\s*\w+:\s*\{'
+            r"/\*\*([\s\S]*?)@generated from rpc [^\s*]+\.(\w+)[\s\S]*?\*/"
+            r"\s*\w+:\s*\{"
             r'[^}]*name:\s*"([^"]+)"'
-            r'[^}]*I:\s*([^,]+),'
-            r'[^}]*O:\s*([^,]+),'
-            r'[^}]*kind:\s*[^.]+\.(\w+)',
-            re.MULTILINE
+            r"[^}]*I:\s*([^,]+),"
+            r"[^}]*O:\s*([^,]+),"
+            r"[^}]*kind:\s*[^.]+\.(\w+)",
+            re.MULTILINE,
         )
 
         for mm in method_pattern.finditer(methods_str):
             method_comment, _, name, input_ref, output_ref, kind = mm.groups()
 
-            methods.append(MethodDef(
-                name=name,
-                input_type=resolve_webpack_type(input_ref),
-                output_type=resolve_webpack_type(output_ref),
-                kind=kind,
-                comment=extract_jsdoc_comment(method_comment),
-            ))
+            methods.append(
+                MethodDef(
+                    name=name,
+                    input_type=resolve_webpack_type(input_ref),
+                    output_type=resolve_webpack_type(output_ref),
+                    kind=kind,
+                    comment=extract_jsdoc_comment(method_comment),
+                )
+            )
 
         svc = ServiceDef(type_name=type_name, methods=methods, comment=comment)
         services_by_file.setdefault(file_path, []).append(svc)
@@ -332,7 +377,7 @@ def find_file_ranges(content: str) -> dict[str, tuple[int, int]]:
     We collect all ranges and merge them so all occurrences are captured.
     """
     file_pattern = re.compile(
-        r'// @generated from file ([^\s]+) \(package ([^,]+), syntax (\w+)\)'
+        r"// @generated from file ([^\s]+) \(package ([^,]+), syntax (\w+)\)"
     )
 
     matches = list(file_pattern.finditer(content))
@@ -373,7 +418,7 @@ def field_to_proto(f: FieldDef, indent: str = "   ") -> str:
             prefix = "repeated "
         lines.append(f"{indent}{prefix}{f.type_ref} {f.name} = {f.no};")
 
-    return '\n'.join(lines)
+    return "\n".join(lines)
 
 
 def get_simple_name(type_name: str) -> str:
@@ -381,10 +426,10 @@ def get_simple_name(type_name: str) -> str:
 
     Handles nested types like 'agent.v1.Outer.Inner' by converting to 'Outer_Inner'.
     """
-    parts = type_name.split('.')
+    parts = type_name.split(".")
     # Skip the package prefix (e.g., 'agent.v1')
     if len(parts) > 2:
-        return '_'.join(parts[2:])
+        return "_".join(parts[2:])
     return parts[-1]
 
 
@@ -419,7 +464,7 @@ def message_to_proto(msg: MessageDef, indent: str = "") -> str:
         lines.append(f"{indent}   }}")
 
     lines.append(f"{indent}}}")
-    return '\n'.join(lines)
+    return "\n".join(lines)
 
 
 def enum_to_proto(enum: EnumDef, indent: str = "") -> str:
@@ -436,7 +481,7 @@ def enum_to_proto(enum: EnumDef, indent: str = "") -> str:
             lines.append(f"{indent}   // {v.comment}")
         lines.append(f"{indent}   {v.name} = {v.no};")
     lines.append(f"{indent}}}")
-    return '\n'.join(lines)
+    return "\n".join(lines)
 
 
 def service_to_proto(svc: ServiceDef, indent: str = "") -> str:
@@ -456,34 +501,36 @@ def service_to_proto(svc: ServiceDef, indent: str = "") -> str:
         stream_in = "stream " if m.kind in ("ClientStreaming", "BiDiStreaming") else ""
         stream_out = "stream " if m.kind in ("ServerStreaming", "BiDiStreaming") else ""
 
-        lines.append(f"{indent}   rpc {m.name}({stream_in}{m.input_type}) returns ({stream_out}{m.output_type});")
+        lines.append(
+            f"{indent}   rpc {m.name}({stream_in}{m.input_type}) returns ({stream_out}{m.output_type});"
+        )
 
     lines.append(f"{indent}}}")
-    return '\n'.join(lines)
+    return "\n".join(lines)
 
 
 def generate_proto_file(proto: ProtoFile) -> str:
     """Generate complete proto file content."""
     lines = [
         f'syntax = "{proto.syntax}";',
-        '',
-        f'package {proto.package};',
-        '',
+        "",
+        f"package {proto.package};",
+        "",
     ]
 
     for enum in proto.enums:
         lines.append(enum_to_proto(enum))
-        lines.append('')
+        lines.append("")
 
     for msg in proto.messages:
         lines.append(message_to_proto(msg))
-        lines.append('')
+        lines.append("")
 
     for svc in proto.services:
         lines.append(service_to_proto(svc))
-        lines.append('')
+        lines.append("")
 
-    return '\n'.join(lines)
+    return "\n".join(lines)
 
 
 def main():
@@ -499,11 +546,11 @@ def main():
 
     filter_pkg = None
     for arg in sys.argv[3:]:
-        if arg.startswith('--filter='):
-            filter_pkg = arg.split('=')[1]
+        if arg.startswith("--filter="):
+            filter_pkg = arg.split("=")[1]
 
     print(f"Reading {input_file}...", file=sys.stderr)
-    with open(input_file, 'r', encoding='utf-8', errors='replace') as f:
+    with open(input_file, "r", encoding="utf-8", errors="replace") as f:
         content = f.read()
 
     print(f"File size: {len(content) / 1024 / 1024:.2f} MB", file=sys.stderr)
@@ -522,7 +569,7 @@ def main():
     services_by_file = extract_services(content, file_ranges)
 
     file_pattern = re.compile(
-        r'// @generated from file ([^\s]+) \(package ([^,]+), syntax (\w+)\)'
+        r"// @generated from file ([^\s]+) \(package ([^,]+), syntax (\w+)\)"
     )
 
     # Collect all messages, enums, services into one consolidated proto
@@ -569,7 +616,10 @@ def main():
     proto_content = generate_proto_file(consolidated)
     output_file.write_text(proto_content)
 
-    print(f"\nTotal: {len(all_messages)} messages, {len(all_enums)} enums, {len(all_services)} services", file=sys.stderr)
+    print(
+        f"\nTotal: {len(all_messages)} messages, {len(all_enums)} enums, {len(all_services)} services",
+        file=sys.stderr,
+    )
     print(f"Output written to: {output_file}", file=sys.stderr)
 
 

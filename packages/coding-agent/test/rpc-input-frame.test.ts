@@ -1,15 +1,27 @@
 import { describe, expect, test } from "bun:test";
+import { RpcHostToolBridge } from "@oh-my-pi/pi-coding-agent/modes/rpc/host-tools";
 import {
 	dispatchRpcInputFrame,
 	type PendingExtensionRequest,
+	RpcInputDispatcher,
 	type RpcInputFrameDeps,
+	RpcPendingExtensionRequests,
 	RpcShutdownCoordinator,
 } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-mode";
-import type { RpcCommand, RpcResponse } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
+import type {
+	RpcCommand,
+	RpcExtensionUIResponse,
+	RpcHostToolCallRequest,
+	RpcHostToolCancelRequest,
+	RpcResponse,
+} from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 
 type OutputFrame = RpcResponse | object;
 
-const makeDeps = (handleCommand: RpcInputFrameDeps["handleCommand"]) => {
+const makeDeps = (
+	handleCommand: RpcInputFrameDeps["handleCommand"],
+	options?: { pendingExtensionRequests?: Map<string, PendingExtensionRequest> },
+) => {
 	const outputs: OutputFrame[] = [];
 	const deps: RpcInputFrameDeps = {
 		handleCommand,
@@ -23,7 +35,7 @@ const makeDeps = (handleCommand: RpcInputFrameDeps["handleCommand"]) => {
 			success: false,
 			error: message,
 		}),
-		pendingExtensionRequests: new Map<string, PendingExtensionRequest>(),
+		pendingExtensionRequests: options?.pendingExtensionRequests ?? new Map<string, PendingExtensionRequest>(),
 		onHostToolResult: () => {},
 		onHostToolUpdate: () => {},
 		onHostUriResult: () => {},
@@ -32,6 +44,21 @@ const makeDeps = (handleCommand: RpcInputFrameDeps["handleCommand"]) => {
 };
 
 const flushMicrotasks = () => new Promise<void>(resolve => setImmediate(resolve));
+
+const requestExtensionInput = (deps: RpcInputFrameDeps, id: string, message: string) => {
+	const response = Promise.withResolvers<RpcExtensionUIResponse>();
+	deps.pendingExtensionRequests.set(id, {
+		resolve: response.resolve,
+		reject: error => response.reject(error),
+	});
+	deps.output({
+		type: "extension_ui_request",
+		id,
+		method: "input",
+		message,
+	});
+	return response.promise;
+};
 
 const cancelledBashResponse = (id: string): RpcResponse => ({
 	id,
@@ -199,6 +226,301 @@ describe("dispatchRpcInputFrame", () => {
 		await trackedTask;
 
 		expect(outputs).toEqual([bashResponse]);
+	});
+});
+
+describe("RpcInputDispatcher", () => {
+	test("control frames resolve extension UI requests while an ordinary command is active", async () => {
+		let depsRef: RpcInputFrameDeps;
+		const { deps, outputs } = makeDeps(async command => {
+			if (command.type !== "prompt") throw new Error(`unexpected command type: ${command.type}`);
+			const response = await requestExtensionInput(depsRef, "ui-active", "Continue?");
+			return {
+				id: command.id,
+				type: "response",
+				command: "prompt",
+				success: true,
+				data: { agentInvoked: "value" in response && response.value === "continue" },
+			};
+		});
+		depsRef = deps;
+		const dispatcher = new RpcInputDispatcher({ deps });
+
+		dispatcher.dispatch({ id: "prompt-1", type: "prompt", message: "ask extension" });
+		await flushMicrotasks();
+
+		expect(outputs).toEqual([
+			{
+				type: "extension_ui_request",
+				id: "ui-active",
+				method: "input",
+				message: "Continue?",
+			},
+		]);
+
+		dispatcher.dispatch({ type: "extension_ui_response", id: "ui-active", value: "continue" });
+		await dispatcher.drain();
+
+		expect(outputs).toEqual([
+			{
+				type: "extension_ui_request",
+				id: "ui-active",
+				method: "input",
+				message: "Continue?",
+			},
+			{
+				id: "prompt-1",
+				type: "response",
+				command: "prompt",
+				success: true,
+				data: { agentInvoked: true },
+			},
+		]);
+	});
+
+	test("malformed frames emit a parse error without ending the input reader", () => {
+		const { deps, outputs } = makeDeps(async command => ({
+			id: command.id,
+			type: "response",
+			command: "prompt",
+			success: true,
+			data: { agentInvoked: false },
+		}));
+		const dispatcher = new RpcInputDispatcher({ deps });
+
+		dispatcher.dispatch(null);
+
+		expect(outputs).toEqual([
+			expect.objectContaining({
+				type: "response",
+				command: "parse",
+				success: false,
+				error: expect.stringContaining("Failed to parse command:"),
+			}),
+		]);
+	});
+
+	test("ordinary commands stay serialized while first command is blocked", async () => {
+		const releaseFirst = Promise.withResolvers<void>();
+		const started: string[] = [];
+		const { deps, outputs } = makeDeps(async command => {
+			started.push(command.type);
+			if (command.type === "abort_retry") {
+				await releaseFirst.promise;
+				return { id: command.id, type: "response", command: "abort_retry", success: true };
+			}
+			if (command.type === "get_state") {
+				return {
+					id: command.id,
+					type: "response",
+					command: "get_state",
+					success: true,
+					data: {
+						thinkingLevel: undefined,
+						isStreaming: false,
+						isCompacting: false,
+						steeringMode: "all",
+						followUpMode: "all",
+						interruptMode: "immediate",
+						sessionId: "session-1",
+						autoCompactionEnabled: false,
+						messageCount: 0,
+						queuedMessageCount: 0,
+						todoPhases: [],
+					},
+				};
+			}
+			throw new Error(`unexpected command type: ${command.type}`);
+		});
+		const dispatcher = new RpcInputDispatcher({ deps });
+
+		dispatcher.dispatch({ id: "first", type: "abort_retry" });
+		dispatcher.dispatch({ id: "second", type: "get_state" });
+		await flushMicrotasks();
+
+		expect(started).toEqual(["abort_retry"]);
+		expect(outputs).toHaveLength(0);
+
+		releaseFirst.resolve();
+		await dispatcher.drain();
+
+		expect(started).toEqual(["abort_retry", "get_state"]);
+		expect((outputs[0] as RpcResponse).id).toBe("first");
+		expect((outputs[1] as RpcResponse).id).toBe("second");
+		expect((outputs[1] as RpcResponse).command).toBe("get_state");
+	});
+
+	test("serial command rejection emits an error response and does not poison the queue", async () => {
+		const started: string[] = [];
+		const { deps, outputs } = makeDeps(async command => {
+			started.push(command.type);
+			if (command.type === "abort_retry") throw new Error("retry controller exploded");
+			if (command.type === "set_auto_retry") {
+				return { id: command.id, type: "response", command: "set_auto_retry", success: true };
+			}
+			throw new Error(`unexpected command type: ${command.type}`);
+		});
+		const dispatcher = new RpcInputDispatcher({ deps });
+
+		dispatcher.dispatch({ id: "bad", type: "abort_retry" });
+		dispatcher.dispatch({ id: "next", type: "set_auto_retry", enabled: true });
+		await dispatcher.drain();
+
+		expect(started).toEqual(["abort_retry", "set_auto_retry"]);
+		expect(outputs).toEqual([
+			{
+				id: "bad",
+				type: "response",
+				command: "abort_retry",
+				success: false,
+				error: "retry controller exploded",
+			},
+			{
+				id: "next",
+				type: "response",
+				command: "set_auto_retry",
+				success: true,
+			},
+		]);
+	});
+
+	test("drain after EOF rejects active and queued host tool requests without emitting new calls", async () => {
+		const disconnectMessage = "RPC client disconnected before host tool execution completed";
+		const hostToolFrames: Array<RpcHostToolCallRequest | RpcHostToolCancelRequest> = [];
+		const bridge = new RpcHostToolBridge(frame => {
+			hostToolFrames.push(frame);
+		});
+		const [tool] = bridge.setTools([
+			{
+				name: "host_wait",
+				description: "Waits for host process",
+				parameters: {
+					type: "object",
+					properties: {},
+					additionalProperties: false,
+				},
+			},
+		]);
+		const started: string[] = [];
+		const { deps, outputs } = makeDeps(async command => {
+			if (command.type !== "prompt") throw new Error(`unexpected command type: ${command.type}`);
+			started.push(command.id ?? "");
+			await tool.execute(`toolu_${command.id}`, {});
+			return {
+				id: command.id,
+				type: "response",
+				command: "prompt",
+				success: true,
+				data: { agentInvoked: true },
+			};
+		});
+		const dispatcher = new RpcInputDispatcher({ deps });
+
+		dispatcher.dispatch({ id: "active", type: "prompt", message: "active host tool" });
+		dispatcher.dispatch({ id: "queued", type: "prompt", message: "queued host tool" });
+		await flushMicrotasks();
+
+		expect(started).toEqual(["active"]);
+		expect(hostToolFrames).toHaveLength(1);
+		expect(hostToolFrames[0]).toMatchObject({
+			type: "host_tool_call",
+			toolCallId: "toolu_active",
+			toolName: "host_wait",
+			arguments: {},
+		});
+
+		bridge.close(disconnectMessage);
+		await dispatcher.drain();
+
+		expect(started).toEqual(["active", "queued"]);
+		expect(hostToolFrames).toHaveLength(1);
+		expect(outputs).toEqual([
+			{
+				id: "active",
+				type: "response",
+				command: "prompt",
+				success: false,
+				error: disconnectMessage,
+			},
+			{
+				id: "queued",
+				type: "response",
+				command: "prompt",
+				success: false,
+				error: disconnectMessage,
+			},
+		]);
+	});
+
+	test("drain after EOF rejects active and future extension UI requests", async () => {
+		const disconnectMessage = "RPC client disconnected before extension UI response completed";
+		const pendingExtensionRequests = new RpcPendingExtensionRequests();
+		const started: string[] = [];
+		let depsRef: RpcInputFrameDeps;
+		const { deps, outputs } = makeDeps(
+			async command => {
+				if (command.type !== "prompt") throw new Error(`unexpected command type: ${command.type}`);
+				started.push(command.id ?? "");
+				await requestExtensionInput(depsRef, `${command.id}-dialog`, command.message);
+				return {
+					id: command.id,
+					type: "response",
+					command: "prompt",
+					success: true,
+					data: { agentInvoked: true },
+				};
+			},
+			{ pendingExtensionRequests },
+		);
+		depsRef = deps;
+		const dispatcher = new RpcInputDispatcher({ deps });
+
+		dispatcher.dispatch({ id: "active", type: "prompt", message: "active dialog" });
+		dispatcher.dispatch({ id: "queued", type: "prompt", message: "queued dialog" });
+		await flushMicrotasks();
+
+		expect(started).toEqual(["active"]);
+		expect(outputs).toEqual([
+			{
+				type: "extension_ui_request",
+				id: "active-dialog",
+				method: "input",
+				message: "active dialog",
+			},
+		]);
+
+		pendingExtensionRequests.rejectAll(disconnectMessage);
+		await dispatcher.drain();
+
+		expect(started).toEqual(["active", "queued"]);
+		expect(outputs).toEqual([
+			{
+				type: "extension_ui_request",
+				id: "active-dialog",
+				method: "input",
+				message: "active dialog",
+			},
+			{
+				id: "active",
+				type: "response",
+				command: "prompt",
+				success: false,
+				error: disconnectMessage,
+			},
+			{
+				type: "extension_ui_request",
+				id: "queued-dialog",
+				method: "input",
+				message: "queued dialog",
+			},
+			{
+				id: "queued",
+				type: "response",
+				command: "prompt",
+				success: false,
+				error: disconnectMessage,
+			},
+		]);
 	});
 });
 

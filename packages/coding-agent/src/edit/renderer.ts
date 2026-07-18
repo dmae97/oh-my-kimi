@@ -423,22 +423,25 @@ function formatStreamingDiff(
 	cache?: RenderedStringCache,
 ): string {
 	if (!diff) return "";
-	// Clamp the collapsed tail to the viewport so a tall or fast-growing diff
-	// cannot outgrow the live window. Otherwise its mutating tail scrolls above
-	// the native-scrollback commit boundary and the engine re-commits a fresh
-	// snapshot every streamed frame, stacking duplicate "… more lines above"
-	// previews in history. The budget is VISUAL rows (a long wrapped line counts
+	// Clamp the tail to the viewport so a tall or fast-growing diff cannot
+	// outgrow the live window. Otherwise its mutating rows scroll above the
+	// native-scrollback commit boundary mid-stream and freeze into immutable
+	// history as a stale preview snapshot; the finalize repair then recommits
+	// the final render below it — a duplicated block on the tape. Collapsed
+	// gets a short fixed tail; expanded widens it to the viewport-sized window,
+	// never unbounded. The budget is VISUAL rows (a long wrapped line counts
 	// for more than one) at the framed block's inner width (border only —
-	// contentPaddingLeft is 0); only the visible suffix is syntax-colored, so the
-	// cheap raw-line wrap walk keeps the per-chunk cost bounded. innerWidth/budget
-	// are in the cache salt so a resize re-slices.
+	// contentPaddingLeft is 0); only the visible suffix is syntax-colored, so
+	// the cheap raw-line wrap walk keeps the per-chunk cost bounded.
+	// innerWidth/budget are in the cache salt so a resize re-slices.
 	const innerWidth = Math.max(1, width - 2);
-	const budget = expanded ? Number.POSITIVE_INFINITY : Math.min(EDIT_STREAMING_PREVIEW_LINES, previewWindowRows());
+	const budget = expanded ? previewWindowRows() : Math.min(EDIT_STREAMING_PREVIEW_LINES, previewWindowRows());
 	let text = cachedRenderedString(cache, uiTheme, expanded, `${rawPath}:${innerWidth}:${budget}`, diff, () => {
 		// "Cursor" tail window: pin the last rows to the bottom so freshly streamed
 		// changes stay on screen. The whole-file diff is recomputed every chunk and
 		// its Myers alignment is not monotonic in payload length, so a hunk-aware
-		// window stutters as rows move between hunks. Expanded lifts the cap.
+		// window stutters as rows move between hunks. Expanded widens the window
+		// to the viewport; the full diff appears once the result finalizes.
 		const allLines = diff.replace(/\n+$/u, "").split("\n");
 		let visualUsed = 0;
 		let cut = allLines.length;

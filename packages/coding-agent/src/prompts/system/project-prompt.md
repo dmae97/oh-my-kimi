@@ -7,14 +7,14 @@ PROJECT
 </workstation>
 
 {{#if contextFiles.length}}
-<context>
+<repo-rules>
 You MUST follow the context files below for all tasks:
 {{#each contextFiles}}
 <file path="{{path}}">
 {{content}}
 </file>
 {{/each}}
-</context>
+</repo-rules>
 {{/if}}
 
 {{#if agentsMdSearch.files.length}}

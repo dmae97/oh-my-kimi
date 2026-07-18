@@ -622,6 +622,41 @@ async fn create_session_for_run(
 		shell.register_builtin("fd", crate::fd::fd_builtin());
 		shell.register_builtin("cat", crate::coreutils::cat_builtin());
 		shell.register_builtin("uniq", crate::coreutils::uniq_builtin());
+		shell.register_builtin("base64", crate::coreutils::base64_builtin());
+		shell.register_builtin("md5sum", crate::coreutils::md5sum_builtin());
+		shell.register_builtin("sha1sum", crate::coreutils::sha1sum_builtin());
+		shell.register_builtin("sha224sum", crate::coreutils::sha224sum_builtin());
+		shell.register_builtin("sha256sum", crate::coreutils::sha256sum_builtin());
+		shell.register_builtin("sha384sum", crate::coreutils::sha384sum_builtin());
+		shell.register_builtin("sha512sum", crate::coreutils::sha512sum_builtin());
+		shell.register_builtin("b2sum", crate::coreutils::b2sum_builtin());
+		shell.register_builtin("basename", crate::coreutils::basename_builtin());
+		shell.register_builtin("dirname", crate::coreutils::dirname_builtin());
+		shell.register_builtin("readlink", crate::coreutils::readlink_builtin());
+		shell.register_builtin("realpath", crate::coreutils::realpath_builtin());
+		shell.register_builtin("touch", crate::coreutils::touch_builtin());
+		shell.register_builtin("stat", crate::coreutils::stat_builtin());
+		shell.register_builtin("date", crate::coreutils::date_builtin());
+		shell.register_builtin("mktemp", crate::coreutils::mktemp_builtin());
+		shell.register_builtin("seq", crate::coreutils::seq_builtin());
+		shell.register_builtin("yes", crate::coreutils::yes_builtin());
+		shell.register_builtin("printenv", crate::coreutils::printenv_builtin());
+		shell.register_builtin("truncate", crate::coreutils::truncate_builtin());
+		shell.register_builtin("tac", crate::coreutils::tac_builtin());
+		shell.register_builtin("nproc", crate::coreutils::nproc_builtin());
+		shell.register_builtin("uname", crate::coreutils::uname_builtin());
+		shell.register_builtin("whoami", crate::coreutils::whoami_builtin());
+		shell.register_builtin("hostname", crate::coreutils::hostname_builtin());
+		shell.register_builtin("which", crate::which::which_builtin());
+		shell.register_builtin("diff", crate::coreutils::diff_builtin());
+		shell.register_builtin("cut", crate::coreutils::cut_builtin());
+		shell.register_builtin("tee", crate::coreutils::tee_builtin());
+		shell.register_builtin("tr", crate::coreutils::tr_builtin());
+		shell.register_builtin("paste", crate::coreutils::paste_builtin());
+		shell.register_builtin("comm", crate::coreutils::comm_builtin());
+		shell.register_builtin("sed", crate::coreutils::sed_builtin());
+		shell.register_builtin("xargs", crate::coreutils::xargs_builtin());
+		shell.register_builtin("jq", crate::coreutils::jq_builtin());
 		if !uutils_env_disabled(config, "PI_DISABLE_UUTILS_DESTRUCTIVE") {
 			if !uutils_env_disabled(config, "PI_DISABLE_RM_BUILTIN") {
 				shell.register_builtin("rm", crate::coreutils::rm_builtin());
@@ -629,6 +664,8 @@ async fn create_session_for_run(
 			if !uutils_env_disabled(config, "PI_DISABLE_MV_BUILTIN") {
 				shell.register_builtin("mv", crate::coreutils::mv_builtin());
 			}
+			// ln can clobber existing files via -f; gate it with the destructive set.
+			shell.register_builtin("ln", crate::coreutils::ln_builtin());
 		}
 	}
 
@@ -1104,11 +1141,16 @@ async fn run_shell_command_once(
 			}
 		}
 	});
+	// Let pipeline consumers flush output after cancellation kills their
+	// producers. The outer run cancellation remains bounded, and this delayed
+	// fallback still releases readers whose writers never close.
+	const CANCEL_READER_GRACE: Duration = Duration::from_millis(500);
 	let cancel_bridge = tokio::spawn({
 		let cancel_token = cancel_token.clone();
 		let reader_cancel = reader_cancel.clone();
 		async move {
 			cancel_token.cancelled().await;
+			time::sleep(CANCEL_READER_GRACE).await;
 			reader_cancel.cancel();
 		}
 	});
@@ -2168,6 +2210,50 @@ mod tests {
 		let _ = std::fs::remove_dir_all(&tmp);
 	}
 
+	/// Regression test for issue #5819: `mkdir -p ~/proj/{a,b}` must create both
+	/// `a` and `b` under `$HOME/proj`. Brace expansion runs before tilde
+	/// expansion and previously left every element after the first with a
+	/// literal `~`, so `b` was created as `./~/proj/b` in the shell cwd instead.
+	#[tokio::test(flavor = "multi_thread")]
+	async fn uutils_mkdir_expands_tilde_for_every_brace_element() {
+		let base = std::env::temp_dir().join(format!("pi-mkdir-brace-{}", std::process::id()));
+		let home = base.join("home");
+		let cwd = base.join("cwd");
+		let _ = std::fs::remove_dir_all(&base);
+		std::fs::create_dir_all(&home).expect("home dir");
+		std::fs::create_dir_all(&cwd).expect("cwd dir");
+		let cwd_str = cwd.to_str().expect("utf8 cwd path");
+
+		let mut env = HashMap::new();
+		env.insert("HOME".to_string(), home.to_string_lossy().to_string());
+		let config =
+			ShellConfig { session_env: Some(env), snapshot_path: None, minimizer: None };
+		let mut session = create_session(&config).await.expect("create_session");
+		session.shell.set_working_dir(cwd_str).expect("set cwd");
+
+		let mut params = session.shell.default_exec_params();
+		params.set_fd(OpenFiles::STDIN_FD, null_file().expect("null"));
+		params.set_fd(OpenFiles::STDOUT_FD, null_file().expect("null"));
+		params.set_fd(OpenFiles::STDERR_FD, null_file().expect("null"));
+
+		let source_info = SourceInfo::from("pi-natives:test");
+		let exec = session
+			.shell
+			.run_string("mkdir -p ~/proj/{a,b}", &source_info, &params)
+			.await
+			.expect("run_string");
+		assert!(matches!(exec.exit_code, ExecutionExitCode::Success), "exit {}", exit_code(&exec));
+
+		// Both elements' tildes expanded: dirs land under $HOME/proj.
+		assert!(home.join("proj/a").is_dir(), "~/proj/a not created under HOME");
+		assert!(home.join("proj/b").is_dir(), "~/proj/b not created under HOME");
+		// The buggy path created a literal `~` tree in the shell cwd.
+		assert!(!cwd.join("~").exists(), "literal ~ tree leaked into cwd");
+		assert!(!cwd.join("a").exists(), "unexpanded element leaked into cwd");
+
+		let _ = std::fs::remove_dir_all(&base);
+	}
+
 	/// `mkdir --help` and an invalid flag must be handled in-process: rendered
 	/// to the command streams and returned as an exit code. The upstream
 	/// `uumain` parser calls `std::process::exit`, which would terminate the
@@ -2848,6 +2934,142 @@ mod tests {
 		let _ = std::fs::remove_dir_all(&tmp);
 	}
 
+	/// The vendored `sed` builtin must stream pipeline stdin through scripts and
+	/// perform `-i` in-place edits (with backup suffix) against the shell
+	/// working directory rather than the host process cwd.
+	#[tokio::test(flavor = "multi_thread")]
+	async fn uutils_sed_substitutes_streams_and_edits_in_place() {
+		let tmp = std::env::temp_dir().join(format!("pi-sed-{}", std::process::id()));
+		let _ = std::fs::remove_dir_all(&tmp);
+		std::fs::create_dir_all(&tmp).expect("temp dir");
+		std::fs::write(tmp.join("conf.txt"), "x=1\n").expect("conf");
+		let tmp_str = tmp.to_str().expect("utf8");
+
+		let config = ShellConfig { session_env: None, snapshot_path: None, minimizer: None };
+		let mut session = create_session(&config).await.expect("create_session");
+		session.shell.set_working_dir(tmp_str).expect("cwd");
+		let mut params = session.shell.default_exec_params();
+		params.set_fd(OpenFiles::STDIN_FD, null_file().expect("null"));
+		params.set_fd(OpenFiles::STDOUT_FD, null_file().expect("null"));
+		params.set_fd(OpenFiles::STDERR_FD, null_file().expect("null"));
+		let si = SourceInfo::from("pi-natives:test");
+		let read = |name: &str| std::fs::read_to_string(tmp.join(name)).unwrap_or_default();
+
+		// Piped stdin through a quiet substitute-and-print script.
+		session
+			.shell
+			.run_string("printf 'hello\\nworld\\n' | sed -n 's/hello/HI/p' > sed.txt", &si, &params)
+			.await
+			.expect("sed pipeline");
+		assert_eq!(read("sed.txt"), "HI\n");
+		// In-place edit of a cwd-relative operand, keeping the requested backup.
+		session
+			.shell
+			.run_string("sed -i.bak 's/1/2/' conf.txt", &si, &params)
+			.await
+			.expect("sed -i");
+		assert_eq!(read("conf.txt"), "x=2\n", "in-place edit must land in the shell cwd");
+		assert_eq!(read("conf.txt.bak"), "x=1\n", "backup must keep the original");
+
+		let _ = std::fs::remove_dir_all(&tmp);
+	}
+
+	/// The `xargs` builtin spawns real child processes, but their stdout must
+	/// flow back into the shell pipeline (ctx streams, not the host fds), items
+	/// must batch per `-n`, and a failing invocation must surface GNU's 123.
+	#[cfg(unix)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn uutils_xargs_children_feed_pipeline_and_report_failure() {
+		let tmp = std::env::temp_dir().join(format!("pi-xargs-{}", std::process::id()));
+		let _ = std::fs::remove_dir_all(&tmp);
+		std::fs::create_dir_all(&tmp).expect("temp dir");
+		let tmp_str = tmp.to_str().expect("utf8");
+
+		let config = ShellConfig { session_env: None, snapshot_path: None, minimizer: None };
+		let mut session = create_session(&config).await.expect("create_session");
+		session.shell.set_working_dir(tmp_str).expect("cwd");
+		let mut params = session.shell.default_exec_params();
+		params.set_fd(OpenFiles::STDIN_FD, null_file().expect("null"));
+		params.set_fd(OpenFiles::STDOUT_FD, null_file().expect("null"));
+		params.set_fd(OpenFiles::STDERR_FD, null_file().expect("null"));
+		let si = SourceInfo::from("pi-natives:test");
+		let read = |name: &str| std::fs::read_to_string(tmp.join(name)).unwrap_or_default();
+
+		// Default echo action: child stdout is captured into the redirect.
+		session
+			.shell
+			.run_string("printf 'a b c\\n' | xargs > xargs.txt", &si, &params)
+			.await
+			.expect("xargs default");
+		assert_eq!(read("xargs.txt"), "a b c\n");
+		// -n batching, with child output feeding a downstream builtin stage.
+		session
+			.shell
+			.run_string(
+				"printf '1\\n2\\n3\\n4\\n' | xargs -n2 echo | wc -l > batches.txt",
+				&si,
+				&params,
+			)
+			.await
+			.expect("xargs -n2");
+		assert_eq!(read("batches.txt").trim(), "2");
+		// A child exiting 1-125 makes xargs exit 123 (GNU contract).
+		session
+			.shell
+			.run_string("printf 'x\\n' | xargs false; printf %s $? > code.txt", &si, &params)
+			.await
+			.expect("xargs false");
+		assert_eq!(read("code.txt"), "123");
+
+		let _ = std::fs::remove_dir_all(&tmp);
+	}
+
+	/// The `jq` builtin must evaluate filters over piped JSON, resolve file
+	/// operands against the shell working directory, and propagate `-e`'s
+	/// null/false exit status through the shell.
+	#[tokio::test(flavor = "multi_thread")]
+	async fn uutils_jq_filters_json_and_propagates_exit_status() {
+		let tmp = std::env::temp_dir().join(format!("pi-jq-{}", std::process::id()));
+		let _ = std::fs::remove_dir_all(&tmp);
+		std::fs::create_dir_all(&tmp).expect("temp dir");
+		std::fs::write(tmp.join("in.json"), "{\"name\":\"pi\"}\n").expect("in.json");
+		let tmp_str = tmp.to_str().expect("utf8");
+
+		let config = ShellConfig { session_env: None, snapshot_path: None, minimizer: None };
+		let mut session = create_session(&config).await.expect("create_session");
+		session.shell.set_working_dir(tmp_str).expect("cwd");
+		let mut params = session.shell.default_exec_params();
+		params.set_fd(OpenFiles::STDIN_FD, null_file().expect("null"));
+		params.set_fd(OpenFiles::STDOUT_FD, null_file().expect("null"));
+		params.set_fd(OpenFiles::STDERR_FD, null_file().expect("null"));
+		let si = SourceInfo::from("pi-natives:test");
+		let read = |name: &str| std::fs::read_to_string(tmp.join(name)).unwrap_or_default();
+
+		// Compact filter over piped stdin.
+		session
+			.shell
+			.run_string("printf '{\"a\":{\"b\":2}}' | jq -c .a > jq.txt", &si, &params)
+			.await
+			.expect("jq pipeline");
+		assert_eq!(read("jq.txt"), "{\"b\":2}\n");
+		// Raw output from a cwd-relative file operand.
+		session
+			.shell
+			.run_string("jq -r .name in.json > name.txt", &si, &params)
+			.await
+			.expect("jq file");
+		assert_eq!(read("name.txt"), "pi\n");
+		// -e maps a null result to exit status 1.
+		session
+			.shell
+			.run_string("printf 'null' | jq -e . > /dev/null; printf %s $? > code.txt", &si, &params)
+			.await
+			.expect("jq -e");
+		assert_eq!(read("code.txt"), "1");
+
+		let _ = std::fs::remove_dir_all(&tmp);
+	}
+
 	/// A stdin-reading builtin blocked on an open pipe must honor abort/timeout:
 	/// the context's cancel flag makes the read return EOF so the utility
 	/// unwinds promptly and the command reports interrupted (130) — it must not
@@ -3040,6 +3262,20 @@ mod tests {
 		path.push(format!("pi-shell-{prefix}-{}-{nonce}", std::process::id()));
 		std::fs::create_dir_all(&path).expect("create temp dir");
 		path
+	}
+
+	#[cfg(unix)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn uutils_diff_reads_process_substitution_fds() {
+		let (result, output) = time::timeout(
+			Duration::from_secs(5),
+			run_command_capture("diff <(echo a) <(echo b)", None, None, CancelToken::default()),
+		)
+		.await
+		.expect("process substitution should not hang");
+
+		assert_eq!(result.exit_code, Some(1));
+		assert!(output.contains("-a\n+b\n"), "diff output missing changed lines: {output:?}");
 	}
 
 	#[cfg(unix)]

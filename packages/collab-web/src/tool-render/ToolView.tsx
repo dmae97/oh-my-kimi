@@ -36,15 +36,33 @@ function normalizeArgs(raw: unknown): { args: Record<string, unknown>; intent: s
 	return { args, intent };
 }
 
+interface XdevDispatch {
+	tool: string;
+	args: Record<string, unknown>;
+	inner: unknown;
+}
+
+function executeXdevDispatch(props: ToolViewProps): XdevDispatch | null {
+	if (props.name !== "write" || props.result?.isError === true || !isRecord(props.result?.details)) return null;
+	const xdev = props.result.details.xdev;
+	if (!isRecord(xdev) || xdev.mode !== "execute" || typeof xdev.tool !== "string") return null;
+	return { tool: xdev.tool, args: isRecord(xdev.args) ? xdev.args : {}, inner: xdev.inner };
+}
+
 export function ToolView(props: ToolViewProps): ReactNode {
 	const [open, setOpen] = useState(props.defaultOpen ?? false);
+	const xdev = executeXdevDispatch(props);
 	const { args, intent: argIntent } = normalizeArgs(props.args);
 	const intent = props.intent?.trim() || argIntent;
-	const renderer = resolveToolRenderer(props.name);
+	const name = xdev?.tool ?? props.name;
+	const result = xdev
+		? { content: props.result!.content, details: xdev.inner, isError: props.result!.isError }
+		: props.result;
+	const renderer = resolveToolRenderer(name);
 	const renderProps: ToolRenderProps = {
-		name: props.name,
-		args,
-		result: props.result,
+		name,
+		args: xdev?.args ?? args,
+		result,
 		running: props.running,
 		host: props.host,
 	};
@@ -67,7 +85,7 @@ export function ToolView(props: ToolViewProps): ReactNode {
 				) : (
 					<span className={`tv-status tv-status--${status}`} aria-hidden="true" />
 				)}
-				<span className="tv-name">{props.name}</span>
+				<span className="tv-name">{xdev ? `xd://${name}` : name}</span>
 				<span className="tv-sum">
 					<renderer.Summary {...renderProps} />
 				</span>

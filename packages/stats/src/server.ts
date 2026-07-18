@@ -20,6 +20,7 @@ import {
 import { decodeEmbeddedClientArchive } from "./embedded-client";
 import embeddedClientArchiveTxt from "./embedded-client.generated.txt";
 import { getGainDashboardStats } from "./gain-aggregator";
+import { recoverStatsPort, STATS_DASHBOARD_HEADER } from "./port-conflict";
 
 const EMBEDDED_CLIENT_ARCHIVE = decodeEmbeddedClientArchive(embeddedClientArchiveTxt);
 
@@ -184,7 +185,7 @@ const ensureClientBuild = async () => {
 /**
  * Handle API requests.
  */
-async function handleApi(req: Request): Promise<Response> {
+export async function handleApi(req: Request): Promise<Response> {
 	const url = new URL(req.url);
 	const path = url.pathname;
 
@@ -229,7 +230,7 @@ async function handleApi(req: Request): Promise<Response> {
 
 	if (path === "/api/stats/errors") {
 		const limit = url.searchParams.get("limit");
-		const stats = await getRecentErrors(limit ? parseInt(limit, 10) : undefined);
+		const stats = await getRecentErrors(range, limit ? parseInt(limit, 10) : undefined);
 		return Response.json(stats);
 	}
 
@@ -293,23 +294,20 @@ async function handleStatic(requestPath: string): Promise<Response> {
 	return new Response("Not Found", { status: 404 });
 }
 
-/**
- * Start the HTTP server.
- */
-export async function startServer(port = 3847): Promise<{ port: number; stop: () => void }> {
-	await ensureClientBuild();
-
+function createDashboardServer(port: number) {
 	const server = Bun.serve({
 		port,
 		async fetch(req) {
 			const url = new URL(req.url);
 			const path = url.pathname;
 
-			// CORS headers for local development
-			const corsHeaders = {
+			// CORS headers for local development; the identity header lets another
+			// omp session's reuse probe positively recognize this dashboard.
+			const corsHeaders: Record<string, string> = {
 				"Access-Control-Allow-Origin": "*",
 				"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 				"Access-Control-Allow-Headers": "Content-Type",
+				[STATS_DASHBOARD_HEADER]: "1",
 			};
 
 			if (req.method === "OPTIONS") {
@@ -327,8 +325,8 @@ export async function startServer(port = 3847): Promise<{ port: number; stop: ()
 
 				// Add CORS headers to all responses
 				const headers = new Headers(response.headers);
-				for (const [key, value] of Object.entries(corsHeaders)) {
-					headers.set(key, value);
+				for (const key in corsHeaders) {
+					headers.set(key, corsHeaders[key]);
 				}
 
 				return new Response(response.body, {
@@ -344,9 +342,39 @@ export async function startServer(port = 3847): Promise<{ port: number; stop: ()
 			}
 		},
 	});
+	return server;
+}
 
-	return {
-		port: server.port ?? port,
-		stop: () => server.stop(),
-	};
+/**
+ * Start the HTTP server, reusing a live dashboard or reclaiming a stale omp listener.
+ */
+export async function startServer(port = 3847): Promise<{ port: number; stop: () => void }> {
+	await ensureClientBuild();
+
+	try {
+		const server = createDashboardServer(port);
+		return {
+			port: server.port ?? port,
+			stop: () => server.stop(),
+		};
+	} catch (error) {
+		if (!(error instanceof Error && "code" in error && error.code === "EADDRINUSE")) throw error;
+
+		const recovery = await recoverStatsPort(port);
+		if (recovery === "reuse") {
+			return { port, stop: () => {} };
+		}
+
+		try {
+			const server = createDashboardServer(port);
+			return {
+				port: server.port ?? port,
+				stop: () => server.stop(),
+			};
+		} catch (retryError) {
+			throw new Error(`Failed to start stats dashboard on port ${port} after reclaiming it.`, {
+				cause: retryError,
+			});
+		}
+	}
 }

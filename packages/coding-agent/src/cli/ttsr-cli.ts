@@ -15,7 +15,7 @@ import * as path from "node:path";
 import { AstMatchStrictness, astMatch, FileType, type GlobMatch, glob } from "@oh-my-pi/pi-natives";
 import { getProjectDir } from "@oh-my-pi/pi-utils/dirs";
 import chalk from "chalk";
-import { BUILTIN_DEFAULTS_PROVIDER_ID, type Rule, ruleCapability } from "../capability/rule";
+import { BUILTIN_DEFAULTS_PROVIDER_ID, compileRuleCondition, type Rule, ruleCapability } from "../capability/rule";
 import { bucketRules } from "../capability/rule-buckets";
 import { Settings } from "../config/settings";
 import type { TtsrSettings } from "../config/settings-schema";
@@ -173,7 +173,7 @@ async function regexMatches(rule: Rule, snippet: string): Promise<string[]> {
 	const out: string[] = [];
 	for (const pattern of rule.condition ?? []) {
 		try {
-			if (new RegExp(pattern).test(snippet)) out.push(pattern);
+			if (compileRuleCondition(pattern).test(snippet)) out.push(pattern);
 		} catch {
 			// Invalid regex — skip; the manager already warned at registration.
 		}
@@ -569,7 +569,7 @@ function compileScanRulePlans(rules: Rule[]): ScanRulePlan[] {
 		const regexConditions: ScanRegexCondition[] = [];
 		for (const pattern of rule.condition ?? []) {
 			try {
-				regexConditions.push({ pattern, regex: new RegExp(pattern) });
+				regexConditions.push({ pattern, regex: compileRuleCondition(pattern) });
 			} catch {
 				// Same behavior as TtsrManager: invalid regex conditions are unusable.
 			}

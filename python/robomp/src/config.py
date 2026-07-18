@@ -129,6 +129,11 @@ class Settings(BaseSettings):
     rate_limit_default: int = Field(3, alias="ROBOMP_RATE_LIMIT_DEFAULT")
     rate_limit_contributor: int = Field(10, alias="ROBOMP_RATE_LIMIT_CONTRIBUTOR")
     rate_limit_unlimited_raw: str = Field("", alias="ROBOMP_RATE_LIMIT_UNLIMITED")
+    # How often the dispatcher sweeps deferred rate-limited events back into the
+    # queue as their submitters' rolling windows free up. The empty-queue path
+    # promotes immediately; this periodic sweep guarantees progress even while a
+    # sustained ordinary queue keeps `claim_next_event` returning work.
+    deferred_promotion_scan_seconds: float = Field(60.0, alias="ROBOMP_DEFERRED_PROMOTION_SCAN_SECONDS")
     # Logins (comma-separated, `@` prefix optional, case-insensitive) whose `@bot_login`
     # mentions are treated as authoritative directives. These accounts also
     # bypass rate limiting regardless of `author_association`.
@@ -147,6 +152,12 @@ class Settings(BaseSettings):
     question_autoclose_enabled: bool = Field(True, alias="ROBOMP_QUESTION_AUTOCLOSE_ENABLED")
     question_autoclose_hours: float = Field(4.0, alias="ROBOMP_QUESTION_AUTOCLOSE_HOURS")
     question_autoclose_scan_seconds: float = Field(60.0, alias="ROBOMP_QUESTION_AUTOCLOSE_SCAN_SECONDS")
+    # Local issue/PR search index. Webhooks keep it fresh in real time; this
+    # interval controls the periodic GitHub reconcile (first pass = full
+    # backfill of every allowlisted repo). <= 0 disables the reconciler —
+    # `gh_search_issues` then falls back to the remote search API until the
+    # repo has a sync watermark.
+    issue_index_sync_seconds: float = Field(900.0, alias="ROBOMP_ISSUE_INDEX_SYNC_SECONDS")
 
     # pi-natives build-output cache. Hardlinks pre-built
     # `packages/natives/native/*.node` (and its companions) into new
@@ -306,8 +317,7 @@ class Settings(BaseSettings):
     @property
     def maintainer_logins(self) -> frozenset[str]:
         items = [
-            piece.strip().lstrip("@").lower().removesuffix("[bot]")
-            for piece in self.maintainer_logins_raw.split(",")
+            piece.strip().lstrip("@").lower().removesuffix("[bot]") for piece in self.maintainer_logins_raw.split(",")
         ]
         return frozenset(item for item in items if item)
 

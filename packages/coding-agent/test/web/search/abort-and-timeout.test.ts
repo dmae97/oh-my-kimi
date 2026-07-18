@@ -22,7 +22,11 @@ import { searchAnthropic } from "@oh-my-pi/pi-coding-agent/web/search/providers/
 import type { SearchParams } from "@oh-my-pi/pi-coding-agent/web/search/providers/base";
 import { searchBrave } from "@oh-my-pi/pi-coding-agent/web/search/providers/brave";
 import { withHardTimeout } from "@oh-my-pi/pi-coding-agent/web/search/providers/utils";
-import type { SearchProviderId, SearchResponse } from "@oh-my-pi/pi-coding-agent/web/search/types";
+import {
+	SearchProviderError,
+	type SearchProviderId,
+	type SearchResponse,
+} from "@oh-my-pi/pi-coding-agent/web/search/types";
 
 const FAKE_SESSION = {} as ToolSession;
 const fakeStorage = {
@@ -173,13 +177,24 @@ describe("executeSearch abort propagation", () => {
 		};
 	}
 
+	function mockProviderChain(providers: provider.SearchProvider[], options?: { explicitFirst?: boolean }) {
+		vi.spyOn(provider, "resolveProviderCandidates").mockReturnValue(
+			providers.map(({ id }, index) => ({ id, explicit: options?.explicitFirst === true && index === 0 })),
+		);
+		return vi.spyOn(provider, "getSearchProvider").mockImplementation(async id => {
+			const match = providers.find(candidate => candidate.id === id);
+			if (!match) throw new Error(`Unexpected provider: ${id}`);
+			return match;
+		});
+	}
+
 	it("surfaces caller cancellation as ToolAbortError instead of falling through to the next provider", async () => {
 		// Two providers: the first throws an AbortError after the caller aborted,
 		// the second would happily return a value. Pre-fix, executeSearch would
 		// fall through to provider B and report success; post-fix, the abort
 		// re-throw stops the loop immediately.
 		const secondProviderSearch = vi.fn();
-		vi.spyOn(provider, "resolveProviderChain").mockResolvedValue([
+		mockProviderChain([
 			fakeProvider("anthropic", async () => {
 				throw new DOMException("aborted", "AbortError");
 			}),
@@ -198,7 +213,7 @@ describe("executeSearch abort propagation", () => {
 		// Defensive: the abort re-throw must NOT alter normal provider-error
 		// flow. A genuine provider error should still produce an error result
 		// rather than throwing.
-		vi.spyOn(provider, "resolveProviderChain").mockResolvedValue([
+		mockProviderChain([
 			fakeProvider("anthropic", async () => {
 				throw new Error("upstream 500");
 			}),
@@ -225,10 +240,7 @@ describe("executeSearch abort propagation", () => {
 				sources: [{ title: "Fallback result", url: "https://example.com/fallback", snippet: "fallback body" }],
 			}),
 		);
-		vi.spyOn(provider, "resolveProviderChain").mockResolvedValue([
-			fakeProvider("searxng", emptyProviderSearch),
-			fakeProvider("brave", sourceProviderSearch),
-		]);
+		mockProviderChain([fakeProvider("searxng", emptyProviderSearch), fakeProvider("brave", sourceProviderSearch)]);
 
 		const tool = new WebSearchTool(FAKE_SESSION);
 		const result = await tool.execute("test-id", { query: "anything" });
@@ -239,5 +251,50 @@ describe("executeSearch abort propagation", () => {
 		expect(block?.type).toBe("text");
 		expect(block && "text" in block ? block.text : "").toContain("Fallback result");
 		expect(result.details?.response.provider).toBe("brave");
+	});
+
+	it("does not load fallback providers after the preferred provider succeeds", async () => {
+		const fallbackSearch = vi.fn();
+		const getProvider = mockProviderChain([
+			fakeProvider("exa", async () => ({
+				provider: "exa",
+				sources: [{ title: "Preferred result", url: "https://example.com/preferred" }],
+			})),
+			fakeProvider("duckduckgo", fallbackSearch),
+		]);
+
+		const tool = new WebSearchTool(FAKE_SESSION);
+		const result = await tool.execute("test-id", { query: "anything" });
+
+		expect(result.details?.response.provider).toBe("exa");
+		expect(getProvider).toHaveBeenCalledTimes(1);
+		expect(getProvider).toHaveBeenCalledWith("exa");
+		expect(fallbackSearch).not.toHaveBeenCalled();
+	});
+
+	it("does not fall through after an explicitly selected provider fails", async () => {
+		const fallbackSearch = vi.fn(
+			async (): Promise<SearchResponse> => ({
+				provider: "brave",
+				sources: [{ title: "Hidden fallback", url: "https://example.com/fallback" }],
+			}),
+		);
+		const getProvider = mockProviderChain(
+			[
+				fakeProvider("codex", async () => {
+					throw new SearchProviderError("codex", "Configured Codex endpoint does not support web_search.", 400);
+				}),
+				fakeProvider("brave", fallbackSearch),
+			],
+			{ explicitFirst: true },
+		);
+
+		const tool = new WebSearchTool(FAKE_SESSION);
+		const result = await tool.execute("test-id", { query: "anything" });
+
+		expect(result.details?.error).toContain("Configured Codex endpoint does not support web_search.");
+		expect(result.details?.response.provider).toBe("codex");
+		expect(getProvider).toHaveBeenCalledTimes(1);
+		expect(fallbackSearch).not.toHaveBeenCalled();
 	});
 });

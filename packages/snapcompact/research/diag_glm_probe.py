@@ -52,7 +52,14 @@ def img_block(path: Path) -> dict:
     return {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
 
 
-def complete(route: str, keys: dict, messages: list[dict], model_or: str, model_zai: str, max_tokens: int) -> dict:
+def complete(
+    route: str,
+    keys: dict,
+    messages: list[dict],
+    model_or: str,
+    model_zai: str,
+    max_tokens: int,
+) -> dict:
     if route == "zai":
         body = {"model": model_zai, "messages": messages, "max_tokens": max_tokens}
         out = post(ZAI_URL, body, keys["zai"])
@@ -68,7 +75,9 @@ def complete(route: str, keys: dict, messages: list[dict], model_or: str, model_
         text = "".join(p.get("text", "") for p in text if isinstance(p, dict))
     return {
         "text": text,
-        "reasoning_text_len": len(msg.get("reasoning_content") or msg.get("reasoning") or ""),
+        "reasoning_text_len": len(
+            msg.get("reasoning_content") or msg.get("reasoning") or ""
+        ),
         "usage": out.get("usage", {}),
         "finish": choice.get("finish_reason"),
         "provider": out.get("provider"),
@@ -80,7 +89,10 @@ def frames_for(shape_name: str, chars: int) -> tuple[list[Path], str, int]:
     paras = squad.load_paragraphs(CACHE)
     flow, _ = squad.build_flow(paras, chars)
     shape = SHAPES[shape_name]
-    frame_dir = CACHE / f"prod-frames-{shape_name}-{sha8(flow, json.dumps(shape, sort_keys=True))}"
+    frame_dir = (
+        CACHE
+        / f"prod-frames-{shape_name}-{sha8(flow, json.dumps(shape, sort_keys=True))}"
+    )
     pngs = sorted(frame_dir.glob("page-*.png"))
     assert pngs, f"no frames in {frame_dir}; run mono_prod first"
     return pngs, flow, len(flow)
@@ -109,7 +121,12 @@ def main() -> None:
 
     if args.mode == "smoke":
         for route in routes:
-            msgs = [{"role": "user", "content": [{"type": "text", "text": "Reply with exactly: PONG"}]}]
+            msgs = [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Reply with exactly: PONG"}],
+                }
+            ]
             r = complete(route, keys, msgs, args.model_or, args.model_zai, 1024)
             print(f"[{route}] {json.dumps(r, default=str)[:600]}")
         return
@@ -119,15 +136,22 @@ def main() -> None:
 
     if args.mode == "bill":
         for n in (int(x) for x in args.counts.split(",")):
-            blocks = [{"type": "text", "text": f"You will see {n} images. Reply with exactly: OK"}]
+            blocks = [
+                {
+                    "type": "text",
+                    "text": f"You will see {n} images. Reply with exactly: OK",
+                }
+            ]
             blocks += [img_block(p) for p in pngs[:n]]
             msgs = [{"role": "user", "content": blocks}]
             for route in routes:
                 r = complete(route, keys, msgs, args.model_or, args.model_zai, 2048)
                 u = r.get("usage", {})
                 pt = u.get("prompt_tokens", 0)
-                print(f"[{route}] n={n:>2} prompt_tokens={pt:>7} per_img={(pt / max(n, 1)):>8.1f} "
-                      f"finish={r.get('finish')} provider={r.get('provider')} text={r.get('text', '')[:40]!r}")
+                print(
+                    f"[{route}] n={n:>2} prompt_tokens={pt:>7} per_img={(pt / max(n, 1)):>8.1f} "
+                    f"finish={r.get('finish')} provider={r.get('provider')} text={r.get('text', '')[:40]!r}"
+                )
         return
 
     if args.mode == "frame":
@@ -135,11 +159,17 @@ def main() -> None:
         ask = "Transcribe the first 5 text lines of this image exactly."
         if args.question:
             ask += f"\nThen answer from the image text: {args.question}\nFormat: TRANSCRIPT lines, then ANSWER: <short answer or UNREADABLE>."
-        msgs = [{"role": "user", "content": [{"type": "text", "text": ask}, img_block(p)]}]
+        msgs = [
+            {"role": "user", "content": [{"type": "text", "text": ask}, img_block(p)]}
+        ]
         for route in routes:
-            r = complete(route, keys, msgs, args.model_or, args.model_zai, args.max_tokens)
+            r = complete(
+                route, keys, msgs, args.model_or, args.model_zai, args.max_tokens
+            )
             u = r.get("usage", {})
-            print(f"\n[{route}] frame={p.name} prompt_tokens={u.get('prompt_tokens')} finish={r.get('finish')}")
+            print(
+                f"\n[{route}] frame={p.name} prompt_tokens={u.get('prompt_tokens')} finish={r.get('finish')}"
+            )
             print("\n".join("  | " + ln for ln in r.get("text", "").splitlines()[:12]))
         return
 
@@ -150,23 +180,34 @@ def main() -> None:
         questions = squad.sample_chunk_questions(paras, offsets, 0, len(flow2), 25, 42)
         batch = questions[15:20]
         from mono_prod import SIZE
+
         shape = SHAPES[args.shape]
         cols = SIZE // shape["cellWidth"]
         rows = SIZE // shape["cellHeight"]
         from run import load_prompt
-        preamble = load_prompt("qa-image-multi.md").format(k=len(pngs), cols=cols, rows=rows)
+
+        preamble = load_prompt("qa-image-multi.md").format(
+            k=len(pngs), cols=cols, rows=rows
+        )
         q_block = "\n".join(f"{i + 1}. {q['q']}" for i, q in enumerate(batch))
         blocks = [{"type": "text", "text": preamble}]
         blocks += [img_block(p) for p in pngs]
-        blocks += [{"type": "text", "text": "End of images."}, {"type": "text", "text": q_block}]
+        blocks += [
+            {"type": "text", "text": "End of images."},
+            {"type": "text", "text": q_block},
+        ]
         msgs = [{"role": "user", "content": blocks}]
         for i, q in enumerate(batch):
             print(f"Q{i + 1}: {q['q']}  golds={q['golds']}")
         for route in routes:
-            r = complete(route, keys, msgs, args.model_or, args.model_zai, args.max_tokens)
+            r = complete(
+                route, keys, msgs, args.model_or, args.model_zai, args.max_tokens
+            )
             u = r.get("usage", {})
-            print(f"\n[{route}] prompt_tokens={u.get('prompt_tokens')} completion={u.get('completion_tokens')} "
-                  f"finish={r.get('finish')} provider={r.get('provider')}")
+            print(
+                f"\n[{route}] prompt_tokens={u.get('prompt_tokens')} completion={u.get('completion_tokens')} "
+                f"finish={r.get('finish')} provider={r.get('provider')}"
+            )
             print("\n".join("  | " + ln for ln in r.get("text", "").splitlines()[:10]))
 
 

@@ -40,12 +40,105 @@ use uucore::{
 	error::{FromIo, UError, UResult, USimpleError},
 };
 
+/// pi-uutils: BSD `tail -r` compatibility (macOS muscle memory).
+///
+/// BSD tail reverses line order with `-r`; GNU tail has no such option. A
+/// short-option cluster containing `r` is therefore unambiguously BSD-shaped,
+/// except after `--`, where it is an operand. Plain reverse invocations are
+/// delegated to `tac` before clap parsing. Combinations with byte, line, or
+/// follow options have no cheap equivalent here and fail explicitly rather
+/// than silently changing their meaning.
+///
+/// Returns `None` when the invocation is not BSD-shaped, `Some(Err(_))` for a
+/// BSD-shaped invocation this builtin cannot safely emulate, and `Some(Ok(_))`
+/// with argv suitable for `uu_tac::run` when it can.
+fn rewrite_bsd_invocation(argv: &[OsString]) -> Option<Result<Vec<OsString>, String>> {
+	let mut has_reverse = false;
+	let mut incompatible = false;
+	let mut unsupported = None;
+
+	for arg in argv.iter().skip(1) {
+		let token = arg.to_string_lossy();
+		if token == "--" {
+			break;
+		}
+		let Some(cluster) = token.strip_prefix('-') else {
+			continue;
+		};
+		if cluster.is_empty() {
+			continue;
+		}
+		if cluster.starts_with('-') {
+			unsupported = Some(token.into_owned());
+			continue;
+		}
+
+		for flag in cluster.chars() {
+			match flag {
+				'r' => has_reverse = true,
+				'n' | 'c' | 'b' | 'f' => incompatible = true,
+				_ => unsupported = Some(format!("-{flag}")),
+			}
+		}
+	}
+
+	if !has_reverse {
+		return None;
+	}
+	if incompatible {
+		return Some(Err(
+			"-r with -n, -c, -b, or -f is not supported by this builtin; pipe through tac".to_owned(),
+		));
+	}
+	if let Some(option) = unsupported {
+		return Some(Err(format!(
+			"-r with {option} is not supported by this builtin; pipe through tac"
+		)));
+	}
+
+	// pi-uutils: `uu_tac` owns its clap command name and error prefix, so this
+	// intentionally uses `tac` as argv[0]; file errors consequently say `tac:`.
+	let mut tac_argv = vec![OsString::from("tac")];
+	let mut operands_only = false;
+	for arg in argv.iter().skip(1) {
+		let token = arg.to_string_lossy();
+		if operands_only {
+			tac_argv.push(arg.clone());
+			continue;
+		}
+		if token == "--" {
+			operands_only = true;
+			tac_argv.push(arg.clone());
+			continue;
+		}
+		if let Some(cluster) = token.strip_prefix('-')
+			&& !cluster.is_empty()
+			&& !cluster.starts_with('-')
+			&& cluster.chars().all(|flag| flag == 'r')
+		{
+			continue;
+		}
+		tac_argv.push(arg.clone());
+	}
+	Some(Ok(tac_argv))
+}
+
 /// In-process builtin entry point. Unlike upstream's `#[uucore::main] uumain`,
 /// this renders clap help/usage/version to the context streams and never calls
 /// `std::process::exit`, so it is safe inside the long-lived host shell
 /// process. The default (non-follow) path reads stdin/files through
 /// [`pi_uutils_ctx`].
 pub fn run(args: Vec<OsString>) -> i32 {
+	// pi-uutils: translate BSD-style `tail -r` before GNU clap parsing; see
+	// `rewrite_bsd_invocation`.
+	let args = match rewrite_bsd_invocation(&args) {
+		None => args,
+		Some(Ok(tac_args)) => return uu_tac::run(tac_args),
+		Some(Err(msg)) => {
+			let _ = writeln!(pi_uutils_ctx::stderr(), "tail: {msg}");
+			return 1;
+		},
+	};
 	let settings = match parse_settings(args) {
 		Ok(settings) => settings,
 		Err(ArgsError::Clap(err)) => {
@@ -540,16 +633,12 @@ fn unbounded_tail<T: Read>(reader: &mut BufReader<T>, settings: &Settings) -> UR
 		},
 		_ => {},
 	}
-	#[cfg(not(target_os = "windows"))]
+	// pi-uutils: upstream emulates Unix SIGPIPE on Windows by calling
+	// `std::process::exit(13)` on a broken-pipe flush. That would kill the
+	// long-lived host shell process. An in-process builtin must never
+	// `process::exit`; let the broken pipe surface as a normal `io::Error` and
+	// propagate to the caller, matching every other pi-uutils builtin.
 	writer.flush()?;
-
-	// SIGPIPE is not available on Windows.
-	#[cfg(target_os = "windows")]
-	writer.flush().inspect_err(|err| {
-		if err.kind() == ErrorKind::BrokenPipe {
-			std::process::exit(13);
-		}
-	})?;
 	Ok(())
 }
 
@@ -572,9 +661,105 @@ where
 #[cfg(test)]
 mod tests {
 
-	use std::io::Cursor;
+	use std::{
+		collections::HashMap,
+		ffi::OsString,
+		fs,
+		io::{self, Cursor, Write},
+		path::PathBuf,
+		sync::{Arc, atomic::AtomicBool},
+	};
 
-	use crate::forwards_thru_file;
+	use parking_lot::Mutex;
+
+	use crate::{forwards_thru_file, run};
+
+	#[derive(Clone)]
+	struct SharedWriter {
+		buf: Arc<Mutex<Vec<u8>>>,
+	}
+
+	impl Write for SharedWriter {
+		fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+			self.buf.lock().write(buf)
+		}
+
+		fn flush(&mut self) -> io::Result<()> {
+			self.buf.lock().flush()
+		}
+	}
+
+	fn run_in(cwd: PathBuf, args: Vec<&str>) -> (i32, String, String) {
+		let stdout_buf = Arc::new(Mutex::new(Vec::new()));
+		let stderr_buf = Arc::new(Mutex::new(Vec::new()));
+		let io = pi_uutils_ctx::ScopeIo {
+			stdin: Box::new(io::empty()),
+			stdin_fd: None,
+			stdin_is_search_input: false,
+			stdout: Box::new(SharedWriter { buf: stdout_buf.clone() }),
+			stderr: Box::new(SharedWriter { buf: stderr_buf.clone() }),
+			cwd,
+			env: HashMap::new(),
+			cancel: Arc::new(AtomicBool::new(false)),
+		};
+		let argv = std::iter::once("tail")
+			.chain(args)
+			.map(OsString::from)
+			.collect();
+		let code = pi_uutils_ctx::scope(io, || run(argv));
+
+		(
+			code,
+			String::from_utf8(stdout_buf.lock().clone()).unwrap(),
+			String::from_utf8(stderr_buf.lock().clone()).unwrap(),
+		)
+	}
+
+	/// Canonicalized temp dir avoids macOS's `/var` → `/private/var` alias.
+	fn canonical_tempdir() -> (tempfile::TempDir, PathBuf) {
+		let dir = tempfile::tempdir().unwrap();
+		let canon = fs::canonicalize(dir.path()).unwrap();
+		(dir, canon)
+	}
+
+	#[test]
+	fn bsd_reverse_delegates_to_tac() {
+		let (_dir, root) = canonical_tempdir();
+		fs::write(root.join("file"), b"first\nsecond\nthird\n").unwrap();
+
+		let (code, stdout, stderr) = run_in(root, vec!["-r", "file"]);
+
+		assert_eq!(code, 0);
+		assert_eq!(stdout, "third\nsecond\nfirst\n");
+		assert_eq!(stderr, "");
+	}
+
+	#[test]
+	fn bsd_reverse_with_line_count_fails_loudly() {
+		let (_dir, root) = canonical_tempdir();
+		fs::write(root.join("file"), b"first\nsecond\nthird\n").unwrap();
+
+		let (code, stdout, stderr) = run_in(root, vec!["-r", "-n", "2", "file"]);
+
+		assert_eq!(code, 1);
+		assert_eq!(stdout, "");
+		assert_eq!(
+			stderr,
+			"tail: -r with -n, -c, -b, or -f is not supported by this builtin; pipe through tac\n"
+		);
+	}
+
+	#[test]
+	fn gnu_line_count_is_unchanged() {
+		let (_dir, root) = canonical_tempdir();
+		fs::write(root.join("file"), b"first\nsecond\nthird\n").unwrap();
+
+		let (code, stdout, stderr) = run_in(root, vec!["-n", "1", "file"]);
+
+		assert_eq!(code, 0);
+		assert_eq!(stdout, "third\n");
+		assert_eq!(stderr, "");
+	}
 
 	#[test]
 	fn test_forwards_thru_file_zero() {
@@ -665,5 +850,48 @@ mod tests {
 		});
 
 		assert_ne!(code, 0, "broken pipe must surface as a non-zero exit, not a panic");
+	}
+
+	#[test]
+	fn unbounded_tail_broken_pipe_does_not_abort() {
+		use std::{
+			collections::HashMap,
+			ffi::OsString,
+			io::{self, Cursor, ErrorKind, Write},
+			sync::{Arc, atomic::AtomicBool},
+		};
+
+		// Same broken-pipe consumer as above, but here stdin is a plain reader
+		// so `tail_stdin` always takes the streaming `unbounded_tail` path — the
+		// one the reported repro (`seq ... | tail -n 3 | head -n 0`) exercises,
+		// and where the Windows SIGPIPE emulation used to `std::process::exit`.
+		struct BrokenPipeWriter;
+		impl Write for BrokenPipeWriter {
+			fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+				Err(io::Error::new(ErrorKind::BrokenPipe, "Broken pipe"))
+			}
+
+			fn flush(&mut self) -> io::Result<()> {
+				Err(io::Error::new(ErrorKind::BrokenPipe, "Broken pipe"))
+			}
+		}
+
+		let input = b"1\n2\n3\n4\n5\n".to_vec();
+		let io = pi_uutils_ctx::ScopeIo {
+			stdin:                 Box::new(Cursor::new(input)),
+			stdin_fd:              None,
+			stdin_is_search_input: false,
+			stdout:                Box::new(BrokenPipeWriter),
+			stderr:                Box::new(io::sink()),
+			cwd:                   std::env::temp_dir(),
+			env:                   HashMap::new(),
+			cancel:                Arc::new(AtomicBool::new(false)),
+		};
+
+		let code = pi_uutils_ctx::scope(io, || {
+			crate::run(vec![OsString::from("tail"), OsString::from("-n"), OsString::from("3")])
+		});
+
+		assert_ne!(code, 0, "broken pipe must surface as a non-zero exit, not process::exit");
 	}
 }

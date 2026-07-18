@@ -67,6 +67,18 @@ describe.skipIf(!SHOULD_RUN)("python runner subprocess", () => {
 		}
 	});
 
+	it.skipIf(process.platform === "win32")("runs in its own POSIX session", async () => {
+		using tempDir = TempDir.createSync("@python-runner-session-isolation-");
+		const kernel = await PythonKernel.start({ cwd: tempDir.path() });
+		try {
+			const result = await executePythonWithKernel(kernel, "import os; print(os.getsid(0), os.getpid())");
+			const [sessionId, processId] = result.output.trim().split(/\s+/).map(Number);
+			expect(sessionId).toBe(processId);
+		} finally {
+			await kernel.shutdown();
+		}
+	});
+
 	it("cancels a long sleep via SIGINT within 500ms", async () => {
 		using tempDir = TempDir.createSync("@python-runner-cancel-");
 		const kernel = await PythonKernel.start({ cwd: tempDir.path() });

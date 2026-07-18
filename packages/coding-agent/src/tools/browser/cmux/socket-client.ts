@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
 import * as net from "node:net";
+import * as os from "node:os";
+import * as path from "node:path";
 import { ToolError } from "../../tool-errors";
 
 const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+const UTF8 = new TextEncoder();
 
 type RequestJob = {
 	method: string;
@@ -25,6 +28,37 @@ type CmuxErrorPayload = {
 	details?: unknown;
 };
 
+type RelayEndpoint = {
+	host: string;
+	port: number;
+};
+
+type RelayCredentials = {
+	relayId: string;
+	relayToken: Uint8Array<ArrayBuffer>;
+};
+
+function parseRelayCredentials(relayIdValue: unknown, relayTokenValue: unknown): RelayCredentials | null {
+	if (typeof relayIdValue !== "string" || typeof relayTokenValue !== "string") {
+		return null;
+	}
+	const relayId = relayIdValue.trim();
+	const relayTokenHex = relayTokenValue.trim();
+	if (
+		relayId.length === 0 ||
+		relayTokenHex.length === 0 ||
+		relayTokenHex.length % 2 !== 0 ||
+		!/^[0-9a-f]+$/i.test(relayTokenHex)
+	) {
+		return null;
+	}
+	const relayToken = new Uint8Array(new ArrayBuffer(relayTokenHex.length / 2));
+	for (let index = 0; index < relayToken.length; index++) {
+		relayToken[index] = Number.parseInt(relayTokenHex.slice(index * 2, index * 2 + 2), 16);
+	}
+	return { relayId, relayToken };
+}
+
 export function formatCmuxError(error: CmuxErrorPayload | undefined): string {
 	const code = typeof error?.code === "string" && error.code.length > 0 ? error.code : "error";
 	const message = typeof error?.message === "string" && error.message.length > 0 ? error.message : "cmux error";
@@ -35,6 +69,8 @@ export function formatCmuxError(error: CmuxErrorPayload | undefined): string {
 export class CmuxSocketClient {
 	readonly #socketPath: string;
 	readonly #password: string | undefined;
+	readonly #relayId: string | undefined;
+	readonly #relayToken: string | undefined;
 	#socket: net.Socket | null = null;
 	#connectPromise: Promise<void> | null = null;
 	#connected = false;
@@ -45,9 +81,11 @@ export class CmuxSocketClient {
 	#activeJob: RequestJob | null = null;
 	#pumping = false;
 
-	constructor(opts: { socketPath: string; password?: string }) {
+	constructor(opts: { socketPath: string; password?: string; relayId?: string; relayToken?: string }) {
 		this.#socketPath = opts.socketPath;
 		this.#password = opts.password;
+		this.#relayId = opts.relayId ?? process.env.CMUX_RELAY_ID;
+		this.#relayToken = opts.relayToken ?? process.env.CMUX_RELAY_TOKEN;
 	}
 
 	async connect(): Promise<void> {
@@ -101,7 +139,11 @@ export class CmuxSocketClient {
 	}
 
 	async #openSocket(): Promise<void> {
-		const socket = net.createConnection({ path: this.#socketPath });
+		const relayEndpoint = this.#parseRelayEndpoint();
+		const relayCredentials = relayEndpoint ? await this.#loadRelayCredentials(relayEndpoint) : null;
+		const socket = relayEndpoint
+			? net.createConnection({ host: relayEndpoint.host, port: relayEndpoint.port })
+			: net.createConnection({ path: this.#socketPath });
 		this.#socket = socket;
 		this.#buffer = "";
 		socket.setEncoding("utf8");
@@ -111,13 +153,16 @@ export class CmuxSocketClient {
 
 		try {
 			await this.#waitForConnect(socket);
-			this.#connected = true;
+			if (relayEndpoint && relayCredentials) {
+				await this.#authenticateRelay(relayEndpoint, relayCredentials);
+			}
 			if (this.#password) {
 				const line = await this.#sendLine(`auth ${this.#password}`, DEFAULT_CONNECT_TIMEOUT_MS);
 				if (line.startsWith("ERROR:") && !line.includes("Unknown command 'auth'")) {
 					throw new ToolError(line);
 				}
 			}
+			this.#connected = true;
 		} catch (err) {
 			this.#connected = false;
 			socket.destroy();
@@ -125,6 +170,97 @@ export class CmuxSocketClient {
 			throw new ToolError(
 				`Failed to connect to cmux socket at ${this.#socketPath}: ${err instanceof Error ? err.message : String(err)}`,
 			);
+		}
+	}
+
+	#parseRelayEndpoint(): RelayEndpoint | null {
+		const value = this.#socketPath.trim();
+		if (value.length === 0 || value.startsWith("/")) {
+			return null;
+		}
+		const match = /^(127\.0\.0\.1|localhost):([0-9]+)$/.exec(value);
+		if (!match) {
+			return null;
+		}
+		const port = Number.parseInt(match[2] ?? "", 10);
+		if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+			return null;
+		}
+		return { host: "127.0.0.1", port };
+	}
+
+	async #loadRelayCredentials(endpoint: RelayEndpoint): Promise<RelayCredentials> {
+		const environmentCredentials = parseRelayCredentials(this.#relayId, this.#relayToken);
+		if (environmentCredentials) {
+			return environmentCredentials;
+		}
+
+		const authPath = path.join(os.homedir(), ".cmux", "relay", `${endpoint.port}.auth`);
+		let payload: unknown;
+		try {
+			payload = await Bun.file(authPath).json();
+		} catch {
+			throw new ToolError(
+				`Missing cmux relay auth metadata for ${endpoint.host}:${endpoint.port}; set CMUX_RELAY_ID/CMUX_RELAY_TOKEN or restore ~/.cmux/relay/${endpoint.port}.auth`,
+			);
+		}
+		const relayId = payload && typeof payload === "object" && "relay_id" in payload ? payload.relay_id : undefined;
+		const relayToken =
+			payload && typeof payload === "object" && "relay_token" in payload ? payload.relay_token : undefined;
+		const fileCredentials = parseRelayCredentials(relayId, relayToken);
+		if (!fileCredentials) {
+			throw new ToolError(`Invalid cmux relay auth metadata in ~/.cmux/relay/${endpoint.port}.auth`);
+		}
+		return fileCredentials;
+	}
+
+	async #authenticateRelay(endpoint: RelayEndpoint, credentials: RelayCredentials): Promise<void> {
+		const challengeLine = await this.#nextLine(DEFAULT_CONNECT_TIMEOUT_MS);
+		let challenge: unknown;
+		try {
+			challenge = JSON.parse(challengeLine);
+		} catch {
+			throw new ToolError(`Invalid cmux relay authentication challenge from ${endpoint.host}:${endpoint.port}`);
+		}
+		if (
+			!challenge ||
+			typeof challenge !== "object" ||
+			!("protocol" in challenge) ||
+			challenge.protocol !== "cmux-relay-auth" ||
+			!("version" in challenge) ||
+			typeof challenge.version !== "number" ||
+			!Number.isInteger(challenge.version) ||
+			!("relay_id" in challenge) ||
+			challenge.relay_id !== credentials.relayId ||
+			!("nonce" in challenge) ||
+			typeof challenge.nonce !== "string" ||
+			challenge.nonce.length === 0
+		) {
+			throw new ToolError(`Invalid cmux relay authentication challenge from ${endpoint.host}:${endpoint.port}`);
+		}
+
+		const message = `relay_id=${challenge.relay_id}\nnonce=${challenge.nonce}\nversion=${challenge.version}`;
+		const key = await globalThis.crypto.subtle.importKey(
+			"raw",
+			credentials.relayToken,
+			{ name: "HMAC", hash: "SHA-256" },
+			false,
+			["sign"],
+		);
+		const mac = await globalThis.crypto.subtle.sign("HMAC", key, UTF8.encode(message));
+		const authLine = JSON.stringify({
+			relay_id: credentials.relayId,
+			mac: Buffer.from(mac).toString("hex"),
+		});
+		const responseLine = await this.#sendLine(authLine, DEFAULT_CONNECT_TIMEOUT_MS);
+		let response: unknown;
+		try {
+			response = JSON.parse(responseLine);
+		} catch {
+			throw new ToolError(`Cmux relay authentication failed for ${endpoint.host}:${endpoint.port}`);
+		}
+		if (!response || typeof response !== "object" || !("ok" in response) || response.ok !== true) {
+			throw new ToolError(`Cmux relay authentication failed for ${endpoint.host}:${endpoint.port}`);
 		}
 	}
 

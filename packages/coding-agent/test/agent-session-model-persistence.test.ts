@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import { type Api, Effort, type Model } from "@oh-my-pi/pi-ai";
+import { type Api, type AssistantMessage, Effort, type Model } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -423,6 +423,157 @@ describe("AgentSession model persistence", () => {
 
 		expect(result.session.model?.id).toBe(defaultModel.id);
 		expect(result.session.configuredThinkingLevel()).toBe(AUTO_THINKING);
+	});
+
+	it("marks an incomplete process-exit transcript aborted during SDK resume without dropping history", async () => {
+		const sessionManager = SessionManager.create(tempDir.path(), path.join(tempDir.path(), "interrupted"));
+		const interruptedAssistant: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "toolCall", id: "call_read", name: "read", arguments: { path: "state.txt" } }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-sonnet-4-5",
+			usage: {
+				input: 1,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "toolUse",
+			timestamp: Date.now(),
+		};
+		sessionManager.appendMessage({ role: "user", content: "inspect state", timestamp: Date.now() });
+		sessionManager.appendMessage(interruptedAssistant);
+		sessionManager.appendMessage({
+			role: "toolResult",
+			toolCallId: "call_read",
+			toolName: "read",
+			content: [{ type: "text", text: "preserved partial result" }],
+			isError: false,
+			timestamp: Date.now(),
+		});
+		sessionManager.appendCustomEntry("session_exit", {
+			reason: "exit",
+			kind: "process_exit",
+			recordedAt: "2026-07-11T02:20:08.800Z",
+		});
+		await sessionManager.flush();
+		const sessionFile = sessionManager.getSessionFile();
+		if (!sessionFile) throw new Error("Expected interrupted session file");
+
+		const result = await createStartupResumeSession(sessionFile);
+		const messages = result.session.sessionManager.buildSessionContext().messages;
+		expect(messages.at(-1)).toMatchObject({
+			role: "assistant",
+			content: [],
+			stopReason: "aborted",
+			errorMessage: "Previous OMP process exited before completing the turn.",
+		});
+		expect(
+			messages.some(
+				message =>
+					message.role === "toolResult" &&
+					message.content.some(part => part.type === "text" && part.text === "preserved partial result"),
+			),
+		).toBe(true);
+		expect(messages.filter(message => message.role === "assistant" && message.stopReason === "aborted")).toHaveLength(
+			1,
+		);
+	});
+
+	it("marks a first user-message process-exit tail aborted with the selected model", async () => {
+		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
+		const settings = Settings.isolated();
+		settings.setModelRole("default", modelValue(defaultModel));
+		const sessionManager = SessionManager.create(tempDir.path(), path.join(tempDir.path(), "interrupted-user"));
+		sessionManager.appendModelChange(modelValue(defaultModel));
+		sessionManager.appendMessage({ role: "user", content: "inspect state", timestamp: Date.now() });
+		sessionManager.appendCustomEntry("session_exit", {
+			reason: "exit",
+			kind: "process_exit",
+			recordedAt: "2026-07-11T02:20:08.800Z",
+		});
+		const result = await createAgentSession({
+			cwd: tempDir.path(),
+			agentDir: tempDir.path(),
+			authStorage: sharedAuthStorage,
+			modelRegistry: sharedModelRegistry,
+			sessionManager,
+			settings,
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			skipPythonPreflight: true,
+		});
+		session = result.session;
+		expect(result.session.model?.id).toBe(defaultModel.id);
+		expect(
+			result.session.sessionManager
+				.getBranch()
+				.find(entry => entry.type === "message" && entry.message.role === "assistant"),
+		).toMatchObject({
+			type: "message",
+			message: {
+				role: "assistant",
+				api: defaultModel.api,
+				provider: defaultModel.provider,
+				model: defaultModel.id,
+				stopReason: "aborted",
+			},
+		});
+	});
+
+	it("marks an interrupted first turn aborted when switching sessions", async () => {
+		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");
+		const created = await createSession({ initialModel: defaultModel, persist: true });
+		const targetFile = path.join(tempDir.path(), "switch-interrupted-user.jsonl");
+		const timestamp = "2026-07-11T02:20:08.800Z";
+		await Bun.write(
+			targetFile,
+			`${[
+				{ type: "session", version: 3, id: "switch-target", timestamp, cwd: tempDir.path() },
+				{
+					type: "model_change",
+					id: "model",
+					parentId: null,
+					timestamp,
+					model: modelValue(defaultModel),
+				},
+				{
+					type: "message",
+					id: "user",
+					parentId: "model",
+					timestamp,
+					message: { role: "user", content: "inspect state", timestamp: Date.parse(timestamp) },
+				},
+				{
+					type: "custom",
+					id: "exit",
+					parentId: "user",
+					timestamp,
+					customType: "session_exit",
+					data: { reason: "exit", kind: "process_exit", recordedAt: timestamp },
+				},
+			]
+				.map(entry => JSON.stringify(entry))
+				.join("\n")}\n`,
+		);
+
+		await expect(created.session.switchSession(targetFile)).resolves.toBe(true);
+
+		expect(created.session.sessionManager.buildSessionContext().messages.at(-1)).toMatchObject({
+			role: "assistant",
+			api: defaultModel.api,
+			provider: defaultModel.provider,
+			model: defaultModel.id,
+			stopReason: "aborted",
+		});
 	});
 
 	it("lists restorable temporary model before the default fallback", () => {

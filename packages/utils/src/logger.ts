@@ -1,7 +1,7 @@
 /**
  * Centralized logger for omp.
  *
- * Default: rotating `~/.omp/logs/omp.<DATE>.log`, no console output (writing
+ * Default: rotating `~/.omp/logs/omp.<DATE>.<PID>.log`, no console output (writing
  * to stdout/stderr would corrupt the TUI). Long-running headless services
  * (the auth broker, etc.) call {@link setTransports} to swap in a console
  * transport so a process supervisor (pm2, journald, k8s) captures the logs.
@@ -11,11 +11,107 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { isPromise } from "node:util/types";
 import winston from "winston";
 import DailyRotateFile from "winston-daily-rotate-file";
 import { getLogsDir } from "./dirs";
 import { drainModuleLoadEvents } from "./timing-buffer";
+/** Severity names accepted by the centralized logger. */
+export type LogLevel = "error" | "warn" | "info" | "debug";
+
+/** Structured log event forwarded to out-of-band sinks such as OpenTelemetry. */
+export interface LogEvent {
+	readonly level: LogLevel;
+	readonly message: string;
+	readonly context: Record<string, unknown> | undefined;
+	readonly timestamp: Date;
+}
+
+/** Receives each structured log event after the local transport path runs. */
+export type LogSink = (event: LogEvent) => void;
+
+const logSinks = new Set<LogSink>();
+
+/** Register an out-of-band log sink and return a disposer. */
+export function registerLogSink(sink: LogSink): () => void {
+	logSinks.add(sink);
+	return () => {
+		logSinks.delete(sink);
+	};
+}
+
+function emitToSinks(level: LogLevel, message: string, context: Record<string, unknown> | undefined): void {
+	if (logSinks.size === 0) return;
+	const event: LogEvent = { level, message, context, timestamp: new Date() };
+	for (const sink of logSinks) {
+		try {
+			sink(event);
+		} catch {
+			// Sinks are side channels; they must never break local logging.
+		}
+	}
+}
+
+const PROCESS_LOG_PATTERN = /^omp\.\d{4}-\d{2}-\d{2}\.(\d+)\.log(?:\.\d+)?$/;
+const PROCESS_AUDIT_PATTERN = /^\.omp\.(\d+)-audit\.json$/;
+const RETAINED_STALE_LOG_FILES = 5;
+
+function processIsRunning(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return !(error instanceof Error && "code" in error && (error.code === "ESRCH" || error.code === "EINVAL"));
+	}
+}
+
+/**
+ * Retain the newest completed-process logs globally and remove their one-use
+ * audit files. Live PID namespaces are never touched.
+ */
+function pruneStaleProcessLogs(dir: string): void {
+	let entries: fs.Dirent[];
+	try {
+		entries = fs.readdirSync(dir, { withFileTypes: true });
+	} catch {
+		return;
+	}
+
+	const staleLogs: Array<{ path: string; mtimeMs: number }> = [];
+	for (const entry of entries) {
+		if (!entry.isFile()) continue;
+		const logMatch = PROCESS_LOG_PATTERN.exec(entry.name);
+		const auditMatch = PROCESS_AUDIT_PATTERN.exec(entry.name);
+		const pidText = logMatch?.[1] ?? auditMatch?.[1];
+		if (!pidText || processIsRunning(Number(pidText))) continue;
+		const entryPath = path.join(dir, entry.name);
+
+		if (auditMatch) {
+			try {
+				fs.rmSync(entryPath, { force: true });
+			} catch {
+				// Retention is best-effort; logging must still initialize.
+			}
+			continue;
+		}
+
+		try {
+			staleLogs.push({ path: entryPath, mtimeMs: fs.statSync(entryPath).mtimeMs });
+		} catch {
+			// Another process may have pruned the same stale namespace.
+		}
+	}
+
+	staleLogs.sort((a, b) => b.mtimeMs - a.mtimeMs);
+	for (const stale of staleLogs.slice(RETAINED_STALE_LOG_FILES)) {
+		try {
+			fs.rmSync(stale.path, { force: true });
+		} catch {
+			// Another process may have pruned the same stale namespace.
+		}
+	}
+}
 
 /** Ensure a logs directory exists; return the resolved path. */
 function ensureDir(dir: string): string {
@@ -72,15 +168,18 @@ function getLogFormat(): winston.Logform.Format {
 	return logFormat;
 }
 
-/** Build a rotating file transport, materializing the target directory lazily. */
+/** Build a rotating file transport with process-local rotation and shared retention. */
 function makeFileTransport(dir?: string): winston.transport {
+	const logsDir = ensureDir(dir ?? getLogsDir());
+	pruneStaleProcessLogs(logsDir);
 	return new DailyRotateFile({
-		dirname: ensureDir(dir ?? getLogsDir()),
-		filename: "omp.%DATE%.log",
+		dirname: logsDir,
+		filename: `omp.%DATE%.${process.pid}.log`,
 		datePattern: "YYYY-MM-DD",
 		maxSize: "10m",
 		maxFiles: 5,
-		zippedArchive: true,
+		zippedArchive: false,
+		auditFile: path.join(logsDir, `.omp.${process.pid}-audit.json`),
 	});
 }
 
@@ -148,6 +247,7 @@ export function error(message: string, context?: Record<string, unknown>): void 
 	} catch {
 		// Silently ignore logging failures
 	}
+	emitToSinks("error", message, context);
 }
 
 /**
@@ -161,6 +261,7 @@ export function warn(message: string, context?: Record<string, unknown>): void {
 	} catch {
 		// Silently ignore logging failures
 	}
+	emitToSinks("warn", message, context);
 }
 
 /**
@@ -174,6 +275,7 @@ export function info(message: string, context?: Record<string, unknown>): void {
 	} catch {
 		// Silently ignore logging failures
 	}
+	emitToSinks("info", message, context);
 }
 
 /**
@@ -187,6 +289,7 @@ export function debug(message: string, context?: Record<string, unknown>): void 
 	} catch {
 		// Silently ignore logging failures
 	}
+	emitToSinks("debug", message, context);
 }
 
 /**

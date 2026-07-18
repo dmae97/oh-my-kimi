@@ -1,19 +1,21 @@
 import type { Component } from "@oh-my-pi/pi-tui";
-import { theme } from "../../modes/theme/theme";
+import { fgOrPlain, theme } from "../../modes/theme/theme";
 
 /**
  * Dynamic border component that adjusts to viewport width.
  *
- * Note: When used from hooks loaded via jiti, the global `theme` may be undefined
- * because jiti creates a separate module cache. Always pass an explicit color
- * function when using DynamicBorder in components exported for hook use.
+ * Note: the module-level `theme` may be `undefined` — when loaded through jiti
+ * (separate module cache) or from a second `src` module graph in npm-package
+ * installs, where the host bundle assigns `theme` but this copy never sees it
+ * (issue #5366). Both the default color and `render()` degrade to plain,
+ * unstyled output instead of crashing the TUI.
  */
 export class DynamicBorder implements Component {
 	#color: (str: string) => string;
 	#cachedWidth = -1;
 	#cachedLines: string[] | undefined;
 
-	constructor(color: (str: string) => string = str => theme.fg("border", str)) {
+	constructor(color: (str: string) => string = str => fgOrPlain("border", str)) {
 		this.#color = color;
 	}
 
@@ -26,7 +28,8 @@ export class DynamicBorder implements Component {
 		if (this.#cachedLines && this.#cachedWidth === width) {
 			return this.#cachedLines;
 		}
-		const lines = [this.#color(theme.boxRound.horizontal.repeat(Math.max(1, width)))];
+		const horizontal = typeof theme === "undefined" ? "─" : theme.boxRound.horizontal;
+		const lines = [this.#color(horizontal.repeat(Math.max(1, width)))];
 		this.#cachedWidth = width;
 		this.#cachedLines = lines;
 		return lines;

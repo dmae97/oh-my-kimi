@@ -24,6 +24,7 @@ import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { toolWireSchema } from "../utils/schema/wire";
 import chatmlHistoryNote from "./gitlab-duo-workflow-chatml-note.md" with { type: "text" };
+import { redactSensitiveCredentials } from "./transform-messages";
 
 export const GITLAB_DUO_WORKFLOW_PROVIDER_ID = "gitlab-duo-agent";
 export const GITLAB_DUO_WORKFLOW_API = "gitlab-duo-agent";
@@ -2581,10 +2582,13 @@ function isGitLabDuoWorkflowChatMlGoal(context: Context): boolean {
 // conversation sequences the way `Human:`/`Assistant:` are.
 function buildGitLabDuoWorkflowGoal(context: Context): string {
 	const conversation = buildGitLabDuoWorkflowConversationHistory(context.messages);
+	// The goal transcript bypasses transformMessages, so apply the outbound
+	// credential redaction here — the same scrub the flow-config system slot
+	// already receives — before the payload leaves the process.
 	if (conversation.length <= 1) {
-		return extractLatestUserPrompt(context.messages);
+		return redactSensitiveCredentials(extractLatestUserPrompt(context.messages));
 	}
-	return renderGitLabDuoWorkflowChatMl(conversation);
+	return redactSensitiveCredentials(renderGitLabDuoWorkflowChatMl(conversation));
 }
 
 const GITLAB_DUO_WORKFLOW_CHATML_START = "<|im_start|>";

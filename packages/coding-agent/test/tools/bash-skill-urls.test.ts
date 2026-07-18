@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import type { Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
-import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
+import { type ResolveContext, resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { expandInternalUrls, expandSkillUrls } from "@oh-my-pi/pi-coding-agent/tools/bash-skill-urls";
 import { ToolError } from "@oh-my-pi/pi-coding-agent/tools/tool-errors";
 
@@ -24,6 +24,7 @@ function createInternalRouter(resources: Record<string, { sourcePath?: string; e
 	canHandle: (input: string) => boolean;
 	resolve: (
 		input: string,
+		context?: ResolveContext,
 	) => Promise<{ url: string; content: string; contentType: "text/plain"; sourcePath?: string; immutable: boolean }>;
 } {
 	return {
@@ -169,12 +170,49 @@ describe("expandInternalUrls", () => {
 		);
 	});
 
+	it("passes caller cwd to the router when expanding memory URLs", async () => {
+		const cwd = "/tmp/session-b";
+		const sourcePath = "/tmp/session-b-memory/memory_summary.md";
+		let observedCwd: string | undefined;
+		let observedPathOnly: boolean | undefined;
+		const router = {
+			canHandle: (input: string) => input === "memory://root/memory_summary.md",
+			resolve: async (input: string, context?: ResolveContext) => {
+				observedCwd = context?.cwd;
+				observedPathOnly = context?.pathOnly;
+				return {
+					url: input,
+					content: "",
+					contentType: "text/plain" as const,
+					sourcePath,
+					immutable: true,
+				};
+			},
+		};
+
+		await expect(
+			expandInternalUrls("cat memory://root/memory_summary.md", { skills: [], internalRouter: router, cwd }),
+		).resolves.toBe(`cat ${shellEscape(sourcePath)}`);
+		expect(observedCwd).toBe(cwd);
+		expect(observedPathOnly).toBe(true);
+	});
+
 	it("expands quoted non-skill URLs and shell-escapes quotes in paths", async () => {
 		const router = createInternalRouter({
 			"artifact://7": { sourcePath: "/tmp/artifacts/with'quote.log" },
 		});
 		await expect(expandInternalUrls('cat "artifact://7"', { skills: [], internalRouter: router })).resolves.toBe(
 			`cat ${shellEscape("/tmp/artifacts/with'quote.log")}`,
+		);
+	});
+
+	it("expands an unquoted URL inside a double-quoted command substitution", async () => {
+		const skills = [createSkill("valid-skill", "/tmp/skills/valid-skill")];
+		const command = 'echo "$(realpath skill://valid-skill/SKILL.md 2>&1)"';
+		const expectedPath = path.join(skills[0].baseDir, "SKILL.md");
+
+		await expect(expandInternalUrls(command, { skills })).resolves.toBe(
+			`echo "$(realpath ${shellEscape(expectedPath)} 2>&1)"`,
 		);
 	});
 

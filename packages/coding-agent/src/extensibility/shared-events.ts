@@ -191,6 +191,12 @@ export interface AgentStartEvent {
 export interface AgentEndEvent {
 	type: "agent_end";
 	messages: AgentMessage[];
+	/**
+	 * When true, the session has already scheduled an automatic continuation
+	 * (auto-retry, empty/unexpected-stop retry, etc.). Subscribers must not
+	 * treat this as a user-visible terminal settle.
+	 */
+	willContinue?: boolean;
 }
 
 /** Fired at the start of each turn */

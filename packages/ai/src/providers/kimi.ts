@@ -5,8 +5,8 @@
  * - OpenAI: https://api.kimi.com/coding/v1/chat/completions
  * - Anthropic: https://api.kimi.com/coding/v1/messages
  *
- * The Anthropic API is generally more stable and recommended.
- * Note: Kimi calculates TPM rate limits based on max_tokens, not actual output.
+ * Each discovered model selects its server-declared protocol; legacy models
+ * without protocol metadata retain the Anthropic-compatible default.
  */
 
 import { getKimiCommonHeaders } from "../registry/oauth/kimi";
@@ -20,11 +20,8 @@ import {
 
 export type KimiApiFormat = OpenAIAnthropicApiFormat;
 
-// Note: Anthropic SDK appends /v1/messages, so base URL should not include /v1
-const KIMI_ANTHROPIC_BASE_URL = "https://api.kimi.com/coding";
-
 export interface KimiOptions extends OpenAIAnthropicShimOptions {
-	/** API format: "openai" or "anthropic". Default: "anthropic" */
+	/** Explicit API format override. Defaults to the model's discovered protocol. */
 	format?: KimiApiFormat;
 }
 
@@ -38,8 +35,9 @@ export function streamKimi(
 	options?: KimiOptions,
 ): AssistantMessageEventStream {
 	return streamOpenAIAnthropicShim(model, context, options, {
-		anthropicBaseUrl: KIMI_ANTHROPIC_BASE_URL,
-		defaultFormat: "anthropic",
+		anthropicBaseUrl: model.baseUrl.replace(/\/v1\/?$/, ""),
+		defaultFormat: model.compat.kimiApiFormat ?? "anthropic",
+		anthropicThinkingMode: model.compat.thinkingFormat === "kimi" ? "anthropic-adaptive" : undefined,
 		extraHeaders: getKimiCommonHeaders,
 	});
 }

@@ -13,6 +13,7 @@ import type {
 	AgentToolUpdateCallback,
 	ThinkingLevel,
 	ToolApproval,
+	ToolLoadMode,
 } from "@oh-my-pi/pi-agent-core";
 import type { CompactionResult } from "@oh-my-pi/pi-agent-core/compaction";
 import type {
@@ -41,6 +42,7 @@ import type { PythonResult } from "../../eval/py/executor";
 import type { BashResult } from "../../exec/bash-executor";
 import type { ExecOptions, ExecResult } from "../../exec/exec";
 import type * as PiCodingAgent from "../../index";
+import type { LocalProtocolOptions } from "../../internal-urls/local-protocol";
 import type { MemoryRuntimeContext } from "../../memory-backend";
 import type { CustomEditor } from "../../modes/components/custom-editor";
 import type { Theme } from "../../modes/theme/theme";
@@ -391,7 +393,7 @@ export interface ExtensionModelQuery {
 	/** The current session model, if one is set. */
 	current(): Model | undefined;
 	/**
-	 * Resolve a model string (`provider/id`, bare id) or role alias (`pi/slow`, a
+	 * Resolve a model string (`provider/id`, bare id) or role alias (`@slow`, a
 	 * configured role) to a Model, using the same settings-backed aliases and match
 	 * preferences as core selection. Thinking/routing suffixes are accepted and resolved
 	 * to the base model (pass effort separately). Returns undefined when nothing matches.
@@ -420,6 +422,8 @@ export interface ExtensionContext {
 	sessionManager: ReadonlySessionManager;
 	/** Model registry for API key resolution */
 	modelRegistry: ModelRegistry;
+	/** Calling session's `local://` root mapping for external tool bridges. */
+	localProtocolOptions?: LocalProtocolOptions;
 	/** Current model (may be undefined) */
 	model: Model | undefined;
 	/** Read-only model query facade: list / current / resolve / family. */
@@ -436,6 +440,24 @@ export interface ExtensionContext {
 	getSystemPrompt(): string[];
 	/** Structured memory runtime for status/search/save across the configured backend. */
 	memory?: MemoryRuntimeContext;
+	/**
+	 * Schedule a repeating callback whose throws are contained. Unlike raw
+	 * `setInterval`, a synchronous throw or rejected promise from `callback` is
+	 * logged and surfaced through the extension error channel instead of
+	 * escaping as a process-fatal `uncaughtException` — one misbehaving timer
+	 * can no longer take down the whole session. The handle is `unref`'d and
+	 * cleared automatically on `session_shutdown`. Prefer this over raw
+	 * `setInterval` for any extension background work.
+	 */
+	setInterval(callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]): Timer;
+	/**
+	 * Schedule a one-shot callback whose throws are contained, mirroring
+	 * {@link setInterval}. Cleared automatically on `session_shutdown` if it has
+	 * not yet fired.
+	 */
+	setTimeout(callback: (...args: unknown[]) => void, ms?: number, ...args: unknown[]): Timer;
+	/** Clear a timer scheduled via {@link setInterval} or {@link setTimeout}. */
+	clearTimer(timer: Timer): void;
 }
 
 /**
@@ -514,6 +536,8 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	/** If true, tool is registered but not auto-included in the initial active set.
 	 *  The registering extension is responsible for activating/deactivating it via setActiveTools(). */
 	defaultInactive?: boolean;
+	/** How this tool is presented when enabled. See {@link ToolLoadMode}. Extension tools default to `"discoverable"`; set `"essential"` to stay top-level. */
+	loadMode?: ToolLoadMode;
 	/** If true, tool may stage deferred changes that require explicit resolve/discard. */
 	deferrable?: boolean;
 	/** Tool approval tier. Defaults to `"exec"` when omitted.

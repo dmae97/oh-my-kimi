@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
+	DefaultPackageManager,
 	DefaultResourceLoader,
 	createAgentSession as legacyCreateAgentSession,
 } from "@oh-my-pi/pi-coding-agent/extensibility/legacy-pi-coding-agent-shim";
@@ -40,6 +41,35 @@ async function mkTempCwd(prefix: string): Promise<string> {
 	tempRoots.push(dir);
 	return dir;
 }
+
+describe("DefaultPackageManager.resolve() (issue #5658)", () => {
+	it("enumerates configured extension paths through OMP discovery", async () => {
+		const tmp = await mkTempCwd("omp-legacy-default-package-manager-");
+		const cwd = path.join(tmp, "project");
+		const agentDir = path.join(tmp, "agent");
+		const extensionPath = path.join(cwd, "configured-extension.ts");
+		await fs.mkdir(cwd, { recursive: true });
+		await fs.writeFile(extensionPath, "export default function () {}\n", "utf8");
+		const settingsManager = Settings.isolated({ extensions: [extensionPath] });
+		const manager = new DefaultPackageManager({ cwd, agentDir, settingsManager });
+
+		const resolved = await manager.resolve(() => Promise.resolve("skip"));
+		const extension = resolved.extensions.find(resource => resource.path === extensionPath);
+
+		expect(extension).toEqual({
+			path: extensionPath,
+			enabled: true,
+			metadata: {
+				source: "auto",
+				scope: "project",
+				origin: "top-level",
+			},
+		});
+		expect(resolved.skills).toEqual([]);
+		expect(resolved.prompts).toEqual([]);
+		expect(resolved.themes).toEqual([]);
+	});
+});
 
 describe("DefaultResourceLoader.reload() (issue #4567)", () => {
 	it("populates the discovery snapshot honoring no* flags and applying every override", async () => {

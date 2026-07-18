@@ -105,5 +105,5 @@ export function showCommandMessage(ctx: InteractiveModeContext, text: string): v
 	block.addChild(new DynamicBorder());
 	block.addChild(new Text(text, 1, 1));
 	block.addChild(new DynamicBorder());
-	ctx.present(block);
+	ctx.presentCommandOutput(block);
 }

@@ -1,4 +1,4 @@
-import { fetchWithRetry, parseStreamingJson } from "@oh-my-pi/pi-utils";
+import { fetchWithRetry, parseStreamingJson, readJsonl } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
 import { getEnvApiKey } from "../stream";
 import type {
@@ -347,36 +347,6 @@ async function captureHttpErrorResponse(response: Response): Promise<CapturedHtt
 	};
 }
 
-async function* iterateNdjson(stream: ReadableStream<Uint8Array>): AsyncGenerator<OllamaChatChunk> {
-	const reader = stream.getReader();
-	const decoder = new TextDecoder();
-	let buffer = "";
-	while (true) {
-		const { done, value } = await reader.read();
-		if (done) {
-			break;
-		}
-		buffer += decoder.decode(value, { stream: true });
-		while (true) {
-			const newlineIndex = buffer.indexOf("\n");
-			if (newlineIndex < 0) {
-				break;
-			}
-			const line = buffer.slice(0, newlineIndex).trim();
-			buffer = buffer.slice(newlineIndex + 1);
-			if (!line) {
-				continue;
-			}
-			yield JSON.parse(line) as OllamaChatChunk;
-		}
-	}
-	buffer += decoder.decode();
-	const tail = buffer.trim();
-	if (tail) {
-		yield JSON.parse(tail) as OllamaChatChunk;
-	}
-}
-
 function createEmptyOutput(model: Model<"ollama-chat">): AssistantMessage {
 	return {
 		role: "assistant",
@@ -622,7 +592,7 @@ const streamOllamaOnce = (
 				});
 			}
 			stream.push({ type: "start", partial: output });
-			for await (const chunk of iterateNdjson(response.body)) {
+			for await (const chunk of readJsonl<OllamaChatChunk>(response.body)) {
 				if (chunk.message?.thinking) {
 					suppressHealedThinking = true;
 					endActiveTextBlock();

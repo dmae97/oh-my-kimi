@@ -86,6 +86,16 @@ describe("openai-responses system prompt routing", () => {
 			expect(input.every(m => m.role !== "system")).toBe(true);
 		});
 
+		it("redacts sensitive credentials in instructions", async () => {
+			const context: Context = {
+				systemPrompt: ["Token: gho_************************************"],
+				messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
+			};
+			const body = await captureRequestBody(gpt4oMiniModel, context);
+
+			expect(body.instructions).toBe("Token: [github_token_redacted]");
+		});
+
 		it("omits instructions field when there is no system prompt", async () => {
 			const context: Context = {
 				systemPrompt: undefined,

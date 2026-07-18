@@ -90,6 +90,32 @@ describe("SessionSelectorComponent mouse", () => {
 		expect(picked?.id).toBe("cccc");
 	});
 
+	it("ignores follow-up keys while locked, then accepts a retry after unlock", () => {
+		const session = makeSession("aaaa", "Alpha session");
+		let selections = 0;
+		let cancellations = 0;
+		const selector = new SessionSelectorComponent(
+			[session],
+			() => {
+				selections += 1;
+			},
+			() => {
+				cancellations += 1;
+			},
+			() => {},
+		);
+
+		selector.lockInput();
+		selector.handleInput("\n");
+		selector.handleInput("\x1b");
+
+		expect(selections).toBe(0);
+		expect(cancellations).toBe(0);
+		selector.unlockInput();
+		selector.handleInput("\n");
+		expect(selections).toBe(1);
+	});
+
 	it("ignores a click on the pinned footer (never resumes a hidden session)", () => {
 		const sessions = Array.from({ length: 20 }, (_, i) => makeSession(`s${i}`, `Title ${i}`));
 		let picked: SessionInfo | undefined;

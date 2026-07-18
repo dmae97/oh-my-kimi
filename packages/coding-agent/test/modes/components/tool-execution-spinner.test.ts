@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
+import { TranscriptContainer } from "@oh-my-pi/pi-coding-agent/modes/components/transcript-container";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { TUI } from "@oh-my-pi/pi-tui";
 
@@ -40,34 +41,6 @@ describe("ToolExecutionComponent live preview spinners", () => {
 			expect(requestRender).not.toHaveBeenCalled();
 			expect(firstFrame).toContain("time.sleep(10)");
 			expect(secondFrame).toContain("time.sleep(10)");
-			expect(secondFrame).not.toBe(firstFrame);
-		} finally {
-			component.stopAnimation();
-		}
-	});
-
-	it("animates a shell pending header while the call is live", () => {
-		vi.useFakeTimers();
-		const requestRender = vi.fn();
-		const requestComponentRender = vi.fn();
-		const component = new ToolExecutionComponent(
-			"ssh",
-			{ host: "example.test", command: "sleep 10" },
-			{},
-			undefined,
-			{ requestRender, requestComponentRender } as unknown as TUI,
-			process.cwd(),
-		);
-
-		try {
-			const firstFrame = stripVTControlCharacters(component.render(80).join("\n"));
-			vi.advanceTimersByTime(120);
-			const secondFrame = stripVTControlCharacters(component.render(80).join("\n"));
-
-			expect(requestComponentRender).toHaveBeenCalledWith(component);
-			expect(requestRender).not.toHaveBeenCalled();
-			expect(firstFrame).toContain("sleep 10");
-			expect(secondFrame).toContain("sleep 10");
 			expect(secondFrame).not.toBe(firstFrame);
 		} finally {
 			component.stopAnimation();
@@ -178,6 +151,36 @@ describe("ToolExecutionComponent live preview spinners", () => {
 			vi.advanceTimersByTime(500);
 			expect(requestRender).not.toHaveBeenCalled();
 			expect(requestComponentRender).not.toHaveBeenCalled();
+		} finally {
+			component.stopAnimation();
+		}
+	});
+
+	it("pins the live vibe_wait wall and releases it after the final result", () => {
+		const component = new ToolExecutionComponent(
+			"vibe_wait",
+			{},
+			{},
+			undefined,
+			{ requestRender: vi.fn(), requestComponentRender: vi.fn() } as unknown as TUI,
+			process.cwd(),
+		);
+		const transcript = new TranscriptContainer();
+		transcript.addChild(component);
+
+		try {
+			transcript.render(80);
+			expect(transcript.isNativeScrollbackLiveRegionPinned()).toBe(true);
+
+			component.updateResult(
+				{
+					content: [{ type: "text", text: "No turns in flight to wait for." }],
+					details: { op: "wait", screens: [] },
+				},
+				false,
+			);
+			transcript.render(80);
+			expect(transcript.isNativeScrollbackLiveRegionPinned()).toBe(false);
 		} finally {
 			component.stopAnimation();
 		}

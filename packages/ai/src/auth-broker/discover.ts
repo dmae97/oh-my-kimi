@@ -72,6 +72,26 @@ interface ConfigSnapshot {
 	token?: string;
 }
 
+/**
+ * Resolve a dotted config key (e.g. `auth.broker.url`) against a parsed YAML
+ * record, accepting both nested form (`auth: { broker: { url } }`) and the
+ * legacy flat literal-dot key (`"auth.broker.url": ...`). Nested wins when both
+ * are present. Returns the value only when it is a string.
+ */
+function readDottedString(record: Record<string, unknown>, dottedKey: string): string | undefined {
+	let current: unknown = record;
+	for (const segment of dottedKey.split(".")) {
+		if (current === null || typeof current !== "object" || Array.isArray(current)) {
+			current = undefined;
+			break;
+		}
+		current = (current as Record<string, unknown>)[segment];
+	}
+	if (typeof current === "string") return current;
+	const flat = record[dottedKey];
+	return typeof flat === "string" ? flat : undefined;
+}
+
 async function readConfigYaml(agentDir: string): Promise<ConfigSnapshot> {
 	for (const filename of MAIN_CONFIG_FILENAMES) {
 		const configPath = path.join(agentDir, filename);
@@ -80,9 +100,8 @@ async function readConfigYaml(agentDir: string): Promise<ConfigSnapshot> {
 			const parsed = YAML.parse(raw);
 			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
 			const record = parsed as Record<string, unknown>;
-			const url = typeof record["auth.broker.url"] === "string" ? (record["auth.broker.url"] as string) : undefined;
-			const token =
-				typeof record["auth.broker.token"] === "string" ? (record["auth.broker.token"] as string) : undefined;
+			const url = readDottedString(record, "auth.broker.url");
+			const token = readDottedString(record, "auth.broker.token");
 			return { url, token };
 		} catch (err) {
 			if (isEnoent(err)) continue;

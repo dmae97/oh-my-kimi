@@ -27,7 +27,10 @@ def load_api_key(env_path: str = "~/.env") -> str:
 
 def image_block(png_path: Path) -> dict:
     data = base64.b64encode(png_path.read_bytes()).decode()
-    return {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": data}}
+    return {
+        "type": "image",
+        "source": {"type": "base64", "media_type": "image/png", "data": data},
+    }
 
 
 def complete(
@@ -61,7 +64,9 @@ def complete(
         try:
             with urllib.request.urlopen(req, timeout=300) as resp:
                 out = json.load(resp)
-            text = "".join(b.get("text", "") for b in out["content"] if b.get("type") == "text")
+            text = "".join(
+                b.get("text", "") for b in out["content"] if b.get("type") == "text"
+            )
             return text, out.get("usage", {}), out.get("stop_reason", "")
         except urllib.error.HTTPError as err:
             detail = err.read().decode(errors="replace")[:500]

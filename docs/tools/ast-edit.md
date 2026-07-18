@@ -40,8 +40,8 @@ Shared AST pattern grammar and language catalog: see [`ast_grep`](./ast-grep.md#
 - `details` includes aggregate preview metadata:
   - `totalReplacements`, `filesTouched`, `filesSearched`, `applied`, `limitReached`
   - optional `parseErrors`, `parseErrorsTotal`, `scopePath`, `files`, `fileReplacements`, `displayContent`, `searchPath`, `cwd`, `meta`
-- The tool always previews first (`applied: false` in the direct result). Actual file writes happen only later through `resolve(action: "apply", ...)`.
-- When preview produced replacements, `ast_edit` also queues a pending `resolve` action. Successful apply returns a separate `resolve` result, not another `ast_edit` result.
+- The tool always previews first (`applied: false` in the direct result). Actual file writes happen only later through a `write /xdev/resolve` dispatch whose plain-text body is the reason.
+- When preview produced replacements, `ast_edit` also queues a pending resolve action. Successful apply returns a separate resolve dispatch result (on the `write` call), not another `ast_edit` result.
 
 ## Flow
 1. `AstEditTool.execute()` validates each op in `packages/coding-agent/src/tools/ast-edit.ts`:
@@ -61,9 +61,9 @@ Shared AST pattern grammar and language catalog: see [`ast_grep`](./ast-grep.md#
    - compiles every rewrite pattern for that language,
    - parses each file, skips files with syntax-error trees, collects `replace_by(...)` edits for every match, enforces replacement and file caps, and returns textual before/after slices plus source ranges.
 7. The TS wrapper deduplicates and caps parse errors, groups changes by file, and renders preview diff lines.
-8. If preview found replacements and `applied` is false, `queueResolveHandler(...)` registers a non-forcing pending `resolve` invoker. While it is pending the session surfaces a `SoftToolRequirement` carrying the resolve reminder; the agent runtime injects the reminder and forces `resolve` only if the model declines that turn (no per-preview `tool_choice` cache bust).
-9. On `resolve(action: "apply")`, the queued callback reruns the same rewrite set with `dryRun: false`, recomputes counts, and returns an error result if the live result no longer matches the preview (`stalePreview`). The current implementation compares replacement totals and per-file counts after the rerun; if the new run has already written different counts, the result is marked error.
-10. On a non-stale apply, the callback returns `Applied N replacements in M files.` (in hashline mode followed by fresh `[path#tag]` snapshot headers re-recorded from the post-apply content); on discard, `resolve` returns a discard message without mutating files.
+8. If preview found replacements and `applied` is false, `queueResolveHandler(...)` registers a non-forcing pending resolve invoker. While it is pending the session surfaces a `SoftToolRequirement` (`toolName: "write"` with a `/xdev/resolve` or `/xdev/reject` `satisfies` predicate) carrying the resolve reminder; the agent runtime injects the reminder and forces `write` only if the model declines that turn (no per-preview `tool_choice` cache bust).
+9. On a `write /xdev/resolve` dispatch, the queued callback reruns the same rewrite set with `dryRun: false`, recomputes counts, and returns an error result if the live result no longer matches the preview (`stalePreview`). The current implementation compares replacement totals and per-file counts after the rerun; if the new run has already written different counts, the result is marked error.
+10. On a non-stale apply, the callback returns `Applied N replacements in M files.` (in hashline mode followed by fresh `[path#tag]` snapshot headers re-recorded from the post-apply content); on discard (`write /xdev/reject`), the dispatch returns a discard message without mutating files.
 
 ## Modes / Variants
 - Single file: preview or apply against one file.
@@ -71,7 +71,7 @@ Shared AST pattern grammar and language catalog: see [`ast_grep`](./ast-grep.md#
 - Multiple explicit paths/globs: wrapper unions them into one synthetic scope or runs per-target native calls when paths only meet at root.
 - Internal URL inputs: only supported when the router resolves them to a backing file path.
 - Preview mode: always the direct `ast_edit` tool result.
-- Apply mode: only reachable through the queued `resolve` callback after a preview.
+- Apply mode: only reachable through the queued resolve callback (a `write /xdev/resolve` or `/xdev/reject` dispatch) after a preview.
 - Hashline output mode vs plain line/column mode: controlled by `resolveFileDisplayMode()`.
 
 ## Side Effects
@@ -79,11 +79,11 @@ Shared AST pattern grammar and language catalog: see [`ast_grep`](./ast-grep.md#
   - Preview reads files and scans directories.
   - Apply rewrites files in place with `std::fs::write(...)`, but only when the computed output differs from the original source.
 - Session state (transcript, memory, jobs, checkpoints, registries)
-  - Registers a non-forcing pending `resolve` invoker through `queueResolveHandler(...)`.
-  - Surfaces a `SoftToolRequirement` (with the resolve reminder) while pending; the agent runtime forces `resolve` only on non-compliance — no steering message and no per-preview forced tool choice.
+  - Registers a non-forcing pending resolve invoker through `queueResolveHandler(...)`.
+  - Surfaces a `SoftToolRequirement` (with the resolve reminder) while pending; the agent runtime forces `write` only on non-compliance — no steering message and no per-preview forced tool choice.
 - User-visible prompts / interactive UI
   - Direct `ast_edit` results are previews.
-  - Follow-up apply/discard is exposed through the hidden `resolve` tool.
+  - Follow-up apply/discard is exposed through the `/xdev/resolve` and `/xdev/reject` device writes.
 - Background work / cancellation
   - Native preview/apply work runs on a blocking worker via `task::blocking(...)`.
   - Cancellation and optional native timeout are cooperative through `CancelToken::heartbeat()`.

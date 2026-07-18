@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+
 from robomp import tasks
 from robomp.github_client import IssueInfo, RepoInfo
 from robomp.tasks import _attach_thread, _directive_from_payload
@@ -89,7 +90,6 @@ async def test_attach_thread_preserves_authorizes_impl(monkeypatch: pytest.Monke
     assert hydrated.body == "test body"
     assert hydrated.author == "test_author"
     assert hydrated.authorizes_impl is True
-
 
 
 def _payload_with_directive(*, issue_number: int, body: str = "@robomp-bot ship it") -> dict[str, object]:

@@ -2,13 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import type { ApiKeyResolveContext, AssistantMessage, ToolCall } from "@oh-my-pi/pi-ai";
-import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import type { ApiKeyResolveContext, AssistantMessage, ToolCall, ToolResultMessage } from "@oh-my-pi/pi-ai";
+import { unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
+import { createMockModel, registerMockApi } from "@oh-my-pi/pi-ai/providers/mock";
 import * as aiStream from "@oh-my-pi/pi-ai/stream";
+import { kCursorExecResolved } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -16,6 +19,8 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 
 type AutoRetryEndEvent = Extract<AgentSessionEvent, { type: "auto_retry_end" }>;
 type AutoRetryStartEvent = Extract<AgentSessionEvent, { type: "auto_retry_start" }>;
+
+const RETRY_CAP_MOCK_API_SOURCE = "agent-session-retry-cap-test";
 
 function lastAssistant(session: AgentSession): AssistantMessage {
 	const message = session.agent.state.messages.at(-1);
@@ -67,9 +72,10 @@ describe("AgentSession retry delay cap", () => {
 			await session.dispose();
 			session = undefined;
 		}
+		unregisterCustomApis(RETRY_CAP_MOCK_API_SOURCE);
+		vi.restoreAllMocks();
 		authStorage.close();
 		tempDir.removeSync();
-		vi.restoreAllMocks();
 	});
 
 	it("bails immediately when retry-after exceeds retry.maxDelayMs", async () => {
@@ -205,25 +211,114 @@ describe("AgentSession retry delay cap", () => {
 		expect(last.content).toContainEqual({ type: "text", text: "recovered after stream read retry" });
 	});
 
-	it("switches credentials instead of failing the delay cap for account rate limits", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+	it("marks extension agent_end willContinue when auto-retry schedules a continue", async () => {
+		const model = getBundledModel("openai", "gpt-5");
 		if (!model) {
-			throw new Error("Expected bundled Anthropic test model to exist");
+			throw new Error("Expected bundled OpenAI test model to exist");
 		}
+		authStorage.setRuntimeApiKey("openai", "openai-test-key");
 
+		const mock = createMockModel({
+			responses: [
+				{ throw: "Error Code stream_read_error: stream_read_error" },
+				{ content: ["recovered after stream read retry"], stopReason: "stop" },
+			],
+		});
+		const agent = new Agent({
+			getApiKey: requestedModel => `${requestedModel.provider}-test-key`,
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: (requestedModel, context, options) => mock.stream(requestedModel, context, options),
+		});
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.maxDelayMs": 5_000,
+			"retry.maxRetries": 1,
+			"retry.modelFallback": false,
+		});
+		settings.setModelRole("default", `${model.provider}/${model.id}`);
+
+		const extensionEmits: Array<{ type: string; willContinue?: boolean }> = [];
+		// Partial ExtensionRunner double — same pattern as sibling agent-session tests;
+		// only emit surfaces used on the auto-retry path are implemented.
+		const extensionRunner = {
+			emit: async (event: { type: string; willContinue?: boolean }) => {
+				extensionEmits.push({ type: event.type, willContinue: event.willContinue });
+			},
+			emitBeforeAgentStart: async () => undefined,
+			hasHandlers: () => false,
+			emitSessionStop: async () => undefined,
+		} as unknown as ExtensionRunner;
+
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+			extensionRunner,
+		});
+
+		vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
+
+		await session.prompt("Trigger stream read retry");
+		await session.waitForIdle();
+
+		const agentEnds = extensionEmits.filter(event => event.type === "agent_end");
+		expect(agentEnds.length).toBeGreaterThanOrEqual(2);
+		// First settle is the failed attempt that scheduled continue; final settle is terminal.
+		expect(agentEnds[0]?.willContinue).toBe(true);
+		expect(agentEnds.at(-1)?.willContinue).toBeFalsy();
+		expect(lastAssistant(session).stopReason).toBe("stop");
+	});
+
+	it("rolls through four sibling credentials inside one AgentSession prompt before delay-cap retry", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const fallbackModel = getBundledModel("openai", "gpt-5");
+		if (!model || !fallbackModel) {
+			throw new Error("Expected bundled primary and fallback test models to exist");
+		}
+		const providerSessionId = "retry-four-credential-session-3";
+
+		registerMockApi(RETRY_CAP_MOCK_API_SOURCE);
 		authStorage.removeRuntimeApiKey("anthropic");
+		authStorage.setRuntimeApiKey("openai", "openai-fallback-key");
 		await authStorage.set("anthropic", [
-			{ type: "api_key", key: "anthropic-key-1" },
-			{ type: "api_key", key: "anthropic-key-2" },
+			{ type: "api_key", key: "anthropic-key-A" },
+			{ type: "api_key", key: "anthropic-key-B" },
+			{ type: "api_key", key: "anthropic-key-C" },
+			{ type: "api_key", key: "anthropic-key-D" },
 		]);
 
 		const rateLimitError =
 			'429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\'s rate limit. Please try again later."}} retry-after-ms=11180000';
-		const mock = createMockModel();
 		const requestedKeys: string[] = [];
-		let agent!: Agent;
-		agent = new Agent({
-			getApiKey: model => modelRegistry.resolver(model, agent.sessionId),
+		const mock = createMockModel({
+			id: model.id,
+			provider: model.provider,
+			handler: (_context, options) => {
+				const apiKey = typeof options?.apiKey === "string" ? options.apiKey : undefined;
+				if (!apiKey) {
+					throw new Error("Expected streamSimple to pass a resolved string API key");
+				}
+				requestedKeys.push(apiKey);
+				// Succeed only once the fourth distinct sibling is attempted; the
+				// session-hash start index is arbitrary, so the repro must not pin
+				// which credential comes first — only that all four are rolled through.
+				return new Set(requestedKeys).size >= 4
+					? { content: ["recovered on fourth credential"], stopReason: "stop" }
+					: { throw: rateLimitError };
+			},
+		});
+		const requestedModels: string[] = [];
+		const agent = new Agent({
+			getApiKey: model => modelRegistry.resolver(model, providerSessionId),
+			sessionId: providerSessionId,
 			initialState: {
 				model,
 				systemPrompt: ["Test"],
@@ -231,22 +326,20 @@ describe("AgentSession retry delay cap", () => {
 				messages: [],
 			},
 			streamFn: (requestedModel, context, options) => {
-				const apiKey = resolveInitialApiKey(options?.apiKey);
-				requestedKeys.push(apiKey);
-				if (requestedKeys.length === 1) {
-					mock.push({ throw: rateLimitError });
-				} else {
-					mock.push({ content: ["recovered after credential switch"] });
-				}
-				return mock.stream(requestedModel, context, options);
+				requestedModels.push(`${requestedModel.provider}/${requestedModel.id}`);
+				return aiStream.streamSimple(mock.model, context, options);
 			},
 		});
 
 		const settings = Settings.isolated({
 			"compaction.enabled": false,
-			"retry.baseDelayMs": 5,
-			"retry.maxDelayMs": 100,
-			"retry.maxRetries": 1,
+			"retry.baseDelayMs": 1,
+			"retry.maxDelayMs": 1,
+			"retry.maxRetries": 0,
+			"retry.modelFallback": true,
+			"retry.fallbackChains": {
+				default: [`${fallbackModel.provider}/${fallbackModel.id}`],
+			},
 		});
 		settings.setModelRole("default", `${model.provider}/${model.id}`);
 
@@ -255,9 +348,9 @@ describe("AgentSession retry delay cap", () => {
 			sessionManager: SessionManager.inMemory(),
 			settings,
 			modelRegistry,
+			providerSessionId,
 		});
 
-		const waitSpy = vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
 		const retryStartEvents: AutoRetryStartEvent[] = [];
 		const retryEndEvents: AutoRetryEndEvent[] = [];
 		session.subscribe(event => {
@@ -268,18 +361,26 @@ describe("AgentSession retry delay cap", () => {
 		await session.prompt("Trigger account rate limit with long retry-after");
 		await session.waitForIdle();
 
-		expect(requestedKeys).toHaveLength(2);
-		expect(new Set(requestedKeys).size).toBe(2);
-		expect(retryStartEvents).toHaveLength(1);
-		expect(retryStartEvents[0]).toMatchObject({ delayMs: 0 });
-		expect(retryEndEvents).toHaveLength(1);
-		expect(retryEndEvents[0]).toMatchObject({ success: true, attempt: 1 });
-		for (const call of waitSpy.mock.calls) {
-			expect(call[0]).toBeLessThanOrEqual(100);
+		expect(requestedModels).toEqual([`${model.provider}/${model.id}`]);
+		expect(requestedKeys).toHaveLength(4);
+		expect(new Set(requestedKeys).size).toBe(4);
+		expect(mock.calls).toHaveLength(4);
+		expect(retryStartEvents).toHaveLength(0);
+		expect(retryEndEvents).toHaveLength(0);
+		expect(session.model?.provider).toBe(model.provider);
+		expect(session.model?.id).toBe(model.id);
+		for (const call of mock.calls) {
+			expect(call.context.messages.filter(message => message.role === "user")).toHaveLength(1);
 		}
+		expect(session.agent.state.messages.filter(message => message.role === "user")).toHaveLength(1);
+		expect(
+			session.agent.state.messages.some(
+				message => message.role === "custom" && "customType" in message && message.customType === "irc:incoming",
+			),
+		).toBe(false);
 		const last = lastAssistant(session);
 		expect(last.stopReason).toBe("stop");
-		expect(last.content).toContainEqual({ type: "text", text: "recovered after credential switch" });
+		expect(last.content).toContainEqual({ type: "text", text: "recovered on fourth credential" });
 	});
 
 	it("switches same-provider credentials before model fallback on ChatGPT usage limits", async () => {
@@ -600,6 +701,126 @@ describe("AgentSession retry delay cap", () => {
 			.find((message): message is AssistantMessage => message.role === "assistant");
 		expect(lastError?.stopReason).toBe("error");
 		expect(lastError?.errorMessage).toBe("The operation timed out.");
+	});
+
+	it("resumes a stalled Cursor stream after its exec tool result", async () => {
+		const stallMessage = "Provider stream stalled while waiting for the next event";
+		const model = createMockModel({
+			id: "composer-2.5",
+			provider: "cursor",
+		});
+		authStorage.setRuntimeApiKey("cursor", "cursor-test-key");
+		const toolCall = {
+			type: "toolCall" as const,
+			id: "cursor-shell-1",
+			name: "shell",
+			arguments: { command: "pwd" },
+			[kCursorExecResolved]: true as const,
+		};
+		const toolResult: ToolResultMessage = {
+			role: "toolResult",
+			toolCallId: toolCall.id,
+			toolName: toolCall.name,
+			content: [{ type: "text", text: "/workspace" }],
+			isError: false,
+			timestamp: Date.now(),
+		};
+		let streamCalls = 0;
+		let resumedWithToolResult = false;
+		const agent = new Agent({
+			getApiKey: requestedModel => `${requestedModel.provider}-test-key`,
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			cursorOnToolResult: message => message,
+			streamFn: (_requestedModel, context, options) => {
+				streamCalls += 1;
+				if (streamCalls > 1) {
+					resumedWithToolResult = context.messages.some(
+						message => message.role === "toolResult" && message.toolCallId === toolCall.id,
+					);
+					model.push({ content: ["Recovered after Cursor stall"] });
+					return model.stream(model, context, options);
+				}
+
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(async () => {
+					await options?.cursorOnToolResult?.(toolResult);
+					const partial: AssistantMessage = {
+						role: "assistant",
+						content: [toolCall],
+						api: model.api,
+						provider: model.provider,
+						model: model.id,
+						usage: {
+							input: 0,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 0,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+						stopReason: "stop",
+						timestamp: Date.now(),
+					};
+					stream.push({ type: "start", partial });
+					stream.push({ type: "toolcall_start", contentIndex: 0, partial });
+					stream.push({
+						type: "toolcall_delta",
+						contentIndex: 0,
+						delta: JSON.stringify(toolCall.arguments),
+						partial,
+					});
+					stream.push({ type: "toolcall_end", contentIndex: 0, toolCall, partial });
+					stream.push({
+						type: "error",
+						reason: "error",
+						error: {
+							...partial,
+							stopReason: "error",
+							errorMessage: stallMessage,
+						},
+					});
+				});
+				return stream;
+			},
+		});
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.maxRetries": 1,
+		});
+		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+		const retryStartEvents: AutoRetryStartEvent[] = [];
+		const retryEndEvents: AutoRetryEndEvent[] = [];
+		session.subscribe(event => {
+			if (event.type === "auto_retry_start") retryStartEvents.push(event);
+			if (event.type === "auto_retry_end") retryEndEvents.push(event);
+		});
+
+		await session.prompt("Run pwd");
+		await session.waitForIdle();
+
+		expect(streamCalls).toBe(2);
+		expect(resumedWithToolResult).toBe(true);
+		expect(
+			session.agent.state.messages.filter(
+				message => message.role === "toolResult" && message.toolCallId === toolCall.id,
+			),
+		).toHaveLength(1);
+		expect(retryStartEvents).toHaveLength(1);
+		expect(retryEndEvents).toContainEqual(expect.objectContaining({ success: true, attempt: 1 }));
+		expect(lastAssistant(session).content).toContainEqual({ type: "text", text: "Recovered after Cursor stall" });
 	});
 
 	it("retries a transient socket close after partial text and thinking", async () => {

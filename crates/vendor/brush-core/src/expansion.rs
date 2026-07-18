@@ -626,30 +626,44 @@ impl<'a, SE: extensions::ShellExtensions> WordExpander<'a, SE> {
 			return Ok(Expansion::from(ExpansionPiece::Splittable(word.to_owned())));
 		}
 
-		// Apply brace expansion first, before anything else (not applicable to heredoc
-		// bodies).
-		let brace_expanded = self.brace_expand_if_needed(word)?;
+		// Apply brace expansion first, before anything else (not applicable to
+		// heredoc bodies). Each resulting element is an independent word: bash
+		// runs tilde/parameter/command/arithmetic expansion on EVERY element, so
+		// a tilde that begins any element (e.g. `~/{a,b}` -> `~/a` and `~/b`)
+		// must expand — not only the first. Parsing the space-joined result as a
+		// single word left every element after the first with a literal leading
+		// `~` (issue #5819).
+		let brace_expanded_words = self.brace_expand_words(word)?;
 		if tracing::enabled!(target: trace_categories::EXPANSION, tracing::Level::DEBUG)
-			&& brace_expanded != word
+			&& !(brace_expanded_words.len() == 1 && brace_expanded_words[0] == word)
 		{
-			tracing::debug!(target: trace_categories::EXPANSION, "  => brace expanded to '{brace_expanded}'");
+			tracing::debug!(target: trace_categories::EXPANSION, "  => brace expanded to {brace_expanded_words:?}");
 		}
 
-		// Expand: tildes, parameters, command substitutions, arithmetic.
-		let pieces = if self.heredoc_mode {
-			// Heredoc mode only affects top-level parsing (literal quotes); recursive
-			// expansion of parameter words (e.g., ${var:-"default"}) uses normal semantics.
-			self.heredoc_mode = false;
-
-			brush_parser::word::parse_heredoc(brace_expanded.as_ref(), &self.parser_options)?
-		} else {
-			brush_parser::word::parse(brace_expanded.as_ref(), &self.parser_options)?
-		};
-
+		// Expand each brace element separately (tildes, parameters, command
+		// substitutions, arithmetic), separating elements with a splittable
+		// space so downstream field splitting yields one field per element.
 		let mut expansions = vec![];
-		for piece in pieces {
-			let piece_expansion = self.expand_word_piece(piece.piece).await?;
-			expansions.push(piece_expansion);
+		for (index, element) in brace_expanded_words.iter().enumerate() {
+			if index > 0 {
+				expansions.push(Expansion::from(ExpansionPiece::Splittable(String::from(" "))));
+			}
+
+			let pieces = if self.heredoc_mode {
+				// Heredoc mode only affects top-level parsing (literal quotes);
+				// recursive expansion of parameter words (e.g., ${var:-"default"})
+				// uses normal semantics.
+				self.heredoc_mode = false;
+
+				brush_parser::word::parse_heredoc(element.as_ref(), &self.parser_options)?
+			} else {
+				brush_parser::word::parse(element.as_ref(), &self.parser_options)?
+			};
+
+			for piece in pieces {
+				let piece_expansion = self.expand_word_piece(piece.piece).await?;
+				expansions.push(piece_expansion);
+			}
 		}
 
 		let coalesced = coalesce_expansions(expansions);
@@ -695,7 +709,13 @@ impl<'a, SE: extensions::ShellExtensions> WordExpander<'a, SE> {
 		}
 	}
 
-	fn brace_expand_if_needed(&self, word: &'a str) -> Result<Cow<'a, str>, error::Error> {
+	/// Perform brace expansion on `word`, returning each expanded element as a
+	/// separate word. When brace expansion doesn't apply (disabled, no braces,
+	/// or a parse failure), the original word is returned as the sole element.
+	///
+	/// Empty brace elements (e.g. from `{,b}`) are returned as a quoted empty
+	/// string (`""`) so they survive as empty fields, matching bash.
+	fn brace_expand_words(&self, word: &'a str) -> Result<Vec<Cow<'a, str>>, error::Error> {
 		// We perform a non-authoritative check to see if the string *may* contain
 		// braces to expand. There may be false positives, but must be no false
 		// negatives.
@@ -703,28 +723,40 @@ impl<'a, SE: extensions::ShellExtensions> WordExpander<'a, SE> {
 			|| !self.shell.options().perform_brace_expansion
 			|| !may_contain_braces_to_expand(word)
 		{
-			return Ok(word.into());
+			return Ok(vec![word.into()]);
 		}
 
 		let parse_result = brush_parser::word::parse_brace_expansions(word, &self.parser_options);
 		if parse_result.is_err() {
 			tracing::error!("failed to parse for brace expansion: {parse_result:?}");
-			return Ok(word.into());
+			return Ok(vec![word.into()]);
 		}
 
 		let brace_expansion_pieces = parse_result?;
 		let Some(brace_expansion_pieces) = brace_expansion_pieces else {
-			return Ok(word.into());
+			return Ok(vec![word.into()]);
 		};
 
 		tracing::debug!(target: trace_categories::EXPANSION, "Brace expansion pieces: {brace_expansion_pieces:?}");
 
-		let result = braceexpansion::generate_and_combine_brace_expansions(brace_expansion_pieces)
+		let words = braceexpansion::generate_and_combine_brace_expansions(brace_expansion_pieces)
 			.into_iter()
-			.map(|s| if s.is_empty() { "\"\"".into() } else { s })
-			.join(" ");
+			.map(|s| if s.is_empty() { Cow::Borrowed("\"\"") } else { Cow::Owned(s) })
+			.collect();
 
-		Ok(result.into())
+		Ok(words)
+	}
+
+	/// Convenience wrapper over [`Self::brace_expand_words`] that joins the
+	/// expanded elements back into a single space-separated string.
+	#[cfg(test)]
+	fn brace_expand_if_needed(&self, word: &'a str) -> Result<Cow<'a, str>, error::Error> {
+		let mut words = self.brace_expand_words(word)?;
+		if words.len() == 1 {
+			Ok(words.pop().unwrap())
+		} else {
+			Ok(Cow::Owned(words.join(" ")))
+		}
 	}
 
 	/// Apply tilde-expansion, parameter expansion, command substitution, and
@@ -2078,6 +2110,32 @@ mod tests {
 		assert_eq!(expander.brace_expand_if_needed("a{}b")?, "a{}b");
 		assert_eq!(expander.brace_expand_if_needed("a{ }b")?, "a{ }b");
 		assert_eq!(expander.brace_expand_if_needed("{a,b{1,2}}")?, "a b1 b2");
+
+		Ok(())
+	}
+
+	/// Regression test for issue #5819: a tilde that begins each element of a
+	/// brace expansion must expand independently. Brace expansion joins its
+	/// elements before the tilde/parameter/... pass, so `~/{a,b}` must yield
+	/// `<HOME>/a` and `<HOME>/b` — not `<HOME>/a` followed by a literal `~/b`.
+	#[tokio::test]
+	async fn test_tilde_expands_for_every_brace_element() -> Result<()> {
+		let mut shell = crate::shell::Shell::builder().build().await?;
+		shell
+			.env_mut()
+			.set_global("HOME", ShellVariable::new(ShellValue::String("/home/user".to_string())))?;
+		let params = shell.default_exec_params();
+
+		assert_eq!(
+			full_expand_and_split_word(&mut shell, &params, "~/project/{a,b}").await?,
+			vec!["/home/user/project/a", "/home/user/project/b"],
+		);
+		// A bare `~/{a,b}` (tilde immediately followed by the brace) must also
+		// expand on both elements.
+		assert_eq!(
+			full_expand_and_split_word(&mut shell, &params, "~/{a,b}").await?,
+			vec!["/home/user/a", "/home/user/b"],
+		);
 
 		Ok(())
 	}

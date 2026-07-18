@@ -273,7 +273,7 @@ describe("SnapcompactInlineTransformer", () => {
 		const longContext = denseText(3000);
 		const context: Context = {
 			systemPrompt: [
-				`Core instructions.\n\n<context>\nYou MUST follow the context files below for all tasks:\n<file path="AGENTS.md">\n${longContext}\n</file>\n</context>\n\nToday is 2026-06-12.`,
+				`Core instructions.\n\n<repo-rules>\nYou MUST follow the context files below for all tasks:\n<file path="AGENTS.md">\n${longContext}\n</file>\n</repo-rules>\n\nToday is 2026-06-12.`,
 				"Final system block.",
 			],
 			messages: [userMessage("do the thing")],

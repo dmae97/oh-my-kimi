@@ -11,7 +11,7 @@
  *
  * Every turn runs as an AsyncJobManager job, so a completed turn self-delivers
  * into the director's conversation exactly like an async `task` result, and
- * `vibe_wait` can block on the first settling turn with `job`-poll semantics.
+ * `vibe_wait` can block on the first settling turn with `hub`-wait semantics.
  */
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -39,8 +39,8 @@ export type VibeCli = "fast" | "good";
 
 /**
  * CLI flavor → bundled agent type. This IS the model-tier mapping: `sonic`
- * carries `model: "pi/smol"` (the configured fast/low-latency role) and `task`
- * carries `model: "pi/task"` (inherits the session's strong model).
+ * carries `model: "@smol"` (the configured fast/low-latency role) and `task`
+ * carries `model: "@task"` (inherits the session's strong model).
  * Resolution goes through {@link resolveAgentModelPatterns} exactly like a
  * `task` spawn, so `task.agentModelOverrides` and model-role settings apply.
  */
@@ -357,7 +357,7 @@ export class VibeSessionRegistry {
 
 	/**
 	 * Block until one watched session's in-flight turn settles, the timeout
-	 * elapses, or `signal` aborts — `job` poll semantics. Settled turns are
+	 * elapses, or `signal` aborts — `hub` wait semantics. Settled turns are
 	 * acknowledged against the job manager so their results are not delivered
 	 * a second time as async follow-ups.
 	 */
@@ -603,7 +603,7 @@ export class VibeSessionRegistry {
 					);
 				}
 			},
-			{ id: `${record.id}-t${turnIndex}`, ownerId: record.ownerId },
+			{ id: `${record.id}-t${turnIndex}`, agentId: record.id, ownerId: record.ownerId },
 		);
 		turn.jobId = jobId;
 		record.turn = turn;

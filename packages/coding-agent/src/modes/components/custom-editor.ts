@@ -1,12 +1,22 @@
 import { fileURLToPath } from "node:url";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
-import { addKeyAliases, canonicalKeyId, Editor, type KeyId, parseKey, parseKittySequence } from "@oh-my-pi/pi-tui";
+import {
+	addKeyAliases,
+	canonicalKeyId,
+	Editor,
+	type EditorTheme,
+	type KeyId,
+	parseKey,
+	parseKittySequence,
+	TUI,
+} from "@oh-my-pi/pi-tui";
 import { BracketedPasteHandler } from "@oh-my-pi/pi-tui/bracketed-paste";
 import type { AppKeybinding } from "../../config/keybindings";
 import { isSettingsInitialized, settings } from "../../config/settings";
 import { imageReferenceHyperlink, PLACEHOLDER_REGEX, renderPlaceholders } from "../image-references";
 import { hasMagicKeyword, highlightMagicKeywords } from "../magic-keywords";
-import { fgOrPlain } from "../theme/theme";
+import { isQueuedMessageList, parseQueueShorthand, QUEUE_LIST_MARKER_RE } from "../queue-input";
+import { fgOrPlain, theme } from "../theme/theme";
 
 type ConfigurableEditorAction = Extract<
 	AppKeybinding,
@@ -284,6 +294,31 @@ export function extractImagePathFromText(text: string): string | undefined {
 }
 
 /**
+ * Resolve the {@link EditorTheme} from a `CustomEditor`/`Editor` constructor
+ * argument list, tolerating both the omp `(theme)` and upstream-pi
+ * `(tui, theme, keybindings)` conventions (see {@link CustomEditor}'s
+ * constructor). A real `EditorTheme` is identified structurally — it exposes a
+ * `borderColor` function and a `symbols` object — so a `TUI` passed in the first
+ * slot is skipped rather than mistaken for the theme.
+ */
+function pickEditorTheme(args: readonly unknown[]): EditorTheme {
+	for (const arg of args) {
+		if (isEditorTheme(arg)) return arg;
+	}
+	// Fall back to the first argument so a caller passing a bare theme that
+	// somehow fails the shape probe still reaches the base constructor.
+	return args[0] as EditorTheme;
+}
+
+function isEditorTheme(value: unknown): value is EditorTheme {
+	if (typeof value !== "object" || value === null) return false;
+	const candidate = value as Partial<EditorTheme>;
+	return (
+		typeof candidate.borderColor === "function" && typeof candidate.symbols === "object" && candidate.symbols !== null
+	);
+}
+
+/**
  * Custom editor that handles configurable app-level shortcuts for coding-agent.
  */
 export class CustomEditor extends Editor {
@@ -295,6 +330,33 @@ export class CustomEditor extends Editor {
 	/** Per-image source links (file:// targets) parallel to {@link pendingImages};
 	 *  `undefined` entries are images without a backing reference yet. */
 	pendingImageLinks: (string | undefined)[] = [];
+
+	/**
+	 * The host {@link TUI}, captured when a plugin constructs this editor through
+	 * the upstream-pi `(tui, theme, keybindings)` convention. Undefined for omp's
+	 * own `new CustomEditor(theme)` callers (they drive repaints through the
+	 * interactive-mode wiring instead). Plugins that call `this.tui.requestRender()`
+	 * in their overrides read it here (issue #4766).
+	 */
+	tui?: TUI;
+
+	/**
+	 * Accept both the omp constructor convention — `new CustomEditor(theme)` —
+	 * and the upstream-pi `Editor` convention — `new Editor(tui, theme, keybindings)`
+	 * — that {@link ExtensionUIContext.setEditorComponent}'s factory contract
+	 * advertises `(tui, theme, keybindings)`. Plugins written against upstream pi
+	 * subclass `CustomEditor`/`Editor` and forward `super(tui, theme, keybindings)`;
+	 * without this shim the `TUI` lands in the `theme` slot and every render throws
+	 * `undefined is not an object (evaluating 'this.#theme.symbols.boxRound')`
+	 * (issue #4766). We locate the real {@link EditorTheme} among the args by shape
+	 * (it carries `symbols`/`borderColor`) rather than by position, and capture a
+	 * leading {@link TUI} so plugin overrides calling `this.tui.requestRender()`
+	 * keep working.
+	 */
+	constructor(...args: readonly unknown[]) {
+		super(pickEditorTheme(args));
+		if (args[0] instanceof TUI) this.tui = args[0];
+	}
 
 	/** Clear the composer draft: optionally commit `historyText` to history, then
 	 *  reset the editor text and all pending draft-image state. The shared tail of
@@ -326,21 +388,41 @@ export class CustomEditor extends Editor {
 	 *  timer to request the next animation frame. Undefined when nobody is
 	 *  listening (tests, headless callers); the timer chain still self-cleans. */
 	#requestShimmerRepaint: (() => void) | undefined;
+	#queueDecorationText: string | undefined;
+	#queueShorthandActive = false;
+	#queueListActive = false;
 
-	/** Gradient-highlight the "ultrathink" / "orchestrate" / "workflowz" keywords as the user types
-	 *  them, skipping any occurrence inside code spans, fenced blocks, or XML sections. Also make
-	 *  pasted image placeholders visually distinct and hyperlink them once their blob file exists.
-	 *  When the editor is focused, the buffer contains a magic keyword, and `magicKeywords.enabled`
-	 *  is on, the gradient shifts every frame to produce a Claude-Code-style shimmer; each render
-	 *  schedules the next frame, so losing focus, deleting the keyword, or flipping the setting
-	 *  stops the animation on its own. The static glow itself runs even when shimmering is gated
-	 *  off, matching existing behavior for the editor and sent bubbles. */
+	/** Decorate magic keywords, attachments, and the queue-composer header/list markers.
+	 *  Queue shorthand reserves its first logical line as a dim `Queueing` label; sequential
+	 *  item markers use the accent color so separate follow-ups remain visible while composing. */
 	decorateText = (text: string): string => {
-		const animated = this.focused && this.#shimmerEnabled() && hasMagicKeyword(this.getText());
+		const editorText = this.getText();
+		const animated = this.focused && this.#shimmerEnabled() && hasMagicKeyword(editorText);
 		const phase = animated ? (Date.now() % CustomEditor.SHIMMER_PERIOD_MS) / CustomEditor.SHIMMER_PERIOD_MS : 0;
 		if (animated) this.#scheduleShimmerFrame();
+		if (this.#queueDecorationText !== editorText) {
+			this.#queueDecorationText = editorText;
+			const queueBody = parseQueueShorthand(editorText);
+			this.#queueShorthandActive = queueBody !== undefined;
+			this.#queueListActive = queueBody !== undefined && isQueuedMessageList(queueBody);
+		}
 		return renderPlaceholders(text, {
-			renderText: value => highlightMagicKeywords(value, undefined, phase),
+			renderText: value => {
+				const highlighted = highlightMagicKeywords(value, undefined, phase);
+				if (this.#queueShorthandActive && (value.startsWith("->") || value.startsWith("=>"))) {
+					const icon = typeof theme === "undefined" ? "➤" : theme.nav.selected;
+					return `${fgOrPlain("dim", `Queueing ${icon}`)}${highlighted.slice(2)}`;
+				}
+				if (this.#queueListActive) {
+					const markerMatch = QUEUE_LIST_MARKER_RE.exec(value);
+					if (markerMatch) {
+						const indent = markerMatch[1] ?? "";
+						const markerEnd = markerMatch[0].length;
+						return `${indent}${fgOrPlain("accent", value.slice(indent.length, markerEnd))}${highlighted.slice(markerEnd)}`;
+					}
+				}
+				return highlighted;
+			},
 			renderReference: (value, kind, index) =>
 				kind === "image"
 					? imageReferenceHyperlink(value, index, this.imageLinks, label =>
@@ -628,6 +710,7 @@ export class CustomEditor extends Editor {
 			this.#pendingInput.push(data);
 			return;
 		}
+		const hadBareQueuePrefix = this.getText() === "->" || this.getText() === "=>";
 		const kittyParsed = parseKittySequence(data);
 		if (kittyParsed && (kittyParsed.modifier & 64) !== 0 && this.onCapsLock) {
 			// Caps Lock is modifier bit 64
@@ -831,5 +914,14 @@ export class CustomEditor extends Editor {
 
 		// Pass to parent for normal handling
 		super.handleInput(data);
+		const cursor = this.getCursor();
+		if (
+			!hadBareQueuePrefix &&
+			(this.getText() === "->" || this.getText() === "=>") &&
+			cursor.line === 0 &&
+			cursor.col === 2
+		) {
+			this.insertText("\n");
+		}
 	}
 }

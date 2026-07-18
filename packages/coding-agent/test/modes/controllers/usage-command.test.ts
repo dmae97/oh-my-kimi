@@ -66,6 +66,54 @@ describe("CommandController /usage", () => {
 		expect(output).not.toContain("··········");
 	});
 
+	it("renders Cursor request quotas in the /usage view", async () => {
+		const present = vi.fn();
+		const ctx = {
+			session: {},
+			ui: { terminal: { columns: 100 } },
+			present,
+			showWarning: vi.fn(),
+			showError: vi.fn(),
+		} as unknown as InteractiveModeContext;
+		const controller = new CommandController(ctx);
+		const now = Date.now();
+		const reports: UsageReport[] = [
+			{
+				provider: "cursor",
+				fetchedAt: now,
+				limits: [
+					{
+						id: "cursor:requests:gpt-4",
+						label: "gpt-4 requests",
+						scope: { provider: "cursor", windowId: "monthly" },
+						window: { id: "monthly", label: "Monthly", resetsAt: now + 86_400_000 },
+						amount: {
+							unit: "requests",
+							used: 150,
+							limit: 500,
+							remaining: 350,
+							usedFraction: 0.3,
+							remainingFraction: 0.7,
+						},
+						status: "ok",
+					},
+				],
+				metadata: { email: "cursor@example.test" },
+			},
+		];
+
+		await controller.handleUsageCommand(reports);
+
+		expect(present).toHaveBeenCalledTimes(1);
+		const firstCall = present.mock.calls[0];
+		expect(firstCall).toBeDefined();
+		const output = renderPresentedBlocks(firstCall?.[0]);
+		expect(output).toContain("Cursor");
+		expect(output).toContain("gpt-4 requests");
+		expect(output).toContain("70% free");
+		expect(output).toContain("resets in 1d");
+	});
+
 	it("renders saved reset expiry lines for future and expired credits", async () => {
 		const present = vi.fn();
 		const ctx = {

@@ -1082,6 +1082,8 @@
                   <div class="thinking-text">${escapeHtml(thinking)}</div>
                   <div class="thinking-collapsed">Thinking ...</div>
                 </div>`;
+              } else if (block.type === 'image') {
+                html += `<div class="message-images"><img src="data:${block.mimeType};base64,${block.data}" class="message-image" /></div>`;
               }
             }
             for (const block of msg.content) {
@@ -1386,7 +1388,7 @@
           },
           // Text content: escape HTML tags
           text(token) {
-            return escapeHtmlTags(escapeHtml(token.text));
+            return token.tokens ? this.parser.parseInline(token.tokens) : escapeHtmlTags(escapeHtml(token.text));
           },
           // Inline code: escape HTML
           codespan(token) {

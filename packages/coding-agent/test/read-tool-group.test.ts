@@ -5,7 +5,7 @@ import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-ag
 import { getDefault } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
 import {
 	ReadToolGroupComponent,
-	readArgsTargetInternalUrl,
+	readArgsCollapseIntoGroup,
 } from "@oh-my-pi/pi-coding-agent/modes/components/read-tool-group";
 import * as themeModule from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 
@@ -250,45 +250,6 @@ describe("ReadToolGroupComponent", () => {
 		expect(extractLinkTexts(rendered)).not.toContain("src/example.ts:7-9");
 	});
 
-	it("renders separate selector grouped summary paths while linking only the base path", () => {
-		settings.override("tui.hyperlinks", "always");
-		const component = new ReadToolGroupComponent();
-		const resolvedPath = path.resolve("/workspace/src/grouped.ts");
-		component.updateArgs({ path: "src/grouped.ts", selector: "2-3" }, "read-split-selector");
-		component.updateResult(
-			{
-				content: [{ type: "text", text: "line 2" }],
-				details: { meta: { source: { type: "path", value: resolvedPath } } },
-			},
-			false,
-			"read-split-selector",
-		);
-
-		const rendered = component.render(120).join("\n");
-
-		const groupedUri = new URL(url.pathToFileURL(path.resolve(resolvedPath)).href);
-		groupedUri.searchParams.set("line", "2");
-		expect(Bun.stripANSI(rendered)).toContain("Read src/grouped.ts:2-3");
-		expect(extractLinkUris(rendered)).toContain(groupedUri.href);
-		expect(extractLinkTexts(rendered)).toContain("src/grouped.ts");
-		expect(extractLinkTexts(rendered)).not.toContain("src/grouped.ts:2-3");
-	});
-
-	it("ignores non-string selectors from malformed runtime args", () => {
-		const component = new ReadToolGroupComponent();
-		const malformedArgs = { path: "src/example.ts", selector: 10 } as unknown as {
-			path: string;
-			selector: string;
-		};
-
-		expect(() => component.updateArgs(malformedArgs, "read-malformed-selector")).not.toThrow();
-
-		const plain = Bun.stripANSI(component.render(120).join("\n"));
-
-		expect(plain).toContain("Read src/example.ts");
-		expect(plain).not.toContain("src/example.ts:10");
-	});
-
 	it("links inline preview titles when the summary row is suppressed", () => {
 		settings.override("tui.hyperlinks", "always");
 		const component = new ReadToolGroupComponent({ showContentPreview: true });
@@ -314,7 +275,7 @@ describe("ReadToolGroupComponent", () => {
 	});
 });
 
-describe("readArgsTargetInternalUrl", () => {
+describe("readArgsCollapseIntoGroup", () => {
 	it.each([
 		["skill://my-skill"],
 		["skill://my-skill/file.md"],
@@ -327,26 +288,28 @@ describe("readArgsTargetInternalUrl", () => {
 		["rule://name"],
 		["mcp://server/resource"],
 		["local://PLAN.md"],
-	])("treats %s as an internal URL read", target => {
-		expect(readArgsTargetInternalUrl({ path: target })).toBe(true);
-		expect(readArgsTargetInternalUrl({ file_path: target })).toBe(true);
+	])("keeps %s as a full tool execution (not grouped)", target => {
+		expect(readArgsCollapseIntoGroup({ path: target })).toBe(false);
+		expect(readArgsCollapseIntoGroup({ file_path: target })).toBe(false);
 	});
 
 	it.each([
 		[path.resolve("/tmp/example.ts")],
 		["./relative/path.md"],
 		["https://example.com/file"],
-		[""],
-	])("treats %s as a filesystem/external target", target => {
-		expect(readArgsTargetInternalUrl({ path: target })).toBe(false);
+		["xd://"],
+		["xd://generate_image"],
+	])("collapses %s into the read group", target => {
+		expect(readArgsCollapseIntoGroup({ path: target })).toBe(true);
+		expect(readArgsCollapseIntoGroup({ file_path: target })).toBe(true);
 	});
 
 	it("returns false for non-record / missing arguments", () => {
-		expect(readArgsTargetInternalUrl(undefined)).toBe(false);
-		expect(readArgsTargetInternalUrl(null)).toBe(false);
-		expect(readArgsTargetInternalUrl("skill://x")).toBe(false);
-		expect(readArgsTargetInternalUrl(["skill://x"])).toBe(false);
-		expect(readArgsTargetInternalUrl({})).toBe(false);
-		expect(readArgsTargetInternalUrl({ path: 42 })).toBe(false);
+		expect(readArgsCollapseIntoGroup(undefined)).toBe(false);
+		expect(readArgsCollapseIntoGroup(null)).toBe(false);
+		expect(readArgsCollapseIntoGroup("xd://x")).toBe(false);
+		expect(readArgsCollapseIntoGroup(["xd://x"])).toBe(false);
+		expect(readArgsCollapseIntoGroup({})).toBe(false);
+		expect(readArgsCollapseIntoGroup({ path: 42 })).toBe(false);
 	});
 });

@@ -8,7 +8,7 @@ import {
 	type UsageState,
 } from "@oh-my-pi/pi-ai/providers/cursor";
 import type { AssistantMessage, AssistantMessageEvent } from "@oh-my-pi/pi-ai/types";
-import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
+import { getStreamingPartialJson, kCursorExecResolved } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 
 interface Harness {
@@ -58,6 +58,7 @@ function newHarness(): Harness {
 		get currentToolCall() {
 			return toolCall;
 		},
+		resolvedMcpToolCallIds: new Set(),
 		firstTokenTime: undefined,
 		setTextBlock: b => {
 			textBlock = b;
@@ -169,6 +170,19 @@ describe("mergeCursorMcpToolCallArgs", () => {
 
 	it("returns an empty object when both sides are absent", () => {
 		expect(mergeCursorMcpToolCallArgs(undefined, undefined)).toEqual({});
+	});
+});
+
+describe("Cursor MCP exec resolution", () => {
+	it("marks a streamed MCP call already resolved by the exec bridge", () => {
+		const h = newHarness();
+		h.state.resolvedMcpToolCallIds.add("call-resolved");
+
+		startMcpToolCall(h, "mcp__fixture_report", "call-resolved");
+
+		const block = h.output.content[0] as ToolCallState;
+		expect(block[kCursorExecResolved]).toBe(true);
+		expect(h.state.resolvedMcpToolCallIds.size).toBe(0);
 	});
 });
 

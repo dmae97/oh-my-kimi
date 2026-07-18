@@ -13,18 +13,17 @@
  *
  * Replaces the old SessionObserverOverlayComponent (ctrl+s observer).
  */
-import * as fs from "node:fs";
-import * as path from "node:path";
-import type { AgentTool } from "@oh-my-pi/pi-agent-core";
-import { Container, Ellipsis, matchesKey, type OverlayHandle, type TUI } from "@oh-my-pi/pi-tui";
+import { type AgentTool, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import { Container, Ellipsis, matchesKey, type OverlayHandle, padding, type TUI, visibleWidth } from "@oh-my-pi/pi-tui";
 import { formatAge, getProjectDir, logger } from "@oh-my-pi/pi-utils";
-import { ADVISOR_TRANSCRIPT_FILENAME, isAdvisorTranscriptName } from "../../advisor";
 import type { KeyId } from "../../config/keybindings";
 import type { MessageRenderer } from "../../extensibility/extensions/types";
 import { IrcBus } from "../../irc/bus";
 import { AgentLifecycleManager } from "../../registry/agent-lifecycle";
 import { type AgentRef, AgentRegistry, type AgentStatus, MAIN_AGENT_ID } from "../../registry/agent-registry";
+import { registerPersistedSubagents } from "../../registry/persisted-agents";
 import { USER_INTERRUPT_LABEL } from "../../session/messages";
+import { parseThinkingLevel } from "../../thinking";
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../../tools/render-utils";
 import type { ObservableSession, SessionObserverRegistry } from "../session-observer-registry";
 import { theme } from "../theme/theme";
@@ -55,87 +54,48 @@ function clampHubLine(line: string, width: number): string {
 
 const STATUS_ORDER: Record<AgentStatus, number> = { running: 0, idle: 1, parked: 2, aborted: 3 };
 
-/** Glyph + status word, colored per theme status conventions. */
-function statusBadge(status: AgentStatus): string {
+/** Status glyph, colored per theme status conventions. The title-line counts spell out the words. */
+function statusGlyph(status: AgentStatus): string {
 	switch (status) {
 		case "running":
-			return theme.fg("accent", `${theme.status.running} running`);
+			return theme.fg("accent", theme.status.running);
 		case "idle":
-			return theme.fg("success", `${theme.status.enabled} idle`);
+			return theme.fg("success", theme.status.enabled);
 		case "parked":
-			return theme.fg("muted", `${theme.status.shadowed} parked`);
+			return theme.fg("muted", theme.status.shadowed);
 		case "aborted":
-			return theme.fg("error", `${theme.status.aborted} aborted`);
+			return theme.fg("error", theme.status.aborted);
 	}
 }
 
-async function registerPersistedSubagents(
-	registry: AgentRegistry,
-	sessionFile: string | null | undefined,
-): Promise<void> {
-	if (!sessionFile?.endsWith(".jsonl")) return;
-	const root = sessionFile.slice(0, -6);
-	await registerPersistedSubagentsFromDir(registry, root, undefined);
+/** Model id + thinking level (`sonnet-4-6 ◒ high`), level colored per theme. */
+function formatModelBadge(modelId: string, level: ThinkingLevel | undefined): string {
+	const model = theme.fg("muted", replaceTabs(modelId));
+	if (!level || level === ThinkingLevel.Off || level === ThinkingLevel.Inherit) return model;
+	const display = theme.thinking[level as keyof typeof theme.thinking] ?? level;
+	return `${model} ${theme.getThinkingBorderColor(level)(display)}`;
 }
 
-async function registerPersistedSubagentsFromDir(
-	registry: AgentRegistry,
-	dir: string,
-	parentId: string | undefined,
-): Promise<void> {
-	let entries: fs.Dirent[];
-	try {
-		entries = await fs.promises.readdir(dir, { withFileTypes: true });
-	} catch {
-		return;
+/**
+ * Active model + reasoning level for a hub row: live session state when the
+ * agent is attached, else the executor-reported `resolvedModel` selector
+ * (`provider/id`, optionally `:<level>`). Undefined when neither is known
+ * (e.g. a parked historical agent restored from disk).
+ */
+function modelBadge(ref: AgentRef, observed: ObservableSession | undefined): string | undefined {
+	const model = ref.session?.model;
+	if (model) {
+		const level = model.thinking ? ref.session?.thinkingLevel : undefined;
+		return formatModelBadge(model.id, level);
 	}
-	for (const entry of entries) {
-		if (!entry.isFile() || !entry.name.endsWith(".jsonl") || entry.name.includes(".bak")) continue;
-		const sessionFile = path.join(dir, entry.name);
-		// The advisor transcript is observability-only: register it as a non-peer
-		// `advisor` kind under its owning session so the Hub can show its read-only
-		// transcript, but it never joins agent-facing rosters and is not revivable.
-		if (isAdvisorTranscriptName(entry.name)) {
-			const owner = parentId ?? MAIN_AGENT_ID;
-			// `__advisor.jsonl` → the default advisor (no slug); `__advisor.<slug>.jsonl`
-			// → a named advisor, keyed and labeled by its slug.
-			const slug =
-				entry.name === ADVISOR_TRANSCRIPT_FILENAME ? "" : entry.name.slice("__advisor.".length, -".jsonl".length);
-			const advisorId = slug ? `${owner}/advisor:${slug}` : `${owner}/advisor`;
-			const displayName = slug ? `advisor:${slug}` : "advisor";
-			const existing = registry.get(advisorId);
-			// Never clobber a non-advisor ref that happens to share this id (a freak
-			// user task literally named `<owner>/advisor`): leave it, skip the advisor.
-			if (existing && existing.kind !== "advisor") continue;
-			if (existing?.sessionFile !== sessionFile) {
-				// The id is reused across `/new`; refresh it to the current session's file.
-				if (existing) registry.unregister(advisorId);
-				registry.register({
-					id: advisorId,
-					displayName,
-					kind: "advisor",
-					parentId: owner,
-					session: null,
-					sessionFile,
-					status: "parked",
-				});
-			}
-			continue;
-		}
-		const id = entry.name.slice(0, -6);
-		if (!registry.get(id)) {
-			registry.register({
-				id,
-				displayName: id,
-				kind: "sub",
-				parentId: parentId ?? MAIN_AGENT_ID,
-				session: null,
-				sessionFile,
-				status: "parked",
-			});
-		}
-		await registerPersistedSubagentsFromDir(registry, path.join(dir, id), id);
-	}
+	const resolved = observed?.progress?.resolvedModel;
+	if (!resolved) return undefined;
+	// Model ids may themselves contain colons (`qwen3:14b`), so only treat the
+	// suffix as a thinking level when it parses as one.
+	const colon = resolved.lastIndexOf(":");
+	const level = colon >= 0 ? parseThinkingLevel(resolved.slice(colon + 1)) : undefined;
+	const selector = level !== undefined ? resolved.slice(0, colon) : resolved;
+	return formatModelBadge(selector.slice(selector.indexOf("/") + 1), level);
 }
 
 /** Result of one host-backed transcript read for the Agent Hub viewer. */
@@ -310,6 +270,19 @@ export class AgentHubOverlayComponent extends Container {
 	}
 
 	/**
+	 * Seed the table's left-left close detector with the current time so a single
+	 * subsequent `←` (within {@link LEFT_TAP_WINDOW_MS}) dismisses the hub.
+	 *
+	 * The editor's own double-tap detector consumes the `←←` that opens the hub,
+	 * leaving this detector at its fresh `0` — without this handoff the user would
+	 * have to press `←←` a second time to escape. Called by the opener when the hub
+	 * was raised by that gesture.
+	 */
+	armCloseTap(): void {
+		this.#lastLeftTap = Date.now();
+	}
+
+	/**
 	 * Open the fullscreen transcript viewer for an agent id (public for table Enter
 	 * and tests). Mounts {@link AgentTranscriptViewer} as a `fullscreen` overlay so it
 	 * owns the alternate screen; the hub table stays mounted underneath and is
@@ -427,17 +400,31 @@ export class AgentHubOverlayComponent extends Container {
 		} else {
 			const termHeight = process.stdout.rows || 40;
 			// Chrome: 2 borders + title + notice? + blank + hints + border
-			const maxVisible = Math.max(3, termHeight - 7 - (this.#notice ? 1 : 0));
-			let start = 0;
-			if (this.#rows.length > maxVisible) {
-				start = Math.min(
-					Math.max(0, this.#selectedRow - Math.floor(maxVisible / 2)),
-					this.#rows.length - maxVisible,
-				);
+			const budget = Math.max(4, termHeight - 7 - (this.#notice ? 1 : 0));
+			const entries = this.#rows.map((ref, i) => this.#renderEntry(ref, i === this.#selectedRow, width));
+			// Entries are 1-2 lines tall; grow a window around the selection until
+			// the line budget is spent, so the selected entry stays centered.
+			let start = this.#selectedRow;
+			let end = this.#selectedRow + 1;
+			let used = entries[start]?.length ?? 0;
+			for (let grew = true; grew; ) {
+				grew = false;
+				if (end < entries.length && used + entries[end].length <= budget) {
+					used += entries[end].length;
+					end++;
+					grew = true;
+				}
+				if (start > 0 && used + entries[start - 1].length <= budget) {
+					start--;
+					used += entries[start].length;
+					grew = true;
+				}
 			}
-			const end = Math.min(start + maxVisible, this.#rows.length);
+			if (start > 0) {
+				lines.push(` ${theme.fg("dim", `… ${start} more`)}`);
+			}
 			for (let i = start; i < end; i++) {
-				lines.push(this.#renderRow(this.#rows[i], i === this.#selectedRow, width));
+				lines.push(...entries[i]);
 			}
 			if (end < this.#rows.length) {
 				lines.push(` ${theme.fg("dim", `… ${this.#rows.length - end} more`)}`);
@@ -466,26 +453,51 @@ export class AgentHubOverlayComponent extends Container {
 		return parts.join(theme.sep.dot);
 	}
 
-	#renderRow(ref: AgentRef, selected: boolean, width: number): string {
+	/**
+	 * One agent entry, 1-2 lines:
+	 * `❯ ⟳ Name  type  ↳ parent  ⧉ 2 ········ model ◒ level · age` — identity
+	 * left, metadata right-aligned (inlined when the terminal is too narrow) —
+	 * plus an indented dim task line when the agent's work is known.
+	 */
+	#renderEntry(ref: AgentRef, selected: boolean, width: number): string[] {
+		const max = Math.max(1, width - 2);
 		const cursor = selected ? theme.fg("accent", theme.nav.cursor) : " ";
-		const parts: string[] = [statusBadge(ref.status), theme.bold(replaceTabs(ref.id))];
-		parts.push(theme.fg("dim", replaceTabs(ref.displayName)));
-		parts.push(theme.fg("dim", ref.parentId ? `${ref.kind} · of ${ref.parentId}` : ref.kind));
-		if (ref.kind === "advisor") {
-			parts.push(theme.fg("warning", "read-only"));
+		const fields: string[] = [`${cursor} ${statusGlyph(ref.status)} ${theme.bold(replaceTabs(ref.id))}`];
+		if (ref.displayName && ref.displayName !== ref.id) {
+			fields.push(theme.fg("dim", replaceTabs(ref.displayName)));
 		}
-		const observed = this.#observableFor(ref.id);
-		const task = observed?.description ?? observed?.progress?.task;
-		if (task) {
-			parts.push(theme.fg("muted", sanitizeLine(task, TRUNCATE_LENGTHS.TITLE)));
+		if (ref.parentId && ref.parentId !== MAIN_AGENT_ID) {
+			fields.push(theme.fg("dim", `↳ ${replaceTabs(ref.parentId)}`));
+		}
+		if (ref.kind === "advisor") {
+			fields.push(theme.fg("warning", "read-only"));
 		}
 		const unread = this.#irc.unreadCount(ref.id);
 		if (unread > 0) {
-			parts.push(theme.fg("warning", `⧉ ${unread}`));
+			fields.push(theme.fg("warning", `⧉ ${unread}`));
 		}
-		parts.push(theme.fg("dim", formatAge(Math.max(1, Math.round((Date.now() - ref.lastActivity) / 1000)))));
-		const rawLine = ` ${cursor} ${parts.join(theme.sep.dot)}`;
-		return truncateToWidth(rawLine.replace(/[\r\n]+/g, " "), Math.max(1, width - 1));
+		const left = ` ${fields.join("  ")}`;
+
+		const observed = this.#observableFor(ref.id);
+		const meta: string[] = [];
+		const badge = modelBadge(ref, observed);
+		if (badge) meta.push(badge);
+		meta.push(theme.fg("dim", formatAge(Math.max(1, Math.round((Date.now() - ref.lastActivity) / 1000)))));
+		const right = meta.join(theme.sep.dot);
+
+		const leftWidth = visibleWidth(left);
+		const rightWidth = visibleWidth(right);
+		const line =
+			leftWidth + 2 + rightWidth <= max
+				? left + padding(max - leftWidth - rightWidth) + right
+				: truncateToWidth(`${left}  ${right}`.replace(/[\r\n]+/g, " "), max);
+		const entry = [line];
+
+		const task = observed?.description ?? observed?.progress?.task ?? ref.activity;
+		if (task) {
+			entry.push(`     ${theme.fg("muted", sanitizeLine(task, Math.max(10, max - 5)))}`);
+		}
+		return entry;
 	}
 
 	#handleTableInput(keyData: string): void {
@@ -503,14 +515,14 @@ export class AgentHubOverlayComponent extends Container {
 			}
 			return;
 		}
-		if (keyData === "j" || matchesSelectDown(keyData)) {
+		if (matchesKey(keyData, "j") || matchesSelectDown(keyData)) {
 			if (this.#rows.length > 0) {
 				this.#selectedRow = Math.min(this.#selectedRow + 1, this.#rows.length - 1);
 			}
 			this.#requestRender();
 			return;
 		}
-		if (keyData === "k" || matchesSelectUp(keyData)) {
+		if (matchesKey(keyData, "k") || matchesSelectUp(keyData)) {
 			if (this.#rows.length > 0) {
 				this.#selectedRow = Math.max(this.#selectedRow - 1, 0);
 			}

@@ -1,5 +1,14 @@
 import type { Component } from "../tui";
-import { applyBackgroundToLine, getPaddingX, padding, replaceTabs, visibleWidth, wrapTextWithAnsi } from "../utils";
+import {
+	applyBackgroundToLine,
+	getPaddingX,
+	getWidthConfigEpoch,
+	padding,
+	publishLineWidths,
+	replaceTabs,
+	visibleWidth,
+	wrapTextWithAnsi,
+} from "../utils";
 
 /**
  * Text component - displays multi-line text with word wrapping
@@ -21,6 +30,7 @@ export class Text implements Component {
 	// Cache for rendered output
 	#cachedText?: string;
 	#cachedWidth?: number;
+	#cachedWidthEpoch?: number;
 	#cachedLines?: string[];
 
 	constructor(text: string = "", paddingX: number = 1, paddingY: number = 1, customBgFn?: (text: string) => string) {
@@ -41,6 +51,7 @@ export class Text implements Component {
 		this.#text = text;
 		this.#cachedText = undefined;
 		this.#cachedWidth = undefined;
+		this.#cachedWidthEpoch = undefined;
 		this.#cachedLines = undefined;
 		return true;
 	}
@@ -49,18 +60,25 @@ export class Text implements Component {
 		this.#customBgFn = customBgFn;
 		this.#cachedText = undefined;
 		this.#cachedWidth = undefined;
+		this.#cachedWidthEpoch = undefined;
 		this.#cachedLines = undefined;
 	}
 
 	invalidate(): void {
 		this.#cachedText = undefined;
 		this.#cachedWidth = undefined;
+		this.#cachedWidthEpoch = undefined;
 		this.#cachedLines = undefined;
 	}
 
 	render(width: number): readonly string[] {
 		// Check cache
-		if (this.#cachedLines && this.#cachedText === this.#text && this.#cachedWidth === width) {
+		if (
+			this.#cachedLines &&
+			this.#cachedText === this.#text &&
+			this.#cachedWidth === width &&
+			this.#cachedWidthEpoch === getWidthConfigEpoch()
+		) {
 			return this.#cachedLines;
 		}
 
@@ -69,6 +87,7 @@ export class Text implements Component {
 			const result: string[] = [];
 			this.#cachedText = this.#text;
 			this.#cachedWidth = width;
+			this.#cachedWidthEpoch = getWidthConfigEpoch();
 			this.#cachedLines = result;
 			return result;
 		}
@@ -86,6 +105,9 @@ export class Text implements Component {
 		const leftMargin = padding(paddingX);
 		const rightMargin = padding(paddingX);
 		const contentLines: string[] = [];
+		// Exact visible widths of `result` rows, published only when rows are
+		// `content + spaces` (customBgFn output width is not knowable here).
+		const resultWidths: number[] | undefined = this.#customBgFn ? undefined : [];
 
 		for (const line of wrappedLines) {
 			// Add margins
@@ -99,6 +121,7 @@ export class Text implements Component {
 				const visibleLen = visibleWidth(lineWithMargins);
 				const paddingNeeded = Math.max(0, width - visibleLen);
 				contentLines.push(lineWithMargins + padding(paddingNeeded));
+				resultWidths?.push(visibleLen + paddingNeeded);
 			}
 		}
 
@@ -111,10 +134,16 @@ export class Text implements Component {
 		}
 
 		const result = [...emptyLines, ...contentLines, ...emptyLines];
+		if (resultWidths !== undefined) {
+			// Pad rows are exactly `width` cells wide.
+			const emptyWidths = new Array<number>(emptyLines.length).fill(width);
+			publishLineWidths(result, [...emptyWidths, ...resultWidths, ...emptyWidths]);
+		}
 
 		// Update cache
 		this.#cachedText = this.#text;
 		this.#cachedWidth = width;
+		this.#cachedWidthEpoch = getWidthConfigEpoch();
 		this.#cachedLines = result;
 
 		return result.length > 0 ? result : [""];

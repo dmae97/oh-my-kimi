@@ -1,8 +1,10 @@
 import { beforeAll, describe, expect, it, vi } from "bun:test";
+import { LoginDialogComponent } from "@oh-my-pi/pi-coding-agent/modes/components/login-dialog";
 import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import type { TUI } from "@oh-my-pi/pi-tui";
 
 interface RenderableBlock {
 	render(width: number): string[];
@@ -22,7 +24,7 @@ beforeAll(async () => {
 });
 
 describe("SelectorController login", () => {
-	it("presents OAuth success as soon as credentials are saved", async () => {
+	it("awaits a provider-scoped online refresh, then presents OAuth success", async () => {
 		const loginSaved = Promise.withResolvers<void>();
 		const presentedBlocks: unknown[] = [];
 		const authStorage = {
@@ -31,7 +33,7 @@ describe("SelectorController login", () => {
 			}),
 		} as unknown as AuthStorage;
 		const refresh = vi.fn(() => new Promise<void>(() => {}));
-		const refreshInBackground = vi.fn();
+		const refreshProvider = vi.fn(async () => {});
 		const ctx = {
 			oauthManualInput: {
 				waitForInput: vi.fn(),
@@ -41,7 +43,7 @@ describe("SelectorController login", () => {
 				modelRegistry: {
 					authStorage,
 					refresh,
-					refreshInBackground,
+					refreshProvider,
 				},
 			},
 			// The login flow swaps the editor slot for the cancellable dialog
@@ -60,10 +62,15 @@ describe("SelectorController login", () => {
 
 		void controller.showOAuthSelector("login", "xai-oauth");
 		await loginSaved.promise;
+		// Let the awaited refreshProvider settle before the success block is presented.
+		await Promise.resolve();
 		await Promise.resolve();
 
 		expect(renderPresented(presentedBlocks)).toContain("Successfully logged in to xai-oauth");
-		expect(refreshInBackground).toHaveBeenCalledTimes(1);
+		// Post-login refresh is scoped to the just-authenticated provider with the
+		// `online` strategy (#5780) — not the all-provider default refresh.
+		expect(refreshProvider).toHaveBeenCalledTimes(1);
+		expect(refreshProvider).toHaveBeenCalledWith("xai-oauth", "online");
 		expect(refresh).not.toHaveBeenCalled();
 		expect(ctx.showError).not.toHaveBeenCalled();
 	});
@@ -81,7 +88,7 @@ describe("SelectorController login", () => {
 		const presentedBlocks: unknown[] = [];
 		const ctx = {
 			oauthManualInput: { waitForInput: vi.fn(), clear: vi.fn() },
-			session: { modelRegistry: { authStorage, refreshInBackground: vi.fn() } },
+			session: { modelRegistry: { authStorage, refreshProvider: vi.fn(async () => {}) } },
 			editorContainer: {
 				clear: vi.fn(() => editorSlot.splice(0)),
 				addChild: vi.fn((child: unknown) => editorSlot.push(child)),
@@ -112,5 +119,15 @@ describe("SelectorController login", () => {
 		expect(ctx.showStatus).toHaveBeenCalledWith("Login cancelled");
 		expect(editorSlot).toEqual([editor]);
 		expect(renderPresented(presentedBlocks)).not.toContain("Successfully logged in");
+	});
+	it("routes enhanced paste into a direct API-key prompt", async () => {
+		const tui = { requestRender: vi.fn() } as unknown as TUI;
+		const dialog = new LoginDialogComponent(tui, "openrouter", vi.fn());
+		const prompt = dialog.showPrompt("Paste your OpenRouter API key");
+
+		dialog.pasteText("OMP_PASTE_TEST_123");
+		dialog.handleInput("\n");
+
+		await expect(prompt).resolves.toBe("OMP_PASTE_TEST_123");
 	});
 });

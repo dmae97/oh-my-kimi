@@ -38,7 +38,7 @@ export interface GalleryFixture {
 	customRendered?: boolean;
 	/**
 	 * Renderer-registry key to use when the fixture key is a variant of a tool
-	 * (e.g. `irc_wait` → `irc`). Defaults to the fixture key.
+	 * (e.g. `hub_wait` → `hub`). Defaults to the fixture key.
 	 */
 	renderer?: string;
 	/**

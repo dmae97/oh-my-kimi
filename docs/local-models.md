@@ -75,7 +75,7 @@ they opt in.
 | flan-t5-small | Rejected — just echoes the input    |
 
 **Shipped local options**: `lfm2-350m`, `qwen3-0.6b`, `gemma-270m`, `qwen2.5-0.5b`, `lfm2-700m`.
-**Default**: `online` (pi/smol).
+**Default**: `online` (@smol).
 
 ## Task 2: Mnemopi memory (`providers.memoryModel`)
 

@@ -334,7 +334,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 				toolConfig,
 				additionalModelRequestFields,
 			};
-			options?.onPayload?.(commandInput);
+			options?.onPayload?.(commandInput, model);
 
 			const host = `bedrock-runtime.${region}.amazonaws.com`;
 			const url = `https://${host}/model/${encodeURIComponent(model.id)}/converse-stream`;
@@ -510,7 +510,12 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 			for (const block of output.content) {
 				if (block.type === "toolCall") clearStreamingPartialJson(block);
 			}
-			const baseMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			let baseMessage: string;
+			try {
+				baseMessage = error instanceof Error ? error.message : (JSON.stringify(error) ?? String(error));
+			} catch {
+				baseMessage = String(error);
+			}
 			// Enrich error with thinking block diagnostics for signature-related failures
 			let diagnostics = "";
 			if (baseMessage.includes("signature") || baseMessage.includes("thinking")) {

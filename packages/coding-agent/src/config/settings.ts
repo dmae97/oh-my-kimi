@@ -27,12 +27,12 @@ import {
 	setWorktreesDir,
 } from "@oh-my-pi/pi-utils";
 import { JSONC, YAML } from "bun";
+import { invalidate as invalidateCapabilityFsCache } from "../capability/fs";
 import { type Settings as SettingsCapabilityItem, settingsCapability } from "../capability/settings";
 import type { ModelRole } from "../config/model-roles";
 import { loadCapability } from "../discovery";
 import { isLightTheme, setAutoThemeMapping, setColorBlindMode, setSymbolPreset } from "../modes/theme/theme";
 import { AgentStorage } from "../session/agent-storage";
-import { normalizeToolName } from "../tools/builtin-names";
 import { type EditMode, normalizeEditMode } from "../utils/edit-mode";
 import { withFileLock } from "./file-lock";
 import {
@@ -173,6 +173,83 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+/**
+ * Migrate a v17 leaf rename that used to nest under a boolean parent path
+ * (`dev.autoqa.consent` → `dev.autoqaConsent`, `todo.reminders.max` →
+ * `todo.remindersMax`). Pre-rename configs left the leaf beneath the parent,
+ * so the parent path resolved to an object and truthy checks like
+ * `isAutoQaEnabled` treated a consent-only container as "enabled".
+ *
+ * Handles nested (`{ parent: { leaf } }`) and quoted-dotted (`"parent.leaf"`)
+ * legacy sources. An explicit new key always wins; a separately configured
+ * boolean parent is preserved; an irrecoverable object-valued parent (only ever
+ * a container for the old leaf) is dropped so the schema default applies.
+ */
+function migrateNestedLeafRename(
+	raw: RawSettings,
+	root: string,
+	parent: string,
+	oldLeaf: string,
+	newLeaf: string,
+	isLeafValue: (value: unknown) => boolean,
+): void {
+	const rootObj = isRecord(raw[root]) ? (raw[root] as Record<string, unknown>) : undefined;
+	const nestedParent = rootObj?.[parent];
+	const flatParent = raw[`${root}.${parent}`];
+	const oldParentPath = `${root}.${parent}`;
+
+	const candidates = [
+		rootObj?.[newLeaf],
+		raw[`${root}.${newLeaf}`],
+		isRecord(nestedParent) ? nestedParent[oldLeaf] : undefined,
+		raw[`${oldParentPath}.${oldLeaf}`],
+	];
+	const resolvedLeaf = candidates.find(isLeafValue);
+
+	const recoveredParent =
+		typeof nestedParent === "boolean" ? nestedParent : typeof flatParent === "boolean" ? flatParent : undefined;
+
+	const ensureRoot = (): Record<string, unknown> => {
+		const current = raw[root];
+		if (isRecord(current)) return current;
+		const created: Record<string, unknown> = {};
+		raw[root] = created;
+		return created;
+	};
+
+	if (resolvedLeaf !== undefined) {
+		const target = ensureRoot();
+		if (!isLeafValue(target[newLeaf])) {
+			target[newLeaf] = resolvedLeaf;
+		}
+	}
+
+	// Strip legacy leaf sources (nested + flat dotted).
+	delete raw[`${oldParentPath}.${oldLeaf}`];
+	delete raw[`${root}.${newLeaf}`];
+	if (isRecord(raw[root]) && isRecord((raw[root] as Record<string, unknown>)[parent])) {
+		const parentObj = (raw[root] as Record<string, unknown>)[parent] as Record<string, unknown>;
+		delete parentObj[oldLeaf];
+		if (Object.keys(parentObj).length === 0) {
+			delete (raw[root] as Record<string, unknown>)[parent];
+		}
+	}
+
+	// The parent path must be a boolean or absent — never a leftover object.
+	if (recoveredParent !== undefined) {
+		const target = ensureRoot();
+		if (typeof target[parent] !== "boolean") {
+			target[parent] = recoveredParent;
+		}
+	} else if (isRecord(raw[root]) && isRecord((raw[root] as Record<string, unknown>)[parent])) {
+		delete (raw[root] as Record<string, unknown>)[parent];
+	}
+	delete raw[oldParentPath];
+	if (isRecord(raw[root]) && Object.keys(raw[root] as Record<string, unknown>).length === 0) {
+		delete raw[root];
+	}
+}
+
 function modelRoleValueFromUnknown(value: unknown): string | undefined {
 	if (typeof value === "string") return value;
 	if (!Array.isArray(value)) return undefined;
@@ -251,6 +328,16 @@ export class Settings {
 
 	/** Paths modified during this session (for partial save) */
 	#modified = new Set<string>();
+	/** Individual project model roles modified during this session */
+	#modifiedProjectModelRoles = new Set<string>();
+	/**
+	 * Original process-wide model-role overrides captured before a project edit
+	 * temporarily replaced them via `#updateRuntimeModelRoleOverride`. Restored
+	 * on `reloadForCwd` / `cloneForCwd` so destination projects never inherit the
+	 * source-project value. Maps role → original override value (`undefined`
+	 * when the role had no runtime override).
+	 */
+	#savedRuntimeModelRoleOverrides = new Map<string, string | undefined>();
 
 	/** Legacy `lastChangelogVersion` captured from config.yml during migration (now a marker file). */
 	#legacyLastChangelogVersion?: string;
@@ -258,6 +345,8 @@ export class Settings {
 	/** Pending save (debounced) */
 	#saveTimer?: NodeJS.Timeout;
 	#savePromise?: Promise<void>;
+	#projectSaveTimer?: NodeJS.Timeout;
+	#projectSavePromise?: Promise<void>;
 
 	/** Whether to persist changes */
 	#persist: boolean;
@@ -266,7 +355,9 @@ export class Settings {
 		this.#cwd = path.normalize(options.cwd ?? getProjectDir());
 		this.#agentDir = path.normalize(options.agentDir ?? getAgentDir());
 		this.#configPath = options.inMemory ? null : path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]);
-		this.#configFiles = options.configFiles?.map(file => path.resolve(this.#cwd, expandTilde(file))) ?? [];
+		const configFiles = process.env.PI_CONFIG_FILES?.split(path.delimiter).filter(Boolean) ?? [];
+		if (options.configFiles) configFiles.push(...options.configFiles);
+		this.#configFiles = configFiles.map(file => path.resolve(this.#cwd, expandTilde(file)));
 		this.#persist = !options.inMemory && options.readOnly !== true;
 
 		if (options.overrides) {
@@ -401,6 +492,9 @@ export class Settings {
 	 * Apply runtime overrides (not persisted).
 	 */
 	override<P extends SettingPath>(path: P, value: SettingValue<P>): void {
+		if (path === "modelRoles") {
+			this.#savedRuntimeModelRoleOverrides.clear();
+		}
 		const prev = this.get(path);
 		const segments = path.split(".");
 		setByPath(this.#overrides, segments, value);
@@ -412,6 +506,9 @@ export class Settings {
 	 * Clear a runtime override.
 	 */
 	clearOverride(path: SettingPath): void {
+		if (path === "modelRoles") {
+			this.#savedRuntimeModelRoleOverrides.clear();
+		}
 		const prev = this.get(path);
 		const segments = path.split(".");
 		let current = this.#overrides;
@@ -444,11 +541,21 @@ export class Settings {
 			clearTimeout(this.#saveTimer);
 			this.#saveTimer = undefined;
 		}
+		if (this.#projectSaveTimer) {
+			clearTimeout(this.#projectSaveTimer);
+			this.#projectSaveTimer = undefined;
+		}
 		if (this.#savePromise) {
 			await this.#savePromise;
 		}
+		if (this.#projectSavePromise) {
+			await this.#projectSavePromise;
+		}
 		if (this.#modified.size > 0) {
 			await this.#saveNow();
+		}
+		if (this.#modifiedProjectModelRoles.size > 0) {
+			await this.#saveProjectNow();
 		}
 	}
 
@@ -464,7 +571,7 @@ export class Settings {
 		cloned.#project = this.#persist ? await cloned.#loadProjectSettings() : structuredClone(this.#project);
 		cloned.#configFiles = [...this.#configFiles];
 		cloned.#configOverlay = structuredClone(this.#configOverlay);
-		cloned.#overrides = structuredClone(this.#overrides);
+		cloned.#overrides = this.#buildOriginalOverrides();
 		cloned.#rebuildMerged();
 		cloned.#fireAllHooks();
 		return cloned;
@@ -485,6 +592,8 @@ export class Settings {
 	async reloadForCwd(cwd: string): Promise<void> {
 		const normalized = path.normalize(cwd);
 		if (normalized === this.#cwd) return;
+		await this.flush();
+		this.#restoreRuntimeModelRoleOverrides();
 		const prevModelRoles = this.get("modelRoles");
 		this.#cwd = normalized;
 		if (this.#persist) {
@@ -603,35 +712,168 @@ export class Settings {
 		return roles;
 	}
 
+	#modelRoleLayerOwns(layer: RawSettings, role: ModelRole | string): boolean {
+		const value = getByPath(layer, ["modelRoles"]);
+		if (!isRecord(value)) return false;
+		return Object.hasOwn(value, role);
+	}
+
+	/**
+	 * Set the full `modelRoles` map on the runtime override layer without
+	 * routing through the public {@link override} method. Internal callers
+	 * (project edits, global fallback updates) use this so they can control
+	 * capture invalidation independently of the whole-map replacement
+	 * semantics that `override("modelRoles", …)` carries.
+	 */
+	#setRuntimeModelRoleOverrides(next: Record<string, string>): void {
+		const prev = this.get("modelRoles");
+		setByPath(this.#overrides, ["modelRoles"], next);
+		this.#rebuildMerged();
+		this.#fireEffectiveSettingChanged("modelRoles", this.get("modelRoles"), prev);
+	}
+
+	#updateRuntimeModelRoleOverride(role: ModelRole | string, modelId: string | undefined): void {
+		const runtimeOverrides = getByPath(this.#overrides, ["modelRoles"]);
+		if (!isRecord(runtimeOverrides) || !Object.hasOwn(runtimeOverrides, role)) return;
+
+		const nextRuntimeOverride = this.#modelRolesFromLayer(this.#overrides);
+		if (modelId === undefined) {
+			delete nextRuntimeOverride[role];
+		} else {
+			nextRuntimeOverride[role] = modelId;
+		}
+		this.#setRuntimeModelRoleOverrides(nextRuntimeOverride);
+	}
+
+	/**
+	 * Capture the original process-wide override for `role` the first time a
+	 * project edit temporarily replaces it, so the original can be restored on
+	 * cwd changes. Subsequent edits in the same cwd must not overwrite the
+	 * first captured value.
+	 */
+	#captureRuntimeModelRoleOverride(role: ModelRole | string): void {
+		if (this.#savedRuntimeModelRoleOverrides.has(role)) return;
+		const runtimeOverrides = getByPath(this.#overrides, ["modelRoles"]);
+		if (!isRecord(runtimeOverrides) || !Object.hasOwn(runtimeOverrides, role)) return;
+		this.#savedRuntimeModelRoleOverrides.set(role, this.#modelRolesFromLayer(this.#overrides)[role]);
+	}
+
+	/**
+	 * Restore original process-wide model-role overrides that were temporarily
+	 * replaced by project edits, mutating `#overrides` in place without
+	 * rebuilding. All remaining captures are valid because superseding
+	 * operations (late `overrideModelRoles`, global-mode `setModelRole`,
+	 * whole-map `override`/`clearOverride`) invalidate the affected captures
+	 * at the point of supersession. Caller is responsible for `#rebuildMerged()`.
+	 */
+	#restoreRuntimeModelRoleOverrides(): void {
+		if (this.#savedRuntimeModelRoleOverrides.size === 0) return;
+		const runtimeRoles = getByPath(this.#overrides, ["modelRoles"]);
+		if (!isRecord(runtimeRoles)) {
+			this.#savedRuntimeModelRoleOverrides.clear();
+			return;
+		}
+		for (const [role, originalValue] of this.#savedRuntimeModelRoleOverrides) {
+			if (originalValue === undefined) {
+				delete runtimeRoles[role];
+			} else {
+				runtimeRoles[role] = originalValue;
+			}
+		}
+		this.#savedRuntimeModelRoleOverrides.clear();
+	}
+
+	/**
+	 * Produce a deep copy of `#overrides` with original process-wide model-role
+	 * overrides restored, for use by {@link cloneForCwd}. All remaining
+	 * captures are valid (see {@link #restoreRuntimeModelRoleOverrides}).
+	 * Does not mutate the current instance's `#overrides`.
+	 */
+	#buildOriginalOverrides(): RawSettings {
+		if (this.#savedRuntimeModelRoleOverrides.size === 0) {
+			return structuredClone(this.#overrides);
+		}
+		const overrides = structuredClone(this.#overrides);
+		const runtimeRoles = getByPath(overrides, ["modelRoles"]);
+		if (!isRecord(runtimeRoles)) return overrides;
+		for (const [role, originalValue] of this.#savedRuntimeModelRoleOverrides) {
+			if (originalValue === undefined) {
+				delete runtimeRoles[role];
+			} else {
+				runtimeRoles[role] = originalValue;
+			}
+		}
+		return overrides;
+	}
+
+	#setProjectModelRoleValue(role: ModelRole | string, modelId: string | null): void {
+		const prev = this.get("modelRoles");
+		const projectRoles = getByPath(this.#project, ["modelRoles"]);
+		const current: Record<string, unknown> = isRecord(projectRoles) ? { ...projectRoles } : {};
+		current[role] = modelId;
+		setByPath(this.#project, ["modelRoles"], current);
+		this.#modifiedProjectModelRoles.add(role);
+		this.#rebuildMerged();
+		this.#fireEffectiveSettingChanged("modelRoles", this.get("modelRoles"), prev);
+		this.#queueProjectSave();
+	}
+
 	/**
 	 * Set a model role (helper for modelRoles record). Passing `undefined`
 	 * clears the role from the persisted record and any runtime override.
+	 *
+	 * In project storage mode, when a project edit has temporarily replaced
+	 * the process-wide runtime override for `role` and that override is still
+	 * active (the runtime slot currently matches the project value), the
+	 * global-layer write must not rewrite that runtime slot — otherwise the
+	 * global fallback would immediately shadow the still-configured project
+	 * role. The global layer is still persisted; only the runtime override is
+	 * left untouched. The guard is precise so that a later clear, a late
+	 * `overrideModelRoles`, or a storage-mode transition does not leave a
+	 * stale skip in place.
 	 */
 	setModelRole(role: ModelRole | string, modelId: string | undefined): void {
 		const current = this.#modelRolesFromLayer(this.#global);
-		const runtimeOverrides = getByPath(this.#overrides, ["modelRoles"]);
-		const updateRuntimeOverride =
-			!!runtimeOverrides &&
-			typeof runtimeOverrides === "object" &&
-			!Array.isArray(runtimeOverrides) &&
-			Object.hasOwn(runtimeOverrides, role);
-
 		if (modelId === undefined) {
 			delete current[role];
 		} else {
 			current[role] = modelId;
 		}
 		this.set("modelRoles", current);
-
-		if (updateRuntimeOverride) {
-			const nextRuntimeOverride = this.#modelRolesFromLayer(this.#overrides);
-			if (modelId === undefined) {
-				delete nextRuntimeOverride[role];
-			} else {
-				nextRuntimeOverride[role] = modelId;
-			}
-			this.override("modelRoles", nextRuntimeOverride);
+		if (this.isProjectModelRoleRuntimeOverrideActive(role)) {
+			return;
 		}
+		this.#savedRuntimeModelRoleOverrides.delete(role);
+		this.#updateRuntimeModelRoleOverride(role, modelId);
+	}
+
+	/**
+	 * Whether `role`'s runtime override slot currently holds the temporary
+	 * project-scoped value installed by a prior `setProjectModelRole`. Returns
+	 * `false` when storage is not project-mode, no capture exists, or the
+	 * project role was cleared. With explicit provenance invalidation, a
+	 * surviving capture implies no external supersession occurred.
+	 */
+	isProjectModelRoleRuntimeOverrideActive(role: ModelRole | string): boolean {
+		if (this.get("modelRoleStorage") !== "project") return false;
+		if (!this.#savedRuntimeModelRoleOverrides.has(role)) return false;
+		return !!this.getProjectModelRole(role);
+	}
+	/**
+	 * Set a model role in the current project's settings layer.
+	 */
+	setProjectModelRole(role: ModelRole | string, modelId: string): void {
+		this.#setProjectModelRoleValue(role, modelId);
+		this.#captureRuntimeModelRoleOverride(role);
+		this.#updateRuntimeModelRoleOverride(role, modelId);
+	}
+	/**
+	 * Clear a model role from the current project's settings layer.
+	 */
+	clearProjectModelRole(role: ModelRole | string): void {
+		this.#setProjectModelRoleValue(role, null);
+		this.#captureRuntimeModelRoleOverride(role);
+		this.#updateRuntimeModelRoleOverride(role, undefined);
 	}
 
 	/**
@@ -641,6 +883,49 @@ export class Settings {
 		const roles: unknown = this.get("modelRoles");
 		if (!isRecord(roles)) return undefined;
 		return modelRoleValueFromUnknown(roles[role]);
+	}
+	/**
+	 * Get a model role from only the global settings layer.
+	 */
+	getGlobalModelRole(role: ModelRole | string): string | undefined {
+		const modelId = this.#modelRolesFromLayer(this.#global)[role];
+		return modelId || undefined;
+	}
+
+	/**
+	 * Get a model role from only the current project settings layer.
+	 */
+	getProjectModelRole(role: ModelRole | string): string | undefined {
+		const modelId = this.#modelRolesFromLayer(this.#project)[role];
+		return modelId || undefined;
+	}
+
+	/**
+	 * Report which layer actually supplies the effective model role across
+	 * full merge precedence (runtime override → config overlay → project →
+	 * global → default). Unlike {@link getModelRoleSource}, this accounts
+	 * for runtime and config-overlay layers and detects ownership by key
+	 * presence rather than normalized value, so a `null` tombstone in the
+	 * overlay or runtime layer correctly blocks lower layers. The project
+	 * layer is checked through {@link #projectSettingsForMerge} because a
+	 * project null is a cleared value (falls back to global), not a
+	 * tombstone.
+	 */
+	getModelRoleProvenance(role: ModelRole | string): "runtime" | "overlay" | "project" | "global" | "default" {
+		if (this.#modelRoleLayerOwns(this.#overrides, role)) return "runtime";
+		if (this.#modelRoleLayerOwns(this.#configOverlay, role)) return "overlay";
+		if (this.#modelRoleLayerOwns(this.#projectSettingsForMerge(), role)) return "project";
+		if (this.#modelRoleLayerOwns(this.#global, role)) return "global";
+		return "default";
+	}
+
+	/**
+	 * Get the persisted layer supplying a model role (project/global/default only).
+	 */
+	getModelRoleSource(role: ModelRole | string): "project" | "global" | "default" {
+		if (this.getProjectModelRole(role)) return "project";
+		if (this.getGlobalModelRole(role)) return "global";
+		return "default";
 	}
 
 	/**
@@ -669,9 +954,10 @@ export class Settings {
 		for (const [role, modelId] of Object.entries(roles)) {
 			if (modelId) {
 				next[role] = modelId;
+				this.#savedRuntimeModelRoleOverrides.delete(role);
 			}
 		}
-		this.override("modelRoles", next);
+		this.#setRuntimeModelRoleOverrides(next);
 	}
 
 	/**
@@ -778,6 +1064,11 @@ export class Settings {
 				if (item.level === "project") {
 					merged = this.#deepMerge(merged, item.data as RawSettings);
 				}
+			}
+			const nativeProject = await this.#loadYaml(path.join(this.#cwd, ".omp", "config.yml"));
+			const nativeModelRoles = getByPath(nativeProject, ["modelRoles"]);
+			if (nativeModelRoles !== undefined) {
+				merged = this.#deepMerge(merged, { modelRoles: nativeModelRoles });
 			}
 			return this.#migrateRawSettings(merged);
 		} catch {
@@ -1195,43 +1486,6 @@ export class Settings {
 			delete raw["search.contextAfter"];
 		}
 
-		// 3. Tool-name arrays use wire IDs too. Preserve user overrides across
-		// the rename without duplicating entries if they already added grep/glob.
-		const migrateToolNameList = (names: unknown): unknown => {
-			if (!Array.isArray(names)) return names;
-			const out: unknown[] = [];
-			const seen = new Set<string>();
-			for (const name of names) {
-				const migrated = typeof name === "string" ? normalizeToolName(name) : name;
-				if (typeof migrated === "string") {
-					if (seen.has(migrated)) continue;
-					seen.add(migrated);
-				}
-				out.push(migrated);
-			}
-			return out;
-		};
-		const ensureToolsObject = (): Record<string, unknown> => {
-			const current = raw.tools;
-			if (current && typeof current === "object" && !Array.isArray(current)) {
-				return current as Record<string, unknown>;
-			}
-			const created: Record<string, unknown> = {};
-			raw.tools = created;
-			return created;
-		};
-		const toolsObj = raw.tools as Record<string, unknown> | undefined;
-		if (toolsObj && "essentialOverride" in toolsObj) {
-			toolsObj.essentialOverride = migrateToolNameList(toolsObj.essentialOverride);
-		}
-		if ("tools.essentialOverride" in raw) {
-			const nestedToolsObj = ensureToolsObject();
-			if (!("essentialOverride" in nestedToolsObj)) {
-				nestedToolsObj.essentialOverride = migrateToolNameList(raw["tools.essentialOverride"]);
-			}
-			delete raw["tools.essentialOverride"];
-		}
-
 		// Also clean up any empty nested objects we might have created or left behind
 		if (raw.glob && typeof raw.glob === "object" && Object.keys(raw.glob).length === 0) {
 			delete raw.glob;
@@ -1291,6 +1545,45 @@ export class Settings {
 		if (tierTouched) raw.tier = tierObj;
 		delete raw.fastModeScope;
 
+		// v17 renames that used to nest under a boolean parent path:
+		//   dev.autoqa.consent -> dev.autoqaConsent
+		//   todo.reminders.max -> todo.remindersMax
+		migrateNestedLeafRename(
+			raw,
+			"dev",
+			"autoqa",
+			"consent",
+			"autoqaConsent",
+			value => value === "unset" || value === "granted" || value === "denied",
+		);
+		migrateNestedLeafRename(
+			raw,
+			"todo",
+			"reminders",
+			"max",
+			"remindersMax",
+			value => typeof value === "number" && Number.isFinite(value),
+		);
+
+		// BM25 tool discovery removal: tools.discoveryMode / tools.essentialOverride /
+		// mcp.discoveryMode / mcp.discoveryDefaultServers are gone with no
+		// replacement (`tools.xdev` stays at its own default). Dead keys are
+		// deleted so they stop lingering in config.yml.
+		const toolsObj = raw.tools as Record<string, unknown> | undefined;
+		if (toolsObj) {
+			delete toolsObj.discoveryMode;
+			delete toolsObj.essentialOverride;
+		}
+		delete raw["tools.discoveryMode"];
+		delete raw["tools.essentialOverride"];
+		const mcpObj = raw.mcp as Record<string, unknown> | undefined;
+		if (mcpObj) {
+			delete mcpObj.discoveryMode;
+			delete mcpObj.discoveryDefaultServers;
+		}
+		delete raw["mcp.discoveryMode"];
+		delete raw["mcp.discoveryDefaultServers"];
+
 		return raw;
 	}
 
@@ -1323,14 +1616,20 @@ export class Settings {
 		if (!this.#persist || !this.#configPath) return;
 
 		// Debounce: wait 100ms for more changes
-		if (this.#saveTimer) {
-			clearTimeout(this.#saveTimer);
-		}
+		clearTimeout(this.#saveTimer);
 		this.#saveTimer = setTimeout(() => {
 			this.#saveTimer = undefined;
-			this.#saveNow().catch(err => {
-				logger.warn("Settings: background save failed", { error: String(err) });
-			});
+			const savePromise = this.#saveNow();
+			this.#savePromise = savePromise;
+			savePromise
+				.catch(err => {
+					logger.warn("Settings: background save failed", { error: String(err) });
+				})
+				.finally(() => {
+					if (this.#savePromise === savePromise) {
+						this.#savePromise = undefined;
+					}
+				});
 		}, 100);
 	}
 
@@ -1367,13 +1666,77 @@ export class Settings {
 
 		this.#rebuildMerged();
 	}
+	#queueProjectSave(): void {
+		if (!this.#persist) return;
+
+		clearTimeout(this.#projectSaveTimer);
+		this.#projectSaveTimer = setTimeout(() => {
+			this.#projectSaveTimer = undefined;
+			const savePromise = this.#saveProjectNow();
+			this.#projectSavePromise = savePromise;
+			savePromise
+				.catch(err => {
+					logger.warn("Settings: background project save failed", { error: String(err) });
+				})
+				.finally(() => {
+					if (this.#projectSavePromise === savePromise) {
+						this.#projectSavePromise = undefined;
+					}
+				});
+		}, 100);
+	}
+
+	async #saveProjectNow(): Promise<void> {
+		if (!this.#persist || this.#modifiedProjectModelRoles.size === 0) return;
+
+		const projectConfigPath = path.join(this.#cwd, ".omp", "config.yml");
+		const modifiedModelRoles = [...this.#modifiedProjectModelRoles];
+		this.#modifiedProjectModelRoles.clear();
+
+		try {
+			await fs.promises.mkdir(path.dirname(projectConfigPath), { recursive: true });
+			await withFileLock(projectConfigPath, async () => {
+				const projectSettings = await this.#loadYaml(projectConfigPath);
+
+				const projectRoles = getByPath(this.#project, ["modelRoles"]);
+				for (const role of modifiedModelRoles) {
+					const value = isRecord(projectRoles) ? projectRoles[role] : undefined;
+					setByPath(projectSettings, ["modelRoles", role], value);
+				}
+
+				await Bun.write(projectConfigPath, YAML.stringify(projectSettings, null, 2));
+			});
+			invalidateCapabilityFsCache(projectConfigPath);
+		} catch (error) {
+			for (const role of modifiedModelRoles) {
+				this.#modifiedProjectModelRoles.add(role);
+			}
+			throw error;
+		}
+
+		this.#rebuildMerged();
+	}
 
 	// ─────────────────────────────────────────────────────────────────────────
 	// Utilities
 	// ─────────────────────────────────────────────────────────────────────────
 
+	#projectSettingsForMerge(): RawSettings {
+		const projectRoles = getByPath(this.#project, ["modelRoles"]);
+		if (!isRecord(projectRoles)) return this.#project;
+
+		let filteredRoles: Record<string, unknown> | undefined;
+		for (const role in projectRoles) {
+			if (!Object.hasOwn(projectRoles, role) || modelRoleValueFromUnknown(projectRoles[role]) !== undefined)
+				continue;
+			filteredRoles ??= { ...projectRoles };
+			delete filteredRoles[role];
+		}
+		return filteredRoles ? { ...this.#project, modelRoles: filteredRoles } : this.#project;
+	}
+
 	#rebuildMerged(): void {
-		this.#merged = this.#deepMerge(this.#deepMerge({}, this.#global), this.#project);
+		this.#merged = this.#deepMerge(this.#deepMerge({}, this.#global), this.#projectSettingsForMerge());
 		this.#merged = this.#deepMerge(this.#merged, this.#configOverlay);
 		this.#merged = this.#deepMerge(this.#merged, this.#overrides);
 		this.#resolvedCache.clear();

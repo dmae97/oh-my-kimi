@@ -201,9 +201,13 @@ describe("WATCHDOG.yml file round-trip", () => {
 	});
 
 	const doc: WatchdogConfigDoc = {
-		instructions: 'Shared baseline.\nSecond line with: a colon and "quotes".',
+		instructions: 'Shared baseline.\n\nSecond line with: a colon and "quotes".',
 		advisors: [
-			{ name: "Architecture", model: "x-ai/grok-code-fast:high", instructions: "Watch module boundaries." },
+			{
+				name: "Architecture",
+				model: "x-ai/grok-code-fast:high",
+				instructions: "Watch module boundaries.\nReport coupling.",
+			},
 			{ name: "Security", tools: ["read", "grep"] },
 		],
 	};
@@ -222,9 +226,23 @@ describe("WATCHDOG.yml file round-trip", () => {
 		// Block style (not the flow `{...}` form), so it stays hand-editable.
 		expect(text).toContain("advisors:");
 		expect(text).not.toMatch(/^\{/);
+		expect(text).toContain('instructions: |2-\n  Shared baseline.\n  \n  Second line with: a colon and "quotes".');
+		expect(text).toContain("    instructions: |2-\n      Watch module boundaries.\n      Report coupling.");
+		expect(text).not.toContain("\\n");
 		const { advisors, sharedInstructions } = await discoverAdvisorConfigs(tmp, tmp);
 		expect(advisors.map(a => a.name)).toEqual(["Architecture", "Security"]);
 		expect(sharedInstructions).toContain("Shared baseline.");
+	});
+
+	it("preserves significant leading whitespace and trailing newlines in block scalars", async () => {
+		const file = path.join(tmp, "WATCHDOG.yml");
+		const whitespaceDoc: WatchdogConfigDoc = {
+			instructions: "  indented first line\nplain second line\n\n",
+			advisors: [{ name: "Whitespace", instructions: "\n  indented after blank\nplain" }],
+		};
+
+		await saveWatchdogConfigFile(file, whitespaceDoc);
+		expect(await loadWatchdogConfigFile(file)).toEqual(whitespaceDoc);
 	});
 
 	it("round-trips an explicit empty tools list without collapsing it into the default", async () => {
@@ -289,5 +307,43 @@ describe("resolveAdvisorConfigEditPath", () => {
 		await Bun.write(path.join(tmp, "WATCHDOG.yml"), "advisors: []\n");
 		await Bun.write(path.join(tmp, "WATCHDOG.yaml"), "advisors: []\n");
 		expect(await resolveAdvisorConfigEditPath("project", dirs(tmp))).toBe(path.join(tmp, "WATCHDOG.yml"));
+	});
+});
+
+describe("per-advisor enabled field", () => {
+	it("preserves explicit true, explicit false, and absence through save and discovery", async () => {
+		const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), "omp-advisor-enabled-"));
+		try {
+			const doc: WatchdogConfigDoc = {
+				advisors: [
+					{ name: "Explicit On", model: "test/model-a", enabled: true },
+					{ name: "Explicit Off", model: "test/model-b", enabled: false },
+					{ name: "Default", model: "test/model-c" },
+				],
+			};
+			const file = path.join(tmp, "WATCHDOG.yml");
+			await saveWatchdogConfigFile(file, doc);
+
+			const loaded = await loadWatchdogConfigFile(file);
+			expect(loaded.advisors.map(advisor => advisor.enabled)).toEqual([true, false, undefined]);
+
+			const { advisors } = await discoverAdvisorConfigs(tmp, tmp);
+			expect(advisors.map(advisor => advisor.enabled)).toEqual([true, false, undefined]);
+		} finally {
+			await fsp.rm(tmp, { recursive: true, force: true });
+		}
+	});
+
+	it("emits explicit boolean values but omits an absent enabled field", () => {
+		const text = serializeWatchdogConfig({
+			advisors: [
+				{ name: "Explicit On", enabled: true },
+				{ name: "Explicit Off", enabled: false },
+				{ name: "Default" },
+			],
+		});
+		expect(text).toContain("enabled: true");
+		expect(text).toContain("enabled: false");
+		expect(text.match(/enabled:/g)).toHaveLength(2);
 	});
 });

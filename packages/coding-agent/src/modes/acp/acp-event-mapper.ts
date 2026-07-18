@@ -6,6 +6,7 @@ import type {
 	ToolCallLocation,
 	ToolKind,
 } from "@agentclientprotocol/sdk";
+import { parseXdUrl } from "../../internal-urls/xd-protocol";
 import type { AgentSessionEvent } from "../../session/agent-session";
 import { resolveToCwd } from "../../tools/path-utils";
 import type { TodoStatus } from "../../tools/todo";
@@ -128,7 +129,24 @@ interface TextMessageLike {
 
 const ACP_TEXT_LIMIT = 4_000;
 
-export function mapToolKind(toolName: string): ToolKind {
+/**
+ * Device name when the call is an `xd://` device dispatch riding the
+ * read/write transport (`write xd://<tool>` executes the mounted tool,
+ * `read xd://` is discovery). Returns `undefined` for plain file paths.
+ */
+function xdevDispatchDevice(toolName: string, args: unknown): string | undefined {
+	if (toolName !== "write" && toolName !== "read") return undefined;
+	const path = extractStringProperty<PathContainer>(args, "path");
+	if (!path) return undefined;
+	return parseXdUrl(path)?.name ?? undefined;
+}
+
+export function mapToolKind(toolName: string, args?: unknown): ToolKind {
+	// An xd:// device write executes the mounted tool — "edit" would make ACP
+	// clients render it as a file modification to a nonexistent path (and
+	// auto-approve it under edit-tier policies). Reads stay "read": listing
+	// devices or fetching docs is discovery.
+	if (toolName === "write" && xdevDispatchDevice(toolName, args)) return "execute";
 	switch (toolName) {
 		case "read":
 			return "read";
@@ -254,6 +272,14 @@ function mapAssistantMessageUpdate(
 	let text: string;
 	const progress = options.getMessageProgress?.(event.message);
 	switch (event.assistantMessageEvent.type) {
+		case "image_end":
+			return [
+				toSessionNotification(sessionId, {
+					sessionUpdate: "agent_message_chunk",
+					content: event.assistantMessageEvent.content,
+					messageId: options.getMessageId?.(event.message),
+				}),
+			];
 		case "text_delta":
 			sessionUpdate = "agent_message_chunk";
 			text = event.assistantMessageEvent.delta;
@@ -420,7 +446,7 @@ export function buildToolCallStartUpdate(input: {
 		sessionUpdate: "tool_call",
 		toolCallId: input.toolCallId,
 		title: buildToolTitle(input.toolName, input.args, input.intent),
-		kind: mapToolKind(input.toolName),
+		kind: mapToolKind(input.toolName, input.args),
 		status: input.status ?? "pending",
 		rawInput: input.args,
 	};
@@ -544,6 +570,9 @@ function buildToolTitle(toolName: string, args: unknown, intent: string | undefi
 		extractStringProperty<PatternContainer>(args, "pattern") ??
 		extractStringProperty<QueryContainer>(args, "query");
 	if (subject) {
+		// Internal URLs (xd://github, skill://react, …) name their target fully;
+		// prefixing the transport tool reads as a file write to a fake path.
+		if (INTERNAL_URL_SUBJECT.test(subject)) return subject;
 		return `${toolName}: ${subject}`;
 	}
 
@@ -565,11 +594,18 @@ function toAcpLocationPath(value: string, cwd?: string): string {
 	}
 }
 
+/**
+ * Scheme-qualified subjects (`xd://`, `skill://`, `agent://`, `https://`, …)
+ * are not local files: resolving them against cwd fabricates paths like
+ * `/repo/xd:/github` and makes editors focus nonexistent files.
+ */
+const INTERNAL_URL_SUBJECT = /^[a-z][a-z0-9+.-]*:\/\//i;
+
 function extractToolLocations(args: unknown, cwd?: string): ToolCallLocation[] {
 	const locations: ToolCallLocation[] = [];
 	const seen = new Set<string>();
 	const pushPath = (raw: string | undefined) => {
-		if (!raw) return;
+		if (!raw || INTERNAL_URL_SUBJECT.test(raw)) return;
 		const path = toAcpLocationPath(raw, cwd);
 		if (seen.has(path)) return;
 		seen.add(path);

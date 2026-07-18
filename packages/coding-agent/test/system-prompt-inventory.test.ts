@@ -40,6 +40,12 @@ const TOOLS = new Map<string, SystemPromptToolMetadata>([
 	],
 ]);
 
+const DIRECT_WEB_SEARCH: SystemPromptToolMetadata = {
+	label: "Direct Web",
+	description: "Provider-callable direct search.",
+	parameters: { type: "object", properties: {} },
+};
+
 const SDK_TOOL: Tool = {
 	name: "sdk_custom",
 	label: "SDK Custom",
@@ -94,6 +100,29 @@ describe("system prompt tool inventory", () => {
 		return text.slice(inventoryStart, inventoryEnd);
 	}
 
+	async function renderMountedWebSearch(opts: {
+		nativeTools: boolean;
+		directDefinition: boolean;
+	}): Promise<{ text: string; inventory: string }> {
+		const tools = new Map(TOOLS);
+		if (opts.directDefinition) tools.set("web_search", DIRECT_WEB_SEARCH);
+		const { systemPrompt } = await buildSystemPrompt({
+			cwd: tempDir,
+			contextFiles: [],
+			skills: [],
+			rules: [],
+			toolNames: ["read", "web_search"],
+			tools,
+			workspaceTree: { ...EMPTY_TREE, rootPath: tempDir },
+			nativeTools: opts.nativeTools,
+			inlineToolDescriptors: false,
+			xdevTools: [{ name: "web_search", summary: "Searches the web." }],
+			xdevDocs: "Mounted web search documentation.",
+		});
+		const text = systemPrompt.join("\n\n");
+		return { text, inventory: opts.nativeTools ? inventoryFrom(text) : text };
+	}
+
 	function makeToolSession(settings: Settings): ToolSession {
 		return {
 			cwd: tempDir,
@@ -128,6 +157,28 @@ describe("system prompt tool inventory", () => {
 		expect(text).toContain("# Tool: read");
 		expect(text).toContain("Executes a shell command.");
 		expect(text).not.toContain("- Read: `read`");
+	});
+
+	it.each([
+		["compact", true],
+		["inline", false],
+	] as const)("omits xd-only tools from the %s inventory", async (_mode, nativeTools) => {
+		const { text, inventory } = await renderMountedWebSearch({ nativeTools, directDefinition: false });
+
+		expect(inventory).toContain(nativeTools ? "`read`" : "# Tool: read");
+		expect(inventory).not.toContain(nativeTools ? "`web_search`" : "# Tool: web_search");
+		expect(text).toContain("# xd:// Tool Devices");
+		expect(text).toContain("Mounted web search documentation.");
+	});
+
+	it.each([
+		["compact", true],
+		["inline", false],
+	] as const)("keeps direct tools that share an xd device name in the %s inventory", async (_mode, nativeTools) => {
+		const { inventory } = await renderMountedWebSearch({ nativeTools, directDefinition: true });
+
+		expect(inventory).toContain(nativeTools ? "- Direct Web: `web_search`" : "# Tool: web_search");
+		if (!nativeTools) expect(inventory).toContain(DIRECT_WEB_SEARCH.description);
 	});
 
 	it("uses a conservative fallback inventory when no tools map is provided", async () => {

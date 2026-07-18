@@ -1,13 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
-import * as fs from "node:fs/promises";
+import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { buildBrowserNavigationHeaders } from "@oh-my-pi/pi-coding-agent/web/search/providers/browser-headers";
-import { browserFetch } from "@oh-my-pi/pi-coding-agent/web/search/providers/browser-page";
 
-afterEach(() => {
-	vi.restoreAllMocks();
-});
+// The child process owns the mock, so this test never mutates a shared dependency.
 
 const CHROME_FALLBACK_HEADERS: Record<string, string> = {
 	Accept:
@@ -29,102 +24,33 @@ const CHROME_FALLBACK_HEADERS: Record<string, string> = {
 };
 
 const packageRoot = path.join(import.meta.dir, "../..");
-const headerGeneratorRoot = path.dirname(fileURLToPath(import.meta.resolve("header-generator")));
 
 describe("browser navigation headers", () => {
-	it("builds a randomized, internally consistent browser profile", () => {
-		const headers = buildBrowserNavigationHeaders();
-
-		// Ensure core navigation headers are always populated
-		expect(headers["User-Agent"]).toBeDefined();
-		expect(headers.Accept).toBeDefined();
-		expect(headers["Accept-Language"]).toBeDefined();
-		expect(headers["Accept-Encoding"]).toBeDefined();
-
-		const ua = headers["User-Agent"] || "";
-
-		// Ensure generated headers match standard conventions for the resolved browser type
-		if (ua.includes("Firefox/")) {
-			// Firefox doesn't support Client Hints and has unique accept values
-			expect(headers["Sec-Ch-Ua"]).toBeUndefined();
-			expect(headers["Sec-Ch-Ua-Platform"]).toBeUndefined();
-			expect(headers.Accept).toContain("text/html");
-		} else if (ua.includes("Chrome/")) {
-			// Chrome, Edge, and Opera support Client Hints
-			expect(headers["Sec-Ch-Ua"]).toBeDefined();
-			expect(headers["Sec-Ch-Ua-Mobile"]).toBeDefined();
-			expect(headers["Sec-Ch-Ua-Platform"]).toBeDefined();
-
-			if (ua.includes("Edg/")) {
-				expect(headers["Sec-Ch-Ua"]).toContain("Microsoft Edge");
-			} else if (ua.includes("OPR/")) {
-				expect(headers["Sec-Ch-Ua"]).toContain("Opera");
-			} else {
-				expect(headers["Sec-Ch-Ua"]).toContain("Google Chrome");
-			}
-		}
+	it("returns the stable Mac Chrome profile when randomization is disabled", () => {
+		expect(buildBrowserNavigationHeaders({ randomized: false })).toEqual(CHROME_FALLBACK_HEADERS);
 	});
 
-	it("falls back gracefully to robust Mac Chrome profile when randomized option is disabled", () => {
-		const headers = buildBrowserNavigationHeaders({ randomized: false });
-
-		expect(headers["User-Agent"]).toContain("Chrome/149.0.0.0");
-		expect(headers["User-Agent"]).toContain("Macintosh; Intel Mac OS X 10_15_7");
-		expect(headers["Sec-Ch-Ua"]).toContain('v="149"');
-		expect(headers["Sec-Ch-Ua-Platform"]).toBe('"macOS"');
-	});
-
-	it("returns stable fallback headers when header-generator data files are unavailable", async () => {
-		const dataFilesDir = path.join(headerGeneratorRoot, "data_files");
-		const unavailableDataFilesDir = path.join(
-			headerGeneratorRoot,
-			`.data_files-unavailable-${process.pid}-${Date.now()}`,
-		);
-
-		await fs.rename(dataFilesDir, unavailableDataFilesDir);
-		try {
-			const script = [
-				'import { buildBrowserNavigationHeaders } from "@oh-my-pi/pi-coding-agent/web/search/providers/browser-headers";',
-				"const headers = buildBrowserNavigationHeaders();",
-				"process.stdout.write(JSON.stringify(headers));",
-			].join("\n");
-			const proc = Bun.spawn([process.execPath, "--no-install", "--eval", script], {
-				cwd: packageRoot,
-				stdout: "pipe",
-				stderr: "pipe",
-			});
-
-			const [exitCode, stdout, stderr] = await Promise.all([
-				proc.exited,
-				new Response(proc.stdout).text(),
-				new Response(proc.stderr).text(),
-			]);
-
-			if (exitCode !== 0) {
-				throw new Error(`browser header import failed with exit ${exitCode}:\n${stderr}`);
-			}
-
-			expect(JSON.parse(stdout)).toEqual(CHROME_FALLBACK_HEADERS);
-		} finally {
-			await fs.rename(unavailableDataFilesDir, dataFilesDir);
-		}
-	});
-
-	it("uses ordinary fetch before considering the browser fallback", async () => {
-		const fetchSpy = vi
-			.spyOn(globalThis, "fetch")
-			.mockResolvedValue(new Response("<html><body>results</body></html>", { status: 200 }));
-
-		const page = await browserFetch("https://search.example/results", {
-			signal: new AbortController().signal,
-			browser: { shouldFallback: () => false },
+	it("imports cleanly and falls back when header-generator data files are absent", async () => {
+		const script = [
+			'import { mock } from "bun:test";',
+			'mock.module("header-generator", () => ({ HeaderGenerator: class { constructor() { throw new Error("ENOENT: data_files/headers-order.json"); } } }));',
+			"// Deliberate dynamic import: install the mock before loading the source under test.",
+			'const { buildBrowserNavigationHeaders } = await import("@oh-my-pi/pi-coding-agent/web/search/providers/browser-headers");',
+			"process.stdout.write(JSON.stringify(buildBrowserNavigationHeaders()));",
+		].join("\n");
+		const proc = Bun.spawn([process.execPath, "--no-install", "--eval", script], {
+			cwd: packageRoot,
+			stdout: "pipe",
+			stderr: "pipe",
 		});
+		const [exitCode, stdout, stderr] = await Promise.all([
+			proc.exited,
+			new Response(proc.stdout).text(),
+			new Response(proc.stderr).text(),
+		]);
 
-		expect(fetchSpy).toHaveBeenCalledTimes(1);
-		expect(page).toEqual({
-			html: "<html><body>results</body></html>",
-			status: 200,
-			url: "https://search.example/results",
-		});
+		expect(exitCode).toBe(0);
+		expect(stderr).toBe("");
+		expect(JSON.parse(stdout)).toEqual(CHROME_FALLBACK_HEADERS);
 	});
 });

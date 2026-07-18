@@ -26,6 +26,20 @@ describe("EvalTool timeout semantics", () => {
 		await disposeAllVmContexts();
 	});
 
+	it("disables the cell timeout when timeout is zero", async () => {
+		const tool = new EvalTool(makeSession());
+		const result = await tool.execute("call-unlimited-timeout", {
+			language: "js",
+			// This integration test must cross the former 1s watchdog boundary;
+			// fake timers do not drive the isolated JS worker's clock.
+			code: "await Bun.sleep(1250); print('completed');",
+			timeout: 0,
+		});
+
+		expect(result.content.some(block => block.type === "text" && block.text.includes("completed"))).toBe(true);
+		expect(result.details?.cells?.[0]?.status).toBe("complete");
+	});
+
 	it("bounds a compute cell (no agent/completion) by a plain wall-clock timeout", async () => {
 		const tool = new EvalTool(makeSession());
 		// 1s budget; the cell idles for 5s and emits no status, so nothing extends

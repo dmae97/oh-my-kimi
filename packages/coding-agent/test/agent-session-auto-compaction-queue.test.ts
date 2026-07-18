@@ -128,7 +128,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 			settings: Settings.isolated({
 				"compaction.autoContinue": false,
 				"todo.reminders": true,
-				"todo.reminders.max": 3,
+				"todo.remindersMax": 3,
 			}),
 			modelRegistry,
 			extensionRunner,
@@ -266,6 +266,65 @@ describe("AgentSession auto-compaction queue resume", () => {
 		await compactPromise;
 
 		expect(compactingDuringAbort).toBe(true);
+	});
+
+	it("resumes a message queued during manual compaction once it completes (#5800)", async () => {
+		// Regression for #5800 review: manual /compact disconnects the agent
+		// listener before `await abort()`, so the abort-finally stranded-message
+		// drain is suppressed while disconnected. Unlike /new (which resets the
+		// queue), compaction preserves the agent queues, so a steer/follow-up that
+		// arrives mid-compaction (async IRC, an xd:// mount notice, an SDK steer)
+		// would hang until the next explicit prompt unless compact() re-drains
+		// after reconnecting.
+		session.settings.set("compaction.keepRecentTokens", 1);
+		sessionManager.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "previous answer" }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-sonnet-4-5",
+			stopReason: "stop",
+			usage: {
+				input: 1_000,
+				output: 100,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 1_100,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now(),
+		});
+		session.agent.replaceMessages(session.buildDisplaySessionContext().messages);
+
+		const continueSpy = vi.spyOn(session.agent, "continue").mockImplementation(async () => {
+			session.agent.clearAllQueues();
+		});
+
+		// Park compaction inside its awaited hook so we can queue a follow-up while
+		// the session is disconnected and abort has already run its finally.
+		const gate = Promise.withResolvers<void>();
+		(globalThis as typeof globalThis & { __ompManualCompactGate?: Promise<void> }).__ompManualCompactGate =
+			gate.promise;
+
+		const compactPromise = session.compact();
+		while (!getRuntimeSignals().includes("before_compact:enter")) {
+			await Promise.resolve();
+		}
+
+		// A message arrives DURING compaction (post-abort, still disconnected).
+		session.agent.followUp({
+			role: "user",
+			content: "please respond after compaction",
+			timestamp: Date.now(),
+		});
+		expect(session.agent.hasQueuedMessages()).toBe(true);
+
+		gate.resolve();
+		await compactPromise;
+		await session.waitForIdle();
+
+		// compact()'s finally re-drained the stranded queue after reconnecting.
+		expect(continueSpy).toHaveBeenCalledTimes(1);
 	});
 
 	it("cancels an in-flight auto-compaction when manual compact startup aborts", async () => {

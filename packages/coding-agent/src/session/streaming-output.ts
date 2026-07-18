@@ -22,6 +22,7 @@ export const ARTIFACT_DEFAULT_MAX_BYTES = 0;
 export const ARTIFACT_DEFAULT_HEAD_BYTES = 3 * 1024 * 1024; // 3 MiB
 
 const NL = "\n";
+const CR = "\r";
 const ELLIPSIS = "…";
 
 // =============================================================================
@@ -43,6 +44,8 @@ export interface OutputSummary {
 	columnDroppedBytes?: number;
 	/** Number of distinct lines that hit the per-line column cap. */
 	columnTruncatedLines?: number;
+	/** Configured per-line column cap in effect (chars), when > 0. */
+	columnMax?: number;
 	/** Artifact ID for internal URL access (artifact://<id>) when truncated */
 	artifactId?: string;
 }
@@ -735,6 +738,8 @@ export class OutputSink {
 	#truncated = false;
 	#lastChunkTime = 0;
 	#pendingChunk = "";
+	#pendingCarriageReturn = false;
+	#pendingChunkTimer: Timer | undefined;
 
 	// Per-line column cap streaming state (persists across `push` calls so a
 	// long line split across chunks still trips the same trigger).
@@ -800,26 +805,57 @@ export class OutputSink {
 	}
 
 	/**
+	 * Converts carriage-return progress updates into line boundaries while
+	 * collapsing CRLF to one newline. A trailing CR is held until the next
+	 * chunk so split CRLF sequences do not create blank lines.
+	 */
+	#normalizeCarriageReturns(text: string): string {
+		if (text.length === 0 || (!this.#pendingCarriageReturn && !text.includes(CR))) return text;
+
+		let cursor = 0;
+		let normalized = "";
+		if (this.#pendingCarriageReturn) {
+			this.#pendingCarriageReturn = false;
+			normalized = NL;
+			if (text.startsWith(NL)) cursor = 1;
+		}
+
+		while (cursor < text.length) {
+			const carriageReturn = text.indexOf(CR, cursor);
+			if (carriageReturn === -1) {
+				normalized += text.substring(cursor);
+				break;
+			}
+			normalized += text.substring(cursor, carriageReturn);
+			if (carriageReturn === text.length - 1) {
+				this.#pendingCarriageReturn = true;
+				break;
+			}
+			normalized += NL;
+			cursor = text.startsWith(NL, carriageReturn + 1) ? carriageReturn + 2 : carriageReturn + 1;
+		}
+		return normalized;
+	}
+
+	/**
 	 * Push a chunk of output. The buffer management and onChunk callback run
 	 * synchronously. File sink writes are deferred and serialized internally.
 	 */
 	push(chunk: string): void {
-		chunk = sanitizeWithOptionalSixelPassthrough(chunk, sanitizeText);
+		chunk = sanitizeWithOptionalSixelPassthrough(chunk, text => sanitizeText(this.#normalizeCarriageReturns(text)));
 
-		// Throttled onChunk: coalesce chunks arriving inside the throttle window
-		// and flush the buffered concatenation on the next eligible tick (plus a
-		// final flush in dump()) so the preview never has silent gaps.
+		// Throttled onChunk: coalesce chunks arriving inside the throttle window.
+		// A timer flushes quiet tails at the throttle boundary; dump() catches a
+		// final pending chunk when the process exits before that timer fires.
 		// Live preview gets the raw (pre-cap) chunk so the TUI never lags behind
 		// what reached the sink — the column cap is for the persisted LLM view.
 		if (this.#onChunk) {
 			const now = Date.now();
 			if (now - this.#lastChunkTime >= this.#chunkThrottleMs) {
-				this.#lastChunkTime = now;
-				const merged = this.#pendingChunk + chunk;
-				this.#pendingChunk = "";
-				this.#onChunk(merged);
+				this.#emitPendingChunkWith(chunk, now);
 			} else {
 				this.#pendingChunk += chunk;
+				this.#schedulePendingChunkFlush();
 			}
 		}
 
@@ -837,7 +873,6 @@ export class OutputSink {
 		const capped = this.#maxColumns > 0 ? this.#applyColumnCap(chunk) : chunk;
 		const cappedBytes = capped === chunk ? rawBytes : Buffer.byteLength(capped, "utf-8");
 		const cappedThisChunk = cappedBytes < rawBytes;
-		if (cappedThisChunk) this.#truncated = true;
 
 		// Mirror RAW chunk to the artifact file so the on-disk record is the full
 		// uncapped stream. Mirror triggers on: in-memory overflow OR this chunk's
@@ -1121,6 +1156,7 @@ export class OutputSink {
 	 * branch in `dump()` against stale totals.
 	 */
 	replace(text: string): void {
+		this.#clearPendingChunkTimer();
 		this.#buffer = text;
 		this.#bufferBytes = Buffer.byteLength(text, "utf-8");
 		this.#head = "";
@@ -1136,6 +1172,39 @@ export class OutputSink {
 		this.#columnDroppedBytes = 0;
 		this.#columnTruncatedLines = 0;
 		this.#pendingChunk = "";
+		this.#pendingCarriageReturn = false;
+	}
+
+	#clearPendingChunkTimer(): void {
+		if (!this.#pendingChunkTimer) return;
+		clearTimeout(this.#pendingChunkTimer);
+		this.#pendingChunkTimer = undefined;
+	}
+
+	#emitPendingChunkWith(chunk: string, now: number): void {
+		this.#clearPendingChunkTimer();
+		this.#lastChunkTime = now;
+		const merged = this.#pendingChunk + chunk;
+		this.#pendingChunk = "";
+		this.#onChunk?.(merged);
+	}
+
+	#flushPendingChunk(): void {
+		if (this.#pendingChunk.length === 0) {
+			this.#clearPendingChunkTimer();
+			return;
+		}
+		this.#emitPendingChunkWith("", Date.now());
+	}
+
+	#schedulePendingChunkFlush(): void {
+		if (this.#chunkThrottleMs <= 0 || this.#pendingChunkTimer) return;
+		const elapsed = Date.now() - this.#lastChunkTime;
+		const delay = Math.max(0, this.#chunkThrottleMs - elapsed);
+		this.#pendingChunkTimer = setTimeout(() => {
+			this.#pendingChunkTimer = undefined;
+			this.#flushPendingChunk();
+		}, delay);
 	}
 
 	/**
@@ -1175,15 +1244,15 @@ export class OutputSink {
 	}
 
 	async dump(notice?: string): Promise<OutputSummary> {
+		if (this.#pendingCarriageReturn) {
+			this.#pendingCarriageReturn = false;
+			this.push(NL);
+		}
 		const noticeLine = notice ? `[${notice}]\n` : "";
 
 		// Flush any chunk still held back by the throttle so the live preview
 		// ends with the complete stream.
-		if (this.#onChunk && this.#pendingChunk.length > 0) {
-			const pending = this.#pendingChunk;
-			this.#pendingChunk = "";
-			this.#onChunk(pending);
-		}
+		this.#flushPendingChunk();
 		const totalLines = this.#sawData ? this.#totalLines + 1 : 0;
 
 		if (this.#file) {
@@ -1248,6 +1317,7 @@ export class OutputSink {
 			elidedLines,
 			columnDroppedBytes: this.#columnDroppedBytes > 0 ? this.#columnDroppedBytes : undefined,
 			columnTruncatedLines: this.#columnTruncatedLines > 0 ? this.#columnTruncatedLines : undefined,
+			columnMax: this.#columnTruncatedLines > 0 ? this.#maxColumns : undefined,
 			artifactId: this.#file?.artifactId,
 		};
 	}

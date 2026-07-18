@@ -78,6 +78,10 @@ function sealCommittedSnapshot(child: Component): void {
 	if (block.isDisplaceableBlock?.()) block.seal?.();
 }
 
+function setBlockCommittedRows(child: Component, rows: number): void {
+	(child as Component & Partial<NativeScrollbackCommittedRows>).setNativeScrollbackCommittedRows?.(rows);
+}
+
 // A "plain blank" row is empty or whitespace-only with no ANSI bytes. It marks
 // separation padding (a `Spacer`, or a no-background `paddingY` row) as opposed
 // to a background-colored padding row, whose escape sequences contain `\S` and
@@ -163,6 +167,7 @@ export class TranscriptContainer
 	// final: the leading finalized blocks plus the first live block's declared
 	// settled rows. TUI commits rows to native scrollback only above it.
 	#nativeScrollbackLiveRegionStart: number | undefined;
+	#nativeScrollbackLiveRegionPinned = false;
 	// Persistent assembled transcript rows. Rows before the stable floor are
 	// byte-identical to the previous render; rows at/after it were re-pushed.
 	#lines: string[] = [];
@@ -187,10 +192,32 @@ export class TranscriptContainer
 	override clear(): void {
 		this.#generation++;
 		super.clear();
+		this.#committedRows = 0;
 	}
 
-	setNativeScrollbackCommittedRows(rows: number): void {
+	override setNativeScrollbackCommittedRows(rows: number): void {
 		this.#committedRows = Number.isFinite(rows) ? Math.max(0, Math.trunc(rows)) : 0;
+		for (let i = 0; i < this.children.length; i++) {
+			const child = this.children[i]!;
+			const segment = this.#segments[i];
+			if (segment === undefined || segment.component !== child) continue;
+			const committedContribution = Math.min(
+				segment.contribution.length,
+				Math.max(0, this.#committedRows - segment.startRow - segment.sep),
+			);
+			if (committedContribution === 0) {
+				setBlockCommittedRows(child, 0);
+				continue;
+			}
+			// Transcript assembly strips plain blank edges from each block. Map the
+			// committed contribution back into the child's raw render coordinates so
+			// nested containers can split the prefix against their exact child rows.
+			let leadingTrimmedRows = 0;
+			while (leadingTrimmedRows < segment.rawRef.length && isPlainBlank(segment.rawRef[leadingTrimmedRows]!)) {
+				leadingTrimmedRows++;
+			}
+			setBlockCommittedRows(child, Math.min(segment.rawRef.length, leadingTrimmedRows + committedContribution));
+		}
 	}
 
 	getRenderStablePrefixRows(): number {
@@ -201,6 +228,11 @@ export class TranscriptContainer
 
 	getNativeScrollbackLiveRegionStart(): number | undefined {
 		return this.#nativeScrollbackLiveRegionStart;
+	}
+
+	/** Propagates viewport pinning from the first still-mutating transcript block. */
+	isNativeScrollbackLiveRegionPinned(): boolean {
+		return this.#nativeScrollbackLiveRegionPinned;
 	}
 
 	/**
@@ -290,6 +322,7 @@ export class TranscriptContainer
 	override render(width: number): readonly string[] {
 		width = Math.max(1, width);
 		this.#nativeScrollbackLiveRegionStart = undefined;
+		this.#nativeScrollbackLiveRegionPinned = false;
 
 		const count = this.children.length;
 
@@ -302,7 +335,8 @@ export class TranscriptContainer
 		// pending-preview rows committed (late result on a scrolled-off call) is
 		// caught too.
 		for (let i = 0; i < count && i < this.#segments.length; i++) {
-			const previous = this.#segments[i]!;
+			const previous = this.#segments[i];
+			if (previous === undefined) continue;
 			if (previous.startRow >= this.#committedRows) break;
 			if (previous.rowCount === 0 || previous.component !== this.children[i]) continue;
 			sealCommittedSnapshot(previous.component);
@@ -320,6 +354,10 @@ export class TranscriptContainer
 			if (!isBlockFinalized(this.children[i]!)) {
 				liveStartIndex = i;
 				hasLiveBlock = true;
+				this.#nativeScrollbackLiveRegionPinned =
+					(
+						this.children[i] as Component & Partial<NativeScrollbackLiveRegion>
+					).isNativeScrollbackLiveRegionPinned?.() === true;
 				break;
 			}
 		}

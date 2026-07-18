@@ -25,6 +25,7 @@ import {
 	findThinkingVariantToken,
 	isDeepseekModelIdOrName,
 	isGlm52ReasoningEffortModelId,
+	isKimiK3ModelId,
 	isMimoModelIdOrName,
 	isMinimaxM2FamilyModelId,
 	isMinimaxM3FamilyModelId,
@@ -61,6 +62,8 @@ const GEMINI_3_FLASH_EFFORTS: readonly Effort[] = [Effort.Minimal, Effort.Low, E
 const GPT_5_2_PLUS_EFFORTS: readonly Effort[] = [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh];
 const GPT_5_1_CODEX_MINI_EFFORTS: readonly Effort[] = [Effort.Medium, Effort.High];
 const LOW_MEDIUM_HIGH_REASONING_EFFORTS: readonly Effort[] = [Effort.Low, Effort.Medium, Effort.High];
+/** Kimi K3's wire-exact mandatory reasoning scale. */
+const KIMI_K3_REASONING_EFFORTS: readonly Effort[] = [Effort.Low, Effort.High, Effort.Max];
 /** Wire-exact two-tier scale (`high`/`max`): GLM-5.2 on Z.ai/Umans/Ollama Cloud/Baseten, Sakana Fugu, DeepSeek. */
 const HIGH_MAX_REASONING_EFFORTS: readonly Effort[] = [Effort.High, Effort.Max];
 /** OpenRouter's DeepSeek route accepts only `high`. */
@@ -174,7 +177,8 @@ function fillThinkingWireDefaults<TApi extends Api>(
 		(spec.api === "anthropic-messages" || spec.api === "bedrock-converse-stream") &&
 		supportsAdaptiveThinkingDisplay(spec.id);
 	const needsRequiresEffort = thinking.requiresEffort === undefined && impliesMandatoryReasoning(parsed, spec.id);
-	if (!effortsChanged && !shouldReplaceEffortMap && !needsDisplay && !needsRequiresEffort) {
+	const needsDefaultLevel = thinking.defaultLevel === undefined && isKimiK3ModelId(spec.id);
+	if (!effortsChanged && !shouldReplaceEffortMap && !needsDisplay && !needsRequiresEffort && !needsDefaultLevel) {
 		return thinking;
 	}
 	const filled: ThinkingConfig = { ...thinking };
@@ -190,6 +194,9 @@ function fillThinkingWireDefaults<TApi extends Api>(
 	}
 	if (needsDisplay) {
 		filled.supportsDisplay = true;
+	}
+	if (needsDefaultLevel) {
+		filled.defaultLevel = Effort.Max;
 	}
 	if (needsRequiresEffort) {
 		filled.requiresEffort = true;
@@ -208,6 +215,9 @@ export function deriveThinking<TApi extends Api>(spec: ModelSpec<TApi>, compat: 
 		mode: inferThinkingControlMode(spec, parsed),
 		efforts,
 	};
+	if (isKimiK3ModelId(spec.id)) {
+		config.defaultLevel = Effort.Max;
+	}
 	const effortMap = inferEffortMap(spec, compat, config.mode, config.efforts);
 	if (effortMap !== undefined) {
 		config.effortMap = effortMap;
@@ -318,7 +328,7 @@ function getModelDefinedEfforts<TApi extends Api>(
 		}
 		if (
 			isZaiThinkingFormat(compat) ||
-			isUmansGlm52ReasoningEffortModel(spec) ||
+			isAnthropicMessagesGlm52ReasoningEffortModel(spec) ||
 			isOllamaCloudGlm52ReasoningEffortModel(spec) ||
 			spec.provider === "baseten"
 		) {
@@ -327,6 +337,9 @@ function getModelDefinedEfforts<TApi extends Api>(
 		if (isOpenAICompatReasoningApi(spec.api)) {
 			return DEFAULT_REASONING_EFFORTS_WITH_MAX;
 		}
+	}
+	if (isKimiK3ModelId(spec.id)) {
+		return KIMI_K3_REASONING_EFFORTS;
 	}
 	if (isSakanaFuguReasoningModel(spec)) {
 		return HIGH_MAX_REASONING_EFFORTS;
@@ -394,8 +407,12 @@ function isOllamaCloudGlm52ReasoningEffortModel<TApi extends Api>(spec: ModelSpe
 	return spec.api === "ollama-chat" && spec.provider === "ollama-cloud" && isGlm52ReasoningEffortModelId(spec.id);
 }
 
-function isUmansGlm52ReasoningEffortModel<TApi extends Api>(spec: ModelSpec<TApi>): boolean {
-	return spec.api === "anthropic-messages" && spec.provider === "umans" && isGlm52ReasoningEffortModelId(spec.id);
+function isAnthropicMessagesGlm52ReasoningEffortModel<TApi extends Api>(spec: ModelSpec<TApi>): boolean {
+	return (
+		spec.api === "anthropic-messages" &&
+		(spec.provider === "umans" || spec.provider === "zai") &&
+		isGlm52ReasoningEffortModelId(spec.id)
+	);
 }
 
 function isMinimaxReasoningModelOnAnthropicEndpoint<TApi extends Api>(spec: ModelSpec<TApi>): boolean {
@@ -540,6 +557,7 @@ function impliesMandatoryReasoning(parsed: ParsedModel, modelId: string): boolea
 		if (semverGte(parsed.version, "3.0")) return true;
 		if (parsed.kind === "pro" && semverGte(parsed.version, "2.5")) return true;
 	}
+	if (isKimiK3ModelId(modelId)) return true;
 	if (isMinimaxM2FamilyModelId(modelId)) return true;
 	if (OPENAI_O_SERIES_RE.test(bareModelId(modelId))) return true;
 	return findThinkingVariantToken(modelId) !== undefined;
@@ -617,7 +635,7 @@ function inferThinkingControlMode<TApi extends Api>(
 			if (isMinimaxReasoningModelOnAnthropicEndpoint(spec)) {
 				return "anthropic-adaptive";
 			}
-			if (isUmansGlm52ReasoningEffortModel(spec)) {
+			if (isAnthropicMessagesGlm52ReasoningEffortModel(spec)) {
 				return "anthropic-budget-effort";
 			}
 			if (parsedModel.family === "anthropic") {

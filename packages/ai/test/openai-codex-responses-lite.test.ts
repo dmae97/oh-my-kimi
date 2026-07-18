@@ -187,25 +187,24 @@ describe("openai-codex reasoning.context", () => {
 
 	// gpt-5.1-codex / gpt-5.3-codex / gpt-5.3-codex-spark reject `all_turns`
 	// ("Unsupported value: 'all_turns' is not supported with this model").
-	it.each([
-		"gpt-5.1-codex",
-		"gpt-5.3-codex",
-		"gpt-5.3-codex-spark",
-	])("omits the all_turns default for pre-5.4 model %s", async modelId => {
-		const model = createCodexModel(modelId);
+	it.each(["gpt-5.1-codex", "gpt-5.3-codex", "gpt-5.3-codex-spark"])(
+		"omits the all_turns default for pre-5.4 model %s",
+		async modelId => {
+			const model = createCodexModel(modelId);
 
-		const defaulted = await transformRequestBody({ model: model.id }, model, { reasoningEffort: "medium" });
-		expect(defaulted.reasoning).toBeDefined();
-		expect(defaulted.reasoning?.context).toBeUndefined();
-		expect("context" in (defaulted.reasoning ?? {})).toBe(false);
+			const defaulted = await transformRequestBody({ model: model.id }, model, { reasoningEffort: "medium" });
+			expect(defaulted.reasoning).toBeDefined();
+			expect(defaulted.reasoning?.context).toBeUndefined();
+			expect("context" in (defaulted.reasoning ?? {})).toBe(false);
 
-		// A supported override (current_turn/auto) is still honored.
-		const overridden = await transformRequestBody({ model: model.id }, model, {
-			reasoningEffort: "medium",
-			reasoningContext: "current_turn",
-		});
-		expect(overridden.reasoning?.context).toBe("current_turn");
-	});
+			// A supported override (current_turn/auto) is still honored.
+			const overridden = await transformRequestBody({ model: model.id }, model, {
+				reasoningEffort: "medium",
+				reasoningContext: "current_turn",
+			});
+			expect(overridden.reasoning?.context).toBe("current_turn");
+		},
+	);
 
 	it("suppresses an explicit all_turns override on a pre-5.4 model", async () => {
 		const model = createCodexModel("gpt-5.3-codex-spark");
@@ -241,24 +240,23 @@ describe("openai-codex reasoning.summary", () => {
 
 	// gpt-5.1-codex / gpt-5.3-codex / gpt-5.3-codex-spark reject `reasoning.summary`
 	// ("Unsupported parameter: 'reasoning.summary' is not supported with this model").
-	it.each([
-		"gpt-5.1-codex",
-		"gpt-5.3-codex",
-		"gpt-5.3-codex-spark",
-	])("omits reasoning.summary for pre-5.4 model %s", async modelId => {
-		const model = createCodexModel(modelId);
+	it.each(["gpt-5.1-codex", "gpt-5.3-codex", "gpt-5.3-codex-spark"])(
+		"omits reasoning.summary for pre-5.4 model %s",
+		async modelId => {
+			const model = createCodexModel(modelId);
 
-		const defaulted = await transformRequestBody({ model: model.id }, model, { reasoningEffort: "medium" });
-		expect(defaulted.reasoning).toBeDefined();
-		expect("summary" in (defaulted.reasoning ?? {})).toBe(false);
+			const defaulted = await transformRequestBody({ model: model.id }, model, { reasoningEffort: "medium" });
+			expect(defaulted.reasoning).toBeDefined();
+			expect("summary" in (defaulted.reasoning ?? {})).toBe(false);
 
-		// Even an explicit summary level is suppressed on unsupported ids.
-		const forced = await transformRequestBody({ model: model.id }, model, {
-			reasoningEffort: "medium",
-			reasoningSummary: "detailed",
-		});
-		expect("summary" in (forced.reasoning ?? {})).toBe(false);
-	});
+			// Even an explicit summary level is suppressed on unsupported ids.
+			const forced = await transformRequestBody({ model: model.id }, model, {
+				reasoningEffort: "medium",
+				reasoningSummary: "detailed",
+			});
+			expect("summary" in (forced.reasoning ?? {})).toBe(false);
+		},
+	);
 });
 
 describe("openai-codex Responses Lite input shaping", () => {
@@ -342,6 +340,25 @@ describe("openai-codex Responses Lite input shaping", () => {
 
 		const noTools = await transformRequestBody({ model: model.id }, model, { responsesLite: true });
 		expect(noTools.parallel_tool_calls).toBe(false);
+	});
+
+	it("falls back from forced hosted tool choices without weakening explicit tool-use constraints", async () => {
+		const model = createCodexModel("gpt-5.6-terra");
+		const tools = [{ type: "function", name: "handoff", parameters: { type: "object" } }];
+
+		const forced = await transformRequestBody(
+			{ model: model.id, tools, tool_choice: { type: "web_search" } },
+			model,
+			{ responsesLite: true },
+		);
+		expect(forced.tool_choice).toBe("auto");
+		expect(forced.tools).toBeUndefined();
+
+		const disabled = await transformRequestBody({ model: model.id, tools, tool_choice: "none" }, model, {
+			responsesLite: true,
+		});
+		expect(disabled.tool_choice).toBe("none");
+		expect(disabled.tools).toBeUndefined();
 	});
 
 	it("moves instructions and tools into input items under lite", async () => {
@@ -758,6 +775,7 @@ describe("openai-codex concurrent reasoning summaries", () => {
 		const terra = createCodexModel("gpt-5.6-terra");
 		const withSummary = await transformRequestBody({ model: terra.id }, terra, { reasoningEffort: "medium" });
 		expect(withSummary.stream_options).toEqual({ reasoning_summary_delivery: "sequential_cutoff" });
+		expect(withSummary.reasoning?.summary).toBe("detailed");
 
 		const suppressed = await transformRequestBody({ model: terra.id }, terra, {
 			reasoningEffort: "medium",
@@ -771,6 +789,72 @@ describe("openai-codex concurrent reasoning summaries", () => {
 		const legacy = createCodexModel("gpt-5.1-codex");
 		const unsupported = await transformRequestBody({ model: legacy.id }, legacy, { reasoningEffort: "medium" });
 		expect(unsupported.stream_options).toBeUndefined();
+	});
+
+	it("renders summary deltas when sequential-cutoff omits atomic done events", async () => {
+		const model = createCodexModel("gpt-5.6-terra");
+		const events: Array<Record<string, unknown>> = [
+			{
+				type: "response.output_item.added",
+				output_index: 0,
+				item: { type: "reasoning", id: "reason_delta", summary: [] },
+			},
+			{
+				type: "response.reasoning_summary_part.added",
+				item_id: "reason_delta",
+				output_index: 0,
+				summary_index: 0,
+				part: { type: "summary_text", text: "" },
+			},
+			{
+				type: "response.reasoning_summary_text.delta",
+				item_id: "reason_delta",
+				output_index: 0,
+				summary_index: 0,
+				delta: "Streaming ",
+			},
+			{
+				type: "response.reasoning_summary_part.done",
+				item_id: "reason_delta",
+				output_index: 0,
+				summary_index: 0,
+				part: { type: "summary_text", text: "Streaming " },
+			},
+			{
+				type: "response.reasoning_summary_part.added",
+				item_id: "reason_delta",
+				output_index: 0,
+				summary_index: 1,
+				part: { type: "summary_text", text: "" },
+			},
+			{
+				type: "response.reasoning_summary_text.delta",
+				item_id: "reason_delta",
+				output_index: 0,
+				summary_index: 0,
+				delta: "fallback",
+			},
+			{
+				type: "response.output_item.done",
+				output_index: 0,
+				item: { type: "reasoning", id: "reason_delta", summary: [] },
+			},
+			...COMPLETED_CODEX_EVENTS,
+		];
+		const fetchMock = createCodexFetchMock(createCodexSse(events), () => {});
+		const stream = streamOpenAICodexResponses(model, createCodexTestContext(), {
+			apiKey: createCodexTestToken(),
+			fetch: fetchMock,
+			reasoning: "medium",
+		});
+		const thinkingDeltas: string[] = [];
+		for await (const event of stream) {
+			if (event.type === "thinking_delta") thinkingDeltas.push(event.delta);
+		}
+		const result = await stream.result();
+
+		expect(thinkingDeltas).toEqual(["Streaming ", "\n\n", "fallback"]);
+		expect(result.content.find(block => block.type === "thinking")?.thinking).toBe("Streaming \n\nfallback");
 	});
 
 	it("deduplicates cumulative atomic summaries and ignores legacy deltas under sequential cutoff", async () => {
@@ -864,6 +948,13 @@ describe("openai-codex concurrent reasoning summaries", () => {
 				output_index: 0,
 				summary_index: 3,
 				text: "Plan\n\nPlanning details\n\nReview output",
+			},
+			{
+				type: "response.reasoning_summary_part.done",
+				item_id: "reason_1",
+				output_index: 0,
+				summary_index: 3,
+				part: { type: "summary_text", text: "Plan\n\nPlanning details\n\nInspect details" },
 			},
 			{
 				type: "response.output_item.done",
@@ -1110,5 +1201,36 @@ describe("openai-codex concurrent reasoning summaries", () => {
 		expect(JSON.parse(replayOnly?.thinkingSignature ?? "{}").id).toBe("rs_3");
 		const text = result.content.find(block => block.type === "text");
 		expect(text?.text).toBe("Hello");
+	});
+});
+
+describe("openai-codex native history redaction", () => {
+	it("redacts credentials from user provider history before replaying it", () => {
+		const model = createCodexModel("gpt-5.1-codex");
+		const credential = "sk-ABCdef1234567890ABCdef1234567890ABCdef1234567890ABCdef123456";
+		const context: Context = {
+			messages: [
+				{
+					role: "user",
+					content: "fallback",
+					timestamp: Date.now(),
+					providerPayload: {
+						type: "openaiResponsesHistory",
+						provider: model.provider,
+						items: [{ type: "message", role: "user", content: [{ type: "input_text", text: credential }] }],
+					},
+				} as Context["messages"][number],
+			],
+		};
+
+		const messages = convertCodexResponsesMessages(model, context);
+
+		expect(messages).toEqual([
+			{
+				type: "message",
+				role: "user",
+				content: [{ type: "input_text", text: "[openai_token_redacted]" }],
+			},
+		]);
 	});
 });

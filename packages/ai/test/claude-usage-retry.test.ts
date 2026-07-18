@@ -24,7 +24,7 @@ function baseParams() {
 		credential: {
 			type: "oauth" as const,
 			accessToken: "oat-test",
-			accountId: "org_test",
+			accountId: "account_test",
 			email: "user@example.com",
 			expiresAt: Date.now() + 60_000,
 		},
@@ -66,6 +66,16 @@ describe("claudeUsageProvider retry contract", () => {
 		const report = await claudeUsageProvider.fetchUsage(baseParams(), makeContext(fetchMock, instantRetryWait));
 		expect(report).not.toBeNull();
 		expect(attempt).toBe(2);
+	});
+
+	it("does not treat the organization response header as account identity", async () => {
+		const fetchMock = (async () =>
+			jsonResponse(200, VALID_PAYLOAD, { "anthropic-organization-id": "org_header" })) as FetchImpl;
+
+		const report = await claudeUsageProvider.fetchUsage(baseParams(), makeContext(fetchMock));
+
+		expect(report?.metadata?.accountId).toBe("account_test");
+		expect(report?.metadata?.orgId).toBeUndefined();
 	});
 
 	it("does NOT retry on 401 — permanent for this credential", async () => {

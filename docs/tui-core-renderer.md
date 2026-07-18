@@ -135,6 +135,10 @@ of history:
 - `getNativeScrollbackLiveRegionStart()` — first row that may still mutate
   (everything below it, including root chrome rendered after it, stays in the
   window).
+- `isNativeScrollbackLiveRegionPinned()` — optional policy for replacing
+  dashboards: rows at/after the live boundary stay viewport-local instead of
+  entering history as frozen snapshots. When the boundary advances or
+  disappears, newly final rows commit in order.
 - `getNativeScrollbackCommitSafeEnd()` — optional **byte-stable** deeper boundary
   (B): the append-only prefix of the live region (a streaming assistant message's
   settled rows), asserted never to re-layout, so it stays under the audit.

@@ -13,6 +13,7 @@ from typing import Any, Protocol
 
 from robomp.github_client import (
     CommentInfo,
+    IssueIndexEntry,
     IssueInfo,
     IssueSummary,
     PullRequestFileInfo,
@@ -45,6 +46,16 @@ class GitHubBackend(Protocol):
         state: str = "open",
         limit: int = 30,
     ) -> list[IssueSummary]: ...
+
+    async def search_issues(self, repo: str, query: str, *, limit: int = 10) -> list[IssueSummary]: ...
+    async def list_issue_index_entries(
+        self,
+        repo: str,
+        *,
+        since: str | None = None,
+        page: int = 1,
+        per_page: int = 100,
+    ) -> list[IssueIndexEntry]: ...
 
     async def list_comments(self, repo: str, number: int) -> list[CommentInfo]: ...
 

@@ -40,6 +40,8 @@ const THINKING_TAG_ENVELOPE_RE = /<(think|thinking|reasoning)>\s*[\s\S]*?<\/\1>/
 const THINKING_FENCE_ENVELOPE_RE = /```(?:thinking|reasoning)\b[\s\S]*?```/gi;
 const LEADING_THINKING_TAG_RE = /^\s*<(think|thinking|reasoning)>\s*[\s\S]*?<\/\1>\s*/i;
 const LEADING_THINKING_FENCE_RE = /^\s*```(?:thinking|reasoning)\b[\s\S]*?```\s*/i;
+const LEADING_PROSE_THINKING_PREAMBLE_RE =
+	/^[ \t]*(?:(?:here(?:['’]s| is)[ \t]+(?:a|the|my)[ \t]+)|my[ \t]+)?(?:thinking|thought|reasoning)[ \t]+process[ \t]*:?[ \t]*(?:\r?\n|$)/i;
 
 function getTitleModel(registry: ModelRegistry, settings: Settings, currentModel?: Model<Api>): Model<Api> | undefined {
 	const availableModels = registry.getAvailable();
@@ -66,6 +68,7 @@ function getTitleModel(registry: ModelRegistry, settings: Settings, currentModel
  *   resolver instead of a pre-evaluated value ensures the metadata's account_uuid
  *   reflects the credential actually selected for this request.
  * @param customSystemPrompt Optional title-specific system prompt override
+ * @param signal Session-lifecycle cancellation for background title requests
  */
 export async function generateSessionTitle(
 	firstMessage: string,
@@ -75,6 +78,7 @@ export async function generateSessionTitle(
 	currentModel?: Model<Api>,
 	metadataResolver?: (provider: string) => Record<string, unknown> | undefined,
 	customSystemPrompt?: string,
+	signal?: AbortSignal,
 ): Promise<string | null> {
 	// Defer titling for greetings / acknowledgements / empty input. The default
 	// tiny title model can't reliably decline trivial input, so this happens
@@ -95,7 +99,7 @@ export async function generateSessionTitle(
 			sessionId,
 			currentModel,
 			metadataResolver,
-			undefined,
+			signal,
 			titleSystemPrompt,
 		);
 	}
@@ -115,9 +119,18 @@ export async function generateSessionTitle(
 		return null;
 	}
 	try {
-		const localTitle = titleSystemPrompt
-			? await tinyTitleClient.generate(tinyModel, firstMessage, { systemPrompt: titleSystemPrompt })
-			: await tinyTitleClient.generate(tinyModel, firstMessage);
+		let localTitle: string | null;
+		if (signal) {
+			localTitle = await tinyTitleClient.generate(
+				tinyModel,
+				firstMessage,
+				titleSystemPrompt ? { signal, systemPrompt: titleSystemPrompt } : { signal },
+			);
+		} else if (titleSystemPrompt) {
+			localTitle = await tinyTitleClient.generate(tinyModel, firstMessage, { systemPrompt: titleSystemPrompt });
+		} else {
+			localTitle = await tinyTitleClient.generate(tinyModel, firstMessage);
+		}
 		if (!localTitle) {
 			logger.warn("title-generator: local tiny model produced no title; skipping (no online fallback)", {
 				sessionId,
@@ -250,13 +263,15 @@ function extractGeneratedTitle(contentBlocks: AssistantMessage["content"]): stri
 	}
 	// Stay lenient: prefer the first closed title marker in visible text, then
 	// fall back to a plain sentence after stripping only known leading leaked
-	// thinking envelopes plus any stray/unclosed title tag fragment.
+	// thinking envelopes plus any stray/unclosed title tag fragment. Reject a
+	// prose thinking preamble only on the markerless path: a later marked title
+	// remains authoritative.
 	const markedTitle = extractVisibleMarkedTitle(textTitle);
-	const cleanedTextTitle =
-		markedTitle ??
-		stripLeadingLeakedThinkingMarkup(textTitle)
-			.replace(/<\/?title>/gi, "")
-			.trim();
+	if (markedTitle !== undefined) return unwrapJsonTitle(markedTitle);
+	const cleanedTextTitle = stripLeadingLeakedThinkingMarkup(textTitle)
+		.replace(/<\/?title>/gi, "")
+		.trim();
+	if (LEADING_PROSE_THINKING_PREAMBLE_RE.test(cleanedTextTitle)) return "";
 	return unwrapJsonTitle(cleanedTextTitle);
 }
 

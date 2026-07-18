@@ -9,11 +9,12 @@ describe("parseAriaRefSelector", () => {
 		expect(parseAriaRefSelector("  aria-ref=e7  ")).toBe("e7");
 	});
 
-	it("rejects a bare eN id so action selectors mean the same on both backends", () => {
-		// cmux already uses bare `eN`/`@eN` for its native observe refs; requiring
-		// the prefix keeps `tab.click("e5")` from meaning different things per backend.
-		expect(parseAriaRefSelector("e5")).toBeNull();
-		expect(parseAriaRefSelector("@e5")).toBeNull();
+	it("accepts bare eN/@eN ids copied straight from snapshot YAML", () => {
+		// Agents copy `e501` out of `[ref=e501]` output; treating it as a CSS tag
+		// selector guaranteed a zero-match timeout instead of a ref resolution.
+		expect(parseAriaRefSelector("e5")).toBe("e5");
+		expect(parseAriaRefSelector("@e5")).toBe("e5");
+		expect(parseAriaRefSelector(" e501 ")).toBe("e501");
 	});
 
 	it("rejects css and other selectors", () => {
@@ -21,6 +22,24 @@ describe("parseAriaRefSelector", () => {
 		expect(parseAriaRefSelector("text/Submit")).toBeNull();
 		expect(parseAriaRefSelector("aria-ref=button")).toBeNull(); // not an eN id
 		expect(parseAriaRefSelector("aria-ref=")).toBeNull();
+		expect(parseAriaRefSelector("e5x")).toBeNull(); // eN must be the whole selector
+		expect(parseAriaRefSelector("section e5")).toBeNull(); // descendant CSS, not a ref
+	});
+
+	it("rejects non-string selectors (handle/Promise) with a recovery-naming ToolError", () => {
+		// Regression: tab.click(await tab.id(n)) / tab.click(tab.id(n)) used to reach
+		// `selector.trim()` and throw the opaque minified `A.trim is not a function`.
+		const handle = {
+			click: async () => {},
+			asElement() {
+				return this;
+			},
+		};
+		expect(() => parseAriaRefSelector(handle as never)).toThrow(/must be a string; got an ElementHandle/);
+		expect(() => parseAriaRefSelector(handle as never)).toThrow(/\(await tab\.id\(n\)\)\.click\(\)/);
+		const promise = Promise.resolve(handle);
+		expect(() => parseAriaRefSelector(promise as never)).toThrow(/got a Promise \(missing await\?\)/);
+		promise.catch(() => {});
 	});
 });
 

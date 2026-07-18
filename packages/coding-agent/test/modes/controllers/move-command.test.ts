@@ -6,7 +6,7 @@ import { CommandController } from "@oh-my-pi/pi-coding-agent/modes/controllers/c
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 
-function createMoveContext(sourceDir: string) {
+function createMoveContext(sourceDir: string, settingsFlush?: () => Promise<void>) {
 	const state = { cwd: sourceDir, movedTo: undefined as string | undefined };
 	const present = vi.fn();
 	const applyCwdChange = vi.fn(async (cwd: string) => {
@@ -21,6 +21,9 @@ function createMoveContext(sourceDir: string) {
 				state.movedTo = cwd;
 			}),
 			dropSession: vi.fn(async () => {}),
+		},
+		settings: {
+			flush: vi.fn(settingsFlush ?? (async () => {})),
 		},
 		showHookCustom: vi.fn(),
 		showHookConfirm: vi.fn(),
@@ -59,6 +62,28 @@ describe("CommandController /move", () => {
 			expect(ctx.ui.requestRender).toHaveBeenCalledWith();
 			expect(present).toHaveBeenCalled();
 			expect(ctx.showError).not.toHaveBeenCalled();
+		} finally {
+			await fs.rm(sourceDir, { recursive: true, force: true });
+			await fs.rm(targetDir, { recursive: true, force: true });
+		}
+	});
+
+	it("aborts /move when pending settings flush fails, leaving cwd untouched", async () => {
+		const sourceDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-move-source-"));
+		const targetDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-move-target-"));
+		try {
+			const { ctx, state } = createMoveContext(sourceDir, async () => {
+				throw new Error("disk full");
+			});
+			const controller = new CommandController(ctx);
+
+			await controller.handleMoveCommand(targetDir);
+
+			expect(ctx.showError).toHaveBeenCalledWith(expect.stringContaining("disk full"));
+			expect(ctx.sessionManager.moveTo).not.toHaveBeenCalled();
+			expect(ctx.applyCwdChange).not.toHaveBeenCalled();
+			expect(state.movedTo).toBeUndefined();
+			expect(state.cwd).toBe(sourceDir);
 		} finally {
 			await fs.rm(sourceDir, { recursive: true, force: true });
 			await fs.rm(targetDir, { recursive: true, force: true });

@@ -4,7 +4,7 @@
  * Uses brush-core via native bindings for shell execution.
  */
 import { ExponentialYield } from "@oh-my-pi/pi-agent-core/utils/yield";
-import { executeShell, type MinimizerOptions, Shell, type ShellRunResult } from "@oh-my-pi/pi-natives";
+import { type MinimizerOptions, Shell, type ShellRunResult } from "@oh-my-pi/pi-natives";
 import { isExecutable, type ShellConfig } from "@oh-my-pi/pi-utils/procmgr";
 import { Settings, type ShellMinimizerSettings } from "../config/settings";
 import { OutputSink } from "../session/streaming-output";
@@ -45,6 +45,8 @@ export interface BashResult {
 	output: string;
 	exitCode: number | undefined;
 	cancelled: boolean;
+	/** True when the command was killed by its timeout deadline (not a user abort). */
+	timedOut?: boolean;
 	truncated: boolean;
 	totalLines: number;
 	totalBytes: number;
@@ -70,6 +72,9 @@ const shellSessionsInUse = new Set<string>();
  */
 const retainedShells = new Set<Shell>();
 const RETAIN_REAP_INTERVAL_MS = 5_000;
+// Native cancellation may spend two seconds unwinding the shell before its
+// N-API chunk bridge drains. The JS watchdog must not race that teardown.
+const NATIVE_TIMEOUT_FALLBACK_GRACE_MS = 5_000;
 
 async function retainShellWithLiveBackgroundJobs(shell: Shell): Promise<void> {
 	let live: number;
@@ -250,6 +255,11 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		};
 	}
 
+	const shellOptions = {
+		sessionEnv: shellEnv,
+		snapshotPath: snapshotPath ?? undefined,
+		minimizer,
+	};
 	const sessionKey = buildSessionKey(shell, prefix, snapshotPath, shellEnv, options?.sessionKey, minimizer);
 	const persistentSessionBroken = brokenShellSessions.has(sessionKey);
 	if (persistentSessionBroken) {
@@ -264,13 +274,10 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 	const sessionBusy = shellSessionsInUse.has(sessionKey);
 	let shellSession = persistentSessionBroken || sessionBusy ? undefined : shellSessions.get(sessionKey);
 	if (!shellSession && !persistentSessionBroken && !sessionBusy) {
-		shellSession = new Shell({
-			sessionEnv: shellEnv,
-			snapshotPath: snapshotPath ?? undefined,
-			minimizer,
-		});
+		shellSession = new Shell(shellOptions);
 		shellSessions.set(sessionKey, shellSession);
 	}
+	const executionShell = shellSession ?? new Shell(shellOptions);
 	const ownsPersistentSession = shellSession !== undefined;
 	if (ownsPersistentSession) {
 		shellSessionsInUse.add(sessionKey);
@@ -278,13 +285,15 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 	const userSignal = options?.signal;
 	const runAbortController = new AbortController();
 	let abortCleanupPromise: Promise<void> | undefined;
+	const abortShell = (): Promise<void> => {
+		abortCleanupPromise ??= executionShell.abort().catch(() => undefined);
+		return abortCleanupPromise;
+	};
 	const abortCurrentExecution = () => {
 		if (!runAbortController.signal.aborted) {
 			runAbortController.abort();
 		}
-		if (shellSession && !abortCleanupPromise) {
-			abortCleanupPromise = shellSession.abort().catch(() => undefined);
-		}
+		void abortShell();
 	};
 	const abortDeferred = Promise.withResolvers<"abort">();
 	const abortHandler = () => {
@@ -302,53 +311,37 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 	const nativeTimeoutMs = requestedTimeoutMs !== undefined && requestedTimeoutMs > 0 ? requestedTimeoutMs : undefined;
 	const nativeOwnsTimeout = nativeTimeoutMs !== undefined;
 	if (deadlineTimeoutMs !== undefined) {
+		const fallbackTimeoutMs = nativeOwnsTimeout
+			? deadlineTimeoutMs + NATIVE_TIMEOUT_FALLBACK_GRACE_MS
+			: deadlineTimeoutMs;
 		timeoutTimer = setTimeout(() => {
-			// Explicit timeouts are already enforced inside pi-natives via
-			// `timeoutMs`. Do not also abort the JS AbortSignal here: on Windows,
-			// aborting that signal while a piped command is still forwarding output
-			// can terminate the Bun host before the native timeout result resolves.
+			// Explicit timeouts are enforced inside pi-natives via `timeoutMs`.
+			// Give native cancellation time to flush pipeline output and drain the
+			// N-API bridge before this result-only watchdog quarantines the run.
 			if (!nativeOwnsTimeout) {
 				abortCurrentExecution();
 			}
 			timeoutDeferred.resolve("timeout");
-		}, deadlineTimeoutMs);
+		}, fallbackTimeoutMs);
 	}
 
 	let resetSession = false;
 
 	try {
-		const runPromise = shellSession
-			? shellSession.run(
-					{
-						command: finalCommand,
-						cwd: commandCwd,
-						env: commandEnv,
-						timeoutMs: nativeTimeoutMs,
-						signal: runAbortController.signal,
-					},
-					(err, chunk) => {
-						if (!err) {
-							enqueueChunk(chunk);
-						}
-					},
-				)
-			: executeShell(
-					{
-						command: finalCommand,
-						cwd: commandCwd,
-						env: commandEnv,
-						sessionEnv: shellEnv,
-						snapshotPath: snapshotPath ?? undefined,
-						minimizer,
-						timeoutMs: nativeTimeoutMs,
-						signal: runAbortController.signal,
-					},
-					(err, chunk) => {
-						if (!err) {
-							enqueueChunk(chunk);
-						}
-					},
-				);
+		const runPromise = executionShell.run(
+			{
+				command: finalCommand,
+				cwd: commandCwd,
+				env: commandEnv,
+				timeoutMs: nativeTimeoutMs,
+				signal: runAbortController.signal,
+			},
+			(err, chunk) => {
+				if (!err) {
+					enqueueChunk(chunk);
+				}
+			},
+		);
 
 		const ey = new ExponentialYield();
 		const winner = await ey.race<
@@ -361,15 +354,17 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 
 		if (winner.kind === "timeout" || winner.kind === "abort") {
 			acceptingChunks = false;
+			const cleanupPromise = abortShell();
 			if (shellSession) {
 				resetSession = true;
-				quarantineShellSession(sessionKey, runPromise, abortCleanupPromise);
+				quarantineShellSession(sessionKey, runPromise, cleanupPromise);
 			} else {
-				void runPromise.catch(() => undefined);
+				void Promise.allSettled([runPromise, cleanupPromise]);
 			}
 			return {
 				exitCode: undefined,
 				cancelled: true,
+				...(winner.kind === "timeout" ? { timedOut: true } : {}),
 				...(await sink.dump(
 					winner.kind === "timeout" && deadlineTimeoutMs !== undefined
 						? `Command timed out after ${Math.round(deadlineTimeoutMs / 1000)} seconds`
@@ -394,6 +389,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 			return {
 				exitCode: undefined,
 				cancelled: true,
+				timedOut: true,
 				...(await sink.dump(annotation)),
 			};
 		}
