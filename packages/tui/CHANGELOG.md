@@ -9,6 +9,9 @@
 ### Fixed
 
 - Fixed ordinary coding-agent editor keystrokes performing a full root compose by adding an explicit stable-focus subtree-render opt-in while preserving full composition for callback-driven components and focus changes ([#5928](https://github.com/can1357/oh-my-pi/issues/5928)).
+- Restored wrapped descriptions in the slash-command autocomplete picker so long skill descriptions remain readable at normal terminal widths ([#5848](https://github.com/can1357/oh-my-pi/issues/5848)).
+- Added viewport-pinned live regions so replacing dashboard frames can stay out of immutable native scrollback until they finalize ([#5777](https://github.com/can1357/oh-my-pi/issues/5777)).
+- Added live-session cleanup for tracked Kitty graphics so consumers can delete retained inline images before replaying text fallbacks.
 
 ## [17.0.3] - 2026-07-17
 
@@ -19,9 +22,6 @@
 - Fixed interactive sessions surviving terminal closure and entering a runaway render loop by stopping the TUI and raising SIGHUP when terminal input closes or output fails ([#5835](https://github.com/can1357/oh-my-pi/issues/5835)).
 - Fixed native cmux SSH pane resizes inserting blank rows into terminal scrollback by routing remote-transport sessions through the in-place repaint path ([#5857](https://github.com/can1357/oh-my-pi/issues/5857)).
 - Fixed the terminal flickering when leaving a fullscreen overlay (e.g. `/settings`) on terminals that re-report their size when the alternate screen buffer toggles: the alt-toggle SIGWINCH echo is height-only, so the resize fast path no longer borrows the alternate screen for it ([#5854](https://github.com/can1357/oh-my-pi/issues/5854)).
-### Fixed
-
-- Restored wrapped descriptions in the slash-command autocomplete picker so long skill descriptions remain readable at normal terminal widths ([#5848](https://github.com/can1357/oh-my-pi/issues/5848)).
 
 ## [17.0.2] - 2026-07-17
 
@@ -36,10 +36,6 @@
 - Fixed Markdown rendering incorrectly turning local file paths containing `www.` or protocol sequences into HTTP links by requiring a valid GFM left boundary for autolinks.
 - Fixed terminal resize behavior by restoring alternate-screen rendering during drag frames, preventing wrapped fragments from polluting native scrollback while preserving the overlay-exit flicker fix.
 - Added optional right-border scrollbar to the `Editor` component (`setScrollbarVisible`): shows a thumb glyph on the right border when content overflows `maxHeight`, enabling scrollable multi-line editors (e.g. advisor instructions) without losing the submit hint off-screen.
-### Fixed
-
-- Added viewport-pinned live regions so replacing dashboard frames can stay out of immutable native scrollback until they finalize ([#5777](https://github.com/can1357/oh-my-pi/issues/5777)).
-- Added live-session cleanup for tracked Kitty graphics so consumers can delete retained inline images before replaying text fallbacks.
 
 ## [17.0.1] - 2026-07-16
 

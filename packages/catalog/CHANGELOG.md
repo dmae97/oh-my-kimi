@@ -9,6 +9,7 @@
 ### Fixed
 
 - Fixed Kimi K3 models served through generic OpenAI-compatible routes exposing unsupported reasoning efforts instead of the mandatory `low`/`high`/`max` scale ([#5983](https://github.com/can1357/oh-my-pi/issues/5983)).
+- Fixed the model cache (`models.db`) serializing provider-defined request headers written into a model's `headers` — any custom name can carry a credential (for example `Authorization`, `X-Goog-Api-Key`, or `X-Access-Token`), so a denylist cannot make plaintext persistence safe. `writeModelCache` now omits all model headers and records only the ids whose headers were removed. On read, schema v10 restores matching static-model headers from the caller's live source; dynamic-only models with omitted headers force an online refetch and are excluded from offline/failure fallbacks rather than returned unusable. Older header-bearing rows are invalidated and securely deleted so their values do not remain recoverable in SQLite free pages ([#5780](https://github.com/can1357/oh-my-pi/issues/5780)).
 
 ## [17.0.4] - 2026-07-18
 
@@ -35,10 +36,6 @@
 - Fixed a regression where the context window for openai-codex GPT-5.6 models (Luna, Sol, Terra) incorrectly fell back to 272,000 instead of preserving its 372,000 capacity.
 - Fixed Umans PAYG models incorrectly displaying as "Free" in /models by correctly sourcing their published per-token rates.
 - Fixed native moonshot/kimi-k3 capabilities and pricing, ensuring it correctly reflects its official pricing, 1M context window, image input support, reasoning capabilities, and 128k output token limit.
-
-### Fixed
-
-- Fixed the model cache (`models.db`) serializing provider-defined request headers written into a model's `headers` — any custom name can carry a credential (for example `Authorization`, `X-Goog-Api-Key`, or `X-Access-Token`), so a denylist cannot make plaintext persistence safe. `writeModelCache` now omits all model headers and records only the ids whose headers were removed. On read, schema v10 restores matching static-model headers from the caller's live source; dynamic-only models with omitted headers force an online refetch and are excluded from offline/failure fallbacks rather than returned unusable. Older header-bearing rows are invalidated and securely deleted so their values do not remain recoverable in SQLite free pages ([#5780](https://github.com/can1357/oh-my-pi/issues/5780)).
 
 ## [17.0.1] - 2026-07-16
 
