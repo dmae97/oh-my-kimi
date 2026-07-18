@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [17.0.4] - 2026-07-18
+
 ### Fixed
 
 - Fixed a corrupt cached embedding model (truncated `model_optimized.onnx`, `Protobuf parsing failed` on load) permanently disabling local embeddings: init now quarantines the broken cache file (rename to `*.corrupt-<ts>`, only when the path resolves inside the fastembed cache directory) and retries once so the model re-downloads.

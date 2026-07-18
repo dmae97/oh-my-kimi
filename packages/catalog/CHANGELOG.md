@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [17.0.4] - 2026-07-18
+
 ### Changed
 
 - Kimi-family models now use MFJS tool schema on all hosts, including proxies like OpenRouter that forward schemas to Moonshot
