@@ -15,6 +15,7 @@ import {
 	formatModelSelectorValue,
 	formatModelStringWithRouting,
 	resolveAgentPrewalkPattern,
+	resolveConfiguredModelPatterns,
 	resolveModelOverride,
 	resolveModelOverrideWithAuthFallback,
 } from "../config/model-resolver";
@@ -161,22 +162,44 @@ function resolveSubagentRetryFallbackCandidates(
 	return candidates;
 }
 
+function resolveSubagentDefaultRetryFallbackChain(settings: Settings): string[] | undefined {
+	const fallbackChain = settings.get("retry.fallbackChains")?.default;
+	if (
+		!Array.isArray(fallbackChain) ||
+		fallbackChain.length === 0 ||
+		!fallbackChain.every(entry => typeof entry === "string")
+	) {
+		return undefined;
+	}
+	return fallbackChain;
+}
+
 function installSubagentRetryFallbackChain(args: {
 	settings: Settings;
 	id: string;
 	candidates: SubagentRetryFallbackCandidate[];
+	defaultFallbackChain: string[] | undefined;
 	model: Model<Api> | undefined;
 	authFallbackUsed: boolean;
 }): string | undefined {
-	const { settings, id, candidates, model, authFallbackUsed } = args;
-	if (!model || authFallbackUsed || candidates.length <= 1) return undefined;
+	const { settings, id, candidates, defaultFallbackChain, model, authFallbackUsed } = args;
+	if (!model || authFallbackUsed || candidates.length === 0) return undefined;
 
 	const selectedIndex = candidates.findIndex(
 		candidate => candidate.model.provider === model.provider && candidate.model.id === model.id,
 	);
 	if (selectedIndex < 0) return undefined;
 	const fallbackSelectors = candidates.slice(selectedIndex + 1).map(candidate => candidate.selector);
-	if (fallbackSelectors.length === 0) return undefined;
+	const existingFallbackChains = settings.get("retry.fallbackChains");
+	// A single explicit model may reuse a configured default chain, but never an implicit parent fallback.
+	const fallbackChain = fallbackSelectors.length > 0 ? fallbackSelectors : defaultFallbackChain;
+	if (
+		!Array.isArray(fallbackChain) ||
+		fallbackChain.length === 0 ||
+		!fallbackChain.every(entry => typeof entry === "string")
+	) {
+		return undefined;
+	}
 
 	const role = `${SUBAGENT_RETRY_FALLBACK_ROLE_PREFIX}${id}`;
 	const modelRoles: Record<string, string> = {};
@@ -189,10 +212,10 @@ function installSubagentRetryFallbackChain(args: {
 	}
 	modelRoles[role] = candidates[selectedIndex].selector;
 	settings.override("modelRoles", modelRoles);
+	// Insert the task-specific role first so another role assigned to the same model cannot capture fallback routing.
 	const fallbackChains: Record<string, string[]> = {
-		[role]: fallbackSelectors,
+		[role]: fallbackChain,
 	};
-	const existingFallbackChains = settings.get("retry.fallbackChains");
 	for (const existingRole in existingFallbackChains) {
 		if (existingRole !== role) {
 			fallbackChains[existingRole] = existingFallbackChains[existingRole];
@@ -2314,6 +2337,11 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			}
 			checkAbort();
 
+			const configuredModelPatterns = resolveConfiguredModelPatterns(modelPatterns, settings);
+			const defaultRetryFallbackChain =
+				configuredModelPatterns.length === 1
+					? resolveSubagentDefaultRetryFallbackChain(subagentSettings)
+					: undefined;
 			const {
 				model,
 				thinkingLevel: resolvedThinkingLevel,
@@ -2347,6 +2375,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				settings: subagentSettings,
 				id,
 				candidates: resolveSubagentRetryFallbackCandidates(modelPatterns, modelRegistry, settings),
+				defaultFallbackChain: defaultRetryFallbackChain,
 				model,
 				authFallbackUsed,
 			});
@@ -2474,6 +2503,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					model || modelOverride === undefined ? undefined : options.parentActiveModelPattern,
 				modelPatternFallbackRole:
 					model || modelOverride === undefined ? undefined : `${SUBAGENT_RETRY_FALLBACK_ROLE_PREFIX}${id}`,
+				modelPatternDefaultFallbackChain:
+					model || modelOverride === undefined ? undefined : defaultRetryFallbackChain,
 				thinkingLevel: effectiveThinkingLevel,
 				toolNames,
 				outputSchema,

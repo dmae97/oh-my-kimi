@@ -111,6 +111,9 @@
 ### Fixed
 
 - Fixed the status line loop indicator to distinguish waiting, running, and paused states and show the remaining loop budget ([#5832](https://github.com/can1357/oh-my-pi/pull/5832) by [@wolfiesch](https://github.com/wolfiesch)).
+### Fixed
+
+- Fixed single-model task agents ignoring an explicitly configured default retry fallback chain, which left subagents failed after their selected provider became unreachable instead of advancing to the configured fallback model.
 
 ## [17.0.3] - 2026-07-17
 ### Fixed
