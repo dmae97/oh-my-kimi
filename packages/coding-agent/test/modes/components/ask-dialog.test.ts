@@ -1087,7 +1087,7 @@ describe("AskDialogComponent", () => {
 			expect(out).toContain("PgUp/PgDn");
 			expect(out).toContain("Tab/←/→");
 			expect(out).not.toContain(" tabs");
-			expect(out).toContain("Esc cancel");
+			expect(out).toContain("ctrl+g cancel");
 			setKeybindings(
 				KeybindingsManager.inMemory({
 					"tui.select.cancel": "ctrl+g",
@@ -1097,7 +1097,7 @@ describe("AskDialogComponent", () => {
 			);
 			const remapped = render(component);
 			expect(remapped).toContain("ctrl+u/ctrl+d");
-			expect(remapped).toContain("Esc cancel");
+			expect(remapped).toContain("ctrl+g cancel");
 		} finally {
 			if (originalRows) Object.defineProperty(process.stdout, "rows", originalRows);
 			else Reflect.deleteProperty(process.stdout, "rows");

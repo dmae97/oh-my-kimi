@@ -236,6 +236,11 @@ function pageKeysLabel(): string {
 	return `${pageUp === "pageup" ? "PgUp" : pageUp}/${pageDown === "pagedown" ? "PgDn" : pageDown}`;
 }
 
+function cancelKeyLabel(): string {
+	const [key = ""] = editorKey("tui.select.cancel").split("/");
+	return key === "escape" ? "Esc" : key;
+}
+
 function normalizedInlineInput(input: string): string {
 	return replaceTabs(input).replace(/\s+/g, " ").trim();
 }
@@ -526,18 +531,19 @@ export class AskDialogComponent implements Component {
 	}
 
 	#footerHintText(indicator: string): string {
+		const cancel = `${cancelKeyLabel()} cancel`;
 		if (this.#isSubmitTab()) {
 			const scroll = indicator ? ` ${indicator} scroll ·` : "";
-			return `Enter submit · ↑/↓ scroll ·${scroll} Esc cancel`;
+			return `Enter submit · ↑/↓ scroll ·${scroll} ${cancel}`;
 		}
 		const question = this.questions[this.#currentQuestionIndex()];
 		const action = question?.multi ? "Space/Enter toggle · n note" : "Enter select · n note";
 		const tabs = this.#hasSubmitTab() ? " · Tab/←/→" : "";
 		if (this.#questionCanPage && indicator) {
-			return `${action} · ↑/↓${tabs} · Esc cancel · ${pageKeysLabel()} ${indicator}`;
+			return `${action} · ↑/↓${tabs} · ${cancel} · ${pageKeysLabel()} ${indicator}`;
 		}
 		const scroll = indicator ? ` ${indicator} scroll ·` : "";
-		return `${action} · ↑/↓ move${tabs} ·${scroll} Esc cancel`;
+		return `${action} · ↑/↓ move${tabs} ·${scroll} ${cancel}`;
 	}
 
 	#questionRows(question: ExtensionAskDialogQuestion): QuestionRow[] {
