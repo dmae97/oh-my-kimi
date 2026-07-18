@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+
+- Retry one transient OpenAI Responses stream truncation before replay-unsafe output, preventing recoverable transport truncations from surfacing as failed turns ([#5908](https://github.com/can1357/oh-my-pi/issues/5908)).
 
 ### Changed
 
