@@ -1430,14 +1430,18 @@ export async function detachGitDir(worktreeRoot: string, sourceCommonDir: string
 		if (isEnoent(err)) return "no-git";
 		throw err;
 	}
-	const parentCommon = path.resolve(sourceCommonDir);
-	const isoCommon = path.resolve(
-		(
-			await runText(worktreeRoot, ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
-				readOnly: true,
-			})
-		).trim(),
-	);
+	// Canonicalize both sides before comparing: `rev-parse` resolves symlinks
+	// (macOS `/tmp` → `/private/tmp`) while callers derive `sourceCommonDir`
+	// lexically from the session cwd. A lexical mismatch here would silently
+	// classify a shared linked-worktree copy as "independent" and skip the
+	// detach entirely — leaving the parent-mutation leak in place.
+	const parentCommon = await fs.promises.realpath(sourceCommonDir).catch(() => path.resolve(sourceCommonDir));
+	const isoCommonRaw = (
+		await runText(worktreeRoot, ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+			readOnly: true,
+		})
+	).trim();
+	const isoCommon = await fs.promises.realpath(isoCommonRaw).catch(() => path.resolve(isoCommonRaw));
 	// A full-copy `.git` already resolves to its own object DB — leave it alone.
 	if (isoCommon !== parentCommon) return "independent";
 

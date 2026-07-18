@@ -753,6 +753,31 @@ describe("detachGitDir", () => {
 		expect((await runGit(iso, ["rev-list", "HEAD"])).split("\n")).toHaveLength(1);
 	});
 
+	it("detaches when sourceCommonDir is reached through a symlinked path", async () => {
+		const { wt, commonDir, baseSha } = await makeLinkedWorktree();
+		// Alias the main checkout through a symlink and hand detachGitDir the
+		// lexical (un-canonicalized) common dir — the shape ensureIsolation
+		// produces when the session cwd traverses a symlink (macOS /tmp,
+		// symlinked project dirs). The shared-common-dir gate must still match,
+		// or the detach silently no-ops and the parent leak survives.
+		const aliasBase = await fs.mkdtemp(path.join(os.tmpdir(), "omp-detach-alias-"));
+		tempDirs.push(aliasBase);
+		const aliasMain = path.join(aliasBase, "main-link");
+		await fs.symlink(path.dirname(commonDir), aliasMain);
+		const aliasCommonDir = path.join(aliasMain, ".git");
+
+		const iso = await copyTree(wt);
+		expect(await git.detachGitDir(iso, aliasCommonDir)).toBe("detached");
+
+		// Isolation is fully functional: task branch + commit stay private.
+		await runGit(iso, ["checkout", "-q", "-b", "feature/a", baseSha]);
+		await fs.writeFile(path.join(iso, "a.txt"), "task a\n");
+		await runGit(iso, ["add", "a.txt"]);
+		await runGit(iso, ["commit", "-q", "-m", "task a"]);
+		expect(await runGit(wt, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("feature/parent");
+		expect(await runGit(wt, ["branch", "--format=%(refname:short)"])).not.toContain("feature/a");
+	});
+
 	it("keeps ensureIsolation from mutating a linked-worktree parent (rcopy backend)", async () => {
 		const { wt, baseSha } = await makeLinkedWorktree();
 		vi.spyOn(natives, "isoResolve").mockReturnValue({
