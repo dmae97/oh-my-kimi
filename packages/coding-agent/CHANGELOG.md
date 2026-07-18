@@ -7,6 +7,7 @@
 - Fixed bundled Linux ffmpeg recording by selecting its available ALSA input when PulseAudio support is absent, and surfaced recorder stderr when capture fails ([#5907](https://github.com/can1357/oh-my-pi/issues/5907)).
 - Session load now skips the recursive async blob-ref resolver for entries with no `blob:sha256:` references. A cheap synchronous precheck gates the walk per entry (preserving the previous per-entry initiation order under synchronous store mutation), so text-heavy histories no longer pay the `Promise.all` tree descent for every non-session entry ([#5922](https://github.com/can1357/oh-my-pi/issues/5922)).
 - Fixed `task` tool schemas emitting boolean subschemas that llama.cpp grammar generation cannot parse ([#5957](https://github.com/can1357/oh-my-pi/issues/5957)).
+- Fixed the transcript keeping finalized assistant blocks in the live compose walk after their rows entered native terminal scrollback, making each stream tick's `TranscriptContainer.render` depth-linear in session length. Fully committed finalized blocks are now compacted out of the local frame regardless of post-finalize version tracking; a later mutation no longer recommits on ordinary frames (no duplication) and rehydrates on the next destructive full replay (no loss). Compose cost for a live tail tick is now flat as depth grows (`bench/transcript-compose.bench.ts`: ratio(N5000/N500) 2.30 → 0.90) ([#5930](https://github.com/can1357/oh-my-pi/issues/5930)).
 
 ## [17.0.3] - 2026-07-17
 
