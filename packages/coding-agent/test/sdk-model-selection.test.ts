@@ -6,8 +6,10 @@ import { Effort, type FetchImpl } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { parseArgs } from "@oh-my-pi/pi-coding-agent/cli/args";
 import { ModelRegistry, type ProviderConfigInput } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { buildSessionOptions as buildCliSessionOptions } from "@oh-my-pi/pi-coding-agent/main";
 import { createAgentSession, type ExtensionFactory } from "@oh-my-pi/pi-coding-agent/sdk";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -220,6 +222,153 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		try {
 			expect(session.model?.provider).toBe("runtime-provider");
 			expect(session.model?.id).toBe("runtime-model");
+			expect(modelFallbackMessage).toBeUndefined();
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	test("resolves deferred bare configured role names after extension providers register", async () => {
+		const settings = Settings.isolated();
+		settings.setModelRole("task", "runtime-provider/runtime-model");
+
+		const { session, modelFallbackMessage } = await createAgentSession({
+			...(await buildSessionOptions("task")),
+			settings,
+		});
+
+		try {
+			expect(session.model?.provider).toBe("runtime-provider");
+			expect(session.model?.id).toBe("runtime-model");
+			expect(modelFallbackMessage).toBeUndefined();
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	test("resolves deferred suffixed bare configured roles after extension providers register", async () => {
+		const settings = Settings.isolated();
+		settings.setModelRole("task", "runtime-provider/runtime-reasoning-model");
+		const authStorage = await AuthStorage.create(path.join(tempDir, "cli-auth.db"));
+		authStoragesToClose.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "cli-models.yml"));
+		const parsed = parseArgs(["--model", "task:high"]);
+		const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
+			throw new Error(`buildSessionOptions unexpectedly exited with ${code}`);
+		});
+		try {
+			const cliOptions = await buildCliSessionOptions(
+				parsed,
+				[],
+				SessionManager.inMemory(),
+				modelRegistry,
+				settings,
+			);
+			expect(cliOptions.modelPattern).toBe("task:high");
+
+			const { session, modelFallbackMessage } = await createAgentSession({
+				...cliOptions,
+				cwd: tempDir,
+				agentDir: tempDir,
+				authStorage,
+				modelRegistry,
+				settings,
+				disableExtensionDiscovery: true,
+				extensions: [providerExtension],
+				skills: [],
+				contextFiles: [],
+				promptTemplates: [],
+				slashCommands: [],
+				enableMCP: false,
+				enableLsp: false,
+				skipPythonPreflight: true,
+			});
+
+			try {
+				expect(session.model?.provider).toBe("runtime-provider");
+				expect(session.model?.id).toBe("runtime-reasoning-model");
+				expect(session.thinkingLevel).toBe(Effort.High);
+				expect(modelFallbackMessage).toBeUndefined();
+			} finally {
+				await session.dispose();
+			}
+		} finally {
+			exitSpy.mockRestore();
+		}
+	});
+
+	test("defers bare role chains when an earlier candidate may be registered by extensions", async () => {
+		const fallbackModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!fallbackModel) {
+			throw new Error("Expected bundled anthropic fallback model");
+		}
+		const settings = Settings.isolated();
+		settings.setModelRole("task", `runtime-provider/runtime-model,${fallbackModel.provider}/${fallbackModel.id}`);
+		const authStorage = await AuthStorage.create(path.join(tempDir, "role-chain-auth.db"));
+		authStoragesToClose.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "role-chain-models.yml"));
+		const parsed = parseArgs(["--model", "task"]);
+		const exitSpy = vi.spyOn(process, "exit").mockImplementation((code?: number | string | null) => {
+			throw new Error(`buildSessionOptions unexpectedly exited with ${code}`);
+		});
+		try {
+			const cliOptions = await buildCliSessionOptions(
+				parsed,
+				[],
+				SessionManager.inMemory(),
+				modelRegistry,
+				settings,
+			);
+			expect(cliOptions.model).toBeUndefined();
+			expect(cliOptions.modelPattern).toBe("task");
+
+			const { session, modelFallbackMessage } = await createAgentSession({
+				...cliOptions,
+				cwd: tempDir,
+				agentDir: tempDir,
+				authStorage,
+				modelRegistry,
+				settings,
+				disableExtensionDiscovery: true,
+				extensions: [providerExtension],
+				skills: [],
+				contextFiles: [],
+				promptTemplates: [],
+				slashCommands: [],
+				enableMCP: false,
+				enableLsp: false,
+				skipPythonPreflight: true,
+			});
+
+			try {
+				expect(session.model?.provider).toBe("runtime-provider");
+				expect(session.model?.id).toBe("runtime-model");
+				expect(modelFallbackMessage).toBeUndefined();
+			} finally {
+				await session.dispose();
+			}
+		} finally {
+			exitSpy.mockRestore();
+		}
+	});
+
+	test("preserves deferred bare role fallback chains", async () => {
+		const settings = Settings.isolated();
+		settings.setModelRole("task", "runtime-provider/runtime-model,runtime-provider/runtime-reasoning-model");
+
+		const { session, modelFallbackMessage } = await createAgentSession({
+			...(await buildSessionOptions("task")),
+			modelPatternFallbackRole: "subagent:deferred",
+			settings,
+		});
+
+		try {
+			expect(session.model?.provider).toBe("runtime-provider");
+			expect(session.model?.id).toBe("runtime-model");
+			expect(session.settings.getModelRole("subagent:deferred")).toBe("runtime-provider/runtime-model");
+			expect(session.settings.get("retry.fallbackChains")["subagent:deferred"]).toEqual([
+				"runtime-provider/runtime-reasoning-model",
+			]);
 			expect(modelFallbackMessage).toBeUndefined();
 		} finally {
 			await session.dispose();

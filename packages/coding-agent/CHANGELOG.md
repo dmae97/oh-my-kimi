@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+
+- Fixed `--model <role>` resolving a bare configured `modelRoles` key.
 
 ## [17.0.4] - 2026-07-18
 

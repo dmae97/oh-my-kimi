@@ -1006,6 +1006,157 @@ describe("resolveCliModel", () => {
 		expect(result.model?.id).toBe("gpt-4o");
 	});
 
+	test("resolves bare configured role names from --model", () => {
+		const registry = {
+			getAll: () => allModels,
+		};
+		const settings = Settings.isolated({
+			modelRoles: { task: "openai/gpt-4o" },
+		});
+
+		const result = resolveCliModel({
+			cliModel: "task",
+			modelRegistry: registry,
+			settings,
+		});
+
+		expect(result.error).toBeUndefined();
+		expect(result.model?.provider).toBe("openai");
+		expect(result.model?.id).toBe("gpt-4o");
+	});
+
+	test("resolves bare configured role names with thinking suffixes", () => {
+		const registry = {
+			getAll: () => allModels,
+		};
+		const settings = Settings.isolated({
+			modelRoles: { task: "anthropic/claude-sonnet-4-5" },
+		});
+
+		const result = resolveCliModel({
+			cliModel: "task:high",
+			modelRegistry: registry,
+			settings,
+		});
+
+		expect(result.error).toBeUndefined();
+		expect(result.model?.id).toBe("claude-sonnet-4-5");
+		expect(result.thinkingLevel).toBe(Effort.High);
+		expect(result.configuredPatterns).toEqual(["anthropic/claude-sonnet-4-5:high"]);
+	});
+
+	test("preserves configured role fallback selectors for deferred resolution", () => {
+		const registry = {
+			getAll: () => allModels,
+		};
+		const settings = Settings.isolated({
+			modelRoles: {
+				task: "openrouter/z-ai/glm-4.7@cerebras,anthropic/claude-sonnet-4-5",
+			},
+		});
+
+		const result = resolveCliModel({
+			cliModel: "task",
+			modelRegistry: registry,
+			settings,
+		});
+
+		expect(result.configuredPatterns).toEqual(["openrouter/z-ai/glm-4.7@cerebras", "anthropic/claude-sonnet-4-5"]);
+	});
+
+	test("reports when a configured role matches after unresolved candidates", () => {
+		const registry = {
+			getAll: () => allModels,
+		};
+		const settings = Settings.isolated({
+			modelRoles: {
+				task: "runtime-provider/runtime-model,anthropic/claude-sonnet-4-5",
+			},
+		});
+
+		const result = resolveCliModel({
+			cliModel: "task",
+			modelRegistry: registry,
+			settings,
+		});
+
+		expect(result.model?.provider).toBe("anthropic");
+		expect(result.configuredPatternIndex).toBe(1);
+		expect(result.configuredPatterns).toEqual(["runtime-provider/runtime-model", "anthropic/claude-sonnet-4-5"]);
+	});
+
+	test("does not fuzzy-match unresolved configured roles", () => {
+		const registry = {
+			getAll: () => allModels,
+		};
+		const settings = Settings.isolated({
+			modelRoles: { sonnet: "runtime-provider/runtime-model" },
+		});
+
+		const result = resolveCliModel({
+			cliModel: "sonnet",
+			modelRegistry: registry,
+			settings,
+		});
+
+		expect(result.model).toBeUndefined();
+		expect(result.configuredPatterns).toEqual(["runtime-provider/runtime-model"]);
+		expect(result.error).toContain('Model "sonnet" not found');
+	});
+
+	test("keeps unknown --model names on the not-found path", () => {
+		const registry = {
+			getAll: () => allModels,
+		};
+
+		const result = resolveCliModel({
+			cliModel: "not-a-model",
+			modelRegistry: registry,
+		});
+
+		expect(result.model).toBeUndefined();
+		expect(result.error).toContain('Model "not-a-model" not found');
+	});
+
+	test("prefers an exact model name over a same-named configured role", () => {
+		const exactModel = buildModel({
+			id: "task",
+			name: "Task",
+			api: "anthropic-messages",
+			provider: "openai",
+			baseUrl: "https://api.openai.com",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 5, output: 15, cacheRead: 0.5, cacheWrite: 5 },
+			contextWindow: 128000,
+			maxTokens: 4096,
+		});
+		const registry = {
+			getAll: () => [...allModels, exactModel],
+		};
+		const settings = Settings.isolated({
+			modelRoles: { task: "anthropic/claude-sonnet-4-5" },
+		});
+
+		const result = resolveCliModel({
+			cliModel: "task",
+			modelRegistry: registry,
+			settings,
+		});
+
+		expect(result.error).toBeUndefined();
+		expect(result.model).toBe(exactModel);
+		const suffixed = resolveCliModel({
+			cliModel: "task:high",
+			modelRegistry: registry,
+			settings,
+		});
+
+		expect(suffixed.error).toBeUndefined();
+		expect(suffixed.model).toBe(exactModel);
+		expect(suffixed.thinkingLevel).toBe(Effort.High);
+	});
+
 	test("resolves configured custom, legacy, and default role aliases from --model", () => {
 		const registry = {
 			getAll: () => allModels,

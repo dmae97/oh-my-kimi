@@ -884,8 +884,12 @@ export async function buildSessionOptions(
 		if (resolved.warning) {
 			process.stderr.write(`${chalk.yellow(`Warning: ${resolved.warning}`)}\n`);
 		}
-		if (resolved.error) {
-			if (!parsed.provider && !parsed.model.includes(":")) {
+		const matchedAfterMissingRolePattern = (resolved.configuredPatternIndex ?? 0) > 0;
+		if (matchedAfterMissingRolePattern) {
+			// Extensions may register an earlier configured role candidate.
+			options.modelPattern = parsed.model;
+		} else if (resolved.error) {
+			if (!parsed.provider && ((resolved.configuredPatterns?.length ?? 0) > 0 || !parsed.model.includes(":"))) {
 				// Model not found in built-in registry — defer resolution to after extensions load
 				// (extensions may register additional providers/models via registerProvider)
 				options.modelPattern = parsed.model;
