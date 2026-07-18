@@ -10,6 +10,8 @@ import DEFAULTS from "./defaults.json" with { type: "json" };
 import type { DapAdapterConfig, DapResolvedAdapter } from "./types";
 
 const EXTENSIONLESS_DEBUGGER_ORDER: readonly string[] = ["gdb", "lldb-dap"];
+const JS_DEBUG_SERVER_ENV = "JS_DEBUG_DAP_SERVER";
+const DAP_PORT_ARGUMENT = "$" + "{port}";
 
 interface NormalizedConfig {
 	adapters: Record<string, unknown>;
@@ -45,7 +47,7 @@ function normalizeObject(value: unknown): Record<string, unknown> {
 function normalizeAdapterConfig(config: unknown): DapAdapterConfig | null {
 	if (!isRecord(config)) return null;
 	if (typeof config.command !== "string" || config.command.length === 0) return null;
-	const connectMode = config.connectMode === "socket" ? ("socket" as const) : undefined;
+	const connectMode = config.connectMode === "socket" || config.connectMode === "tcp" ? config.connectMode : undefined;
 	return {
 		command: config.command,
 		args: normalizeStringArray(config.args),
@@ -184,6 +186,52 @@ function normalizeCommandForCwd(command: string, cwd: string): string {
 	return command;
 }
 
+function resolveJsDebugServerPath(cwd: string): string | null {
+	const configured = process.env[JS_DEBUG_SERVER_ENV];
+	const dataHome = process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local", "share");
+	const candidates = [
+		...(configured ? [path.resolve(cwd, configured)] : []),
+		path.join(dataHome, "nvim", "mason", "packages", "js-debug-adapter", "js-debug", "src", "dapDebugServer.js"),
+		path.join(os.homedir(), ".local", "opt", "js-debug", "src", "dapDebugServer.js"),
+	];
+	for (const candidate of candidates) {
+		if (fs.existsSync(candidate)) return candidate;
+	}
+	return null;
+}
+
+function resolveDefaultJsDebugAdapter(
+	adapterName: string,
+	config: DapAdapterConfig,
+	cwd: string,
+	localRoots?: readonly string[],
+): DapResolvedAdapter | null | undefined {
+	if (adapterName !== "js-debug-adapter" || config.command !== "js-debug-adapter") {
+		return undefined;
+	}
+	const serverPath = resolveJsDebugServerPath(cwd);
+	if (!serverPath) return null;
+	const nodeCommand = resolveCommand("node", cwd, {
+		cache: WhichCachePolicy.Fresh,
+		PATH: process.env.PATH,
+		localRoots,
+	});
+	const resolvedCommand = nodeCommand ?? process.execPath;
+	return {
+		name: adapterName,
+		command: nodeCommand ? "node" : "bun",
+		args: [serverPath, DAP_PORT_ARGUMENT, "127.0.0.1"],
+		resolvedCommand,
+		languages: config.languages ?? [],
+		fileTypes: config.fileTypes ?? [],
+		rootMarkers: config.rootMarkers ?? [],
+		launchDefaults: config.launchDefaults ?? {},
+		attachDefaults: config.attachDefaults ?? {},
+		connectMode: "tcp",
+		acceptsDirectoryProgram: config.acceptsDirectoryProgram === true,
+	};
+}
+
 function resolveAdapterFromConfig(
 	adapterName: string,
 	configs: Record<string, DapAdapterConfig>,
@@ -192,6 +240,8 @@ function resolveAdapterFromConfig(
 ): DapResolvedAdapter | null {
 	const config = configs[adapterName];
 	if (!config) return null;
+	const jsDebugAdapter = resolveDefaultJsDebugAdapter(adapterName, config, cwd, localRoots);
+	if (jsDebugAdapter !== undefined) return jsDebugAdapter;
 	const normalizedCommand = normalizeCommandForCwd(config.command, cwd);
 	const commandIsBare =
 		!path.isAbsolute(config.command) && !config.command.includes("/") && !config.command.includes("\\");
