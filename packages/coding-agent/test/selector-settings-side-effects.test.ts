@@ -68,34 +68,34 @@ describe("selector setting side effects", () => {
 	});
 
 	for (const id of ["terminal.showImages", "showImages"]) {
-	for (const visible of [false, true]) {
-		it(`updates every image owner and rebuilds the transcript when ${id}=${visible}`, () => {
-			const setShowImages = vi.fn();
-			const setImagesVisible = vi.fn();
-			const clearInlineImages = vi.fn();
-			const resetDisplay = vi.fn();
-			const tool = Object.create(ToolExecutionComponent.prototype) as ToolExecutionComponent;
-			tool.setShowImages = setShowImages;
-			const assistant = Object.create(AssistantMessageComponent.prototype) as AssistantMessageComponent;
-			assistant.setImagesVisible = setImagesVisible;
-			const controller = new SelectorController({
-				chatContainer: { children: [tool, assistant] },
-				ui: { clearInlineImages, resetDisplay },
-			} as unknown as InteractiveModeContext);
+		for (const visible of [false, true]) {
+			it(`updates every image owner and rebuilds the transcript when ${id}=${visible}`, () => {
+				const setShowImages = vi.fn();
+				const setImagesVisible = vi.fn();
+				const clearInlineImages = vi.fn();
+				const resetDisplay = vi.fn();
+				const tool = Object.create(ToolExecutionComponent.prototype) as ToolExecutionComponent;
+				tool.setShowImages = setShowImages;
+				const assistant = Object.create(AssistantMessageComponent.prototype) as AssistantMessageComponent;
+				assistant.setImagesVisible = setImagesVisible;
+				const controller = new SelectorController({
+					chatContainer: { children: [tool, assistant] },
+					ui: { clearInlineImages, resetDisplay },
+				} as unknown as InteractiveModeContext);
 
-			controller.handleSettingChange(id, visible);
+				controller.handleSettingChange(id, visible);
 
-			expect(setShowImages).toHaveBeenCalledWith(visible);
-			expect(setImagesVisible).toHaveBeenCalledWith(visible);
-			expect(clearInlineImages).toHaveBeenCalledTimes(visible ? 0 : 1);
-			expect(resetDisplay).toHaveBeenCalledTimes(1);
-			if (!visible) {
-				expect(clearInlineImages.mock.invocationCallOrder[0]).toBeLessThan(
-					resetDisplay.mock.invocationCallOrder[0],
-				);
-			}
-		});
-	}
+				expect(setShowImages).toHaveBeenCalledWith(visible);
+				expect(setImagesVisible).toHaveBeenCalledWith(visible);
+				expect(clearInlineImages).toHaveBeenCalledTimes(visible ? 0 : 1);
+				expect(resetDisplay).toHaveBeenCalledTimes(1);
+				if (!visible) {
+					expect(clearInlineImages.mock.invocationCallOrder[0]).toBeLessThan(
+						resetDisplay.mock.invocationCallOrder[0],
+					);
+				}
+			});
+		}
 	}
 
 	it("clears stale default role thinking when auto is selected", async () => {
