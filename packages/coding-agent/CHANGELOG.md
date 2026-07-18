@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed legacy pi extensions failing extension validation when importing `getPackageDir` or `getProjectDir` from `@earendil-works/pi-coding-agent` (aliased to the legacy shim). The shim only re-exported `getAgentDir`; the two missing path helpers now resolve — `getProjectDir` from `@oh-my-pi/pi-utils` and `getPackageDir` from omp's canonical package-root helper — so extensions like `@gotgenes/pi-permission-system` install and load ([#5968](https://github.com/can1357/oh-my-pi/issues/5968)).
+
 ## [17.0.4] - 2026-07-18
 
 ### Fixed

@@ -1334,6 +1334,14 @@ export function readStoredCredential(provider: string): AuthCredential | undefin
 	return storage.get(provider);
 }
 
+// Pi SDK path helpers. `export * from "../index"` above only forwards
+// `getAgentDir`; `getProjectDir` (a `@oh-my-pi/pi-utils` helper) and
+// `getPackageDir` (omp's canonical coding-agent package-root helper, matching
+// pi's "install directory of the coding-agent package" semantics) are absent
+// from that barrel, so legacy extensions importing either fail Bun's static
+// export check during validation (issue #5968).
+export { getProjectDir } from "@oh-my-pi/pi-utils";
+export { getPackageDir } from "../config";
 export * from "../index";
 export { formatBytes as formatSize } from "../tools/render-utils";
 export { Type } from "./typebox";
