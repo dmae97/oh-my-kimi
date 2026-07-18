@@ -7,11 +7,12 @@ import { $ } from "bun";
 const STATS_PROBE_TIMEOUT_MS = 500;
 const PROCESS_EXIT_POLL_MS = 50;
 const PROCESS_EXIT_POLLS = 10;
-const RECLAIMABLE_IMAGES = new Set(["bun", "node", "omp"]);
+const STATS_RUNTIME_IMAGES: Record<string, true> = { bun: true, node: true, omp: true, "omp-stats": true };
 
 interface PortHolder {
 	pid: number;
 	image: string;
+	commandLine: string;
 }
 
 /** Header stamped on every dashboard response so reuse probes can identify us. */
@@ -96,17 +97,18 @@ async function findLinuxPortHolder(port: number): Promise<PortHolder | null> {
 		}
 		if (!ownsSocket) continue;
 
+		let commandLine = "";
+		try {
+			const rawCommandLine = await Bun.file(`/proc/${pid}/cmdline`).text();
+			commandLine = rawCommandLine.split("\0").filter(Boolean).join(" ");
+		} catch {}
+
 		try {
 			const executable = await fs.readlink(`/proc/${pid}/exe`);
-			return { pid, image: path.basename(executable) };
+			return { pid, image: path.basename(executable), commandLine };
 		} catch {
-			try {
-				const commandLine = await Bun.file(`/proc/${pid}/cmdline`).text();
-				const executable = commandLine.split("\0", 1)[0];
-				return { pid, image: executable ? path.basename(executable) : "unknown" };
-			} catch {
-				return { pid, image: "unknown" };
-			}
+			const executable = commandLine.split(" ", 1)[0];
+			return { pid, image: executable ? path.basename(executable) : "unknown", commandLine };
 		}
 	}
 	return null;
@@ -121,15 +123,22 @@ async function findMacPortHolder(port: number): Promise<PortHolder | null> {
 	if (result.exitCode !== 0) return null;
 
 	let pid: number | null = null;
+	let image = "unknown";
 	for (const line of result.text().split("\n")) {
 		if (line.startsWith("p")) {
 			const parsed = Number.parseInt(line.slice(1), 10);
 			pid = Number.isSafeInteger(parsed) ? parsed : null;
 		} else if (line.startsWith("c") && pid !== null) {
-			return { pid, image: line.slice(1) || "unknown" };
+			image = line.slice(1) || "unknown";
+			break;
 		}
 	}
-	return null;
+	if (pid === null) return null;
+
+	const ps = $which("ps");
+	if (!ps) return { pid, image, commandLine: "" };
+	const processInfo = await $`${ps} -ww -p ${pid} -o command=`.quiet().nothrow();
+	return { pid, image, commandLine: processInfo.exitCode === 0 ? processInfo.text().trim() : "" };
 }
 
 async function findWindowsPortHolder(port: number): Promise<PortHolder | null> {
@@ -155,13 +164,22 @@ async function findWindowsPortHolder(port: number): Promise<PortHolder | null> {
 	}
 	if (pid === null) return null;
 
+	let image = "unknown";
 	const tasklist = $which("tasklist");
-	if (!tasklist) return { pid, image: "unknown" };
-	const filter = `PID eq ${pid}`;
-	const task = await $`${tasklist} /FI ${filter} /FO CSV /NH`.quiet().nothrow();
-	if (task.exitCode !== 0) return { pid, image: "unknown" };
-	const imageMatch = /^"((?:[^"]|"")*)"/.exec(task.text().trim());
-	return { pid, image: imageMatch?.[1]?.replaceAll('""', '"') || "unknown" };
+	if (tasklist) {
+		const filter = `PID eq ${pid}`;
+		const task = await $`${tasklist} /FI ${filter} /FO CSV /NH`.quiet().nothrow();
+		if (task.exitCode === 0) {
+			const imageMatch = /^"((?:[^"]|"")*)"/.exec(task.text().trim());
+			image = imageMatch?.[1]?.replaceAll('""', '"') || "unknown";
+		}
+	}
+
+	const powershell = $which("powershell") ?? $which("pwsh");
+	if (!powershell) return { pid, image, commandLine: "" };
+	const command = `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").CommandLine`;
+	const processInfo = await $`${powershell} -NoProfile -NonInteractive -Command ${command}`.quiet().nothrow();
+	return { pid, image, commandLine: processInfo.exitCode === 0 ? processInfo.text().trim() : "" };
 }
 
 async function findPortHolder(port: number): Promise<PortHolder | null> {
@@ -214,8 +232,17 @@ export async function recoverStatsPort(port: number): Promise<"retry" | "reuse">
 		.toLowerCase()
 		.replace(/\.exe$/, "")
 		.replace(/ \(deleted\)$/, "");
-	if (!RECLAIMABLE_IMAGES.has(normalizedImage)) {
-		throw new Error(`Port ${port} is in use by ${holder.image} (PID ${holder.pid}); refusing to stop it.`);
+	const normalizedCommand = holder.commandLine.toLowerCase().replaceAll("\\", "/");
+	const hasStatsIdentity =
+		normalizedImage === "omp-stats" ||
+		/(?:^|[/"'\s])omp-stats(?:\.exe)?(?:["'\s]|$)/.test(normalizedCommand) ||
+		/\/packages\/stats\/src\/index\.ts(?:["'\s]|$)/.test(normalizedCommand) ||
+		(normalizedImage === "omp" && /(?:^|\s)stats(?:\s|$)/.test(normalizedCommand)) ||
+		/(?:^|\/)omp(?:\.exe)?["'\s]+stats(?:["'\s]|$)/.test(normalizedCommand);
+	if (!STATS_RUNTIME_IMAGES[normalizedImage] || !hasStatsIdentity) {
+		throw new Error(
+			`Port ${port} is in use by ${holder.image} (PID ${holder.pid}), which is not identifiable as an omp stats dashboard; refusing to stop it.`,
+		);
 	}
 
 	await terminatePortHolder(holder);

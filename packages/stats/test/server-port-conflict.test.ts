@@ -5,7 +5,7 @@ import { startServer } from "../src/server";
 
 const holderProcesses: Array<Subprocess<"ignore", "pipe", "pipe">> = [];
 
-async function startBunHolder(responseExpr: string) {
+async function startBunHolder(responseExpr: string, options?: { statsOwned?: boolean }) {
 	const reservation = Bun.serve({
 		hostname: "127.0.0.1",
 		port: 0,
@@ -15,7 +15,9 @@ async function startBunHolder(responseExpr: string) {
 	reservation.stop(true);
 
 	const source = `Bun.serve({ hostname: "127.0.0.1", port: ${port}, fetch: () => ${responseExpr} }); process.stdout.write("ready"); await Promise.withResolvers().promise;`;
-	const child = Bun.spawn([process.execPath, "-e", source], {
+	const args = [process.execPath, "-e", source];
+	if (options?.statsOwned) args.push("omp-stats");
+	const child = Bun.spawn(args, {
 		stdin: "ignore",
 		stdout: "pipe",
 		stderr: "pipe",
@@ -58,7 +60,7 @@ describe("startServer port conflicts", () => {
 			expect(server.port).toBe(existing.port);
 			server.stop();
 
-			// The foreign server is untouched: it still answers on the port.
+			// The existing dashboard is untouched: it still answers on the port.
 			const response = await fetch(`http://127.0.0.1:${existing.port}/api/stats/models`);
 			expect(response.status).toBe(200);
 			expect(response.headers.get(STATS_DASHBOARD_HEADER)).toBe("1");
@@ -68,25 +70,24 @@ describe("startServer port conflicts", () => {
 		}
 	});
 
-	it("does not reuse a foreign 200 responder and reclaims the port instead", async () => {
-		// An SPA dev server catch-all: 200 JSON, but no dashboard header and not
-		// the models array shape. Must not be treated as a reusable dashboard.
+	it("refuses to stop a foreign 200 responder", async () => {
 		const holder = await startBunHolder('Response.json({ app: "spa" })');
-		const server = await startServer(holder.port);
 
-		try {
-			expect(server.port).toBe(holder.port);
-			expect(await holder.child.exited).not.toBe(0);
-			const response = await fetch(`http://127.0.0.1:${holder.port}/api/stats/models`);
-			expect(response.headers.get(STATS_DASHBOARD_HEADER)).toBe("1");
-			await response.body?.cancel();
-		} finally {
-			server.stop();
-		}
+		await expect(startServer(holder.port)).rejects.toThrow("not identifiable as an omp stats dashboard");
+		expect(holder.child.exitCode).toBeNull();
+		const response = await fetch(`http://127.0.0.1:${holder.port}/api/stats/models`);
+		expect(await response.json()).toEqual({ app: "spa" });
 	});
 
-	it("reclaims an unresponsive Bun listener and starts the dashboard", async () => {
-		const holder = await startBunHolder('new Response("holder", { status: 404 })');
+	it("refuses to stop an unrelated Bun listener that fails the probe", async () => {
+		const holder = await startBunHolder('new Response("foreign", { status: 404 })');
+
+		await expect(startServer(holder.port)).rejects.toThrow("not identifiable as an omp stats dashboard");
+		expect(holder.child.exitCode).toBeNull();
+	});
+
+	it("reclaims an unresponsive confirmed stats listener", async () => {
+		const holder = await startBunHolder('new Response("holder", { status: 404 })', { statsOwned: true });
 		const server = await startServer(holder.port);
 
 		try {
