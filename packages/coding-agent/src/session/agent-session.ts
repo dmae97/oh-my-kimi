@@ -138,6 +138,7 @@ import {
 	getInstallId,
 	isBunTestRuntime,
 	isEnoent,
+	isInteractiveHost,
 	logger,
 	postmortem,
 	prompt,
@@ -9696,6 +9697,13 @@ export class AgentSession {
 	}
 
 	#scheduleReplanTitleRefresh(): void {
+		// Headless subagent sessions have no operator-visible title, so a todo-init
+		// replan refresh only burns a tiny-model call whose result lands in JSONL
+		// and is never shown (issue #5910). In an interactive host the operator can
+		// focus a live subagent from the Agent Hub, where the status line renders
+		// its session name — so keep the refresh there and only skip subagents when
+		// no focusable UI exists (print/RPC/ACP/eval/SDK/CI).
+		if (this.#agentKind === "sub" && !isInteractiveHost()) return;
 		if (this.#replanTitleRefreshInFlight) return;
 		if (!this.settings.get("title.refreshOnReplan")) return;
 		if (this.sessionManager.titleSource === "user") return;
