@@ -50,6 +50,7 @@ import {
 	parseModelString,
 	pickDefaultAvailableModel,
 	resolveAllowedModels,
+	resolveCliModel,
 	resolveConfiguredModelPatterns,
 	resolveModelRoleValue,
 } from "./config/model-resolver";
@@ -2066,13 +2067,35 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 		}
 		// Resolve deferred --model/subagent patterns now that extension models are
-		// registered. Expand role aliases (`@smol`) and comma chains to concrete
-		// selectors first so deferred resolution accepts everything the immediate
-		// path (resolveModelOverride → resolveModelRoleValue) accepts.
+		// registered. Use the same CLI resolver as the immediate path so bare role
+		// names, exact model names, and provider selectors keep one precedence rule.
 		if (!model && deferredModelPatterns.length > 0) {
-			const expandedModelPatterns = resolveConfiguredModelPatterns(deferredModelPatterns, settings);
 			const availableModels = modelRegistry.getAll();
 			const matchPreferences = getModelMatchPreferences(settings);
+			const expandedModelPatterns = deferredModelPatterns.flatMap(pattern =>
+				pattern.split(",").flatMap(selector => {
+					const trimmedSelector = selector.trim();
+					if (!trimmedSelector) return [];
+					const resolved = resolveCliModel({
+						cliModel: trimmedSelector,
+						modelRegistry,
+						settings,
+						preferences: matchPreferences,
+					});
+					if (resolved.configuredPatterns && resolved.configuredPatterns.length > 0) {
+						return resolved.configuredPatterns;
+					}
+					if (resolved.model) {
+						return [
+							formatModelSelectorValue(
+								resolved.selector ?? formatModelStringWithRouting(resolved.model),
+								resolved.thinkingLevel,
+							),
+						];
+					}
+					return resolveConfiguredModelPatterns([trimmedSelector], settings);
+				}),
+			);
 			for (let patternIndex = 0; patternIndex < expandedModelPatterns.length; patternIndex += 1) {
 				const pattern = expandedModelPatterns[patternIndex];
 				const primary = parseModelPattern(pattern, availableModels, matchPreferences);
