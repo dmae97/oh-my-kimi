@@ -1193,6 +1193,7 @@ function assertMfjsValid(node: unknown, path = "$"): void {
 		for (const [i, entry] of node.entries()) assertMfjsValid(entry, `${path}[${i}]`);
 		return;
 	}
+	if (typeof node === "boolean") throw new Error(`MFJS requires an object schema at ${path}`);
 	if (typeof node !== "object" || node === null) return;
 	const obj = node as Record<string, unknown>;
 	for (const key of Object.keys(obj)) {
@@ -1276,11 +1277,20 @@ describe("normalizeSchemaForMoonshot", () => {
 		expect(props.limit).toEqual({ type: "integer", default: 10 });
 	});
 
-	it("preserves boolean subschemas rather than synthesizing MFJS-forbidden not", () => {
-		expect(normalizeSchemaForMoonshot({ type: "object", properties: { forbidden: false } })).toEqual({
+	it("coerces boolean subschemas to MFJS object forms without changing boolean keywords", () => {
+		expect(
+			normalizeSchemaForMoonshot({
+				type: "object",
+				properties: { allowed: true, forbidden: false },
+				additionalProperties: false,
+			}),
+		).toEqual({
 			type: "object",
-			properties: { forbidden: false },
+			properties: { allowed: {}, forbidden: {} },
+			additionalProperties: false,
 		});
+		expect(normalizeSchemaForMoonshot(true)).toEqual({});
+		expect(normalizeSchemaForMoonshot(false)).toEqual({});
 	});
 
 	it("folds oneOf into anyOf (the only MFJS combinator)", () => {

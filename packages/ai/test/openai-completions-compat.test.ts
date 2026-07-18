@@ -2382,6 +2382,22 @@ describe("Moonshot Flavored JSON Schema tool normalization", () => {
 				additionalProperties: false,
 			},
 		},
+		{
+			name: "task",
+			description: "spawn task",
+			parameters: {
+				type: "object",
+				properties: {
+					tasks: {
+						type: "array",
+						items: {
+							type: "object",
+							properties: { outputSchema: true },
+						},
+					},
+				},
+			},
+		},
 	];
 
 	function toolParameters(payload: unknown, toolName: string): Record<string, unknown> {
@@ -2434,6 +2450,10 @@ describe("Moonshot Flavored JSON Schema tool normalization", () => {
 		const paths = probeProperty(payload, "find", "paths");
 		expect(paths.minItems).toBeUndefined();
 		expect(paths.type).toBe("array");
+		const taskProperties = toObject(
+			toObject(toObject(probeProperty(payload, "task", "tasks").items)?.properties)?.outputSchema,
+		);
+		expect(taskProperties).toEqual({});
 	});
 
 	it("leaves raw JSON Schema untouched on non-Moonshot hosts (flag-gated)", async () => {
@@ -2446,5 +2466,8 @@ describe("Moonshot Flavored JSON Schema tool normalization", () => {
 		expect(op).toEqual({ type: "string", enum: ["pr_checkout", "pr_create"], description: "github operation" });
 		const paths = probeProperty(payload, "find", "paths");
 		expect(paths.minItems).toBe(1);
+		const taskItems = toObject(probeProperty(payload, "task", "tasks").items);
+		const taskProperties = toObject(taskItems?.properties);
+		expect(taskProperties?.outputSchema).toBe(true);
 	});
 });
