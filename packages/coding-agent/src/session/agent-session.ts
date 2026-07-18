@@ -11949,7 +11949,7 @@ export class AgentSession {
 			// can anchor the next prompt at the full failed-request size and re-trigger
 			// compaction at the same boundary. Remove every capped empty stop; toolUse
 			// orphans still need this for Anthropic message-history validity.
-			this.#discardAssistantTurn(assistantMessage);
+			await this.#dropPersistedAssistantTurn(assistantMessage);
 			return false;
 		}
 		this.#discardAssistantTurn(assistantMessage);
