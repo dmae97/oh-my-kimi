@@ -31,7 +31,7 @@ type AnthropicMessagesValidation = {
 type ModelsEndpointValidation = {
 	kind: "models-endpoint";
 	provider: string;
-	modelsUrl: string;
+	modelsUrl: string | (() => string);
 	headers?: Record<string, string> | (() => Record<string, string> | undefined);
 };
 
@@ -99,7 +99,10 @@ export function createApiKeyLogin(config: ApiKeyLoginConfig): (options: OAuthCon
 				await validateApiKeyAgainstModelsEndpoint({
 					provider: config.validation.provider,
 					apiKey: trimmed,
-					modelsUrl: config.validation.modelsUrl,
+					modelsUrl:
+						typeof config.validation.modelsUrl === "function"
+							? config.validation.modelsUrl()
+							: config.validation.modelsUrl,
 					headers: config.validation.headers,
 					signal: options.signal,
 					fetch: options.fetch,
