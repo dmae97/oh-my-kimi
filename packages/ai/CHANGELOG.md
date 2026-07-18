@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Kept native Kimi Code K3 thinking enabled for named function selection by using generic required tool choice.
+
 ## [17.0.4] - 2026-07-18
 
 ### Fixed
