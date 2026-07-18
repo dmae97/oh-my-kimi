@@ -1368,9 +1368,8 @@ export class DapSessionManager {
 		this.#sessions.set(session.id, session);
 		if (parentSessionId) {
 			this.#sessions.get(parentSessionId)?.childSessionIds.add(session.id);
-		} else {
-			this.#activeSessionId = session.id;
 		}
+		this.#activeSessionId = session.id;
 		const heartbeat = setInterval(() => {
 			if (!client.isAlive()) {
 				session.status = "terminated";

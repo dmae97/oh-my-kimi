@@ -35,7 +35,11 @@ class FakeDapClient {
 	#alive = true;
 	disposed = false;
 
-	constructor(readonly childConfiguration?: Record<string, unknown>) {
+	constructor(
+		readonly childConfiguration?: Record<string, unknown>,
+		readonly childRequest: "launch" | "attach" = "launch",
+		readonly stopOnStart = true,
+	) {
 		this.proc = {
 			exited: this.#exited.promise,
 			exitCode: null,
@@ -62,11 +66,11 @@ class FakeDapClient {
 			if (this.childConfiguration) {
 				queueMicrotask(() => {
 					void this.#emitReverse("startDebugging", {
-						request: "launch",
+						request: this.childRequest,
 						configuration: this.childConfiguration,
 					});
 				});
-			} else {
+			} else if (this.stopOnStart) {
 				queueMicrotask(() => this.#emit("stopped", { reason: "entry", threadId: 7 }));
 			}
 		}
@@ -178,5 +182,31 @@ describe("DAP multi-session debugging", () => {
 			expect(client.requests.some(request => request.command === "disconnect")).toBe(true);
 			expect(client.disposed).toBe(true);
 		}
+	});
+
+	it("targets a running attach child before it emits a stopped event", async () => {
+		const root = new FakeDapClient(
+			{
+				name: "attached.js",
+				type: "pwa-node",
+				__pendingTargetId: "attached-child",
+			},
+			"attach",
+		);
+		const child = new FakeDapClient(undefined, "launch", false);
+		spyOn(DapClient, "spawn").mockResolvedValue(root as unknown as DapClient);
+		spyOn(DapClient, "connect").mockResolvedValue(child as unknown as DapClient);
+		const manager = new DapSessionManager();
+
+		await manager.launch({ adapter: TEST_ADAPTER, program: "/tmp/attached.js", cwd: "/tmp" }, undefined, 25);
+		const active = manager.getActiveSession();
+		const threads = await manager.threads(undefined, 100);
+
+		expect(active?.parentSessionId).toBeDefined();
+		expect(threads.threads).toEqual([{ id: 7, name: "target.js" }]);
+		expect(child.requests.filter(request => request.command === "threads")).toHaveLength(1);
+		expect(root.requests.filter(request => request.command === "threads")).toHaveLength(0);
+
+		await manager.terminate(undefined, 100);
 	});
 });
