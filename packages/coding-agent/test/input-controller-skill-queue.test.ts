@@ -651,11 +651,12 @@ function createStubInteractiveModeContextForUiHelpers(session: AgentSession) {
 	};
 	const pendingMessagesContainer = new Container();
 	const requestRender = vi.fn();
+	const requestComponentRender = vi.fn();
 	const updatePendingMessagesDisplay = vi.fn();
 
 	const ctx = {
 		editor,
-		ui: { requestRender },
+		ui: { requestRender, requestComponentRender },
 		pendingMessagesContainer,
 		session,
 		viewSession: session,
@@ -667,7 +668,7 @@ function createStubInteractiveModeContextForUiHelpers(session: AgentSession) {
 		locallySubmittedUserSignatures: new Set<string>(),
 	} as unknown as InteractiveModeContext;
 
-	return { ctx, editor, pendingMessagesContainer };
+	return { ctx, editor, pendingMessagesContainer, requestComponentRender };
 }
 
 describe("UiHelpers / InputController against derived queued custom display", () => {
@@ -702,6 +703,26 @@ describe("UiHelpers / InputController against derived queued custom display", ()
 		expect(rendered).toContain("Steering · 1");
 		expect(rendered).toContain("1. /skill:test-skill arg1 arg2");
 		expect(rendered).not.toContain("Steer:");
+	});
+
+	it("requests the pending-container repaint after rebuilding and clearing it", async () => {
+		fixture = await createRealSession();
+		const { session } = fixture;
+		queueCustomSteer(session, "/skill:test-skill arg1 arg2");
+
+		const { ctx, pendingMessagesContainer, requestComponentRender } =
+			createStubInteractiveModeContextForUiHelpers(session);
+		const uiHelpers = new UiHelpers(ctx);
+		uiHelpers.updatePendingMessagesDisplay();
+
+		expect(pendingMessagesContainer.children.length).toBeGreaterThan(0);
+		expect(requestComponentRender).toHaveBeenNthCalledWith(1, pendingMessagesContainer);
+
+		session.clearQueue();
+		uiHelpers.updatePendingMessagesDisplay();
+
+		expect(pendingMessagesContainer.children).toHaveLength(0);
+		expect(requestComponentRender).toHaveBeenNthCalledWith(2, pendingMessagesContainer);
 	});
 
 	it("groups yield follow-ups under one heading", async () => {

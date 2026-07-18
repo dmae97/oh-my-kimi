@@ -1133,6 +1133,7 @@ export class TUI extends Container {
 	// Target component -> containing root child, so animation-rate requests do
 	// not re-walk a huge transcript subtree every frame.
 	#componentRootCache = new WeakMap<Component, Component>();
+	#scopedInputRenderComponents = new WeakSet<Component>();
 
 	// Persistent prepared frame, row-aligned with #composedFrame. Entries store
 	// normalized, width-fitted content rows without the per-line terminal
@@ -1890,6 +1891,17 @@ export class TUI extends Container {
 	}
 
 	/**
+	 * Opt `component` into subtree-only renders when input leaves focus stable.
+	 *
+	 * The host must explicitly request renders for every sibling mutated by the
+	 * component's input callbacks. Components without this opt-in retain the
+	 * legacy full-root render after input.
+	 */
+	enableScopedInputRender(component: Component): void {
+		this.#scopedInputRenderComponents.add(component);
+	}
+
+	/**
 	 * Schedule a render on behalf of `component` after a self-contained change
 	 * (spinner frame, blink) that cannot have affected any other component.
 	 *
@@ -2368,15 +2380,23 @@ export class TUI extends Container {
 			}
 		}
 
-		// Pass input to focused component (including Ctrl+C)
-		// The focused component can decide how to handle Ctrl+C
-		if (this.#focusedComponent?.handleInput) {
+		// Pass input to focused component (including Ctrl+C).
+		// The focused component can decide how to handle Ctrl+C.
+		// Opted-in components only dirty their focused subtree. Unregistered
+		// components retain the legacy full compose because their callbacks may
+		// mutate siblings; focus changes also require the new surface to paint.
+		const focused = this.#focusedComponent;
+		if (focused?.handleInput) {
 			// Filter out key release events unless component opts in
-			if (isKeyRelease(data) && !this.#focusedComponent.wantsKeyRelease) {
+			if (isKeyRelease(data) && !focused.wantsKeyRelease) {
 				return;
 			}
-			this.#focusedComponent.handleInput(data);
-			this.requestRender();
+			focused.handleInput(data);
+			if (this.#focusedComponent === focused && this.#scopedInputRenderComponents.has(focused)) {
+				this.requestComponentRender(focused);
+			} else {
+				this.requestRender();
+			}
 		}
 	}
 
