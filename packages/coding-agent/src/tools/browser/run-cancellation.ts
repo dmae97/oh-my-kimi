@@ -117,6 +117,10 @@ export function bindBrowserRunFacade<T extends object>(target: T, signal: AbortS
 				return wrapped;
 			}
 			if (value && typeof value === "object") {
+				// Never proxy AbortSignals: native combinators (AbortSignal.any, fetch)
+				// brand-check internal slots that a Proxy cannot forward, and reading a
+				// signal needs no abort gating anyway.
+				if (value instanceof AbortSignal) return value;
 				const wrapped = bindBrowserRunFacade(value, signal);
 				cache.set(prop, wrapped);
 				return wrapped;
