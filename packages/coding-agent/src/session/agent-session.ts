@@ -122,6 +122,7 @@ import {
 } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { resetOpenAICodexHistoryAfterCompaction } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
+import { kCursorExecResolved } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { GeminiHeaderRunDetector, isGeminiThinkingModel } from "@oh-my-pi/pi-ai/utils/thinking-loop";
 import { type RepeatedToolCallDetection, ToolCallLoopGuard } from "@oh-my-pi/pi-ai/utils/tool-call-loop-guard";
@@ -5029,8 +5030,12 @@ export class AgentSession {
 					return;
 				}
 			}
-			if (this.#isRetryableError(msg)) {
-				const didRetry = await this.#handleRetryableError(msg);
+			const resumeCursorStreamStall = this.#canResumeCursorStreamStall(msg);
+			if (resumeCursorStreamStall || this.#isRetryableError(msg)) {
+				const didRetry = await this.#handleRetryableError(
+					msg,
+					resumeCursorStreamStall ? { preserveFailedTurn: true } : undefined,
+				);
 				if (didRetry) {
 					await emitAgentEndNotification({ willContinue: true });
 					return;
@@ -14643,6 +14648,50 @@ export class AgentSession {
 		if (this.#isClassifierRefusal(message)) return true;
 		return AIError.retriable(id, { replayUnsafe: this.#hasReplayUnsafeToolOutput(message) });
 	}
+
+	/**
+	 * Resume a stalled Cursor turn after every server-executed tool has produced
+	 * a result. The failed assistant/tool-result pair must stay in context: it
+	 * records completed side effects and lets the next request continue from
+	 * them instead of replaying the original turn.
+	 */
+	#canResumeCursorStreamStall(message: AssistantMessage): boolean {
+		if (
+			message.provider !== "cursor" ||
+			message.stopReason !== "error" ||
+			!message.errorMessage?.toLowerCase().includes("stream stall")
+		) {
+			return false;
+		}
+		const id = this.#classifyRetryMessage(message);
+		if (!AIError.retriable(id)) return false;
+
+		const resolvedToolCallIds: string[] = [];
+		for (const block of message.content) {
+			if (block.type !== "toolCall") continue;
+			if (!(kCursorExecResolved in block) || block[kCursorExecResolved] !== true) return false;
+			resolvedToolCallIds.push(block.id);
+		}
+		if (resolvedToolCallIds.length === 0) return false;
+
+		const messages = this.agent.state.messages;
+		let assistantIndex = -1;
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const candidate = messages[i];
+			if (candidate.role === "assistant" && this.#isSameAssistantMessage(candidate, message)) {
+				assistantIndex = i;
+				break;
+			}
+		}
+		if (assistantIndex < 0) return false;
+
+		const unresolvedToolCallIds = new Set(resolvedToolCallIds);
+		for (let i = assistantIndex + 1; i < messages.length; i++) {
+			const candidate = messages[i];
+			if (candidate.role === "toolResult") unresolvedToolCallIds.delete(candidate.toolCallId);
+		}
+		return unresolvedToolCallIds.size === 0;
+	}
 	/**
 	 * Retried turns remove the failed assistant message from active context.
 	 * Text/thinking-only partials are safe to discard and replay. Retained
@@ -15220,7 +15269,12 @@ export class AgentSession {
 	 */
 	async #handleRetryableError(
 		message: AssistantMessage,
-		options?: { allowModelFallback?: boolean; fireworksFastFallback?: boolean; hardErrorFallback?: boolean },
+		options?: {
+			allowModelFallback?: boolean;
+			fireworksFastFallback?: boolean;
+			hardErrorFallback?: boolean;
+			preserveFailedTurn?: boolean;
+		},
 	): Promise<boolean> {
 		const retrySettings = this.settings.getGroup("retry");
 		// The Fireworks Fast→base degrade is an intrinsic model-selection safety net,
@@ -15411,8 +15465,11 @@ export class AgentSession {
 			errorId: message.errorId,
 		});
 
-		// Remove the failed assistant message from active context before retrying.
-		this.#removeAssistantMessageFromActiveContext(message, "auto-retry");
+		// Cursor exec-channel tools have already run and emitted results. Keep that
+		// failed turn intact so continuation cannot repeat their side effects.
+		if (!options?.preserveFailedTurn) {
+			this.#removeAssistantMessageFromActiveContext(message, "auto-retry");
+		}
 
 		// A thinking/response loop retried into identical context loops again. Inject a
 		// hidden redirect so the retried turn sees a directive to break the repeated

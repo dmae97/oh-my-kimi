@@ -2,10 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import type { ApiKeyResolveContext, AssistantMessage, ToolCall } from "@oh-my-pi/pi-ai";
+import type { ApiKeyResolveContext, AssistantMessage, ToolCall, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
 import { createMockModel, registerMockApi } from "@oh-my-pi/pi-ai/providers/mock";
 import * as aiStream from "@oh-my-pi/pi-ai/stream";
+import { kCursorExecResolved } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -700,6 +701,126 @@ describe("AgentSession retry delay cap", () => {
 			.find((message): message is AssistantMessage => message.role === "assistant");
 		expect(lastError?.stopReason).toBe("error");
 		expect(lastError?.errorMessage).toBe("The operation timed out.");
+	});
+
+	it("resumes a stalled Cursor stream after its exec tool result", async () => {
+		const stallMessage = "Provider stream stalled while waiting for the next event";
+		const model = createMockModel({
+			id: "composer-2.5",
+			provider: "cursor",
+		});
+		authStorage.setRuntimeApiKey("cursor", "cursor-test-key");
+		const toolCall = {
+			type: "toolCall" as const,
+			id: "cursor-shell-1",
+			name: "shell",
+			arguments: { command: "pwd" },
+			[kCursorExecResolved]: true as const,
+		};
+		const toolResult: ToolResultMessage = {
+			role: "toolResult",
+			toolCallId: toolCall.id,
+			toolName: toolCall.name,
+			content: [{ type: "text", text: "/workspace" }],
+			isError: false,
+			timestamp: Date.now(),
+		};
+		let streamCalls = 0;
+		let resumedWithToolResult = false;
+		const agent = new Agent({
+			getApiKey: requestedModel => `${requestedModel.provider}-test-key`,
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			cursorOnToolResult: message => message,
+			streamFn: (_requestedModel, context, options) => {
+				streamCalls += 1;
+				if (streamCalls > 1) {
+					resumedWithToolResult = context.messages.some(
+						message => message.role === "toolResult" && message.toolCallId === toolCall.id,
+					);
+					model.push({ content: ["Recovered after Cursor stall"] });
+					return model.stream(model, context, options);
+				}
+
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(async () => {
+					await options?.cursorOnToolResult?.(toolResult);
+					const partial: AssistantMessage = {
+						role: "assistant",
+						content: [toolCall],
+						api: model.api,
+						provider: model.provider,
+						model: model.id,
+						usage: {
+							input: 0,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 0,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+						stopReason: "stop",
+						timestamp: Date.now(),
+					};
+					stream.push({ type: "start", partial });
+					stream.push({ type: "toolcall_start", contentIndex: 0, partial });
+					stream.push({
+						type: "toolcall_delta",
+						contentIndex: 0,
+						delta: JSON.stringify(toolCall.arguments),
+						partial,
+					});
+					stream.push({ type: "toolcall_end", contentIndex: 0, toolCall, partial });
+					stream.push({
+						type: "error",
+						reason: "error",
+						error: {
+							...partial,
+							stopReason: "error",
+							errorMessage: stallMessage,
+						},
+					});
+				});
+				return stream;
+			},
+		});
+
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.maxRetries": 1,
+		});
+		settings.setModelRole("default", `${model.provider}/${model.id}`);
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+		});
+		const retryStartEvents: AutoRetryStartEvent[] = [];
+		const retryEndEvents: AutoRetryEndEvent[] = [];
+		session.subscribe(event => {
+			if (event.type === "auto_retry_start") retryStartEvents.push(event);
+			if (event.type === "auto_retry_end") retryEndEvents.push(event);
+		});
+
+		await session.prompt("Run pwd");
+		await session.waitForIdle();
+
+		expect(streamCalls).toBe(2);
+		expect(resumedWithToolResult).toBe(true);
+		expect(
+			session.agent.state.messages.filter(
+				message => message.role === "toolResult" && message.toolCallId === toolCall.id,
+			),
+		).toHaveLength(1);
+		expect(retryStartEvents).toHaveLength(1);
+		expect(retryEndEvents).toContainEqual(expect.objectContaining({ success: true, attempt: 1 }));
+		expect(lastAssistant(session).content).toContainEqual({ type: "text", text: "Recovered after Cursor stall" });
 	});
 
 	it("retries a transient socket close after partial text and thinking", async () => {
