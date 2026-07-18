@@ -63,6 +63,7 @@ import {
 	estimateTokens,
 	generateBranchSummary,
 	generateHandoffFromContext,
+	invalidateMessageCache,
 	prepareCompaction,
 	renderHandoffPrompt,
 	resolveBudgetReserveTokens,
@@ -2524,7 +2525,13 @@ export class AgentSession {
 		const isPlanNudge = (m: AgentMessage): boolean =>
 			m.role === "custom" && m.customType === PREWALK_PLAN_MESSAGE_TYPE;
 		for (let i = liveMessages.length - 1; i >= 0; i--) {
-			if (isPlanNudge(liveMessages[i])) liveMessages.splice(i, 1);
+			if (isPlanNudge(liveMessages[i])) {
+				// Interior removal on the live array: drop the scrubbed message from
+				// the convert/estimate caches so the next convert can't reuse a prefix
+				// that still carries its fragment (the array shrinks in place).
+				invalidateMessageCache(liveMessages[i]);
+				liveMessages.splice(i, 1);
+			}
 		}
 		const stateMessages = this.agent.state.messages;
 		const filtered = stateMessages.filter(m => !isPlanNudge(m));
