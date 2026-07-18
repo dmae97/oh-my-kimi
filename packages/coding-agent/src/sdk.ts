@@ -2698,8 +2698,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			if (snapcompactInline) transformed = await snapcompactInline.transform(transformed, transformModel);
 			return clampProviderContextImages(transformed, transformModel);
 		};
-		const onPayload = async (payload: unknown, _model?: Model) => {
-			return await extensionRunner.emitBeforeProviderRequest(payload);
+		const onPayload = async (payload: unknown, model?: Model) => {
+			return await extensionRunner.emitBeforeProviderRequest(payload, model);
 		};
 		const onResponse: SimpleStreamOptions["onResponse"] = async (response, model) => {
 			await extensionRunner.emitAfterProviderResponse(response, model);

@@ -7,6 +7,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentMessage, AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { discoverAndLoadExtensions, ExtensionRuntime } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import {
@@ -481,6 +482,78 @@ describe("ExtensionRunner", () => {
 	});
 
 	describe("before_provider_request chaining", () => {
+		it("exposes the request model instead of the primary session model", async () => {
+			const primaryModel = getBundledModel("openai-codex", "gpt-5.6-sol");
+			const requestModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+			if (!primaryModel || !requestModel) throw new Error("Expected bundled cross-provider models to exist");
+
+			const extCode = `
+				export default function(pi) {
+					pi.on("before_provider_request", async (_event, ctx) => {
+						const current = ctx.models.current();
+						return {
+							model: ctx.model && {
+								provider: ctx.model.provider,
+								id: ctx.model.id,
+								api: ctx.model.api,
+							},
+							current: current && {
+								provider: current.provider,
+								id: current.id,
+								api: current.api,
+							},
+						};
+					});
+				}
+			`;
+			fs.writeFileSync(path.join(extensionsDir, "request-model.ts"), extCode);
+
+			const result = await loadTestExtensions();
+			const runner = new ExtensionRunner(
+				result.extensions,
+				result.runtime,
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+			);
+			runner.initialize(
+				{
+					sendMessage: () => {},
+					sendUserMessage: () => {},
+					appendEntry: () => {},
+					setLabel: () => {},
+					getActiveTools: () => [],
+					getAllTools: () => [],
+					setActiveTools: async () => {},
+					getCommands: () => [],
+					setModel: async () => false,
+					getThinkingLevel: () => undefined,
+					setThinkingLevel: () => {},
+					getSessionName: () => undefined,
+					setSessionName: async () => {},
+				},
+				{
+					getModel: () => primaryModel,
+					isIdle: () => true,
+					abort: () => {},
+					hasPendingMessages: () => false,
+					shutdown: () => {},
+					getContextUsage: () => undefined,
+					compact: async () => {},
+					getSystemPrompt: () => [],
+				},
+			);
+
+			const payload = await runner.emitBeforeProviderRequest({}, requestModel);
+
+			const expected = {
+				provider: requestModel.provider,
+				id: requestModel.id,
+				api: requestModel.api,
+			};
+			expect(payload).toEqual({ model: expected, current: expected });
+		});
+
 		it("chains payload replacements across handlers in load order", async () => {
 			const extCode1 = `
 				export default function(pi) {
