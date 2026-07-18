@@ -38,6 +38,7 @@ import {
 } from "./launch";
 import { extractReadableFromHtml, type ReadableFormat } from "./readable";
 import {
+	bindBrowserRunFacade,
 	CELL_BUDGET_SLACK_MS,
 	markHandled,
 	resolvePredicateTimeout,
@@ -963,9 +964,9 @@ export class WorkerCore {
 			const runtime = this.#ensureRuntime(msg.session);
 			runtime.setCwd(msg.session.cwd);
 			runtime.setRunScope({
-				page: runPage.page,
-				browser,
-				tab: tabApi,
+				page: bindBrowserRunFacade(runPage.page, signal),
+				browser: bindBrowserRunFacade(browser, signal),
+				tab: bindBrowserRunFacade(tabApi, signal),
 				assert: (cond: unknown, text?: string): void => {
 					if (!cond) throw new ToolError(text ?? "Assertion failed");
 				},

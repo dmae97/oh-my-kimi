@@ -3,6 +3,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { BrowserTool } from "@oh-my-pi/pi-coding-agent/tools/browser";
 import { ensureChromiumExecutable } from "@oh-my-pi/pi-coding-agent/tools/browser/launch";
+import { getTabsMapForTest } from "@oh-my-pi/pi-coding-agent/tools/browser/tab-supervisor";
 
 function makeSession(): ToolSession {
 	return {
@@ -221,6 +222,38 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser tab evaluation", () => {
 		} finally {
 			await tool.execute("close", { action: "close", name, kill: true });
 			server.stop(true);
+		}
+	}, 30_000);
+
+	it("observes floating raw page promises when the target closes", async () => {
+		const tool = new BrowserTool(makeSession());
+		const name = `target-close-${process.pid}`;
+		const url = `data:text/html,<h1>ready</h1>#${name}`;
+
+		try {
+			await tool.execute("open", { action: "open", name, url });
+			const tabSession = getTabsMapForTest().get(name);
+			if (tabSession?.backend !== "worker") throw new Error("Worker tab was not created");
+			const pages = await tabSession.browser.browser.pages();
+			const targetPage = pages.find(page => page.url() === url);
+			if (!targetPage) throw new Error(`Target page was not found for ${url}`);
+
+			const started = targetPage.waitForFunction("document.documentElement.dataset.floating === 'true'", {
+				polling: "mutation",
+			});
+			const run = tool.execute("run", {
+				action: "run",
+				name,
+				code: "page.evaluate(() => { document.documentElement.dataset.floating = 'true'; return Promise.withResolvers().promise; }); try { await tab.waitForSelector('#never'); } catch {} return 'survived';",
+			});
+			const startedHandle = await started;
+			await startedHandle.dispose();
+			await targetPage.close();
+
+			const result = await run;
+			expect(result.content).toEqual([{ type: "text", text: "survived" }]);
+		} finally {
+			await tool.execute("close", { action: "close", name, kill: true });
 		}
 	}, 30_000);
 });
