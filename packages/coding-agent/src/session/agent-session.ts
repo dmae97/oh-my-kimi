@@ -13904,25 +13904,32 @@ export class AgentSession {
 				// That is exactly the dead-end the elide shake rescues: it reaches
 				// INSIDE the tail and offloads heavy content to an artifact placeholder,
 				// shrinking the tail so findCutPoint can then move the cut and leave
-				// older turns to summarize. Run the same rescue the post-maintenance
-				// guard uses, then re-prepare on the elided branch and fall through to
-				// the normal compaction body when it now succeeds (writing a compaction
-				// entry anchors the stale billed usage so the auto-continue re-check
-				// cannot re-trip and loop the warning — issue #4786). Skip when we
-				// already fell through from a shake strategy pass (it tried and found
-				// nothing) or on the idle timer (it re-checks usage on its own cadence).
-				let rescued: ShakeResult | undefined;
-				if (reason !== "idle" && !fallbackFromShake) {
-					rescued = await this.#tryShakeRescueForDeadEnd(autoCompactionSignal);
-					if (rescued && !autoCompactionSignal.aborted) {
-						pathEntriesForCompaction = this.sessionManager.getBranch();
-						preparation = prepareCompaction(
-							pathEntriesForCompaction,
-							compactionSettings,
-							autoCompactionCandidates,
-						);
-						if (preparation) this.#emitShakeRescueNotice(rescued);
-					}
+				// older turns to summarize. Run the same tiered rescue the
+				// post-maintenance guard uses (elide, then image drop), with progress
+				// defined as "prepareCompaction now succeeds on the rewritten branch",
+				// and fall through to the normal compaction body when it does (writing
+				// a compaction entry anchors the stale billed usage so the
+				// auto-continue re-check cannot re-trip and loop the warning — issue
+				// #4786). `skipElide` when we already fell through from a shake
+				// strategy pass (it tried and found nothing); skip entirely on the
+				// idle timer (it re-checks usage on its own cadence).
+				let rescueRewroteHistory = false;
+				if (reason !== "idle") {
+					await this.#rescueCompactionDeadEnd(autoCompactionSignal, {
+						skipElide: fallbackFromShake,
+						hasProgress: () => {
+							// Only reached when a tier actually freed something, so the
+							// branch has been rewritten either way.
+							rescueRewroteHistory = true;
+							pathEntriesForCompaction = this.sessionManager.getBranch();
+							preparation = prepareCompaction(
+								pathEntriesForCompaction,
+								compactionSettings,
+								autoCompactionCandidates,
+							);
+							return preparation !== undefined;
+						},
+					});
 				}
 				if (!preparation) {
 					await this.#emitSessionEvent({
@@ -13946,7 +13953,7 @@ export class AgentSession {
 					if (noProgressDeadEnd) {
 						this.emitNotice(
 							"warning",
-							compactionDeadEndWarning("clear large tool output, run `/shake images` to drop attached images,"),
+							compactionDeadEndWarning("shrink it (e.g. clear large tool output)"),
 							"compaction",
 						);
 					}
@@ -13959,7 +13966,7 @@ export class AgentSession {
 						: noProgressDeadEnd
 							? COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION
 							: COMPACTION_CHECK_NONE;
-					return rescued ? { ...base, historyRewritten: true } : base;
+					return rescueRewroteHistory ? { ...base, historyRewritten: true } : base;
 				}
 			}
 

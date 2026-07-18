@@ -1345,8 +1345,10 @@ describe("AgentSession auto-compaction progress guard", () => {
 		// side) and summary compaction cannot start. The dead-end runs the elide
 		// shake rescue INSIDE the tail; once it frees enough, prepareCompaction is
 		// retried on the elided branch, now succeeds, and the pass falls through to
-		// a normal (hook-supplied) compaction that creates headroom and
-		// auto-continues instead of looping the no-progress warning.
+		// a normal (hook-supplied) compaction that creates headroom and — with an
+		// active goal still needing work — auto-continues instead of looping the
+		// no-progress warning.
+		activateOngoingGoal("rescue-refit");
 		const branch = sessionManager.getBranch();
 		const firstKeptEntryId = branch[branch.length - 1].id;
 		if (!firstKeptEntryId) throw new Error("seeded entry has no id");
