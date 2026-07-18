@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Reduced concurrent subagent update CPU by reconstructing recent output only at progress emission boundaries. ([#5936](https://github.com/can1357/oh-my-pi/issues/5936))
+
 ## [17.0.3] - 2026-07-17
 
 ### Changed
