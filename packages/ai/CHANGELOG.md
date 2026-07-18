@@ -14,6 +14,9 @@
 ### Fixed
 
 - Fixed Anthropic session credential stickiness suppressing usage-based re-ranking indefinitely: the session pin skipped ranking for up to 30 days (or process lifetime) even after the ≤1h prompt cache it protects was no longer guaranteed warm. The Anthropic skip is now gated on time since the session's last resolve (`ANTHROPIC_SESSION_STICKY_CACHE_WARM_MS`, 1h), while providers without a verified cache lifetime retain their existing stickiness. When ranking runs, the pinned account is only a tie-break rather than an absolute front-of-queue override, restoring proactive multi-account load balancing after long idle ([#5966](https://github.com/can1357/oh-my-pi/issues/5966)).
+### Fixed
+
+- Fixed clockless Anthropic usage windows outranking clocked sibling credentials by scoring their headroom over the full window duration ([#5960](https://github.com/can1357/oh-my-pi/issues/5960)).
 
 ## [17.0.4] - 2026-07-18
 

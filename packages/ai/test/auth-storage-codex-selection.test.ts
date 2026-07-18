@@ -2065,7 +2065,7 @@ function createClaudeLimit(args: {
 	key: "5h" | "7d";
 	durationMs: number;
 	usedFraction: number;
-	resetInMs: number;
+	resetInMs?: number;
 	tier?: "fable";
 }): UsageLimit {
 	const clamped = Math.min(Math.max(args.usedFraction, 0), 1);
@@ -2083,7 +2083,7 @@ function createClaudeLimit(args: {
 			id: args.key,
 			label,
 			durationMs: args.durationMs,
-			resetsAt: Date.now() + args.resetInMs,
+			...(args.resetInMs === undefined ? {} : { resetsAt: Date.now() + args.resetInMs }),
 		},
 		amount: {
 			unit: "percent",
@@ -2099,9 +2099,9 @@ function createClaudeLimit(args: {
 
 function createClaudeUsageReport(args: {
 	accountId: string;
-	primary: { usedFraction: number; resetInMs: number };
-	secondary: { usedFraction: number; resetInMs: number };
-	fableSecondary?: { usedFraction: number; resetInMs: number };
+	primary: { usedFraction: number; resetInMs?: number };
+	secondary: { usedFraction: number; resetInMs?: number };
+	fableSecondary?: { usedFraction: number; resetInMs?: number };
 }): UsageReport {
 	const limits = [
 		createClaudeLimit({
@@ -2206,6 +2206,35 @@ describe("AuthStorage claude oauth ranking", () => {
 
 		const counts = await countApiKeySelections(authStorage, "anthropic", "weighted-claude-near");
 		expectExclusivePreference(counts, "api-acct-near", "api-acct-far");
+	});
+
+	test("assumes the full duration remains when ranking clockless windows", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+
+		await authStorage.set("anthropic", [
+			{ type: "oauth", ...createCredential("acct-clockless", "clockless@example.com") },
+			{ type: "oauth", ...createCredential("acct-clocked", "clocked@example.com") },
+		]);
+
+		usageByAccount.set(
+			"acct-clockless",
+			createClaudeUsageReport({
+				accountId: "acct-clockless",
+				primary: { usedFraction: 0 },
+				secondary: { usedFraction: 0 },
+			}),
+		);
+		usageByAccount.set(
+			"acct-clocked",
+			createClaudeUsageReport({
+				accountId: "acct-clocked",
+				primary: { usedFraction: 0, resetInMs: 4 * HOUR_MS },
+				secondary: { usedFraction: 0.05, resetInMs: 22 * HOUR_MS },
+			}),
+		);
+
+		const apiKey = await authStorage.getApiKey("anthropic", "session-claude-clockless");
+		expect(apiKey).toBe("api-acct-clocked");
 	});
 
 	test("resolves equal-priority accounts to one deterministic pick", async () => {

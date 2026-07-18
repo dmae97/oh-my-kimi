@@ -3904,16 +3904,15 @@ export class AuthStorage {
 	 * how fast the window's remaining quota must be consumed to fully use it
 	 * before it resets and expires. Higher = more headroom at risk of expiring
 	 * unused = ranked first, so selection chases quota that is about to be
-	 * wasted ("use it or lose it"). Without a reset clock the headroom
-	 * fraction alone is returned, degrading to most-headroom-first.
+	 * wasted ("use it or lose it"). Without a reset clock, the full window
+	 * duration is assumed to remain so clocked and clockless scores stay comparable.
 	 */
 	#computeWindowRequiredDrain(limit: UsageLimit | undefined, nowMs: number, fallbackDurationMs: number): number {
 		const headroom = 1 - this.#normalizeUsageFraction(limit);
 		if (headroom <= 0) return 0;
 		const resetAt = this.#resolveWindowResetAt(limit?.window);
-		if (resetAt === undefined) return headroom;
 		const durationMs = limit?.window?.durationMs ?? fallbackDurationMs;
-		let remainingMs = resetAt - nowMs;
+		let remainingMs = resetAt === undefined ? durationMs : resetAt - nowMs;
 		if (Number.isFinite(durationMs) && durationMs > 0) {
 			remainingMs = Math.min(remainingMs, durationMs);
 		}
