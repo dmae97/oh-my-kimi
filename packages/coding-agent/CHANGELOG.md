@@ -116,6 +116,9 @@
 ### Fixed
 
 - Fixed the cmux browser backend failing inside `cmux ssh` sessions by dialing loopback `CMUX_SOCKET_PATH` values over TCP and completing the relay HMAC-SHA256 challenge-response with credentials from the session environment or `~/.cmux/relay/<port>.auth` ([#5788](https://github.com/can1357/oh-my-pi/issues/5788)).
+### Fixed
+
+- Isolated the CLIProxyAPI auth-broker import tests from ambient broker configuration so fixture credentials cannot be uploaded to a live broker ([#5782](https://github.com/can1357/oh-my-pi/issues/5782)).
 
 ## [17.0.1] - 2026-07-16
 
