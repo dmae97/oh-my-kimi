@@ -15,8 +15,10 @@ import {
 	getSessionsDir,
 	isEnoent,
 	logger,
+	stringifyJson,
 	toError,
 } from "@oh-my-pi/pi-utils";
+import type { StructuredSubagentSchemaMode } from "../task/types";
 import { ArtifactManager } from "./artifacts";
 import { type BlobPutOptions, type BlobPutResult, BlobStore } from "./blob-store";
 import {
@@ -38,7 +40,6 @@ import {
 	type CustomMessageEntry,
 	type FileEntry,
 	type LabelEntry,
-	type MCPToolSelectionEntry,
 	type ModeChangeEntry,
 	type ModelChangeEntry,
 	type NewSessionOptions,
@@ -539,7 +540,7 @@ export class SessionManager {
 	}
 
 	#lineFor(entry: FileEntry): string {
-		return `${JSON.stringify(prepareEntryForPersistence(entry, this.#blobs))}\n`;
+		return `${stringifyJson(prepareEntryForPersistence(entry, this.#blobs)) ?? "null"}\n`;
 	}
 
 	#titleSlotLine(): string {
@@ -783,6 +784,7 @@ export class SessionManager {
 			timestamp,
 			cwd: this.#cwd,
 			parentSession: options?.parentSession,
+			providerPromptCacheKey: options?.providerPromptCacheKey,
 		};
 		this.#titleUpdatedAt = timestamp;
 
@@ -934,6 +936,26 @@ export class SessionManager {
 		};
 	}
 
+	/**
+	 * Create an independent manager for the current logical session and branch.
+	 * The clone shares the storage backend but owns its entry index and writer, so
+	 * callers can finish session-owned work after this manager switches elsewhere.
+	 * Set `persist` false when the original session is intentionally being dropped.
+	 */
+	cloneCurrentSession(options?: { persist?: boolean }): SessionManager {
+		const persist = options?.persist ?? this.#persist;
+		const clone = new SessionManager(this.#cwd, this.#sessionDir, persist, this.#storage);
+		clone.#suppressBreadcrumb = true;
+		clone.restoreState(this.captureState());
+		if (!persist) {
+			clone.#sessionFile = undefined;
+			clone.#fileIsCurrent = false;
+			clone.#rewriteRequired = false;
+			clone.#forceFileCreation = false;
+		}
+		return clone;
+	}
+
 	restoreState(snapshot: SessionManagerStateSnapshot): void {
 		this.#closeWriterEventually();
 		this.#diskTail = Promise.resolve();
@@ -1050,6 +1072,7 @@ export class SessionManager {
 			timestamp,
 			cwd: this.#cwd,
 			parentSession: parentSessionId,
+			providerPromptCacheKey: this.#header.providerPromptCacheKey ?? parentSessionId,
 		};
 		this.#sessionName = this.#header.title;
 		this.#titleSource = this.#header.titleSource;
@@ -1468,6 +1491,34 @@ export class SessionManager {
 		return entry.id;
 	}
 
+	/**
+	 * Append to a non-active branch without changing the current leaf.
+	 * Used by work that retains ownership of a branch across tree navigation.
+	 */
+	appendMessageToBranch(
+		message:
+			| Message
+			| CustomMessage
+			| HookMessage
+			| BashExecutionMessage
+			| PythonExecutionMessage
+			| FileMentionMessage,
+		parentId: string | null,
+	): string {
+		if (parentId !== null && !this.#index.has(parentId)) throw new Error(`Entry ${parentId} not found`);
+		const activeLeafId = this.#index.leafId();
+		const entry: SessionMessageEntry = {
+			type: "message",
+			id: generateId(this.#index),
+			parentId,
+			timestamp: nowIso(),
+			message,
+		};
+		this.#recordEntry(entry);
+		this.#index.setLeaf(activeLeafId);
+		return entry.id;
+	}
+
 	/** Append a thinking level change as child of current leaf, then advance leaf. Returns entry id. */
 	appendThinkingLevelChange(thinkingLevel?: string, configured?: string): string {
 		const entry: ThinkingLevelChangeEntry = {
@@ -1508,6 +1559,8 @@ export class SessionManager {
 		task: string;
 		tools: string[];
 		outputSchema?: unknown;
+		outputSchemaMode?: StructuredSubagentSchemaMode;
+		restrictToolNames?: boolean;
 		spawns?: string;
 		readSummarize?: boolean;
 	}): string {
@@ -1584,19 +1637,6 @@ export class SessionManager {
 			details: stripInternalDetailsFields(normalized.details),
 			attribution: normalized.attribution,
 			...this.#freshEntryFields(),
-		};
-		this.#recordEntry(entry);
-		return entry.id;
-	}
-
-	/**
-	 * Append an MCP tool selection entry recording the discovery-selected MCP tools.
-	 */
-	appendMCPToolSelection(selectedToolNames: string[]): string {
-		const entry: MCPToolSelectionEntry = {
-			type: "mcp_tool_selection",
-			...this.#freshEntryFields(),
-			selectedToolNames: [...selectedToolNames],
 		};
 		this.#recordEntry(entry);
 		return entry.id;
@@ -1888,7 +1928,13 @@ export class SessionManager {
 
 		const sourceHeader = sourceEntries.find(entry => entry.type === "session") as SessionHeader | undefined;
 		const history = sourceEntries.filter(entry => entry.type !== "session") as SessionEntry[];
-		manager.#resetToNewSession({ parentSession: sourceHeader?.id }, options?.sessionFile);
+		manager.#resetToNewSession(
+			{
+				parentSession: sourceHeader?.id,
+				providerPromptCacheKey: sourceHeader?.providerPromptCacheKey ?? sourceHeader?.id,
+			},
+			options?.sessionFile,
+		);
 		manager.#header.title = sourceHeader?.title;
 		manager.#header.titleSource = sourceHeader?.titleSource;
 		manager.#sessionName = manager.#header.title;
@@ -1953,6 +1999,8 @@ export class SessionManager {
 			task: string;
 			tools: string[];
 			outputSchema?: unknown;
+			outputSchemaMode?: StructuredSubagentSchemaMode;
+			restrictToolNames?: boolean;
 			spawns?: string;
 			readSummarize?: boolean;
 		} | null;
@@ -1971,6 +2019,8 @@ export class SessionManager {
 			task: string;
 			tools: string[];
 			outputSchema?: unknown;
+			outputSchemaMode?: StructuredSubagentSchemaMode;
+			restrictToolNames?: boolean;
 			spawns?: string;
 			readSummarize?: boolean;
 		} | null = null;
@@ -1982,6 +2032,8 @@ export class SessionManager {
 					task: entry.task,
 					tools: entry.tools,
 					outputSchema: entry.outputSchema,
+					outputSchemaMode: entry.outputSchemaMode,
+					restrictToolNames: entry.restrictToolNames,
 					readSummarize: entry.readSummarize,
 					spawns: entry.spawns,
 				};

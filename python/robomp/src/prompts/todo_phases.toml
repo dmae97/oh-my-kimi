@@ -2,6 +2,7 @@
 name = "Classify"
 tasks = [
   "Read the issue body + every prior comment",
+  "gh_search_issues for duplicates and already-merged fixes",
   "Call classify_issue with primary type + labels",
 ]
 

@@ -11,8 +11,7 @@
  * {@link SnapshotStore.record} with the full normalized text they observed.
  * The store hashes it, dedups against the per-path history, and returns the
  * tag. Consumers (recovery, the patcher) resolve a stale tag back to the
- * recorded full text via {@link SnapshotStore.byHash} and 3-way-merge the
- * would-be edit onto the live content.
+ * recorded full text and map its unchanged edit anchors onto live content.
  *
  * The abstract base class lets callers plug in whatever storage they like
  * (LRU, persistent SQLite, etc.). {@link InMemorySnapshotStore} ships as a
@@ -199,8 +198,8 @@ export class InMemorySnapshotStore extends SnapshotStore {
 		// texts that happen to share the 4-hex tag are DIFFERENT snapshots — fusing
 		// them under one entry would corrupt seenLines (attaching lines from
 		// text B onto the stored text A) and let the patcher misresolve which
-		// snapshot the section tag names when it does 3-way merge or seen-line
-		// validation. See issue #4075.
+		// snapshot the section tag names during recovery or seen-line validation.
+		// See issue #4075.
 		const existing = history.find(version => version.hash === hash && version.text === fullText);
 		if (existing) {
 			// Same content state observed again: refresh recency and promote to

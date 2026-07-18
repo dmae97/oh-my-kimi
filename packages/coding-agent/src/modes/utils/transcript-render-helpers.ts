@@ -13,7 +13,7 @@ import {
 	resolveAbortLabel,
 	shouldRenderAbortReason,
 } from "../../session/messages";
-import { createIrcMessageCard } from "../../tools/irc";
+import { createIrcMessageCard } from "../../tools/hub";
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../../tools/render-utils";
 import { canonicalizeMessage } from "../../utils/thinking-display";
 import { TranscriptBlock } from "../components/transcript-container";
@@ -125,15 +125,70 @@ export function buildFileMentionBlock(files: FileMentionMessage["files"], indent
 }
 
 /**
- * Whether an assistant turn has visible text or thinking content (after
- * canonicalization) — i.e. content that closes the current read-tool run.
+ * Whether an assistant turn has visible text, thinking, or image content — i.e.
+ * content that closes the current read-tool run.
  */
 export function assistantHasVisibleContent(message: AssistantAgentMessage): boolean {
 	return message.content.some(
 		content =>
+			content.type === "image" ||
 			(content.type === "text" && canonicalizeMessage(content.text)) ||
 			(content.type === "thinking" && canonicalizeMessage(content.thinking)),
 	);
+}
+
+/**
+ * Split mixed assistant turns into visible text before tool execution and
+ * visible text segments that must render immediately after the preceding tool.
+ * Cursor can return intro text, tool calls, progress text, and the final answer
+ * in one assistant message; keeping every text block in the leading assistant
+ * block buries post-tool text above tool results in the transcript.
+ */
+export function splitAssistantMessageToolTimeline(message: AssistantAgentMessage): {
+	beforeTools: AssistantAgentMessage;
+	afterToolCalls: ReadonlyMap<string, AssistantAgentMessage>;
+	hasToolCalls: boolean;
+} {
+	const beforeTools: AssistantAgentMessage["content"] = [];
+	const afterToolCalls = new Map<string, AssistantAgentMessage>();
+	let pendingAfterTool: AssistantAgentMessage["content"] = [];
+	let lastToolCallId: string | undefined;
+	let sawToolCall = false;
+
+	const displaySegment = (content: AssistantAgentMessage["content"]): AssistantAgentMessage => ({
+		...message,
+		content,
+		stopReason: "stop",
+		errorMessage: undefined,
+		retryRecovery: undefined,
+	});
+
+	const flushPendingAfterTool = () => {
+		if (!lastToolCallId || pendingAfterTool.length === 0) return;
+		afterToolCalls.set(lastToolCallId, displaySegment(pendingAfterTool));
+		pendingAfterTool = [];
+	};
+
+	for (const content of message.content) {
+		if (content.type === "toolCall") {
+			flushPendingAfterTool();
+			sawToolCall = true;
+			lastToolCallId = content.id;
+			continue;
+		}
+		if (sawToolCall) {
+			pendingAfterTool.push(content);
+		} else {
+			beforeTools.push(content);
+		}
+	}
+	flushPendingAfterTool();
+
+	if (!sawToolCall) {
+		return { beforeTools: message, afterToolCalls, hasToolCalls: false };
+	}
+
+	return { beforeTools: displaySegment(beforeTools), afterToolCalls, hasToolCalls: true };
 }
 
 /**

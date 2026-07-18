@@ -323,6 +323,30 @@ export interface RawSseEvent {
 	raw: string[];
 }
 
+/** Lifecycle fields shared by every Codex compaction implementation. */
+export interface CodexCompactionContext {
+	/** Stable only for one logical compaction, including parallel summary calls. */
+	operationId: string;
+	trigger: "manual" | "auto";
+	reason: "user_requested" | "context_limit" | "model_downshift" | "comp_hash_changed";
+	phase: "standalone_turn" | "pre_turn" | "mid_turn";
+	strategy: "memento" | "prefix_compaction";
+}
+
+/** Canonical nested metadata serialized into the Codex turn envelope. */
+export interface CodexCompactionMetadata {
+	trigger: "manual" | "auto";
+	reason: "user_requested" | "context_limit" | "model_downshift" | "comp_hash_changed";
+	implementation: "responses" | "responses_compaction_v2" | "responses_compact";
+	phase: "standalone_turn" | "pre_turn" | "mid_turn";
+	strategy: "memento" | "prefix_compaction";
+}
+
+/** Dispatch context combining canonical metadata with its local operation identity. */
+export interface CodexCompactionRequestContext extends CodexCompactionMetadata {
+	operationId: string;
+}
+
 export interface StreamOptions {
 	temperature?: number;
 	topP?: number;
@@ -388,9 +412,9 @@ export interface StreamOptions {
 	 */
 	sessionId?: string;
 	/**
-	 * Optional prompt-cache identity. When set, OpenAI Responses-compatible
-	 * providers use this for `prompt_cache_key` while keeping `sessionId` for
-	 * provider routing / conversation headers.
+	 * Optional prompt-cache identity. OpenAI-family providers use this for
+	 * `prompt_cache_key` payloads and cache-affinity headers such as
+	 * `x-grok-conv-id`; when omitted, they fall back to `sessionId`.
 	 */
 	promptCacheKey?: string;
 	/**
@@ -398,22 +422,8 @@ export interface StreamOptions {
 	 * Providers can use this to persist transport/session state between turns.
 	 */
 	providerSessionState?: Map<string, ProviderSessionState>;
-	/**
-	 * Force Gemini model-mode Interactions API transport for providers that support it.
-	 * When unset, those providers may still use Interactions to continue known
-	 * server-side conversation lineage via `previousInteractionId` or stored state.
-	 */
-	useInteractionsApi?: boolean;
-	/**
-	 * Whether supported Interactions transports should store server-side conversation
-	 * state and return response ids for follow-up turns. Defaults to true.
-	 */
-	storeInteraction?: boolean;
-	/**
-	 * Explicit Interactions response id to continue. Mutually exclusive with
-	 * `storeInteraction: false` because the follow-up itself must be storable.
-	 */
-	previousInteractionId?: string;
+	/** Canonical Codex compaction classification; ignored by other providers. */
+	codexCompaction?: CodexCompactionRequestContext;
 	/**
 	 * Optional per-provider concurrent request cap for LLM stream calls. Keys are
 	 * provider ids (`model.provider`); positive numeric values cap in-flight
@@ -529,7 +539,7 @@ export interface SimpleStreamOptions extends Omit<StreamOptions, "apiKey"> {
 	toolChoice?: ToolChoice;
 	/** OpenAI service tier for processing priority/cost control. Ignored by non-OpenAI providers. */
 	serviceTier?: ServiceTier;
-	/** API format for Kimi Code provider: "openai" or "anthropic" (default: "anthropic") */
+	/** Explicit Kimi Code API format override; omitted uses live per-model protocol metadata. */
 	kimiApiFormat?: "openai" | "anthropic";
 	/** API format for Synthetic provider: "openai" or "anthropic" (default: "openai") */
 	syntheticApiFormat?: "openai" | "anthropic";
@@ -696,7 +706,14 @@ export interface ContextSnapshot {
 
 export interface AssistantMessage {
 	role: "assistant";
-	content: (TextContent | ThinkingContent | RedactedThinkingContent | AnthropicFallbackContent | ToolCall)[];
+	content: (
+		| TextContent
+		| ThinkingContent
+		| RedactedThinkingContent
+		| AnthropicFallbackContent
+		| ImageContent
+		| ToolCall
+	)[];
 	api: Api;
 	provider: Provider;
 	model: string;
@@ -715,6 +732,8 @@ export interface AssistantMessage {
 	stopReason: StopReason;
 	stopDetails?: StopDetails | null;
 	errorMessage?: string;
+	/** Per-tool abort messages used when an aborted assistant turn needs different placeholder results per tool call. */
+	toolCallAbortMessages?: Record<string, string>;
 	/** HTTP status surfaced by the provider when the request failed. Populated by every provider's catch block alongside `errorMessage` so consumers (auth retry, telemetry, UI) can branch without regex-scraping the message. */
 	errorStatus?: number;
 	/** Structured machine-readable error classifier; see `utils/error-id.ts` for bit layout and helpers. */
@@ -881,6 +900,7 @@ export type AssistantMessageEvent =
 	| { type: "thinking_start"; contentIndex: number; partial: AssistantMessage }
 	| { type: "thinking_delta"; contentIndex: number; delta: string; partial: AssistantMessage }
 	| { type: "thinking_end"; contentIndex: number; content: string; partial: AssistantMessage }
+	| { type: "image_end"; contentIndex: number; content: ImageContent; partial: AssistantMessage }
 	| { type: "toolcall_start"; contentIndex: number; partial: AssistantMessage }
 	| { type: "toolcall_delta"; contentIndex: number; delta: string; partial: AssistantMessage }
 	| { type: "toolcall_end"; contentIndex: number; toolCall: ToolCall; partial: AssistantMessage }

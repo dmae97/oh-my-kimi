@@ -142,6 +142,9 @@ const CLIENT_CAPABILITIES = {
 			codeDescriptionSupport: true,
 			dataSupport: true,
 		},
+		diagnostic: {
+			dynamicRegistration: true,
+		},
 	},
 	window: {
 		workDoneProgress: true,
@@ -428,7 +431,7 @@ async function handleConfigurationRequest(client: LspClient, message: LspJsonRpc
 	const items = params?.items ?? [];
 	const result = items.map(item => {
 		const section = item.section ?? "";
-		return client.config.settings?.[section] ?? {};
+		return client.config.settings?.[section] ?? null;
 	});
 	await sendResponse(client, message.id, result, "workspace/configuration");
 }
@@ -456,6 +459,58 @@ async function handleApplyEditRequest(client: LspClient, message: LspJsonRpcRequ
 	}
 }
 
+interface DynamicCapabilityRegistration {
+	id?: unknown;
+	method?: unknown;
+}
+
+interface DynamicCapabilityParams {
+	registrations?: DynamicCapabilityRegistration[];
+	unregisterations?: DynamicCapabilityRegistration[];
+	unregistrations?: DynamicCapabilityRegistration[];
+}
+
+function updateDynamicCapabilities(client: LspClient, message: LspJsonRpcRequest): void {
+	const params = message.params as DynamicCapabilityParams;
+	if (message.method === "client/registerCapability") {
+		if (!Array.isArray(params.registrations)) return;
+		let registrations = client.dynamicCapabilityRegistrations;
+		if (!registrations) {
+			registrations = new Map();
+			client.dynamicCapabilityRegistrations = registrations;
+		}
+		for (const registration of params.registrations) {
+			if (typeof registration.id === "string" && typeof registration.method === "string") {
+				registrations.set(registration.id, registration.method);
+			}
+		}
+		return;
+	}
+
+	const registrations = client.dynamicCapabilityRegistrations;
+	if (!registrations) return;
+	const unregistrations = params.unregisterations ?? params.unregistrations;
+	if (!Array.isArray(unregistrations)) return;
+	for (const registration of unregistrations) {
+		if (typeof registration.id === "string") {
+			registrations.delete(registration.id);
+		}
+	}
+}
+
+/** Whether the server advertised LSP 3.17 document diagnostic pulls statically or through registration. */
+export function supportsDocumentDiagnostics(client: LspClient): boolean {
+	const staticProvider = client.serverCapabilities?.diagnosticProvider;
+	if (staticProvider) return true;
+
+	const registrations = client.dynamicCapabilityRegistrations;
+	if (!registrations) return false;
+	for (const method of registrations.values()) {
+		if (method === "textDocument/diagnostic") return true;
+	}
+	return false;
+}
+
 /**
  * Respond to a server-initiated request.
  */
@@ -478,6 +533,7 @@ async function handleServerRequest(client: LspClient, message: LspJsonRpcRequest
 		return;
 	}
 	if (message.method === "client/registerCapability" || message.method === "client/unregisterCapability") {
+		updateDynamicCapabilities(client, message);
 		// Some servers block semantic requests until dynamic registration succeeds.
 		await sendResponse(client, message.id, null, message.method);
 		return;
@@ -685,6 +741,7 @@ export async function getOrCreateClient(
 			requestId: 0,
 			diagnostics: new Map(),
 			diagnosticsVersion: 0,
+			dynamicCapabilityRegistrations: new Map(),
 			openFiles: new Map(),
 			pendingRequests: new Map(),
 			messageBuffer: new Uint8Array(0),
@@ -750,8 +807,14 @@ export async function getOrCreateClient(
 
 			client.serverCapabilities = initResult.capabilities as LspClient["serverCapabilities"];
 
-			// Send initialized notification
+			// Finish the initialize handshake before publishing the client as ready.
 			await sendNotification(client, "initialized", {}, signal);
+			await sendNotification(
+				client,
+				"workspace/didChangeConfiguration",
+				{ settings: config.settings ?? {} },
+				signal,
+			);
 
 			client.status = "ready";
 			// Publish only after init succeeds: pre-init clients are reachable

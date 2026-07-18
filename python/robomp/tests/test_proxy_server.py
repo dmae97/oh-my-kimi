@@ -166,7 +166,9 @@ async def _async_client(app) -> httpx.AsyncClient:
     )
 
 
-def test_read_remote_urls_uses_safe_directory_and_slot_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_read_remote_urls_uses_safe_directory_and_slot_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from robomp.proxy import server as proxy_server
 
     captured: dict[str, object] = {}
@@ -1134,7 +1136,9 @@ async def test_git_fetch_rejects_option_shaped_origin(proxy_settings: Settings, 
     pool_dir = _stage_pool(proxy_settings, upstream_repo)
     config_path = pool_dir / ".git" / "config"
     config_text = config_path.read_text(encoding="utf-8")
-    config_path.write_text(config_text.replace(f"\turl = {upstream_repo}\n", "\turl = --upload-pack=env\n"), encoding="utf-8")
+    config_path.write_text(
+        config_text.replace(f"\turl = {upstream_repo}\n", "\turl = --upload-pack=env\n"), encoding="utf-8"
+    )
 
     app = _build_app(proxy_settings)
     body = b'{"repo":"octo/widget"}'
@@ -1146,8 +1150,6 @@ async def test_git_fetch_rejects_option_shaped_origin(proxy_settings: Settings, 
         )
 
     assert resp.status_code == 400, resp.text
-
-
 
 
 @pytest.mark.parametrize(
@@ -1204,6 +1206,7 @@ async def test_git_push_rejects_attacker_pushurl(proxy_settings: Settings, upstr
         )
     assert resp.status_code == 400, resp.text
     assert not _bare_has_branch(upstream_repo, branch)
+
 
 # ============================================================================
 # fetch_ref refuses refspec / option injection in `ref`

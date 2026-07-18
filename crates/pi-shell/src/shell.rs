@@ -622,6 +622,41 @@ async fn create_session_for_run(
 		shell.register_builtin("fd", crate::fd::fd_builtin());
 		shell.register_builtin("cat", crate::coreutils::cat_builtin());
 		shell.register_builtin("uniq", crate::coreutils::uniq_builtin());
+		shell.register_builtin("base64", crate::coreutils::base64_builtin());
+		shell.register_builtin("md5sum", crate::coreutils::md5sum_builtin());
+		shell.register_builtin("sha1sum", crate::coreutils::sha1sum_builtin());
+		shell.register_builtin("sha224sum", crate::coreutils::sha224sum_builtin());
+		shell.register_builtin("sha256sum", crate::coreutils::sha256sum_builtin());
+		shell.register_builtin("sha384sum", crate::coreutils::sha384sum_builtin());
+		shell.register_builtin("sha512sum", crate::coreutils::sha512sum_builtin());
+		shell.register_builtin("b2sum", crate::coreutils::b2sum_builtin());
+		shell.register_builtin("basename", crate::coreutils::basename_builtin());
+		shell.register_builtin("dirname", crate::coreutils::dirname_builtin());
+		shell.register_builtin("readlink", crate::coreutils::readlink_builtin());
+		shell.register_builtin("realpath", crate::coreutils::realpath_builtin());
+		shell.register_builtin("touch", crate::coreutils::touch_builtin());
+		shell.register_builtin("stat", crate::coreutils::stat_builtin());
+		shell.register_builtin("date", crate::coreutils::date_builtin());
+		shell.register_builtin("mktemp", crate::coreutils::mktemp_builtin());
+		shell.register_builtin("seq", crate::coreutils::seq_builtin());
+		shell.register_builtin("yes", crate::coreutils::yes_builtin());
+		shell.register_builtin("printenv", crate::coreutils::printenv_builtin());
+		shell.register_builtin("truncate", crate::coreutils::truncate_builtin());
+		shell.register_builtin("tac", crate::coreutils::tac_builtin());
+		shell.register_builtin("nproc", crate::coreutils::nproc_builtin());
+		shell.register_builtin("uname", crate::coreutils::uname_builtin());
+		shell.register_builtin("whoami", crate::coreutils::whoami_builtin());
+		shell.register_builtin("hostname", crate::coreutils::hostname_builtin());
+		shell.register_builtin("which", crate::which::which_builtin());
+		shell.register_builtin("diff", crate::coreutils::diff_builtin());
+		shell.register_builtin("cut", crate::coreutils::cut_builtin());
+		shell.register_builtin("tee", crate::coreutils::tee_builtin());
+		shell.register_builtin("tr", crate::coreutils::tr_builtin());
+		shell.register_builtin("paste", crate::coreutils::paste_builtin());
+		shell.register_builtin("comm", crate::coreutils::comm_builtin());
+		shell.register_builtin("sed", crate::coreutils::sed_builtin());
+		shell.register_builtin("xargs", crate::coreutils::xargs_builtin());
+		shell.register_builtin("jq", crate::coreutils::jq_builtin());
 		if !uutils_env_disabled(config, "PI_DISABLE_UUTILS_DESTRUCTIVE") {
 			if !uutils_env_disabled(config, "PI_DISABLE_RM_BUILTIN") {
 				shell.register_builtin("rm", crate::coreutils::rm_builtin());
@@ -629,6 +664,8 @@ async fn create_session_for_run(
 			if !uutils_env_disabled(config, "PI_DISABLE_MV_BUILTIN") {
 				shell.register_builtin("mv", crate::coreutils::mv_builtin());
 			}
+			// ln can clobber existing files via -f; gate it with the destructive set.
+			shell.register_builtin("ln", crate::coreutils::ln_builtin());
 		}
 	}
 
@@ -1104,11 +1141,16 @@ async fn run_shell_command_once(
 			}
 		}
 	});
+	// Let pipeline consumers flush output after cancellation kills their
+	// producers. The outer run cancellation remains bounded, and this delayed
+	// fallback still releases readers whose writers never close.
+	const CANCEL_READER_GRACE: Duration = Duration::from_millis(500);
 	let cancel_bridge = tokio::spawn({
 		let cancel_token = cancel_token.clone();
 		let reader_cancel = reader_cancel.clone();
 		async move {
 			cancel_token.cancelled().await;
+			time::sleep(CANCEL_READER_GRACE).await;
 			reader_cancel.cancel();
 		}
 	});
@@ -1372,7 +1414,14 @@ async fn read_output_bytes(
 
 impl SpawnObserver for process::SpawnRegistry {
 	fn on_spawn(&self, pid: i32, pgid: Option<i32>) {
-		self.record(pid, pgid);
+		// Pin a stable process reference *now*, before the pid can be recycled.
+		// On Windows an open handle keeps the pid slot reserved for the lifetime
+		// of the handle; on Linux the pidfd carries identity; on macOS the
+		// recorded start-time triple detects impersonation. Deferring the open
+		// to `build_targets` (as the old code did) let a recycled pid resolve
+		// to an unrelated process — issue #4605.
+		let process = process::Process::from_pid(pid);
+		self.record(pgid, process);
 	}
 }
 
@@ -1642,7 +1691,7 @@ async fn read_output(
 			let pending = &buf[..it];
 			match str::from_utf8(pending) {
 				Ok(text) => {
-					emit_chunk(text, on_chunk.as_ref());
+					emit_chunk(text, on_chunk.as_ref()).await;
 					it = 0;
 					break;
 				},
@@ -1651,7 +1700,7 @@ async fn read_output(
 					if p > 0 {
 						// SAFETY: [..p] is guaranteed valid UTF-8 by valid_up_to().
 						let text = unsafe { str::from_utf8_unchecked(&pending[..p]) };
-						emit_chunk(text, on_chunk.as_ref());
+						emit_chunk(text, on_chunk.as_ref()).await;
 						// copy p..it to the beginning of the buffer
 						buf.copy_within(p..it, 0);
 						it -= p;
@@ -1660,7 +1709,7 @@ async fn read_output(
 					match err.error_len() {
 						Some(p) => {
 							// Invalid byte sequence: emit replacement and drop those bytes.
-							emit_chunk(REPLACEMENT, on_chunk.as_ref());
+							emit_chunk(REPLACEMENT, on_chunk.as_ref()).await;
 							// copy p..it to the beginning of the buffer
 							buf.copy_within(p..it, 0);
 							it -= p;
@@ -1681,10 +1730,10 @@ async fn read_output(
 	for chunk in buf[..it].utf8_chunks() {
 		let valid = chunk.valid();
 		if !valid.is_empty() {
-			emit_chunk(valid, on_chunk.as_ref());
+			emit_chunk(valid, on_chunk.as_ref()).await;
 		}
 		if !chunk.invalid().is_empty() {
-			emit_chunk(REPLACEMENT, on_chunk.as_ref());
+			emit_chunk(REPLACEMENT, on_chunk.as_ref()).await;
 		}
 	}
 }
@@ -1770,7 +1819,7 @@ async fn read_output_buffered(
 			while !pending.is_empty() {
 				match str::from_utf8(&pending) {
 					Ok(text) => {
-						emit_chunk(text, Some(cb));
+						emit_chunk(text, Some(cb)).await;
 						pending.clear();
 						break;
 					},
@@ -1779,12 +1828,12 @@ async fn read_output_buffered(
 						if p > 0 {
 							// SAFETY: [..p] is valid UTF-8 per valid_up_to().
 							let text = unsafe { str::from_utf8_unchecked(&pending[..p]) };
-							emit_chunk(text, Some(cb));
+							emit_chunk(text, Some(cb)).await;
 							pending.drain(..p);
 						}
 						match err.error_len() {
 							Some(skip) => {
-								emit_chunk(REPLACEMENT, Some(cb));
+								emit_chunk(REPLACEMENT, Some(cb)).await;
 								pending.drain(..skip);
 							},
 							None => break,
@@ -1800,10 +1849,10 @@ async fn read_output_buffered(
 		for chunk in pending.utf8_chunks() {
 			let valid = chunk.valid();
 			if !valid.is_empty() {
-				emit_chunk(valid, Some(cb));
+				emit_chunk(valid, Some(cb)).await;
 			}
 			if !chunk.invalid().is_empty() {
-				emit_chunk(REPLACEMENT, Some(cb));
+				emit_chunk(REPLACEMENT, Some(cb)).await;
 			}
 		}
 	}
@@ -1851,9 +1900,16 @@ fn read_nonblocking<T: std::os::fd::AsRawFd>(file: &T, buf: &mut [u8]) -> io::Re
 	}
 }
 
-fn emit_chunk(text: &str, callback: Option<&Sender<String>>) {
+/// Forward one decoded chunk to the streaming callback, honouring channel
+/// backpressure: on a bounded channel (the pi-natives JS bridge) the send
+/// parks until the consumer frees a slot — which parks the pipe reader and,
+/// transitively, the child on its stdout/stderr pipe — so a fast producer
+/// can never buffer unbounded output in memory (#4078). A disconnected
+/// receiver (consumer gone) fails immediately, so the pipe keeps draining
+/// and the child never wedges on a full pipe.
+async fn emit_chunk(text: &str, callback: Option<&Sender<String>>) {
 	if let Some(callback) = callback {
-		let _ = callback.send(text.to_string());
+		let _ = callback.send_async(text.to_string()).await;
 	}
 }
 
@@ -2152,6 +2208,50 @@ mod tests {
 		assert!(!out.contains(tmp_str), "verbose output leaked absolute path: {out:?}");
 
 		let _ = std::fs::remove_dir_all(&tmp);
+	}
+
+	/// Regression test for issue #5819: `mkdir -p ~/proj/{a,b}` must create both
+	/// `a` and `b` under `$HOME/proj`. Brace expansion runs before tilde
+	/// expansion and previously left every element after the first with a
+	/// literal `~`, so `b` was created as `./~/proj/b` in the shell cwd instead.
+	#[tokio::test(flavor = "multi_thread")]
+	async fn uutils_mkdir_expands_tilde_for_every_brace_element() {
+		let base = std::env::temp_dir().join(format!("pi-mkdir-brace-{}", std::process::id()));
+		let home = base.join("home");
+		let cwd = base.join("cwd");
+		let _ = std::fs::remove_dir_all(&base);
+		std::fs::create_dir_all(&home).expect("home dir");
+		std::fs::create_dir_all(&cwd).expect("cwd dir");
+		let cwd_str = cwd.to_str().expect("utf8 cwd path");
+
+		let mut env = HashMap::new();
+		env.insert("HOME".to_string(), home.to_string_lossy().to_string());
+		let config =
+			ShellConfig { session_env: Some(env), snapshot_path: None, minimizer: None };
+		let mut session = create_session(&config).await.expect("create_session");
+		session.shell.set_working_dir(cwd_str).expect("set cwd");
+
+		let mut params = session.shell.default_exec_params();
+		params.set_fd(OpenFiles::STDIN_FD, null_file().expect("null"));
+		params.set_fd(OpenFiles::STDOUT_FD, null_file().expect("null"));
+		params.set_fd(OpenFiles::STDERR_FD, null_file().expect("null"));
+
+		let source_info = SourceInfo::from("pi-natives:test");
+		let exec = session
+			.shell
+			.run_string("mkdir -p ~/proj/{a,b}", &source_info, &params)
+			.await
+			.expect("run_string");
+		assert!(matches!(exec.exit_code, ExecutionExitCode::Success), "exit {}", exit_code(&exec));
+
+		// Both elements' tildes expanded: dirs land under $HOME/proj.
+		assert!(home.join("proj/a").is_dir(), "~/proj/a not created under HOME");
+		assert!(home.join("proj/b").is_dir(), "~/proj/b not created under HOME");
+		// The buggy path created a literal `~` tree in the shell cwd.
+		assert!(!cwd.join("~").exists(), "literal ~ tree leaked into cwd");
+		assert!(!cwd.join("a").exists(), "unexpanded element leaked into cwd");
+
+		let _ = std::fs::remove_dir_all(&base);
 	}
 
 	/// `mkdir --help` and an invalid flag must be handled in-process: rendered
@@ -2834,6 +2934,142 @@ mod tests {
 		let _ = std::fs::remove_dir_all(&tmp);
 	}
 
+	/// The vendored `sed` builtin must stream pipeline stdin through scripts and
+	/// perform `-i` in-place edits (with backup suffix) against the shell
+	/// working directory rather than the host process cwd.
+	#[tokio::test(flavor = "multi_thread")]
+	async fn uutils_sed_substitutes_streams_and_edits_in_place() {
+		let tmp = std::env::temp_dir().join(format!("pi-sed-{}", std::process::id()));
+		let _ = std::fs::remove_dir_all(&tmp);
+		std::fs::create_dir_all(&tmp).expect("temp dir");
+		std::fs::write(tmp.join("conf.txt"), "x=1\n").expect("conf");
+		let tmp_str = tmp.to_str().expect("utf8");
+
+		let config = ShellConfig { session_env: None, snapshot_path: None, minimizer: None };
+		let mut session = create_session(&config).await.expect("create_session");
+		session.shell.set_working_dir(tmp_str).expect("cwd");
+		let mut params = session.shell.default_exec_params();
+		params.set_fd(OpenFiles::STDIN_FD, null_file().expect("null"));
+		params.set_fd(OpenFiles::STDOUT_FD, null_file().expect("null"));
+		params.set_fd(OpenFiles::STDERR_FD, null_file().expect("null"));
+		let si = SourceInfo::from("pi-natives:test");
+		let read = |name: &str| std::fs::read_to_string(tmp.join(name)).unwrap_or_default();
+
+		// Piped stdin through a quiet substitute-and-print script.
+		session
+			.shell
+			.run_string("printf 'hello\\nworld\\n' | sed -n 's/hello/HI/p' > sed.txt", &si, &params)
+			.await
+			.expect("sed pipeline");
+		assert_eq!(read("sed.txt"), "HI\n");
+		// In-place edit of a cwd-relative operand, keeping the requested backup.
+		session
+			.shell
+			.run_string("sed -i.bak 's/1/2/' conf.txt", &si, &params)
+			.await
+			.expect("sed -i");
+		assert_eq!(read("conf.txt"), "x=2\n", "in-place edit must land in the shell cwd");
+		assert_eq!(read("conf.txt.bak"), "x=1\n", "backup must keep the original");
+
+		let _ = std::fs::remove_dir_all(&tmp);
+	}
+
+	/// The `xargs` builtin spawns real child processes, but their stdout must
+	/// flow back into the shell pipeline (ctx streams, not the host fds), items
+	/// must batch per `-n`, and a failing invocation must surface GNU's 123.
+	#[cfg(unix)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn uutils_xargs_children_feed_pipeline_and_report_failure() {
+		let tmp = std::env::temp_dir().join(format!("pi-xargs-{}", std::process::id()));
+		let _ = std::fs::remove_dir_all(&tmp);
+		std::fs::create_dir_all(&tmp).expect("temp dir");
+		let tmp_str = tmp.to_str().expect("utf8");
+
+		let config = ShellConfig { session_env: None, snapshot_path: None, minimizer: None };
+		let mut session = create_session(&config).await.expect("create_session");
+		session.shell.set_working_dir(tmp_str).expect("cwd");
+		let mut params = session.shell.default_exec_params();
+		params.set_fd(OpenFiles::STDIN_FD, null_file().expect("null"));
+		params.set_fd(OpenFiles::STDOUT_FD, null_file().expect("null"));
+		params.set_fd(OpenFiles::STDERR_FD, null_file().expect("null"));
+		let si = SourceInfo::from("pi-natives:test");
+		let read = |name: &str| std::fs::read_to_string(tmp.join(name)).unwrap_or_default();
+
+		// Default echo action: child stdout is captured into the redirect.
+		session
+			.shell
+			.run_string("printf 'a b c\\n' | xargs > xargs.txt", &si, &params)
+			.await
+			.expect("xargs default");
+		assert_eq!(read("xargs.txt"), "a b c\n");
+		// -n batching, with child output feeding a downstream builtin stage.
+		session
+			.shell
+			.run_string(
+				"printf '1\\n2\\n3\\n4\\n' | xargs -n2 echo | wc -l > batches.txt",
+				&si,
+				&params,
+			)
+			.await
+			.expect("xargs -n2");
+		assert_eq!(read("batches.txt").trim(), "2");
+		// A child exiting 1-125 makes xargs exit 123 (GNU contract).
+		session
+			.shell
+			.run_string("printf 'x\\n' | xargs false; printf %s $? > code.txt", &si, &params)
+			.await
+			.expect("xargs false");
+		assert_eq!(read("code.txt"), "123");
+
+		let _ = std::fs::remove_dir_all(&tmp);
+	}
+
+	/// The `jq` builtin must evaluate filters over piped JSON, resolve file
+	/// operands against the shell working directory, and propagate `-e`'s
+	/// null/false exit status through the shell.
+	#[tokio::test(flavor = "multi_thread")]
+	async fn uutils_jq_filters_json_and_propagates_exit_status() {
+		let tmp = std::env::temp_dir().join(format!("pi-jq-{}", std::process::id()));
+		let _ = std::fs::remove_dir_all(&tmp);
+		std::fs::create_dir_all(&tmp).expect("temp dir");
+		std::fs::write(tmp.join("in.json"), "{\"name\":\"pi\"}\n").expect("in.json");
+		let tmp_str = tmp.to_str().expect("utf8");
+
+		let config = ShellConfig { session_env: None, snapshot_path: None, minimizer: None };
+		let mut session = create_session(&config).await.expect("create_session");
+		session.shell.set_working_dir(tmp_str).expect("cwd");
+		let mut params = session.shell.default_exec_params();
+		params.set_fd(OpenFiles::STDIN_FD, null_file().expect("null"));
+		params.set_fd(OpenFiles::STDOUT_FD, null_file().expect("null"));
+		params.set_fd(OpenFiles::STDERR_FD, null_file().expect("null"));
+		let si = SourceInfo::from("pi-natives:test");
+		let read = |name: &str| std::fs::read_to_string(tmp.join(name)).unwrap_or_default();
+
+		// Compact filter over piped stdin.
+		session
+			.shell
+			.run_string("printf '{\"a\":{\"b\":2}}' | jq -c .a > jq.txt", &si, &params)
+			.await
+			.expect("jq pipeline");
+		assert_eq!(read("jq.txt"), "{\"b\":2}\n");
+		// Raw output from a cwd-relative file operand.
+		session
+			.shell
+			.run_string("jq -r .name in.json > name.txt", &si, &params)
+			.await
+			.expect("jq file");
+		assert_eq!(read("name.txt"), "pi\n");
+		// -e maps a null result to exit status 1.
+		session
+			.shell
+			.run_string("printf 'null' | jq -e . > /dev/null; printf %s $? > code.txt", &si, &params)
+			.await
+			.expect("jq -e");
+		assert_eq!(read("code.txt"), "1");
+
+		let _ = std::fs::remove_dir_all(&tmp);
+	}
+
 	/// A stdin-reading builtin blocked on an open pipe must honor abort/timeout:
 	/// the context's cancel flag makes the read return EOF so the utility
 	/// unwinds promptly and the command reports interrupted (130) — it must not
@@ -3026,6 +3262,20 @@ mod tests {
 		path.push(format!("pi-shell-{prefix}-{}-{nonce}", std::process::id()));
 		std::fs::create_dir_all(&path).expect("create temp dir");
 		path
+	}
+
+	#[cfg(unix)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn uutils_diff_reads_process_substitution_fds() {
+		let (result, output) = time::timeout(
+			Duration::from_secs(5),
+			run_command_capture("diff <(echo a) <(echo b)", None, None, CancelToken::default()),
+		)
+		.await
+		.expect("process substitution should not hang");
+
+		assert_eq!(result.exit_code, Some(1));
+		assert!(output.contains("-a\n+b\n"), "diff output missing changed lines: {output:?}");
 	}
 
 	#[cfg(unix)]
@@ -4132,5 +4382,40 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 			out.contains("DFL") && !out.contains("IGN"),
 			"builtin nohup masked SIGHUP like the external tool (output: {out:?})",
 		);
+	}
+
+	/// Regression for #4078: the JS bridge hands the pipe readers a *bounded*
+	/// chunk channel. With a consumer slower than the producer the readers
+	/// must park on `send_async` (backpressuring the child through its pipe)
+	/// rather than buffer unboundedly — and, unlike a drop-on-full design,
+	/// every produced byte must still reach the consumer.
+	#[cfg(unix)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn streaming_output_backpressures_on_bounded_channel_without_loss() {
+		const TOTAL_BYTES: usize = 1_048_576;
+		let (tx, rx) = flume::bounded::<String>(4);
+		let options = ShellExecuteOptions {
+			command: format!("yes x | head -c {TOTAL_BYTES}"),
+			..Default::default()
+		};
+		let run = tokio::spawn(execute_shell(options, Some(tx), CancelToken::default()));
+
+		let mut received = 0usize;
+		while let Ok(chunk) = rx.recv_async().await {
+			received += chunk.len();
+			// Slow consumer: forces the bounded queue to fill and the readers
+			// to park between chunks.
+			time::sleep(Duration::from_micros(50)).await;
+		}
+
+		let result = time::timeout(Duration::from_secs(30), run)
+			.await
+			.expect("command should finish despite backpressure")
+			.expect("run task should not panic")
+			.expect("execute should succeed");
+		assert_eq!(result.exit_code, Some(0));
+		assert!(!result.cancelled);
+		assert!(!result.timed_out);
+		assert_eq!(received, TOTAL_BYTES, "streamed bytes were dropped under backpressure");
 	}
 }

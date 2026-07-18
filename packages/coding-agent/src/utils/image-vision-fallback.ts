@@ -97,7 +97,7 @@ function formatImageBlock(localUrl: string, description: string): string {
 
 /**
  * Resolve a vision-capable model, mirroring the inspect_image priority
- * (`pi/vision` → `pi/default` → active → first image-capable available), but
+ * (`@vision` → `@default` → active → first image-capable available), but
  * never returning a text-only model.
  */
 function resolveVisionModel(deps: DescribeAttachedImagesDeps): Model<Api> | undefined {
@@ -111,8 +111,8 @@ function resolveVisionModel(deps: DescribeAttachedImagesDeps): Model<Api> | unde
 		return model?.input.includes("image") ? model : undefined;
 	};
 	return (
-		resolvePattern("pi/vision") ??
-		resolvePattern("pi/default") ??
+		resolvePattern("@vision") ??
+		resolvePattern("@default") ??
 		resolvePattern(deps.activeModelString) ??
 		available.find(model => model.input.includes("image"))
 	);

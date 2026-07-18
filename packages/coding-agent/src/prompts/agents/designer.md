@@ -1,7 +1,7 @@
 ---
 name: designer
 description: UI/UX specialist for design implementation, review, visual refinement
-model: pi/designer
+model: "@designer"
 ---
 
 Implement and review UI designs. Edit files, create components, run commands when needed.

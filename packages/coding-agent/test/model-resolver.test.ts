@@ -10,6 +10,7 @@ import {
 	parseModelString,
 	pickDefaultAvailableModel,
 	resolveAgentModelPatterns,
+	resolveAgentPrewalkPattern,
 	resolveAllowedModels,
 	resolveCliModel,
 	resolveModelFromString,
@@ -17,6 +18,7 @@ import {
 	resolveModelRoleValue,
 	resolveModelScope,
 } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
+import { DEFAULT_MODEL_ROLE_ALIAS, LEGACY_MODEL_ROLE_ALIAS_PREFIX } from "@oh-my-pi/pi-coding-agent/config/model-roles";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 
 // Mock models for testing
@@ -140,6 +142,54 @@ const mockMaxSuffixModels: Model<Api>[] = [
 		contextWindow: 128000,
 		maxTokens: 8192,
 	}),
+	buildModel({
+		id: "coding-router:low",
+		name: "NanoGPT Coding Router Low",
+		api: "openai-completions",
+		provider: "nanogpt",
+		baseUrl: "https://nano-gpt.com/api/v1",
+		reasoning: true,
+		thinking: {
+			mode: "effort",
+			efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+		},
+		input: ["text"],
+		cost: { input: 0.14, output: 0.28, cacheRead: 0.028, cacheWrite: 0 },
+		contextWindow: 128000,
+		maxTokens: 8192,
+	}),
+];
+
+// Sibling models where one id is a prefix of the other AND the longer id embeds
+// a thinking-tier token (`-highspeed` contains `high`). Regression fixture for
+// the fuzzy match swallowing a `:high` thinking suffix into the longer id.
+const mockThinkingSuffixSiblingModels: Model<"openai-completions">[] = [
+	buildModel({
+		id: "kimi-for-coding",
+		name: "K2.7 Code",
+		api: "openai-completions",
+		provider: "kimi-code",
+		baseUrl: "https://api.kimi.com/coding/v1",
+		reasoning: true,
+		thinking: { mode: "effort", efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High] },
+		input: ["text", "image"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 262144,
+		maxTokens: 32000,
+	}),
+	buildModel({
+		id: "kimi-for-coding-highspeed",
+		name: "K2.7 Code Highspeed",
+		api: "openai-completions",
+		provider: "kimi-code",
+		baseUrl: "https://api.kimi.com/coding/v1",
+		reasoning: true,
+		thinking: { mode: "effort", efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High] },
+		input: ["text", "image"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 262144,
+		maxTokens: 32000,
+	}),
 ];
 
 const mockAutoSuffixModels: Model<Api>[] = [
@@ -216,6 +266,25 @@ const mockCodexOverlapModels: Model<"anthropic-messages">[] = [
 		cost: { input: 1, output: 4, cacheRead: 0.1, cacheWrite: 1 },
 		contextWindow: 200000,
 		maxTokens: 8192,
+	}),
+];
+
+const mockMaxCapableModels: Model<"anthropic-messages">[] = [
+	buildModel({
+		id: "claude-opus-4-7",
+		name: "Claude Opus 4.7",
+		api: "anthropic-messages",
+		provider: "anthropic",
+		baseUrl: "https://api.anthropic.com",
+		reasoning: true,
+		thinking: {
+			mode: "anthropic-adaptive",
+			efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
+		},
+		input: ["text", "image"],
+		cost: { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
+		contextWindow: 200000,
+		maxTokens: 32000,
 	}),
 ];
 
@@ -410,7 +479,15 @@ describe("parseModelPattern", () => {
 		});
 
 		test("all valid thinking levels work", () => {
-			const levels = ["off", Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh] as const;
+			const levels = [
+				"off",
+				Effort.Minimal,
+				Effort.Low,
+				Effort.Medium,
+				Effort.High,
+				Effort.XHigh,
+				Effort.Max,
+			] as const;
 			for (const level of levels) {
 				const result = parseModelPattern(`sonnet:${level}`, allModels);
 				expect(result.model?.id).toBe("claude-sonnet-4-5");
@@ -418,20 +495,27 @@ describe("parseModelPattern", () => {
 				expect(result.warning).toBeUndefined();
 			}
 		});
-		test("max aliases the highest thinking level after the literal pattern misses", () => {
+		test("max parses as a real thinking level after the literal pattern misses", () => {
 			const result = parseModelPattern("gpt-5.3-codex:max", allModels);
 			expect(result.model?.id).toBe("gpt-5.3-codex");
-			expect(result.thinkingLevel).toBe(Effort.XHigh);
+			expect(result.thinkingLevel).toBe(Effort.Max);
 			expect(result.explicitThinkingLevel).toBe(true);
 			expect(result.warning).toBeUndefined();
 		});
 
-		test("literal model ids ending in max win over the thinking alias", () => {
+		test("literal model ids ending in max win over the thinking suffix", () => {
 			const result = parseModelPattern("nanogpt/coding-router:max", mockMaxSuffixModels);
 			expect(result.model?.id).toBe("coding-router:max");
 			expect(result.thinkingLevel).toBeUndefined();
 			expect(result.explicitThinkingLevel).toBe(false);
 			expect(result.warning).toBeUndefined();
+		});
+
+		test("fuzzy selectors preserve literal models ending in a thinking-level suffix", () => {
+			const result = parseModelPattern("router:low", mockMaxSuffixModels);
+			expect(result.model?.id).toBe("coding-router:low");
+			expect(result.thinkingLevel).toBeUndefined();
+			expect(result.explicitThinkingLevel).toBe(false);
 		});
 
 		test("literal model ids ending in auto win over the auto sentinel alias", () => {
@@ -440,6 +524,30 @@ describe("parseModelPattern", () => {
 			expect(result.thinkingLevel).toBeUndefined();
 			expect(result.explicitThinkingLevel).toBe(false);
 			expect(result.warning).toBeUndefined();
+		});
+
+		test("thinking suffix is stripped before fuzzy match, never absorbed into a longer sibling id", () => {
+			// `kimi-for-coding:high` must resolve to the standard model at high effort,
+			// not fuzzy-match `kimi-for-coding-highspeed` (issue #5151).
+			const result = parseModelPattern("kimi-code/kimi-for-coding:high", mockThinkingSuffixSiblingModels);
+			expect(result.model?.id).toBe("kimi-for-coding");
+			expect(result.thinkingLevel).toBe(Effort.High);
+			expect(result.explicitThinkingLevel).toBe(true);
+			expect(result.warning).toBeUndefined();
+		});
+
+		test("bare id thinking suffix is stripped before fuzzy match against a longer sibling", () => {
+			const result = parseModelPattern("kimi-for-coding:high", mockThinkingSuffixSiblingModels);
+			expect(result.model?.id).toBe("kimi-for-coding");
+			expect(result.thinkingLevel).toBe(Effort.High);
+			expect(result.explicitThinkingLevel).toBe(true);
+		});
+
+		test("the longer sibling still resolves exactly with its own thinking suffix", () => {
+			const result = parseModelPattern("kimi-code/kimi-for-coding-highspeed:high", mockThinkingSuffixSiblingModels);
+			expect(result.model?.id).toBe("kimi-for-coding-highspeed");
+			expect(result.thinkingLevel).toBe(Effort.High);
+			expect(result.explicitThinkingLevel).toBe(true);
 		});
 	});
 
@@ -523,13 +631,13 @@ describe("parseModelPattern", () => {
 			expect(result.warning).toBeUndefined();
 		});
 
-		test("openrouter/<id>:max applies xhigh through the exact-selector path, not an OpenRouter route", () => {
-			// `max` is a thinking alias, never an OpenRouter route suffix: the request must
-			// resolve the base model and carry xhigh, not clone a literal `z-ai/glm-4.7:max`.
+		test("openrouter/<id>:max applies max through the exact-selector path, not an OpenRouter route", () => {
+			// `max` is a thinking-level suffix, never an OpenRouter route suffix: the request
+			// must resolve the base model and carry max, not clone a literal `z-ai/glm-4.7:max`.
 			const result = parseModelPattern("openrouter/z-ai/glm-4.7:max", allModels);
 			expect(result.model?.provider).toBe("openrouter");
 			expect(result.model?.id).toBe("z-ai/glm-4.7");
-			expect(result.thinkingLevel).toBe(Effort.XHigh);
+			expect(result.thinkingLevel).toBe(Effort.Max);
 			expect(result.explicitThinkingLevel).toBe(true);
 		});
 	});
@@ -596,12 +704,12 @@ describe("parseModelPattern", () => {
 });
 
 describe("resolveModelRoleValue", () => {
-	test("resolves pi/<role>:<thinking> by expanding role alias before parsing thinking", () => {
+	test("resolves @role:<thinking> by expanding role alias before parsing thinking", () => {
 		const settings = {
 			getModelRole: (role: string) => (role === "smol" ? "openrouter/qwen/qwen3-coder:exacto" : undefined),
 		} as NonNullable<Parameters<typeof resolveModelRoleValue>[2]>["settings"];
 
-		const result = resolveModelRoleValue("pi/smol:high", allModels, { settings });
+		const result = resolveModelRoleValue("@smol:high", allModels, { settings });
 
 		expect(result.model?.provider).toBe("openrouter");
 		expect(result.model?.id).toBe("qwen/qwen3-coder:exacto");
@@ -609,25 +717,26 @@ describe("resolveModelRoleValue", () => {
 		expect(result.explicitThinkingLevel).toBe(true);
 	});
 
-	test("resolves pi/<role>:max by expanding role alias before parsing thinking", () => {
+	test("resolves @role:max by expanding role alias before parsing thinking", () => {
 		const settings = {
 			getModelRole: (role: string) => (role === "smol" ? "openai-codex/gpt-5.3-codex" : undefined),
 		} as NonNullable<Parameters<typeof resolveModelRoleValue>[2]>["settings"];
 
-		const result = resolveModelRoleValue("pi/smol:max", allModels, { settings });
+		const result = resolveModelRoleValue("@smol:max", allModels, { settings });
 
 		expect(result.model?.provider).toBe("openai-codex");
 		expect(result.model?.id).toBe("gpt-5.3-codex");
+		// Role-value resolution clamps: gpt-5.3-codex's ladder tops out at xhigh.
 		expect(result.thinkingLevel).toBe(Effort.XHigh);
 		expect(result.explicitThinkingLevel).toBe(true);
 	});
 
-	test("resolves pi/default through configured default role alias", () => {
+	test("resolves @default through configured default role alias", () => {
 		const settings = {
 			getModelRole: (role: string) => (role === "default" ? "openrouter/qwen/qwen3-coder:exacto" : undefined),
 		} as NonNullable<Parameters<typeof resolveModelRoleValue>[2]>["settings"];
 
-		const result = resolveModelRoleValue("pi/default", allModels, { settings });
+		const result = resolveModelRoleValue("@default", allModels, { settings });
 
 		expect(result.model?.provider).toBe("openrouter");
 		expect(result.model?.id).toBe("qwen/qwen3-coder:exacto");
@@ -679,6 +788,15 @@ describe("resolveModelRoleValue", () => {
 		expect(result.explicitThinkingLevel).toBe(true);
 	});
 
+	test("passes max through unclamped when the model ladder includes it", () => {
+		const result = resolveModelRoleValue("anthropic/claude-opus-4-7:max", mockMaxCapableModels);
+
+		expect(result.model?.provider).toBe("anthropic");
+		expect(result.model?.id).toBe("claude-opus-4-7");
+		expect(result.thinkingLevel).toBe(Effort.Max);
+		expect(result.explicitThinkingLevel).toBe(true);
+	});
+
 	test("preserves an explicit :auto suffix as an explicit thinking selector", () => {
 		const result = resolveModelRoleValue("anthropic/claude-sonnet-4-5:auto", allModels);
 
@@ -698,14 +816,41 @@ describe("resolveModelRoleValue", () => {
 		expect(result.explicitThinkingLevel).toBe(true);
 	});
 });
+describe("resolveAgentPrewalkPattern", () => {
+	test("agent definition alone decides: true → default target, pattern → custom, false/absent → off", () => {
+		expect(resolveAgentPrewalkPattern({ agentPrewalk: true })).toBe("@smol");
+		expect(resolveAgentPrewalkPattern({ agentPrewalk: "@very-smol" })).toBe("@very-smol");
+		expect(resolveAgentPrewalkPattern({ agentPrewalk: false })).toBeUndefined();
+		expect(resolveAgentPrewalkPattern({})).toBeUndefined();
+	});
+
+	test("settings override wins over the agent definition", () => {
+		expect(resolveAgentPrewalkPattern({ settingsOverride: "off", agentPrewalk: true })).toBeUndefined();
+		expect(resolveAgentPrewalkPattern({ settingsOverride: "off", agentPrewalk: "@very-smol" })).toBeUndefined();
+		expect(resolveAgentPrewalkPattern({ settingsOverride: "on", agentPrewalk: false })).toBe("@smol");
+		expect(resolveAgentPrewalkPattern({ settingsOverride: "openai/gpt-4o", agentPrewalk: false })).toBe(
+			"openai/gpt-4o",
+		);
+	});
+
+	test("override 'on' keeps the agent's custom target when one is defined", () => {
+		expect(resolveAgentPrewalkPattern({ settingsOverride: "on", agentPrewalk: "@very-smol" })).toBe("@very-smol");
+		expect(resolveAgentPrewalkPattern({ settingsOverride: "on" })).toBe("@smol");
+	});
+
+	test("blank override falls through to the agent definition", () => {
+		expect(resolveAgentPrewalkPattern({ settingsOverride: "  ", agentPrewalk: true })).toBe("@smol");
+		expect(resolveAgentPrewalkPattern({ settingsOverride: "", agentPrewalk: false })).toBeUndefined();
+	});
+});
 describe("resolveAgentModelPatterns", () => {
-	test("falls back to the active session model when pi/task is unset", () => {
+	test("falls back to the active session model when @task is unset", () => {
 		const settings = Settings.isolated({
 			modelRoles: { default: "anthropic/claude-sonnet-4-5" },
 		});
 
 		const result = resolveAgentModelPatterns({
-			agentModel: "pi/task",
+			agentModel: "@task",
 			settings,
 			activeModelPattern: "openai/gpt-4o",
 		});
@@ -722,7 +867,7 @@ describe("resolveAgentModelPatterns", () => {
 		});
 
 		const result = resolveAgentModelPatterns({
-			agentModel: "pi/task",
+			agentModel: "@task",
 			settings,
 			activeModelPattern: "openai/gpt-4o",
 		});
@@ -738,7 +883,7 @@ describe("resolveAgentModelPatterns", () => {
 		});
 
 		const result = resolveAgentModelPatterns({
-			agentModel: "pi/task",
+			agentModel: "@task",
 			settings,
 		});
 
@@ -750,17 +895,17 @@ describe("resolveAgentModelPatterns", () => {
 			modelRoles: { default: "local/llama" },
 		});
 
-		expect(resolveAgentModelPatterns({ agentModel: "pi/smol", settings })).toEqual(["local/llama"]);
-		expect(resolveAgentModelPatterns({ agentModel: "pi/slow", settings })).toEqual(["local/llama"]);
-		expect(resolveAgentModelPatterns({ agentModel: "pi/designer", settings })).toEqual(["local/llama"]);
+		expect(resolveAgentModelPatterns({ agentModel: "@smol", settings })).toEqual(["local/llama"]);
+		expect(resolveAgentModelPatterns({ agentModel: "@slow", settings })).toEqual(["local/llama"]);
+		expect(resolveAgentModelPatterns({ agentModel: "@designer", settings })).toEqual(["local/llama"]);
 	});
 
 	test("expands cross-role default aliases when inheriting for an unset role", () => {
 		const settings = Settings.isolated({
-			modelRoles: { default: "pi/slow", slow: "anthropic/claude-sonnet-4-5" },
+			modelRoles: { default: "@slow", slow: "anthropic/claude-sonnet-4-5" },
 		});
 
-		expect(resolveAgentModelPatterns({ agentModel: "pi/smol", settings })).toEqual(["anthropic/claude-sonnet-4-5"]);
+		expect(resolveAgentModelPatterns({ agentModel: "@smol", settings })).toEqual(["anthropic/claude-sonnet-4-5"]);
 	});
 
 	test("prefers configured designer role override over priority defaults", () => {
@@ -772,7 +917,7 @@ describe("resolveAgentModelPatterns", () => {
 		});
 
 		const result = resolveAgentModelPatterns({
-			agentModel: "pi/designer",
+			agentModel: "@designer",
 			settings,
 		});
 
@@ -781,7 +926,7 @@ describe("resolveAgentModelPatterns", () => {
 
 	test("slow priority falls forward to Opus 4.8 before older Opus aliases", () => {
 		const settings = Settings.isolated();
-		const patterns = resolveAgentModelPatterns({ agentModel: "pi/slow", settings });
+		const patterns = resolveAgentModelPatterns({ agentModel: "@slow", settings });
 
 		const dottedRegistry = {
 			getAvailable: () => [
@@ -859,6 +1004,70 @@ describe("resolveCliModel", () => {
 		expect(result.error).toBeUndefined();
 		expect(result.model?.provider).toBe("openai");
 		expect(result.model?.id).toBe("gpt-4o");
+	});
+
+	test("resolves configured custom, legacy, and default role aliases from --model", () => {
+		const registry = {
+			getAll: () => allModels,
+		};
+		const settings = Settings.isolated({
+			modelRoles: {
+				default: "openai/gpt-4o",
+				fable: "anthropic/claude-sonnet-4-5:high",
+			},
+		});
+
+		const canonical = resolveCliModel({
+			cliModel: "@fable",
+			modelRegistry: registry,
+			settings,
+		});
+		const legacy = resolveCliModel({
+			cliModel: `${LEGACY_MODEL_ROLE_ALIAS_PREFIX}fable`,
+			modelRegistry: registry,
+			settings,
+		});
+		const defaultRole = resolveCliModel({
+			cliModel: DEFAULT_MODEL_ROLE_ALIAS,
+			modelRegistry: registry,
+			settings,
+		});
+
+		expect(canonical.error).toBeUndefined();
+		expect(canonical.model?.provider).toBe("anthropic");
+		expect(canonical.model?.id).toBe("claude-sonnet-4-5");
+		expect(canonical.thinkingLevel).toBe(Effort.High);
+		expect(legacy).toEqual(canonical);
+		expect(defaultRole.model?.provider).toBe("openai");
+		expect(defaultRole.model?.id).toBe("gpt-4o");
+	});
+
+	test("splits thinking suffixes and abbreviations off the * default alias", () => {
+		const registry = {
+			getAll: () => allModels,
+		};
+		const settings = Settings.isolated({
+			modelRoles: { default: "anthropic/claude-sonnet-4-5" },
+		});
+
+		const explicit = resolveCliModel({
+			cliModel: `${DEFAULT_MODEL_ROLE_ALIAS}:high`,
+			modelRegistry: registry,
+			settings,
+		});
+		const abbreviated = resolveCliModel({
+			cliModel: `${DEFAULT_MODEL_ROLE_ALIAS}:xhi`,
+			modelRegistry: registry,
+			settings,
+		});
+
+		expect(explicit.error).toBeUndefined();
+		expect(explicit.model?.id).toBe("claude-sonnet-4-5");
+		expect(explicit.thinkingLevel).toBe(Effort.High);
+		// `xhi` → xhigh via unique-prefix parsing, then clamped to the model ladder.
+		expect(abbreviated.error).toBeUndefined();
+		expect(abbreviated.model?.id).toBe("claude-sonnet-4-5");
+		expect(abbreviated.thinkingLevel).toBe(Effort.High);
 	});
 
 	test("resolves fuzzy patterns within an explicit provider", () => {
@@ -1071,7 +1280,26 @@ describe("resolveModelScope", () => {
 		expect(scoped[0].model.id).toBe("gpt-5.5");
 	});
 
-	test("applies max thinking aliases to glob scopes when no literal max ids match", async () => {
+	test("resolves role aliases in --models scope to the role's model with its thinking level", async () => {
+		const settings = Settings.isolated({
+			modelRoles: { fable: "anthropic/claude-sonnet-4-5:high" },
+		});
+
+		const scoped = await resolveModelScope(
+			["@fable", "openai/gpt-4o"],
+			{ getAvailable: () => allModels },
+			undefined,
+			settings,
+		);
+
+		expect(scoped).toHaveLength(2);
+		expect(scoped[0].model.id).toBe("claude-sonnet-4-5");
+		expect(scoped[0].thinkingLevel).toBe(Effort.High);
+		expect(scoped[0].explicitThinkingLevel).toBe(true);
+		expect(scoped[1].model.id).toBe("gpt-4o");
+	});
+
+	test("applies max thinking selectors to glob scopes when no literal max ids match", async () => {
 		const registry = {
 			getAvailable: () => mockCodexOverlapModels,
 		};
@@ -1079,8 +1307,21 @@ describe("resolveModelScope", () => {
 		const scoped = await resolveModelScope(["openai-codex/*:max"], registry);
 
 		expect(scoped).toHaveLength(2);
+		// Scoped levels clamp per model: max on an xhigh-ceiling ladder resolves to xhigh.
 		expect(scoped.map(entry => entry.thinkingLevel)).toEqual([Effort.XHigh, Effort.XHigh]);
 		expect(scoped.every(entry => entry.explicitThinkingLevel)).toBe(true);
+	});
+
+	test("keeps max on glob scopes when the model ladder includes it", async () => {
+		const registry = {
+			getAvailable: () => mockMaxCapableModels,
+		};
+
+		const scoped = await resolveModelScope(["anthropic/*:max"], registry);
+
+		expect(scoped).toHaveLength(1);
+		expect(scoped[0].thinkingLevel).toBe(Effort.Max);
+		expect(scoped[0].explicitThinkingLevel).toBe(true);
 	});
 
 	test("preserves literal :max in scoped-model globs", async () => {
@@ -1144,16 +1385,23 @@ describe("parseModelString", () => {
 		});
 
 		test("extracts max when explicitly enabled for provider id selectors", () => {
-			const result = parseModelString("deepseek/deepseek-v4-pro:max", { allowMaxAlias: true });
-			expect(result).toEqual({ provider: "deepseek", id: "deepseek-v4-pro", thinkingLevel: Effort.XHigh });
+			const result = parseModelString("deepseek/deepseek-v4-pro:max", { allowMaxSuffix: true });
+			expect(result).toEqual({ provider: "deepseek", id: "deepseek-v4-pro", thinkingLevel: Effort.Max });
 		});
 
 		test("preserves literal max model ids when the caller can prove they exist", () => {
 			const result = parseModelString("nanogpt/coding-router:max", {
-				allowMaxAlias: true,
+				allowMaxSuffix: true,
 				isLiteralModelId: (provider, id) => provider === "nanogpt" && id === "coding-router:max",
 			});
 			expect(result).toEqual({ provider: "nanogpt", id: "coding-router:max" });
+		});
+
+		test("leaves :max attached to the model id unless the caller opts in via allowMaxSuffix", () => {
+			// Without allowMaxSuffix, the strict suffix parser must not silently
+			// reinterpret a literal `:max` id as a thinking suffix.
+			const result = parseModelString("anthropic/claude-sonnet-4-5:max");
+			expect(result).toEqual({ provider: "anthropic", id: "claude-sonnet-4-5:max" });
 		});
 
 		test("leaves :auto attached to the model id unless the caller opts in via allowAutoAlias", () => {
@@ -1215,18 +1463,18 @@ describe("resolveModelFromString", () => {
 });
 
 describe("expandRoleAlias", () => {
-	test("expands pi/vision to configured vision role", () => {
+	test("expands @vision to configured vision role", () => {
 		const settings = Settings.isolated();
 		settings.setModelRole("vision", "openai/gpt-4o");
 
-		expect(expandRoleAlias("pi/vision", settings)).toBe("openai/gpt-4o");
+		expect(expandRoleAlias("@vision", settings)).toBe("openai/gpt-4o");
 	});
 
-	test("keeps pi/vision alias when vision role is unset", () => {
+	test("keeps @vision alias when vision role is unset", () => {
 		const settings = Settings.isolated();
 		settings.setModelRole("default", "anthropic/claude-sonnet-4-5");
 
-		expect(expandRoleAlias("pi/vision", settings)).toBe("pi/vision");
+		expect(expandRoleAlias("@vision", settings)).toBe("@vision");
 	});
 });
 
@@ -1242,16 +1490,16 @@ describe("extractExplicitThinkingSelector", () => {
 		const result = extractExplicitThinkingSelector("nanogpt/coding-router:max", undefined, {
 			isLiteralModelId: () => false,
 		});
-		expect(result).toBe(Effort.XHigh);
+		expect(result).toBe(Effort.Max);
 	});
 
 	test("treats max on pi role aliases as an explicit selector before expansion", () => {
 		const settings = Settings.isolated();
 		settings.setModelRole("smol", "nanogpt/coding-router:max");
-		const result = extractExplicitThinkingSelector("pi/smol:max", settings, {
+		const result = extractExplicitThinkingSelector("@smol:max", settings, {
 			isLiteralModelId: (provider, id) => provider === "nanogpt" && id === "coding-router:max",
 		});
-		expect(result).toBe(Effort.XHigh);
+		expect(result).toBe(Effort.Max);
 	});
 
 	test("does not carry auto from literal role model ids", () => {
@@ -1383,6 +1631,15 @@ describe("filterAvailableModelsByEnabledPatterns", () => {
 	const models = mockModels as Model[];
 	test("returns all models when patterns is empty", () => {
 		expect(filterAvailableModelsByEnabledPatterns(models, [])).toEqual(models);
+	});
+
+	test("resolves role aliases to the role's model when settings are provided", () => {
+		const settings = Settings.isolated({
+			modelRoles: { fable: "anthropic/claude-sonnet-4-5:high" },
+		});
+		const result = filterAvailableModelsByEnabledPatterns(models, ["@fable"], settings);
+		expect(result).toHaveLength(1);
+		expect(result[0].id).toBe("claude-sonnet-4-5");
 	});
 
 	test("filters by exact provider/modelId", () => {

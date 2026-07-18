@@ -1,14 +1,26 @@
 import { describe, expect, it } from "bun:test";
+import { create } from "@bufbuild/protobuf";
 import {
+	type BlockState,
 	buildCursorHistoryForTest,
 	buildCursorSystemPromptJsons,
 	emptyGrepPatternRejection,
+	handleServerMessage,
 	resolveExecHandler,
 	streamCursor,
+	type ToolCallState,
 } from "@oh-my-pi/pi-ai/providers/cursor";
-import type { Context, Model } from "@oh-my-pi/pi-ai/types";
+import { streamCursor as lazyStreamCursor, setCursorProviderModule } from "@oh-my-pi/pi-ai/providers/register-builtins";
+import type { AssistantMessage, Context, CursorExecHandlers, Model, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
+import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import type { AgentRunRequest } from "@oh-my-pi/pi-catalog/discovery/cursor-gen/agent_pb";
+import {
+	type AgentRunRequest,
+	AgentServerMessageSchema,
+	ExecServerMessageSchema,
+	McpArgsSchema,
+	ReadArgsSchema,
+} from "@oh-my-pi/pi-catalog/discovery/cursor-gen/agent_pb";
 
 const cursorModel: Model<"cursor-agent"> = buildModel({
 	id: "cursor-composer-2.5",
@@ -23,9 +35,23 @@ const cursorModel: Model<"cursor-agent"> = buildModel({
 	maxTokens: 1,
 });
 
-function captureCursorPayload(context: Context): Promise<AgentRunRequest> {
+const cursorMaxModeModel: Model<"cursor-agent"> = buildModel({
+	id: "cursor-composer-2.5-max",
+	name: "Cursor Composer 2.5 Max",
+	api: "cursor-agent",
+	provider: "cursor",
+	baseUrl: "",
+	reasoning: false,
+	input: ["text"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 1,
+	maxTokens: 1,
+	cursorMaxMode: true,
+});
+
+function captureCursorPayload(context: Context, model: Model<"cursor-agent"> = cursorModel): Promise<AgentRunRequest> {
 	const { promise, resolve, reject } = Promise.withResolvers<AgentRunRequest>();
-	streamCursor(cursorModel, context, {
+	streamCursor(model, context, {
 		apiKey: "test-token",
 		onPayload: payload => {
 			if (isAgentRunRequest(payload)) {
@@ -163,6 +189,19 @@ describe("Cursor request action encoding", () => {
 		});
 
 		expect(payload.action?.action.case).toBe("userMessageAction");
+	});
+
+	it("sends Cursor max-mode metadata on model details and requested model", async () => {
+		const payload = await captureCursorPayload(
+			{
+				messages: [{ role: "user", content: "continue", timestamp: 0 }],
+			},
+			cursorMaxModeModel,
+		);
+
+		expect(payload.modelDetails?.maxMode).toBe(true);
+		expect(payload.requestedModel?.modelId).toBe("cursor-composer-2.5-max");
+		expect(payload.requestedModel?.maxMode).toBe(true);
 	});
 
 	it("uses a resume action when a tool result is the final context message", async () => {
@@ -359,5 +398,245 @@ describe("Cursor grepArgs empty-pattern guard (issue #4574)", () => {
 	it("rejects a whitespace-only pattern the same way as an empty one", () => {
 		expect(emptyGrepPatternRejection("   ", undefined)).toBe("grep pattern is required (received an empty pattern).");
 		expect(emptyGrepPatternRejection("\t\n", "src/**/*.ts")).toContain('"src/**/*.ts"');
+	});
+});
+
+function cursorAssistantMessage(): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [],
+		api: "cursor-agent",
+		provider: "cursor",
+		model: "cursor-composer-2.5",
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "stop",
+		timestamp: 0,
+	};
+}
+
+function newBlockState(): BlockState {
+	let textBlock: BlockState["currentTextBlock"] = null;
+	let thinkingBlock: BlockState["currentThinkingBlock"] = null;
+	let toolCall: ToolCallState | null = null;
+	return {
+		get currentTextBlock() {
+			return textBlock;
+		},
+		get currentThinkingBlock() {
+			return thinkingBlock;
+		},
+		get currentToolCall() {
+			return toolCall;
+		},
+		resolvedMcpToolCallIds: new Set(),
+		firstTokenTime: undefined,
+		setTextBlock: b => {
+			textBlock = b;
+		},
+		setThinkingBlock: b => {
+			thinkingBlock = b;
+		},
+		setToolCall: t => {
+			toolCall = t;
+		},
+		setFirstTokenTime: () => {},
+	};
+}
+
+describe("Cursor exec local-work tracking (issue #4593)", () => {
+	it("marks the stream busy for the duration of a local exec handler", async () => {
+		const output = cursorAssistantMessage();
+		const stream = new AssistantMessageEventStream();
+		const state = newBlockState();
+		const written: unknown[] = [];
+		const h2Request = {
+			write: (chunk: unknown) => {
+				written.push(chunk);
+				return true;
+			},
+		} as unknown as Parameters<typeof handleServerMessage>[5];
+		const handlerGate = Promise.withResolvers<void>();
+		const execHandlers: CursorExecHandlers = {
+			async read(args) {
+				await handlerGate.promise;
+				return {
+					role: "toolResult",
+					toolCallId: args.toolCallId,
+					toolName: "read",
+					content: [{ type: "text", text: "file contents" }],
+					isError: false,
+					timestamp: 1,
+				} satisfies ToolResultMessage;
+			},
+		};
+		const serverMsg = create(AgentServerMessageSchema, {
+			message: {
+				case: "execServerMessage",
+				value: create(ExecServerMessageSchema, {
+					id: 1,
+					execId: "exec-1",
+					message: {
+						case: "readArgs",
+						value: create(ReadArgsSchema, { path: "/tmp/slow-file", toolCallId: "call-read-1" }),
+					},
+				}),
+			},
+		});
+
+		expect(stream.hasPendingLocalWork).toBe(false);
+		const dispatch = handleServerMessage(
+			serverMsg,
+			output,
+			stream,
+			state,
+			new Map(),
+			h2Request,
+			execHandlers,
+			undefined,
+			{ sawTokenDelta: false },
+			[],
+		);
+
+		// The exec round-trip is in flight: the stream must advertise local
+		// work so the lazy idle watchdog defers instead of aborting.
+		expect(stream.hasPendingLocalWork).toBe(true);
+
+		handlerGate.resolve();
+		await dispatch;
+
+		expect(stream.hasPendingLocalWork).toBe(false);
+		// The read result went back out on the exec channel.
+		expect(written.length).toBe(1);
+	});
+
+	it("marks an MCP call as resolved before its streamed block arrives", async () => {
+		const output = cursorAssistantMessage();
+		const stream = new AssistantMessageEventStream();
+		const state = newBlockState();
+		const h2Request = { write: () => true } as unknown as Parameters<typeof handleServerMessage>[5];
+		const serverMsg = create(AgentServerMessageSchema, {
+			message: {
+				case: "execServerMessage",
+				value: create(ExecServerMessageSchema, {
+					id: 1,
+					execId: "exec-mcp-1",
+					message: {
+						case: "mcpArgs",
+						value: create(McpArgsSchema, {
+							name: "mcp__fixture_report",
+							toolName: "mcp__fixture_report",
+							toolCallId: "call-mcp-1",
+							providerIdentifier: "pi-agent",
+						}),
+					},
+				}),
+			},
+		});
+		const execHandlers: CursorExecHandlers = {
+			async mcp(args) {
+				return {
+					role: "toolResult",
+					toolCallId: args.toolCallId,
+					toolName: args.toolName,
+					content: [{ type: "text", text: "reported" }],
+					isError: false,
+					timestamp: 1,
+				};
+			},
+		};
+
+		await handleServerMessage(
+			serverMsg,
+			output,
+			stream,
+			state,
+			new Map(),
+			h2Request,
+			execHandlers,
+			undefined,
+			{
+				sawTokenDelta: false,
+			},
+			[],
+		);
+
+		expect(state.resolvedMcpToolCallIds.has("call-mcp-1")).toBe(true);
+	});
+
+	it("survives a local exec tool outliving the lazy idle budget end to end", async () => {
+		const workDone = Promise.withResolvers<void>();
+		// The tracked work completes only once the lazy watchdog has consulted
+		// the stream's local-work state at two expired deadlines, proving the
+		// idle budget was truly exceeded while the exec tool ran.
+		class ProbedStream extends AssistantMessageEventStream {
+			probeCalls = 0;
+			override get hasPendingLocalWork(): boolean {
+				this.probeCalls++;
+				if (this.probeCalls >= 2) workDone.resolve();
+				return super.hasPendingLocalWork;
+			}
+		}
+		const source = new ProbedStream();
+		let providerSignal: AbortSignal | undefined;
+		setCursorProviderModule({
+			streamCursor: (_model, _context, options) => {
+				providerSignal = options.signal;
+				void (async () => {
+					const partial = cursorAssistantMessage();
+					source.push({ type: "start", partial });
+					source.push({ type: "text_delta", contentIndex: 0, delta: "spawning local tool", partial });
+					await source.trackLocalWork(workDone.promise);
+					const message = cursorAssistantMessage();
+					source.push({ type: "done", reason: "stop", message });
+				})();
+				return source;
+			},
+		});
+
+		const stream = lazyStreamCursor(cursorModel, { messages: [] }, { apiKey: "test", streamIdleTimeoutMs: 5 });
+		const result = await stream.result();
+
+		expect(providerSignal?.aborted).toBe(false);
+		expect(source.probeCalls).toBeGreaterThanOrEqual(2);
+		expect(result.stopReason).toBe("stop");
+	});
+
+	it("still aborts a silent cursor stream with no local work in flight", async () => {
+		const partial = cursorAssistantMessage();
+		let providerSignal: AbortSignal | undefined;
+		const source = {
+			async *[Symbol.asyncIterator]() {
+				yield { type: "start", partial } as const;
+				yield { type: "text_delta", contentIndex: 0, delta: "hello", partial } as const;
+				const stalled = Promise.withResolvers<never>();
+				if (providerSignal?.aborted) {
+					stalled.reject(new Error("Request was aborted"));
+				}
+				providerSignal?.addEventListener("abort", () => stalled.reject(new Error("Request was aborted")), {
+					once: true,
+				});
+				await stalled.promise;
+			},
+		} as unknown as AssistantMessageEventStream;
+		setCursorProviderModule({
+			streamCursor: (_model, _context, options) => {
+				providerSignal = options.signal;
+				return source;
+			},
+		});
+
+		const stream = lazyStreamCursor(cursorModel, { messages: [] }, { apiKey: "test", streamIdleTimeoutMs: 10 });
+		const result = await stream.result();
+
+		expect(providerSignal?.aborted).toBe(true);
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toBe("Provider stream stalled while waiting for the next event");
 	});
 });

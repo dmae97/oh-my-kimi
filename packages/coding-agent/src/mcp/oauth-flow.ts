@@ -277,6 +277,8 @@ export interface MCPOAuthConfig {
 	authorizationUrl: string;
 	/** Token endpoint URL */
 	tokenUrl: string;
+	/** Dynamic client registration endpoint advertised by the authorization server. */
+	registrationUrl?: string;
 	/** Client ID (optional when already embedded in authorization URL) */
 	clientId?: string;
 	/** Client secret (optional for PKCE flows) */
@@ -383,6 +385,13 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 	async generateAuthUrl(state: string, redirectUri: string): Promise<{ url: string; instructions?: string }> {
 		if (!this.#resolvedClientId) {
 			await this.#tryRegisterClient(redirectUri);
+			// `unapproved_client` explicitly establishes that registration cannot
+			// produce the required client id. Other DCR failures stay on the
+			// clientless probe path because they may be transient or caused by
+			// unrelated registration metadata.
+			if (!this.#resolvedClientId && this.#isDefinitiveRegistrationRejection()) {
+				throw this.#missingClientIdError();
+			}
 		}
 
 		const authUrl = new URL(this.config.authorizationUrl);
@@ -555,12 +564,28 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 	 * "Only clients listed in the Figma MCP Catalog can connect"), the fallback
 	 * probe surfaces a message that names the endpoint and status instead of
 	 * the historical opaque "OAuth provider requires client_id".
+	 *
+	 * Includes {@link MCPOAuthConfig.scopes} as RFC 7591 `scope` when set so
+	 * providers that bind DCR clients to registered scopes only (e.g. Clerk)
+	 * accept the later authorize request for the same scope set.
 	 */
 	async #tryRegisterClient(redirectUri: string): Promise<void> {
-		const registrationEndpoint = await this.#resolveRegistrationEndpoint();
+		const registrationEndpoint = this.config.registrationUrl ?? (await this.#resolveRegistrationEndpoint());
 		if (!registrationEndpoint) return;
 
 		try {
+			const registrationBody: Record<string, unknown> = {
+				client_name: "oh-my-pi",
+				redirect_uris: [redirectUri],
+				grant_types: ["authorization_code", "refresh_token"],
+				response_types: ["code"],
+				token_endpoint_auth_method: "none",
+				application_type: "native",
+			};
+			const scope = this.config.scopes?.trim();
+			if (scope) {
+				registrationBody.scope = scope;
+			}
 			const response = await this.#fetch(registrationEndpoint, {
 				method: "POST",
 				headers: {
@@ -568,14 +593,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 					Accept: "application/json",
 				},
 				signal: this.ctrl.signal,
-				body: JSON.stringify({
-					client_name: "oh-my-pi",
-					redirect_uris: [redirectUri],
-					grant_types: ["authorization_code", "refresh_token"],
-					response_types: ["code"],
-					token_endpoint_auth_method: "none",
-					application_type: "native",
-				}),
+				body: JSON.stringify(registrationBody),
 			});
 
 			if (!response.ok) {
@@ -681,6 +699,19 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 	}
 
 	/**
+	 * Whether the provider explicitly rejected this client as unapproved.
+	 *
+	 * HTTP status alone is insufficient: payload errors such as
+	 * `invalid_client_metadata` and `invalid_redirect_uri` do not establish that
+	 * the authorization endpoint requires a client id. Keep those on the
+	 * clientless probe path.
+	 */
+	#isDefinitiveRegistrationRejection(): boolean {
+		const failure = this.#registrationFailure;
+		return failure?.status === 403 && /\bunapproved_client\b/i.test(failure.detail ?? "");
+	}
+
+	/**
 	 * Build the error thrown when the authorize probe confirms the provider
 	 * demands a `client_id`. When dynamic client registration was attempted and
 	 * rejected (e.g. Figma's 403 for unlisted clients), fold the endpoint + HTTP
@@ -715,6 +746,7 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
  */
 export interface RefreshMCPOAuthTokenOptions {
 	fetch?: FetchImpl;
+	signal?: AbortSignal;
 	/**
 	 * Authorization-server URL the original grant was minted against. Used to
 	 * filter same-origin resource indicators on refresh. Defaults to `tokenUrl`'s
@@ -766,6 +798,7 @@ export async function refreshMCPOAuthToken(
 		method: "POST",
 		headers: { "Content-Type": "application/x-www-form-urlencoded" },
 		body: params.toString(),
+		signal: optsFromTrailing?.signal,
 	});
 
 	if (!response.ok) {

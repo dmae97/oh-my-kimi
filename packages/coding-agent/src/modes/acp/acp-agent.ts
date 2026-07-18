@@ -42,7 +42,7 @@ import {
 } from "@agentclientprotocol/sdk";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
-import { getBlobsDir, isEnoent, logger, VERSION } from "@oh-my-pi/pi-utils";
+import { getBlobsDir, isEnoent, logger, type postmortem, VERSION } from "@oh-my-pi/pi-utils";
 import { disableProvider, enableProvider, reset as resetCapabilities } from "../../capability";
 import { Settings } from "../../config/settings";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
@@ -60,7 +60,7 @@ import { MCPManager } from "../../mcp/manager";
 import type { MCPServerConfig } from "../../mcp/types";
 import { loadAllExtensions } from "../../modes/components/extensions/state-manager";
 import { theme } from "../../modes/theme/theme";
-import { type PlanApprovalDetails, resolveApprovedPlan } from "../../plan-mode/approved-plan";
+import { normalizePlanTitle, type PlanApprovalDetails, resolveApprovedPlan } from "../../plan-mode/approved-plan";
 import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
 import { BlobStore, resolveImageDataSync } from "../../session/blob-store";
 import { isSilentAbort, SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
@@ -72,7 +72,6 @@ import { buildAvailableSlashCommands, toAcpAvailableCommands } from "../../slash
 import { DEFAULT_STT_MODEL_KEY, STT_MODEL_OPTIONS } from "../../stt/models";
 import { AUTO_THINKING, parseConfiguredThinkingLevel } from "../../thinking";
 import { normalizeLocalScheme } from "../../tools/path-utils";
-import { runResolveInvocation } from "../../tools/resolve";
 import { ToolError } from "../../tools/tool-errors";
 import {
 	DEFAULT_TTS_LOCAL_MODEL_KEY,
@@ -84,6 +83,7 @@ import { canonicalizeMessage } from "../../utils/thinking-display";
 import { createAcpClientBridge } from "./acp-client-bridge";
 import {
 	buildToolCallStartUpdate,
+	extractAssistantMessageText,
 	mapAgentSessionEventToAcpSessionUpdates,
 	normalizeReplayToolArguments,
 } from "./acp-event-mapper";
@@ -128,6 +128,15 @@ type PromptLifecycleError = Error & { readonly code: "ACP_SESSION_CLOSED" };
 type PromptTurnState = {
 	cancelRequested: boolean;
 	settled: boolean;
+	/**
+	 * Delivery of streamed assistant `error` chunks this turn (the mapper
+	 * surfaces them as `agent_message_chunk`s). Resolves `true` once at least
+	 * one error chunk reached the client — the `agent_end` error fallback in
+	 * {@link AcpAgent##flushUnreportedTurnError} awaits it and stays silent on
+	 * success, so a fallback racing an in-flight delivery can neither duplicate
+	 * the error nor drop it when delivery fails.
+	 */
+	errorTextDelivery: Promise<boolean> | undefined;
 	/**
 	 * `abort()` is in-flight (or its bounded-timeout race). `undefined` while the turn is
 	 * running normally and after cleanup completes. The turn occupies `record.promptTurn`
@@ -341,10 +350,17 @@ async function elicitFromAcpClient(
 			finish(undefined);
 		});
 	const response = await promise;
-	if (response?.action !== "accept" || !response.content) {
+	if (!isAcceptedElicitation(response) || !response.content) {
 		return undefined;
 	}
 	return response.content.value;
+}
+
+/** Narrows a `CreateElicitationResponse` to the accepted-with-content branch; the SDK's `action: string` catch-all arm otherwise defeats literal narrowing on `action !== "accept"`. */
+function isAcceptedElicitation(
+	response: CreateElicitationResponse | undefined,
+): response is Extract<CreateElicitationResponse, { action: "accept" }> {
+	return response?.action === "accept";
 }
 
 /**
@@ -425,6 +441,7 @@ export function createAcpExtensionUiContext(
 		setEditorText: () => {},
 		getEditorText: () => "",
 		editor: async () => undefined,
+		addAutocompleteProvider: () => {},
 		setEditorComponent: () => {},
 		get theme() {
 			return theme;
@@ -682,6 +699,7 @@ export class AcpAgent implements Agent {
 			record.promptTurn = {
 				cancelRequested: false,
 				settled: false,
+				errorTextDelivery: undefined,
 				cleanup: undefined,
 				usageBaseline: this.#cloneUsageStatistics(record.session.sessionManager.getUsageStatistics()),
 				unsubscribe: undefined,
@@ -843,13 +861,16 @@ export class AcpAgent implements Agent {
 			return false;
 		}
 		const built = await buildSkillPromptMessage(skill, parsed.args, "user");
-		await record.session.promptCustomMessage({
-			customType: SKILL_PROMPT_MESSAGE_TYPE,
-			content: built.message,
-			display: true,
-			details: built.details,
-			attribution: "user",
-		});
+		await record.session.promptCustomMessage(
+			{
+				customType: SKILL_PROMPT_MESSAGE_TYPE,
+				content: built.message,
+				display: true,
+				details: built.details,
+				attribution: "user",
+			},
+			{ streamingBehavior: "steer" },
+		);
 		return true;
 	}
 
@@ -1006,7 +1027,7 @@ export class AcpAgent implements Agent {
 		this.#connection.signal.addEventListener(
 			"abort",
 			() => {
-				void this.#disposeAllSessions();
+				void this.dispose();
 			},
 			{ once: true },
 		);
@@ -1195,6 +1216,10 @@ export class AcpAgent implements Agent {
 			imageDataCache.set(key, resolved);
 			return resolved;
 		};
+		const streamedAssistantError =
+			event.type === "message_update" &&
+			event.message.role === "assistant" &&
+			event.assistantMessageEvent.type === "error";
 		for (const notification of mapAgentSessionEventToAcpSessionUpdates(event, record.session.sessionId, {
 			getMessageId: message => this.#getLiveMessageId(record, message),
 			getMessageProgress: message => this.#getLiveMessageProgress(record, message),
@@ -1202,7 +1227,18 @@ export class AcpAgent implements Agent {
 			cwd: record.session.sessionManager.getCwd(),
 			resolveImageData: resolveImageDataForAcp,
 		})) {
-			await this.#connection.sessionUpdate(notification);
+			const delivery = this.#connection.sessionUpdate(notification);
+			if (streamedAssistantError) {
+				// Resolves true only once the error chunk actually reached the
+				// client — a failed delivery keeps the agent_end fallback armed.
+				const outcome = delivery.then(
+					() => true,
+					() => false,
+				);
+				const prior = promptTurn.errorTextDelivery;
+				promptTurn.errorTextDelivery = prior ? Promise.all([prior, outcome]).then(([a, b]) => a || b) : outcome;
+			}
+			await delivery;
 		}
 		if (event.type === "tool_execution_end") {
 			record.toolArgsById.delete(event.toolCallId);
@@ -1210,13 +1246,100 @@ export class AcpAgent implements Agent {
 		this.#clearLiveAssistantMessageAfterEvent(record, event);
 
 		if (event.type === "agent_end") {
+			await this.#flushMissedFinalAssistantText(record, event);
+			await this.#flushUnreportedTurnError(record, event);
 			await this.#emitEndOfTurnUpdates(record);
 			await this.#waitForAcpPromptIdle(record);
+			record.liveMessageId = undefined;
+			record.liveMessageProgress = undefined;
 			this.#finishPrompt(record, {
 				stopReason: this.#resolveStopReason(event, promptTurn.cancelRequested),
 				usage: this.#buildTurnUsage(promptTurn.usageBaseline, record.session.sessionManager.getUsageStatistics()),
 			});
 		}
+	}
+
+	/**
+	 * Deliver the final visible answer when the assistant `message_end` never
+	 * reached this prompt turn's subscription. Session event handlers are
+	 * fire-and-forget (`Agent#emit` does not await async listeners), and
+	 * `agent_end` is flushed through the session's `#endInFlight` path while the
+	 * assistant `message_end` fan-out can still be parked on extension delivery —
+	 * so `agent_end` can overtake `message_end`. Once the turn finishes,
+	 * `#finishPrompt` unsubscribes and the fallback text emission in
+	 * `mapAssistantMessageEnd` is lost for good: a client that only received
+	 * `agent_thought_chunk`s stays stuck on the thinking block (#4902). The live
+	 * message progress records whether visible text ever reached the client; if
+	 * it has not, emit the last assistant message's text before the prompt
+	 * resolves. A `message_end` that lands during the end-of-turn waits still
+	 * takes the normal mapper path and sees `textEmitted` already set, so the
+	 * answer is delivered exactly once.
+	 */
+	async #flushMissedFinalAssistantText(
+		record: ManagedSessionRecord,
+		event: Extract<AgentSessionEvent, { type: "agent_end" }>,
+	): Promise<void> {
+		const progress = record.liveMessageProgress;
+		if (!progress || progress.textEmitted) {
+			return;
+		}
+		const lastAssistant = [...event.messages]
+			.reverse()
+			.find((message): message is AssistantMessage => message.role === "assistant");
+		if (!lastAssistant) {
+			return;
+		}
+		const text = extractAssistantMessageText(lastAssistant);
+		if (text.length === 0) {
+			return;
+		}
+		progress.textEmitted = true;
+		await this.#connection.sessionUpdate({
+			sessionId: record.session.sessionId,
+			update: {
+				sessionUpdate: "agent_message_chunk",
+				content: { type: "text", text },
+				messageId: record.liveMessageId,
+			},
+		});
+	}
+
+	/**
+	 * Surface a turn-fatal provider error that never reached the client. A
+	 * request that fails before streaming any assistant events — e.g. GitHub
+	 * Copilot's `HTTP 400 model_not_supported` after retries — emits only
+	 * `agent_end` with an empty assistant message carrying `errorMessage`
+	 * (`Agent#runLoop`'s catch), so no `message_update`/`message_end` ever maps
+	 * to a session update and the client sees the turn end silently. Errors
+	 * that did stream are tracked via {@link PromptTurnState.errorTextDelivery};
+	 * the fallback awaits that delivery and re-sends only when it failed.
+	 */
+	async #flushUnreportedTurnError(
+		record: ManagedSessionRecord,
+		event: Extract<AgentSessionEvent, { type: "agent_end" }>,
+	): Promise<void> {
+		const streamedDelivery = record.promptTurn?.errorTextDelivery;
+		if (streamedDelivery && (await streamedDelivery)) {
+			return;
+		}
+		const lastAssistant = [...event.messages]
+			.reverse()
+			.find((message): message is AssistantMessage => message.role === "assistant");
+		if (lastAssistant?.stopReason !== "error") {
+			return;
+		}
+		const errorMessage = lastAssistant.errorMessage;
+		if (!errorMessage || isSilentAbort(lastAssistant)) {
+			return;
+		}
+		await this.#connection.sessionUpdate({
+			sessionId: record.session.sessionId,
+			update: {
+				sessionUpdate: "agent_message_chunk",
+				content: { type: "text", text: errorMessage },
+				messageId: record.liveMessageId ?? crypto.randomUUID(),
+			},
+		});
 	}
 
 	async #waitForAcpPromptIdle(record: ManagedSessionRecord): Promise<void> {
@@ -1244,8 +1367,16 @@ export class AcpAgent implements Agent {
 		}
 	}
 
+	/**
+	 * Reset live-message tracking once the assistant `message_end` is handled.
+	 * The `agent_end` reset happens inside the `agent_end` branch of
+	 * `#handlePromptEvent` — after `#flushMissedFinalAssistantText` — so a
+	 * `message_end` that arrives during the end-of-turn waits maps against the
+	 * real progress instead of resurrecting a fresh one (which would double-emit
+	 * the final answer).
+	 */
 	#clearLiveAssistantMessageAfterEvent(record: ManagedSessionRecord, event: AgentSessionEvent): void {
-		if ((event.type === "message_end" && event.message.role === "assistant") || event.type === "agent_end") {
+		if (event.type === "message_end" && event.message.role === "assistant") {
 			record.liveMessageId = undefined;
 			record.liveMessageProgress = undefined;
 		}
@@ -1509,93 +1640,90 @@ export class AcpAgent implements Agent {
 				workflow: previous?.workflow ?? "parallel",
 				reentry: previous !== undefined,
 			});
-			// Mirror `InteractiveMode.#enterPlanMode`: register the standing resolve
-			// handler that consumes `resolve { action: "apply" }` from plan-mode.
-			// Without this, the agent's resolve call falls through to the "No
-			// pending action to resolve" error (issue #1869).
-			session.setStandingResolveHandler?.(input => this.#runAcpPlanApprovalResolve(session, input));
+			// Mirror `InteractiveMode.#enterPlanMode`: register the plan-proposal
+			// handler that consumes `xd://propose` writes from plan mode. Without
+			// this, proposal dispatch falls through and plan mode has no approval
+			// path (issue #1869).
+			session.setPlanProposalHandler?.(title => this.#handleAcpPlanProposal(session, title));
 		} else {
-			session.setStandingResolveHandler?.(null);
+			session.setPlanProposalHandler?.(null);
 			session.setPlanModeState(undefined);
 		}
 	}
 
 	/**
-	 * Standing resolve handler installed while ACP plan mode is active. The agent
-	 * submits the finalized plan via `resolve { action: "apply", extra: { title } }`;
-	 * this handler validates the plan file, normalizes the title, asks the ACP
-	 * client to confirm (via `unstable_createElicitation` when supported), and on
-	 * approval renames the plan to `local://<title>.md`, exits plan mode, and
-	 * notifies the client of both mode surfaces so the agent regains full tools.
+	 * Plan-proposal handler installed while ACP plan mode is active. The agent
+	 * submits the finalized plan by writing its `<slug>`/title to
+	 * `xd://propose`; this handler validates the plan file, normalizes the
+	 * title, asks the ACP client to confirm (via `unstable_createElicitation`
+	 * when supported), and on approval keeps the chosen plan path, exits plan
+	 * mode, and notifies the client so the agent regains full tools.
 	 *
-	 * Mirrors `InteractiveMode.#runPlanApprovalResolve` for the parts the agent
-	 * sees (same `PlanApprovalDetails` shape, same source tool name `plan_approval`).
-	 * Clients without form-mode elicitation get an auto-approve so plan mode is
-	 * never stranded — the agent always has a way out.
+	 * Mirrors `InteractiveMode.#handlePlanProposal` for the parts the agent sees
+	 * (same `PlanApprovalDetails` shape). Clients without form-mode elicitation
+	 * get an auto-approve so plan mode is never stranded — the agent always has
+	 * a way out.
 	 */
-	#runAcpPlanApprovalResolve(session: AgentSession, input: unknown): Promise<AgentToolResult<unknown>> {
-		return runResolveInvocation(input as Parameters<typeof runResolveInvocation>[0], {
-			sourceToolName: "plan_approval",
-			label: "Plan ready for approval",
-			apply: async (_reason, extra) => {
-				const state = session.getPlanModeState();
-				if (!state?.enabled) {
-					throw new ToolError("Plan mode is not active.");
-				}
-				const { planFilePath, planContent, title } = await resolveApprovedPlan({
-					suppliedTitle: extra?.title,
-					statePlanFilePath: state.planFilePath,
-					readPlan: url => this.#readAcpPlanFile(session, url),
-					listPlanFiles: () => this.#listAcpLocalPlanFiles(session),
-				});
-				const approved = await this.#requestAcpPlanApprovalChoice(session.sessionId, title, planContent);
-				const details: PlanApprovalDetails = {
-					planFilePath,
-					title,
-					planExists: true,
-				};
-				if (!approved) {
-					// User chose to refine: leave plan mode active so the agent
-					// keeps the read-only toolset and can iterate on the plan file.
-					return {
-						content: [
-							{
-								type: "text" as const,
-								text: 'Plan refinement requested. Update the plan file, then call `resolve { action: "apply" }` again when ready.',
-							},
-						],
-						details,
-					};
-				}
-				// Approved. Set the plan reference so the next turn injects the plan
-				// content as context (the file keeps its agent-chosen name — no
-				// rename), then exit plan mode so the agent regains full tools.
-				session.setPlanReferencePath(planFilePath);
-				session.setStandingResolveHandler?.(null);
-				session.setPlanModeState(undefined);
-				try {
-					await this.#connection.sessionUpdate({
-						sessionId: session.sessionId,
-						update: this.#buildCurrentModeUpdate(session),
-					});
-					await this.#pushConfigOptionUpdateForSession(session);
-				} catch (error) {
-					logger.warn("Failed to emit mode updates after plan approval", {
-						sessionId: session.sessionId,
-						error,
-					});
-				}
-				return {
-					content: [
-						{
-							type: "text" as const,
-							text: `Plan approved at ${planFilePath}. Plan mode exited; proceed with the implementation.`,
-						},
-					],
-					details,
-				};
-			},
+	async #handleAcpPlanProposal(session: AgentSession, title: string): Promise<AgentToolResult<unknown>> {
+		const state = session.getPlanModeState();
+		if (!state?.enabled) {
+			throw new ToolError("Plan mode is not active.");
+		}
+		const {
+			planFilePath,
+			planContent,
+			title: resolvedTitle,
+		} = await resolveApprovedPlan({
+			suppliedTitle: title,
+			statePlanFilePath: state.planFilePath,
+			readPlan: url => this.#readAcpPlanFile(session, url),
+			listPlanFiles: () => this.#listAcpLocalPlanFiles(session),
 		});
+		const approved = await this.#requestAcpPlanApprovalChoice(session.sessionId, resolvedTitle, planContent);
+		const details: PlanApprovalDetails = {
+			planFilePath,
+			title: resolvedTitle,
+			planExists: true,
+		};
+		if (!approved) {
+			const normalizedTitle = normalizePlanTitle(resolvedTitle).title;
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: `Plan refinement requested. Update the plan file, then write ${normalizedTitle} to xd://propose again when ready.`,
+					},
+				],
+				details,
+			};
+		}
+		// Approved. Set the plan reference so the next turn injects the plan
+		// content as context (the file keeps its agent-chosen name — no rename),
+		// then exit plan mode so the agent regains full tools.
+		session.setPlanReferencePath(planFilePath);
+		session.setPlanProposalHandler?.(null);
+		session.setPlanModeState(undefined);
+		try {
+			await this.#connection.sessionUpdate({
+				sessionId: session.sessionId,
+				update: this.#buildCurrentModeUpdate(session),
+			});
+			await this.#pushConfigOptionUpdateForSession(session);
+		} catch (error) {
+			logger.warn("Failed to emit mode updates after plan approval", {
+				sessionId: session.sessionId,
+				error,
+			});
+		}
+		return {
+			content: [
+				{
+					type: "text" as const,
+					text: `Plan approved at ${planFilePath}. Plan mode exited; proceed with the implementation.`,
+				},
+			],
+			details,
+		};
 	}
 
 	#resolveAcpPlanFilePath(session: AgentSession, planFilePath: string): string {
@@ -1784,9 +1912,9 @@ export class AcpAgent implements Agent {
 		const projectPath = await resolveActiveProjectRegistryPath(cwd);
 		clearPluginRootsAndCaches(projectPath ? [projectPath] : undefined);
 		resetCapabilities();
+		await record.session.refreshSkills();
 		const fileCommands = await loadSlashCommands({ cwd });
 		record.session.setSlashCommands(fileCommands);
-		await record.session.refreshSshTool({ activateIfAvailable: true });
 		await this.#emitAvailableCommandsUpdate(record);
 	}
 
@@ -1982,6 +2110,23 @@ export class AcpAgent implements Agent {
 					});
 					continue;
 				}
+				if (
+					item.type === "image" &&
+					"data" in item &&
+					typeof item.data === "string" &&
+					"mimeType" in item &&
+					typeof item.mimeType === "string"
+				) {
+					notifications.push({
+						sessionId,
+						update: {
+							sessionUpdate: "agent_message_chunk",
+							content: { type: "image", data: item.data, mimeType: item.mimeType },
+							messageId,
+						},
+					});
+					continue;
+				}
 				if (item.type === "thinking" && "thinking" in item && typeof item.thinking === "string") {
 					const thinking = canonicalizeMessage(item.thinking);
 					if (thinking.length === 0) continue;
@@ -2152,7 +2297,7 @@ export class AcpAgent implements Agent {
 				setLabel: (targetId, label) => {
 					record.session.sessionManager.appendLabelChange(targetId, label);
 				},
-				getActiveTools: () => record.session.getActiveToolNames(),
+				getActiveTools: () => record.session.getEnabledToolNames(),
 				getAllTools: () => record.session.getAllToolNames(),
 				setActiveTools: toolNames => record.session.setActiveToolsByName(toolNames),
 				getCommands: () => getSessionSlashCommands(record.session),
@@ -2230,7 +2375,7 @@ export class AcpAgent implements Agent {
 		}
 		if (servers.length === 0) {
 			record.mcpManager = undefined;
-			await record.session.refreshMCPTools([], { activateAll: true });
+			await record.session.refreshMCPTools([]);
 			return;
 		}
 
@@ -2257,7 +2402,7 @@ export class AcpAgent implements Agent {
 		}
 
 		record.mcpManager = manager;
-		await record.session.refreshMCPTools(result.tools, { activateAll: true });
+		await record.session.refreshMCPTools(result.tools);
 	}
 
 	#toMcpConfig(server: McpServer): MCPServerConfig {
@@ -2316,7 +2461,7 @@ export class AcpAgent implements Agent {
 		}
 	}
 
-	async #disposeSessionRecord(record: ManagedSessionRecord): Promise<void> {
+	async #disposeSessionRecord(record: ManagedSessionRecord, reason?: postmortem.Reason): Promise<void> {
 		record.lifetimeUnsubscribe?.();
 		if (record.mcpManager) {
 			try {
@@ -2327,21 +2472,22 @@ export class AcpAgent implements Agent {
 			record.mcpManager = undefined;
 		}
 		try {
-			await record.session.dispose();
+			await record.session.dispose({ reason });
 		} catch (error) {
 			logger.warn("Failed to dispose ACP session", { error });
 		}
 	}
 
-	async #disposeStandaloneSession(session: AgentSession): Promise<void> {
+	async #disposeStandaloneSession(session: AgentSession, reason?: postmortem.Reason): Promise<void> {
 		try {
-			await session.dispose();
+			await session.dispose({ reason });
 		} catch (error) {
 			logger.warn("Failed to dispose ACP session", { error });
 		}
 	}
 
-	async #disposeAllSessions(): Promise<void> {
+	/** Dispose every session owned by this ACP connection and await persisted teardown. */
+	async dispose(reason?: postmortem.Reason): Promise<void> {
 		if (this.#disposePromise) {
 			await this.#disposePromise;
 			return;
@@ -2357,7 +2503,7 @@ export class AcpAgent implements Agent {
 							"ACP agent disposed before queued prompt could run",
 						);
 						await this.#cancelPromptForClose(record);
-						await this.#disposeSessionRecord(record);
+						await this.#disposeSessionRecord(record, reason);
 					} catch (error) {
 						logger.warn("Failed to clean up ACP session", { sessionId, error });
 					}
@@ -2367,7 +2513,7 @@ export class AcpAgent implements Agent {
 			const initialSession = this.#initialSession;
 			this.#initialSession = undefined;
 			if (initialSession) {
-				await this.#disposeStandaloneSession(initialSession);
+				await this.#disposeStandaloneSession(initialSession, reason);
 			}
 		})();
 

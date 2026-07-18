@@ -1,7 +1,7 @@
 import {
 	type Component,
 	Container,
-	fuzzyMatch,
+	FuzzyText,
 	Input,
 	matchesKey,
 	padding,
@@ -59,6 +59,33 @@ function sessionSearchText(session: SessionInfo): string {
 	return parts.filter(Boolean).join(" ");
 }
 
+/**
+ * Lowercased per-session search haystack, built once and cached on the
+ * {@link SessionInfo} itself (so it dies with the listing that produced it).
+ * Rebuilding it per keystroke — a ~4KB string join plus `toLowerCase` per
+ * session — was one of the costs that made resume search visibly lag.
+ *
+ * Only the string is cached. A prebuilt fuzzy index (~60KB per 4KB session)
+ * would cost hundreds of MB on multi-thousand-session listings, so fuzzy
+ * indexes are built transiently per scan visit instead (see
+ * {@link scoreFuzzySession} callers).
+ */
+const kSearchTextLower = Symbol("session.searchTextLower");
+
+interface SearchableSessionInfo extends SessionInfo {
+	[kSearchTextLower]?: string;
+}
+
+function sessionTextLower(session: SessionInfo): string {
+	const tagged = session as SearchableSessionInfo;
+	let textLower = tagged[kSearchTextLower];
+	if (textLower === undefined) {
+		textLower = sessionSearchText(session).toLowerCase();
+		tagged[kSearchTextLower] = textLower;
+	}
+	return textLower;
+}
+
 function tokenizeSessionQuery(query: string): string[] {
 	const trimmed = query.trim().toLowerCase();
 	return trimmed ? trimmed.split(/\s+/) : [];
@@ -70,6 +97,59 @@ function compareSessionRecency(a: SessionInfo, b: SessionInfo): number {
 
 const MIN_PURE_FUZZY_TOKEN_SCORE = -20;
 
+/** One ranked search hit; `index` is the session's position in the unfiltered list (recency order). */
+interface RankedSessionMatch {
+	session: SessionInfo;
+	score: number;
+	index: number;
+}
+
+/**
+ * True when every query token appears verbatim in the haystack. Literal
+ * matches rank purely by recency, so they skip fuzzy scoring entirely — a pure
+ * fast path, not a semantic change: a contiguous substring of the lowercased
+ * text always lies within one normalized word per query sub-token, so every
+ * literal token also fuzzy-matches.
+ */
+function isLiteralMatch(textLower: string, tokens: string[]): boolean {
+	for (const token of tokens) {
+		if (!textLower.includes(token)) return false;
+	}
+	return true;
+}
+
+/**
+ * Fuzzy-score one non-literal session against every query token. Returns
+ * undefined when a token fails to match or the weakest token is pure-fuzzy
+ * noise. The caller builds `fuzzy` once per session visit so multi-token
+ * queries share a single index.
+ */
+function scoreFuzzySession(
+	session: SessionInfo,
+	index: number,
+	tokens: string[],
+	fuzzy: FuzzyText,
+): RankedSessionMatch | undefined {
+	let score = 0;
+	let worstTokenScore = Number.NEGATIVE_INFINITY;
+	for (const token of tokens) {
+		const match = fuzzy.match(token);
+		if (!match.matches) return undefined;
+		score += match.score;
+		worstTokenScore = Math.max(worstTokenScore, match.score);
+	}
+	if (worstTokenScore >= MIN_PURE_FUZZY_TOKEN_SCORE) return undefined;
+	return { session, score, index };
+}
+
+function compareLiteralRank(a: RankedSessionMatch, b: RankedSessionMatch): number {
+	return compareSessionRecency(a.session, b.session) || a.index - b.index;
+}
+
+function compareFuzzyRank(a: RankedSessionMatch, b: RankedSessionMatch): number {
+	return a.score - b.score || compareSessionRecency(a.session, b.session) || a.index - b.index;
+}
+
 /**
  * Filter and rank session picker search results.
  *
@@ -77,44 +157,33 @@ const MIN_PURE_FUZZY_TOKEN_SCORE = -20;
  * as a literal substring, newer sessions should beat a slightly better fuzzy
  * position match. Pure fuzzy/acronym matches still sort by fuzzy score after
  * literal matches, but weak pure fuzzy tokens are dropped as noise.
+ *
+ * This is the synchronous reference implementation; {@link SessionList} runs
+ * the same primitives incrementally so huge listings never block a keystroke.
  */
 export function rankSessionSearchMatches(allSessions: SessionInfo[], query: string): SessionInfo[] {
 	const tokens = tokenizeSessionQuery(query);
 	if (tokens.length === 0) return allSessions;
 
-	const results: Array<{ session: SessionInfo; score: number; literal: boolean; index: number }> = [];
+	const literal: RankedSessionMatch[] = [];
+	const fuzzyMatches: RankedSessionMatch[] = [];
 	for (let index = 0; index < allSessions.length; index++) {
 		const session = allSessions[index]!;
-		const text = sessionSearchText(session);
-		const textLower = text.toLowerCase();
-		let score = 0;
-		let worstTokenScore = Number.NEGATIVE_INFINITY;
-		let literal = true;
-		let matches = true;
-
-		for (const token of tokens) {
-			const match = fuzzyMatch(token, textLower);
-			if (!match.matches) {
-				matches = false;
-				break;
-			}
-			score += match.score;
-			worstTokenScore = Math.max(worstTokenScore, match.score);
-			if (!textLower.includes(token)) literal = false;
+		const textLower = sessionTextLower(session);
+		if (isLiteralMatch(textLower, tokens)) {
+			literal.push({ session, score: 0, index });
+			continue;
 		}
-
-		if (matches && (literal || worstTokenScore < MIN_PURE_FUZZY_TOKEN_SCORE)) {
-			results.push({ session, score, literal, index });
-		}
+		const match = scoreFuzzySession(session, index, tokens, new FuzzyText(textLower));
+		if (match) fuzzyMatches.push(match);
 	}
 
-	results.sort((a, b) => {
-		if (a.literal !== b.literal) return a.literal ? -1 : 1;
-		if (a.literal) return compareSessionRecency(a.session, b.session) || a.index - b.index;
-		return a.score - b.score || compareSessionRecency(a.session, b.session) || a.index - b.index;
-	});
-
-	return results.map(result => result.session);
+	literal.sort(compareLiteralRank);
+	fuzzyMatches.sort(compareFuzzyRank);
+	const out: SessionInfo[] = [];
+	for (const match of literal) out.push(match.session);
+	for (const match of fuzzyMatches) out.push(match.session);
+	return out;
 }
 
 /**
@@ -157,6 +226,37 @@ export function mergeSessionRanking(
 }
 
 /**
+ * Delay before the prompt-history DB is consulted for the current query.
+ * History matching hits SQLite synchronously (an FTS lookup plus a LIKE scan
+ * over every stored prompt — tens to hundreds of ms on a year-old database),
+ * so it must never run per keystroke: fuzzy results render immediately and
+ * the history merge lands once typing pauses.
+ */
+const HISTORY_MERGE_DEBOUNCE_MS = 150;
+/**
+ * Minimum query length for history augmentation. A single character matches
+ * essentially every stored prompt — the most expensive FTS prefix to expand —
+ * and only reorders the recency-ranked list by noise.
+ */
+const HISTORY_MERGE_MIN_QUERY = 2;
+
+/**
+ * Sessions fuzzy-scored synchronously inside the keystroke itself. Small
+ * listings finish within it, keeping the complete-in-one-frame behavior;
+ * anything left spills into async chunks. A fuzzy visit costs ~100µs (index
+ * build over the ≤4KB per-session corpus dominates), so 100 visits ≈ 10ms —
+ * about one frame. Counts rather than a deadline keep chunk boundaries
+ * deterministic (and testable under fake timers).
+ */
+const FUZZY_SCAN_INLINE_COUNT = 100;
+/**
+ * Sessions fuzzy-scored per async chunk (~15ms). Each chunk yields back to
+ * the event loop so the next keystroke is never blocked behind a long scan; a
+ * new query bumps the scan generation and orphans pending chunks.
+ */
+const FUZZY_SCAN_CHUNK_COUNT = 150;
+
+/**
  * Custom session list component with multi-line items and search
  */
 class SessionList implements Component {
@@ -182,6 +282,29 @@ class SessionList implements Component {
 	#allSessions: SessionInfo[];
 	#showCwd: boolean;
 	readonly #historyMatcher?: SessionHistoryMatcher;
+	#historyMergeTimer: NodeJS.Timeout | undefined;
+	/** Re-render hook for async list updates (fuzzy scan chunks, history merge). */
+	onRequestRender?: () => void;
+
+	// ── Incremental search state ──────────────────────────────────────────
+	// #filteredSessions is always composed from these three inputs (see
+	// #composeFiltered), so late-arriving fuzzy chunks and the debounced
+	// history merge can land in any order without clobbering each other.
+	/** Recency-ranked sessions whose text contains every query token verbatim. */
+	#literalRanked: RankedSessionMatch[] = [];
+	/** Score-ranked fuzzy-only matches, appended by scan chunks. */
+	#fuzzyRanked: RankedSessionMatch[] = [];
+	/** Prompt-history session IDs for the current query, once the merge landed. */
+	#historyIds: string[] = [];
+	/** Invalidates in-flight scan chunks when the query or dataset changes. */
+	#scanGeneration = 0;
+	#scanTimer: NodeJS.Timeout | undefined;
+	/**
+	 * True once the user moved the selection for the current query; blocks the
+	 * history merge from reordering the list under their cursor. (Fuzzy chunks
+	 * only append below the literal group, which never shifts existing rows.)
+	 */
+	#selectionMoved = false;
 
 	constructor(
 		sessions: SessionInfo[],
@@ -233,23 +356,130 @@ class SessionList implements Component {
 	}
 
 	#filterSessions(query: string): void {
-		const fuzzy = rankSessionSearchMatches(this.#allSessions, query);
-		this.#filteredSessions = this.#mergeHistoryMatches(query, fuzzy);
+		this.#scanGeneration++;
+		if (this.#scanTimer !== undefined) {
+			clearTimeout(this.#scanTimer);
+			this.#scanTimer = undefined;
+		}
+		this.#selectionMoved = false;
+		this.#historyIds = [];
+		this.#literalRanked = [];
+		this.#fuzzyRanked = [];
+
+		const tokens = tokenizeSessionQuery(query);
+		if (tokens.length === 0) {
+			this.#filteredSessions = this.#allSessions;
+			this.#selectedIndex = Math.min(this.#selectedIndex, Math.max(0, this.#filteredSessions.length - 1));
+			this.#scheduleHistoryMerge(query);
+			return;
+		}
+
+		// Literal pass: one substring scan per token per session, synchronous so
+		// every keystroke gets immediate recency-ranked feedback regardless of
+		// listing size.
+		const literal: RankedSessionMatch[] = [];
+		const rest: number[] = [];
+		const all = this.#allSessions;
+		for (let index = 0; index < all.length; index++) {
+			if (isLiteralMatch(sessionTextLower(all[index]!), tokens)) {
+				literal.push({ session: all[index]!, score: 0, index });
+			} else {
+				rest.push(index);
+			}
+		}
+		literal.sort(compareLiteralRank);
+		this.#literalRanked = literal;
+
+		// Fuzzy pass: building a fuzzy index per session is too expensive to run
+		// across a huge listing inside one keystroke, so scan a bounded slice now
+		// and spill the remainder into async chunks.
+		this.#scanFuzzySlice(this.#scanGeneration, tokens, rest, 0, FUZZY_SCAN_INLINE_COUNT);
+		this.#composeFiltered();
+		this.#scheduleHistoryMerge(query);
+	}
+
+	/**
+	 * Score up to `budget` sessions from `rest[start..]` (indexes into the
+	 * unfiltered list), then schedule the remainder on a macrotask so pending
+	 * input events run first. Chunks that added matches recompose the visible
+	 * list and request a render; a stale generation aborts silently.
+	 */
+	#scanFuzzySlice(generation: number, tokens: string[], rest: number[], start: number, budget: number): void {
+		const all = this.#allSessions;
+		const end = Math.min(rest.length, start + budget);
+		for (let i = start; i < end; i++) {
+			const index = rest[i]!;
+			const session = all[index]!;
+			const match = scoreFuzzySession(session, index, tokens, new FuzzyText(sessionTextLower(session)));
+			if (match) this.#fuzzyRanked.push(match);
+		}
+		if (end >= rest.length) return;
+		this.#scanTimer = setTimeout(() => {
+			this.#scanTimer = undefined;
+			if (generation !== this.#scanGeneration) return;
+			const before = this.#fuzzyRanked.length;
+			this.#scanFuzzySlice(generation, tokens, rest, end, FUZZY_SCAN_CHUNK_COUNT);
+			if (this.#fuzzyRanked.length > before) {
+				this.#composeFiltered();
+				this.onRequestRender?.();
+			}
+		}, 0);
+	}
+
+	/**
+	 * Rebuild {@link #filteredSessions} from the current literal, fuzzy, and
+	 * history inputs: literal matches first (recency), fuzzy-only matches below
+	 * (score), prompt-history matches promoted to the top when present.
+	 */
+	#composeFiltered(): void {
+		this.#fuzzyRanked.sort(compareFuzzyRank);
+		const base: SessionInfo[] = [];
+		for (const match of this.#literalRanked) base.push(match.session);
+		for (const match of this.#fuzzyRanked) base.push(match.session);
+		this.#filteredSessions =
+			this.#historyIds.length > 0 ? mergeSessionRanking(this.#allSessions, base, this.#historyIds) : base;
 		this.#selectedIndex = Math.min(this.#selectedIndex, Math.max(0, this.#filteredSessions.length - 1));
 	}
 
 	/**
-	 * Augment fuzzy results with prompt-history matches without replacing them.
+	 * Augment ranked results with prompt-history matches without replacing them.
 	 * The session-list corpus only sees the first 4KB of each session, so a prompt
-	 * typed deep into a long session is invisible to fuzzy search; `historyMatcher`
-	 * recovers those via `history.db`.
+	 * typed deep into a long session is invisible to text search; `historyMatcher`
+	 * recovers those via `history.db`. The lookup hits SQLite synchronously, so it
+	 * is debounced off the keystroke path ({@link HISTORY_MERGE_DEBOUNCE_MS}) and
+	 * composed in when it lands, discarded if the query changed meanwhile.
 	 */
-	#mergeHistoryMatches(query: string, fuzzy: SessionInfo[]): SessionInfo[] {
+	#scheduleHistoryMerge(query: string): void {
+		if (this.#historyMergeTimer !== undefined) {
+			clearTimeout(this.#historyMergeTimer);
+			this.#historyMergeTimer = undefined;
+		}
+		const matcher = this.#historyMatcher;
 		const trimmed = query.trim();
-		if (!trimmed || !this.#historyMatcher) return fuzzy;
-		const historyIds = this.#historyMatcher(trimmed);
-		if (historyIds.length === 0) return fuzzy;
-		return mergeSessionRanking(this.#allSessions, fuzzy, historyIds);
+		if (!matcher || trimmed.length < HISTORY_MERGE_MIN_QUERY) return;
+		this.#historyMergeTimer = setTimeout(() => {
+			this.#historyMergeTimer = undefined;
+			if (this.#searchInput.getValue() !== query) return;
+			if (this.#selectionMoved) return;
+			const historyIds = matcher(trimmed);
+			if (historyIds.length === 0) return;
+			this.#historyIds = historyIds;
+			this.#composeFiltered();
+			this.onRequestRender?.();
+		}, HISTORY_MERGE_DEBOUNCE_MS);
+	}
+
+	/** Cancel pending async search work; idempotent, called on every picker exit path. */
+	dispose(): void {
+		this.#scanGeneration++;
+		if (this.#scanTimer !== undefined) {
+			clearTimeout(this.#scanTimer);
+			this.#scanTimer = undefined;
+		}
+		if (this.#historyMergeTimer !== undefined) {
+			clearTimeout(this.#historyMergeTimer);
+			this.#historyMergeTimer = undefined;
+		}
 	}
 
 	removeSession(sessionPath: string): void {
@@ -272,6 +502,7 @@ class SessionList implements Component {
 	/** Wheel notch: move the selection one step (clamped, no wrap). */
 	handleWheel(delta: -1 | 1): void {
 		if (this.#filteredSessions.length === 0) return;
+		this.#selectionMoved = true;
 		this.#selectedIndex = Math.max(0, Math.min(this.#filteredSessions.length - 1, this.#selectedIndex + delta));
 	}
 
@@ -433,21 +664,25 @@ class SessionList implements Component {
 		}
 		// Up arrow
 		if (matchesSelectUp(keyData)) {
+			this.#selectionMoved = true;
 			this.#selectedIndex = Math.max(0, this.#selectedIndex - 1);
 			return;
 		}
 		// Down arrow
 		if (matchesSelectDown(keyData)) {
+			this.#selectionMoved = true;
 			this.#selectedIndex = Math.min(this.#filteredSessions.length - 1, this.#selectedIndex + 1);
 			return;
 		}
 		// Page up - jump up by maxVisible items
 		if (matchesKey(keyData, "pageUp")) {
+			this.#selectionMoved = true;
 			this.#selectedIndex = Math.max(0, this.#selectedIndex - this.#visibleCount());
 			return;
 		}
 		// Page down - jump down by maxVisible items
 		if (matchesKey(keyData, "pageDown")) {
+			this.#selectionMoved = true;
 			this.#selectedIndex = Math.min(this.#filteredSessions.length - 1, this.#selectedIndex + this.#visibleCount());
 			return;
 		}
@@ -525,6 +760,7 @@ export class SessionSelectorComponent extends Container {
 	#globalSessions: SessionInfo[] | null = null;
 	#scope: "folder" | "all" = "folder";
 	#toggling = false;
+	#inputLocked = false;
 	// 0-based line where the session list begins within this component's own
 	// render, captured each frame. The fullscreen picker overlay paints from
 	// screen row 0, so a mouse row maps to `row - #listLineOffset` inside the
@@ -566,9 +802,21 @@ export class SessionSelectorComponent extends Container {
 		// user to Tab into all-projects rather than silently surfacing other
 		// projects' history (issue #3099).
 		this.#sessionList = new SessionList(sessions, false, options.historyMatcher, options.getTerminalRows);
-		this.#sessionList.onSelect = onSelect;
-		this.#sessionList.onCancel = onCancel;
-		this.#sessionList.onExit = onExit;
+		// Every exit path cancels the list's pending history merge, so a stale
+		// debounce timer can never run its SQLite lookup after the picker closed.
+		this.#sessionList.onSelect = session => {
+			this.#sessionList.dispose();
+			onSelect(session);
+		};
+		this.#sessionList.onCancel = () => {
+			this.#sessionList.dispose();
+			onCancel();
+		};
+		this.#sessionList.onExit = () => {
+			this.#sessionList.dispose();
+			onExit();
+		};
+		this.#sessionList.onRequestRender = () => this.#onRequestRender?.();
 		this.#sessionList.onDeleteRequest = (session: SessionInfo) => {
 			this.#showDeleteConfirmation(session);
 		};
@@ -626,6 +874,24 @@ export class SessionSelectorComponent extends Container {
 
 	setOnRequestRender(callback: () => void): void {
 		this.#onRequestRender = callback;
+	}
+	/** Ignore input after selection while the host resumes the session. */
+	lockInput(): void {
+		this.#inputLocked = true;
+	}
+	/** Re-enable input after a failed resume so the user can pick again. */
+	unlockInput(): void {
+		this.#inputLocked = false;
+	}
+
+	/**
+	 * Dispose the session list explicitly: while the delete-confirmation dialog
+	 * is mounted the list is detached from the child tree, so Container's
+	 * child-walking dispose would miss its pending history-merge timer.
+	 */
+	dispose(): void {
+		this.#sessionList.dispose();
+		super.dispose();
 	}
 
 	#clearError(): void {
@@ -715,6 +981,7 @@ export class SessionSelectorComponent extends Container {
 	}
 
 	handleInput(keyData: string): void {
+		if (this.#inputLocked) return;
 		if (keyData.startsWith("\x1b[<")) {
 			this.#handleMouse(keyData);
 			return;

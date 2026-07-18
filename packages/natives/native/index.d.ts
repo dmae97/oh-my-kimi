@@ -84,8 +84,13 @@ export declare class Process {
 /** Stateful PTY session for interactive stdin/stdout passthrough. */
 export declare class PtySession {
   constructor()
-  /** Start a PTY command and stream output chunks via callback. */
+  /** Start a shell command and stream output chunks via callback. */
   start(options: PtyStartOptions, onChunk?: ((error: Error | null, chunk: string) => void) | undefined | null): Promise<PtyRunResult>
+  /**
+   * Start an executable with separate arguments and stream output chunks via
+   * callback.
+   */
+  startArgv(options: PtyArgvStartOptions, onChunk?: ((error: Error | null, chunk: string) => void) | undefined | null): Promise<PtyRunResult>
   /** Write raw input bytes to PTY stdin. */
   write(data: string): void
   /** Resize the active PTY. */
@@ -170,16 +175,7 @@ export declare function __ompInstallTokioRuntime(): void
  * `packages/natives/native/index.js` (which derives the name from
  * `package.json#version`).
  */
-export declare function __piNativesV16_3_11(): void
-
-/**
- * Apply conservative pre-execution rewrites to a bash command.
- *
- * Strips trailing `| head|tail [safe-args]` and redundant trailing `2>&1`
- * from each top-level pipeline. The full rules and bail conditions live in
- * `pi_shell::fixup`. Synchronous and cheap (one parse pass over the input).
- */
-export declare function applyBashFixups(command: string): BashFixupResult
+export declare function __piNativesV17_0_3(): void
 
 /**
  * Apply ast-grep rewrite rules to matching files; honors `dryRun` and returns
@@ -415,17 +411,6 @@ export interface AstReplaceResult {
   limitReached: boolean
   /** Parse or pattern errors when not failing the whole operation. */
   parseErrors?: Array<string>
-}
-
-/**
- * Result of [`apply_bash_fixups`]: a possibly-rewritten command plus the
- * substrings that were removed (in source order).
- */
-export interface BashFixupResult {
-  /** Possibly-rewritten command. Equal to the input when no fixup fired. */
-  command: string
-  /** Substrings removed, in source order — suitable for a user-facing notice. */
-  stripped: Array<string>
 }
 
 export interface BlockRange {
@@ -1268,6 +1253,26 @@ export interface ProcessWaitOptions {
   timeoutMs?: number
   /** Abort signal for cancelling the wait. */
   signal?: unknown
+}
+
+/** Options for running an executable and argument vector in a PTY session. */
+export interface PtyArgvStartOptions {
+  /** Executable name or path. */
+  application: string
+  /** Arguments passed directly to the executable. */
+  args: Array<string>
+  /** Working directory for command execution. */
+  cwd?: string
+  /** Environment variables for this command. */
+  env?: Record<string, string>
+  /** Timeout in milliseconds before cancelling. */
+  timeoutMs?: number
+  /** Abort signal for cancelling the operation. */
+  signal?: unknown
+  /** PTY column count. */
+  cols?: number
+  /** PTY row count. */
+  rows?: number
 }
 
 /** Result of a PTY command run. */

@@ -613,6 +613,34 @@ describe("pi-natives", () => {
 	});
 
 	describe("pty", () => {
+		it("passes executable arguments without shell quoting", async () => {
+			const scriptPath = path.join(testDir, "pty-argv.ts");
+			const expected = ["argument with spaces", 'quote"inside', "backslash\\end"];
+			await Bun.write(scriptPath, 'process.stdout.write(JSON.stringify(process.argv.slice(2)) + "\\n");\n');
+			const session = new PtySession();
+			let output = "";
+			let callbackError: Error | null = null;
+			const result = await session.startArgv(
+				{
+					application: process.execPath,
+					args: [scriptPath, ...expected],
+					cwd: testDir,
+					timeoutMs: 5_000,
+					cols: 80,
+					rows: 24,
+				},
+				(error, chunk) => {
+					callbackError = error;
+					output += chunk;
+				},
+			);
+
+			expect(callbackError).toBeNull();
+			expect(result.exitCode).toBe(0);
+			expect(result.timedOut).toBeFalse();
+			expect(JSON.parse(output.trim())).toEqual(expected);
+		});
+
 		it("should time out detached background workloads without hanging", async () => {
 			if (process.platform === "win32" || !Bun.which("bash")) {
 				return;

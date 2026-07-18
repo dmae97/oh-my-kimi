@@ -22,8 +22,11 @@ import friendlyPersonality from "./prompts/system/personalities/friendly.md" wit
 import pragmaticPersonality from "./prompts/system/personalities/pragmatic.md" with { type: "text" };
 import projectPromptTemplate from "./prompts/system/project-prompt.md" with { type: "text" };
 import systemPromptTemplate from "./prompts/system/system-prompt.md" with { type: "text" };
+import { normalizeConcurrencyLimit } from "./task/parallel";
+import { usesCodexTaskPrompt } from "./task/prompt-policy";
 import { shortenPath } from "./tools/render-utils";
 import { type ActiveRepoContext, resolveActiveRepoContext } from "./utils/active-repo-context";
+import { formatLocalCalendarDate } from "./utils/local-date";
 import { normalizePromptPath } from "./utils/prompt-path";
 import { AGENTS_MD_LIMIT, buildWorkspaceTree, type WorkspaceTree } from "./workspace-tree";
 
@@ -251,7 +254,7 @@ async function getCachedGpu(): Promise<string | undefined> {
 }
 
 async function getCpuModel(): Promise<string | undefined> {
-	if (process.platform !== "linux") return undefined;
+	if (process.platform !== "linux") return os.cpus()[0]?.model;
 	try {
 		const cpuInfo = await Bun.file("/proc/cpuinfo").text();
 		const match = /^model name\s*:\s*(.+)$/m.exec(cpuInfo);
@@ -400,7 +403,7 @@ export async function loadSystemPromptFiles(options: LoadContextFilesOptions = {
 	return userLevel?.content ?? null;
 }
 
-export const DEFAULT_SYSTEM_PROMPT_TOOL_NAMES = ["read", "bash", "eval", "edit", "write"] as const;
+export const DEFAULT_SYSTEM_PROMPT_TOOL_NAMES = ["read", "bash", "edit", "write"] as const;
 
 export interface SystemPromptToolMetadata {
 	label: string;
@@ -467,21 +470,21 @@ export interface BuildSystemPromptOptions {
 	/** Pre-loaded context files (skips discovery if provided). */
 	contextFiles?: Array<{ path: string; content: string; depth?: number }>;
 	/** Skills provided directly to system prompt construction. */
-	skills?: Skill[];
+	skills?: readonly Skill[];
 	/** Pre-loaded rulebook rules (descriptions, excluding TTSR and always-apply). */
 	rules?: Array<{ name: string; description?: string; path: string; globs?: string[] }>;
 	/** Intent field name injected into every tool schema. If set, explains the field in the prompt. */
 	intentField?: string;
-	/** Whether MCP tool discovery is active for this prompt build. */
-	mcpDiscoveryMode?: boolean;
-	/** Discoverable MCP server summaries to advertise when discovery mode is active. */
-	mcpDiscoveryServerSummaries?: string[];
 	/** Encourage the agent to delegate via tasks unless changes are trivial. */
 	eagerTasks?: boolean;
 	/** When true, the Eager Tasks section uses the hard MUST/ONLY wording (`task.eager: always`) rather than the softer `preferred` nudge. */
 	eagerTasksAlways?: boolean;
-	/** Whether `task.batch` is enabled; gates batch-call guidance in the Eager Tasks section. */
+	/** Whether `task.batch` is enabled; selects the centralized delegation guidance's call shape. */
 	taskBatch?: boolean;
+	/** Effective task concurrency limit displayed in centralized delegation guidance. Zero means unlimited. */
+	taskMaxConcurrency?: number;
+	/** Whether IRC-backed parallel coordination can be included in delegation policy. */
+	taskIrcEnabled?: boolean;
 	/** Rules with alwaysApply=true — their full content is injected into the prompt. */
 	alwaysApplyRules?: AlwaysApplyRule[];
 	/** Whether secret obfuscation is active. When true, explains the redaction format in the prompt. */
@@ -490,8 +493,10 @@ export interface BuildSystemPromptOptions {
 	workspaceTree?: WorkspaceTree | Promise<WorkspaceTree>;
 	/** Whether the local memory://root summary is active. */
 	memoryRootEnabled?: boolean;
-	/** Active model identifier (e.g. "anthropic/claude-opus-4") surfaced to the agent. */
+	/** Active model identifier (e.g. "anthropic/claude-opus-4") used by prompt policy and optionally surfaced. */
 	model?: string;
+	/** Whether to surface `model` in the workstation block. Model-specific prompt policy still uses it. Default: true. */
+	includeModelInPrompt?: boolean;
 	/** Personality preset rendered into the default system prompt. "none" omits the block. Default: "default" */
 	personality?: Personality;
 	/** Whether to include the workspace directory tree in the system prompt. Default: false */
@@ -500,6 +505,12 @@ export interface BuildSystemPromptOptions {
 	renderMermaid?: boolean;
 	/** Pre-resolved nested active repo context. Undefined resolves from cwd. */
 	activeRepoContext?: ActiveRepoContext | null;
+	/** Tools mounted under `xd://`; renders the protocol section when non-empty. */
+	xdevTools?: Array<{ name: string; summary: string }>;
+	/** Full docs + JSON schema for every `xd://`-mounted tool, inlined into the protocol section so no discovery `read` is needed. */
+	xdevDocs?: string;
+	/** Whether Auto-QA grievance reporting is enabled; renders the `xd://report_issue` note. */
+	autoQaEnabled?: boolean;
 }
 
 /** Result of building provider-facing system prompt messages. */
@@ -530,18 +541,22 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		rules,
 		alwaysApplyRules,
 		intentField,
-		mcpDiscoveryMode = false,
-		mcpDiscoveryServerSummaries = [],
 		eagerTasks = false,
 		eagerTasksAlways = false,
 		taskBatch = true,
+		taskMaxConcurrency = 0,
+		taskIrcEnabled = false,
 		secretsEnabled = false,
 		workspaceTree: providedWorkspaceTree,
 		memoryRootEnabled = false,
 		model,
+		includeModelInPrompt = true,
 		personality = "default",
 		includeWorkspaceTree = false,
 		renderMermaid = true,
+		xdevTools = [],
+		xdevDocs = "",
+		autoQaEnabled = false,
 		activeRepoContext: providedActiveRepoContext,
 	} = options;
 	const inlineToolDescriptors = providedInlineToolDescriptors ?? false;
@@ -622,7 +637,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 						totalLines: 0,
 						agentsMdFiles: [],
 					});
-	const skillsPromise: Promise<Skill[]> =
+	const skillsPromise: Promise<readonly Skill[]> =
 		providedSkills !== undefined
 			? Promise.resolve(providedSkills)
 			: skillsSettings?.enabled !== false
@@ -693,7 +708,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		}
 	}
 
-	const date = new Date().toISOString().slice(0, 10);
+	const date = formatLocalCalendarDate();
 	const dateTime = date;
 	const promptCwd = shortenPath(normalizePromptPath(resolvedCwd));
 	const activeRepoContextPrompt = renderActiveRepoContextPrompt(activeRepoContext);
@@ -707,14 +722,25 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 
 	// Build tool descriptions for system prompt rendering.
 	const toolPromptNames = new Map<string, string>(toolNames.map(name => [name, tools?.get(name)?.wireName ?? name]));
+	// xd://-mounted tools count as present for prompt gates ({{#has tools "lsp"}})
+	// and resolve their own name as the reference — the xd:// section explains
+	// the access path. The Tool Inventory list stays limited to real defs.
+	for (const mounted of xdevTools) {
+		if (!toolPromptNames.has(mounted.name)) toolPromptNames.set(mounted.name, mounted.name);
+	}
 	const toolRefs = Object.fromEntries(toolPromptNames.entries());
-	const toolInfo = toolNames.map(name => ({
+	const xdevToolNames = new Set(xdevTools.map(mounted => mounted.name));
+	// A direct custom tool can share a name with a retained built-in device.
+	// Presence in both toolNames and tools proves it still has a top-level definition.
+	const inventoryToolNames =
+		xdevToolNames.size === 0 ? toolNames : toolNames.filter(name => tools?.has(name) || !xdevToolNames.has(name));
+	const toolInfo = inventoryToolNames.map(name => ({
 		name: toolPromptNames.get(name) ?? name,
 		internalName: name,
 		label: tools?.get(name)?.label ?? "",
 		description: tools?.get(name)?.description ?? "",
 	}));
-	const inventoryTools = toolNames.map(name => {
+	const inventoryTools = inventoryToolNames.map(name => {
 		const meta = tools?.get(name);
 		return {
 			name: toolPromptNames.get(name) ?? name,
@@ -753,7 +779,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		systemPromptCustomization: effectiveSystemPromptCustomization,
 		customPrompt: resolvedCustomPrompt,
 		appendPrompt: resolvedAppendPrompt ?? "",
-		tools: toolNames,
+		tools: [...new Set([...toolNames, ...xdevTools.map(mounted => mounted.name)])],
 		toolInfo,
 		toolInventory,
 		inlineToolDescriptors,
@@ -769,21 +795,24 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		date,
 		dateTime,
 		cwd: promptCwd,
-		model: model ?? "",
+		model: includeModelInPrompt ? (model ?? "") : "",
+		useCodexTaskPrompt: usesCodexTaskPrompt(model),
 		personality: personality === "none" ? "" : PERSONALITY_SPECS[personality].trim(),
 		intentTracing: !!intentField,
 		intentField: intentField ?? "",
-		mcpDiscoveryMode,
-		hasMCPDiscoveryServers: mcpDiscoveryServerSummaries.length > 0,
-		mcpDiscoveryServerSummaries,
 		eagerTasks,
 		eagerTasksAlways,
 		taskBatch,
+		MAX_CONCURRENCY: normalizeConcurrencyLimit(taskMaxConcurrency),
+		taskIrcEnabled,
 		secretsEnabled,
 		hasMemoryRoot: memoryRootEnabled,
 		hasObsidian: hasObsidian(),
 		includeWorkspaceTree,
 		renderMermaid,
+		xdevTools,
+		xdevDocs,
+		autoQaEnabled,
 	};
 	const rendered = prompt.render(resolvedCustomPrompt ? customSystemPromptTemplate : systemPromptTemplate, data);
 	const systemPrompt = [rendered];

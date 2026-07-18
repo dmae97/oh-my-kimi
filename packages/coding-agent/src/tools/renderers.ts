@@ -21,16 +21,24 @@ import { evalToolRenderer } from "./eval-render";
 import { githubToolRenderer } from "./gh-renderer";
 import { globToolRenderer } from "./glob";
 import { grepToolRenderer } from "./grep";
+import { hubToolRenderer } from "./hub";
 import { inspectImageToolRenderer } from "./inspect-image-renderer";
-import { ircToolRenderer } from "./irc";
-import { jobToolRenderer } from "./job";
 import { recallToolRenderer, reflectToolRenderer, retainToolRenderer } from "./memory-render";
 import { readToolRenderer } from "./read";
-import { resolveToolRenderer } from "./resolve";
-import { searchToolBm25Renderer } from "./search-tool-bm25";
-import { sshToolRenderer } from "./ssh";
+import { resolveRenderer } from "./resolve";
 import { todoToolRenderer } from "./todo";
+import { createVibeToolRenderer } from "./vibe";
 import { writeToolRenderer } from "./write";
+import { setXdevRendererLookup } from "./xdev";
+
+/**
+ * Per-renderer opt-in for a full viewport replay when the first result
+ * replaces a painted pending-call render. A predicate receives the painted
+ * call args and render options so the repaint stays scoped to the pending
+ * shapes that actually re-anchor (an over-eager replay wipes native
+ * scrollback on direct terminals).
+ */
+export type FirstResultViewportRepaint = boolean | ((args: unknown, options: RenderResultOptions) => boolean);
 
 export type ToolRenderer = {
 	renderCall: (args: unknown, options: RenderResultOptions, theme: Theme) => Component;
@@ -55,12 +63,11 @@ export type ToolRenderer = {
 	 */
 	animatedPartialResult?: boolean | ((args: unknown) => boolean);
 	/**
-	 * Whether replacing a streamed pending placeholder with the first result
-	 * requires a full viewport repaint. Use for merged renderers whose pending
-	 * streamed args may have committed placeholder rows that the result render
-	 * re-anchors instead of preserving.
+	 * Whether replacing a pending call render with the first result requires a
+	 * full viewport repaint. Use for merged renderers whose pending rows can be
+	 * re-anchored instead of preserved by the result render.
 	 */
-	forceFirstResultViewportRepaint?: boolean;
+	forceFirstResultViewportRepaint?: FirstResultViewportRepaint;
 	/**
 	 * Whether settling a provisional partial result into the final render requires
 	 * a full viewport repaint. Use when the result renderer changes chrome or
@@ -83,15 +90,16 @@ export const toolRenderers: Record<string, ToolRenderer> = {
 	grep: grepToolRenderer as ToolRenderer,
 	lsp: lspToolRenderer as ToolRenderer,
 	inspect_image: inspectImageToolRenderer as ToolRenderer,
-	irc: ircToolRenderer as ToolRenderer,
+	hub: hubToolRenderer as ToolRenderer,
 	read: readToolRenderer as ToolRenderer,
-	job: jobToolRenderer as ToolRenderer,
-	resolve: resolveToolRenderer as ToolRenderer,
+	// Keyed by xd:// resolution-device names: the write dispatch delegates here
+	// by dispatch tool, and historical `resolve` tool transcripts still render
+	// through the `resolve` entry. Both devices carry the same ResolveDetails.
+	resolve: resolveRenderer as ToolRenderer,
+	reject: resolveRenderer as ToolRenderer,
 	retain: retainToolRenderer as ToolRenderer,
 	recall: recallToolRenderer as ToolRenderer,
 	reflect: reflectToolRenderer as ToolRenderer,
-	search_tool_bm25: searchToolBm25Renderer as ToolRenderer,
-	ssh: sshToolRenderer as ToolRenderer,
 	// Lazy getter: `taskToolRenderer` lives in a module that closes an import
 	// cycle back here (task/renderer → task/render → … → tools/renderers), so
 	// reading it at init order-dependently hits its temporal dead zone. Deferring
@@ -103,5 +111,15 @@ export const toolRenderers: Record<string, ToolRenderer> = {
 	github: githubToolRenderer as ToolRenderer,
 	goal: goalToolRenderer as ToolRenderer,
 	web_search: webSearchToolRenderer as ToolRenderer,
+	vibe_spawn: createVibeToolRenderer("spawn") as ToolRenderer,
+	vibe_send: createVibeToolRenderer("send") as ToolRenderer,
+	vibe_wait: createVibeToolRenderer("wait") as ToolRenderer,
+	vibe_kill: createVibeToolRenderer("kill") as ToolRenderer,
+	vibe_list: createVibeToolRenderer("list") as ToolRenderer,
 	write: writeToolRenderer as ToolRenderer,
 };
+
+// Wire the xd:// render delegation. Injected (instead of the xdev module
+// importing this module) to avoid the renderers → tool modules → sdk →
+// tools/index → xdev import cycle.
+setXdevRendererLookup(name => toolRenderers[name]);

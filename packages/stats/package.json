@@ -1,7 +1,7 @@
 {
   "type": "module",
   "name": "@oh-my-pi/omp-stats",
-  "version": "16.3.11",
+  "version": "17.0.3",
   "description": "Local observability dashboard for pi AI usage statistics",
   "homepage": "https://omp.sh",
   "author": "Can Boluk",
@@ -55,6 +55,7 @@
     "@types/bun": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
+    "linkedom": "catalog:",
     "postcss": "catalog:"
   },
   "engines": {

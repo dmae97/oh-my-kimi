@@ -163,27 +163,106 @@ function findDuplicate(beam: BeamMemoryState, content: string): string | null {
 	return row?.id ?? null;
 }
 
+function tableExists(db: BeamMemoryState["db"], table: string): boolean {
+	return (
+		db
+			.prepare("SELECT 1 FROM sqlite_master WHERE type IN ('table','virtual table') AND name = ? LIMIT 1")
+			.get(table) !== null
+	);
+}
+
+/** Tables whose rows point back to a `working_memory` id via `source_memory_id`. */
+const MEMORIA_SOURCE_TABLES = [
+	"memoria_facts",
+	"memoria_instructions",
+	"memoria_kg",
+	"memoria_preferences",
+	"memoria_timelines",
+] as const;
+
+/**
+ * Remove every artifact linked to the given `working_memory` ids so no deletion
+ * path leaves orphans behind. Covers annotations, embeddings, extracted facts
+ * (`facts.source_msg_id`), memoria projections (`*.source_memory_id`), episodic
+ * gists, and the graph edges tied to those memory / gist / fact node ids.
+ *
+ * Idempotent and schema-tolerant: `gists` / `graph_edges` only exist once an
+ * `EpisodicGraph` has initialised, so they are guarded. Callers own the
+ * transaction and the base `working_memory` delete.
+ */
+function purgeWorkingMemoryArtifacts(db: BeamMemoryState["db"], ids: readonly string[]): void {
+	if (ids.length === 0) return;
+	const placeholders = ids.map(() => "?").join(", ");
+
+	const graphRefs = new Set<string>(ids);
+	for (const id of ids) graphRefs.add(`gist_${id}`);
+	if (tableExists(db, "facts")) {
+		const factRows = db.prepare(`SELECT fact_id FROM facts WHERE source_msg_id IN (${placeholders})`).all(...ids) as {
+			fact_id: string;
+		}[];
+		for (const row of factRows) graphRefs.add(row.fact_id);
+		db.prepare(`DELETE FROM facts WHERE source_msg_id IN (${placeholders})`).run(...ids);
+	}
+
+	db.prepare(`DELETE FROM annotations WHERE memory_id IN (${placeholders})`).run(...ids);
+	db.prepare(`DELETE FROM memory_embeddings WHERE memory_id IN (${placeholders})`).run(...ids);
+	for (const table of MEMORIA_SOURCE_TABLES) {
+		db.prepare(`DELETE FROM ${table} WHERE source_memory_id IN (${placeholders})`).run(...ids);
+	}
+
+	if (tableExists(db, "gists")) {
+		db.prepare(`DELETE FROM gists WHERE memory_id IN (${placeholders})`).run(...ids);
+	}
+	if (tableExists(db, "graph_edges")) {
+		const refs = [...graphRefs];
+		const refPlaceholders = refs.map(() => "?").join(", ");
+		db.prepare(`DELETE FROM graph_edges WHERE source IN (${refPlaceholders}) OR target IN (${refPlaceholders})`).run(
+			...refs,
+			...refs,
+		);
+	}
+}
+
+/**
+ * TTL / overflow trim for transient working memory. Only genuine scratch is
+ * eligible: `consolidated_at IS NULL` no longer suffices on its own, since
+ * restored or imported durable rows legitimately carry a NULL consolidation
+ * marker with an old event timestamp (issue #4819). Rows flagged `IMPORTED`
+ * are treated as durable and never trimmed, and trimmed rows cascade all linked
+ * artifacts via `purgeWorkingMemoryArtifacts`.
+ */
 function trimWorkingMemory(beam: BeamMemoryState): void {
 	const limit = beam.config.workingMemoryLimit;
 	if (!Number.isFinite(limit) || limit <= 0) return;
 	const ttlHours = beam.config.workingMemoryTtlHours;
 	const cutoff = toUtcIso(new Date(Date.now() - ttlHours * 3_600_000));
-	beam.db
-		.prepare(`
-			DELETE FROM working_memory
-			WHERE session_id = ?
-			  AND consolidated_at IS NULL
-			  AND (
-				timestamp < ? OR
-				id NOT IN (
+	transaction(beam.db, () => {
+		const ids = (
+			beam.db
+				.prepare(`
 					SELECT id FROM working_memory
-					WHERE session_id = ? AND consolidated_at IS NULL
-					ORDER BY timestamp DESC
-					LIMIT ?
-				)
-			  )
-		`)
-		.run(beam.sessionId, cutoff, beam.sessionId, limit);
+					WHERE session_id = ?
+					  AND consolidated_at IS NULL
+					  AND trust_tier IS NOT 'IMPORTED'
+					  AND (
+						timestamp < ? OR
+						id NOT IN (
+							SELECT id FROM working_memory
+							WHERE session_id = ? AND consolidated_at IS NULL AND trust_tier IS NOT 'IMPORTED'
+							ORDER BY timestamp DESC
+							LIMIT ?
+						)
+					  )
+				`)
+				.all(beam.sessionId, cutoff, beam.sessionId, limit) as { id: string }[]
+		).map(row => row.id);
+		if (ids.length === 0) return;
+		const placeholders = ids.map(() => "?").join(", ");
+		beam.db
+			.prepare(`DELETE FROM working_memory WHERE id IN (${placeholders}) AND session_id = ?`)
+			.run(...ids, beam.sessionId);
+		purgeWorkingMemoryArtifacts(beam.db, ids);
+	});
 }
 
 function addTemporalAnnotations(beam: BeamMemoryState, memoryId: string, timestamp: string, source: string): void {
@@ -665,7 +744,46 @@ export function get(beam: BeamMemoryState, memoryId: string): Row | null {
 			WHERE id = ? AND (session_id = ? OR scope = 'global')
 		`)
 		.get(memoryId, beam.sessionId) as Row | null | undefined;
-	return episodic == null ? null : { ...episodic, metadata: episodic.metadata_json, memory_store: "episodic" };
+	if (episodic != null) return { ...episodic, metadata: episodic.metadata_json, memory_store: "episodic" };
+
+	return getFact(beam, memoryId);
+}
+
+/**
+ * Read-only resolution for ids minted from the `facts` table. `recall`
+ * surfaces `facts.fact_id` as a result id (`factRecall`), so `get` must
+ * resolve those ids too — otherwise every surfaced fact id is a dead end
+ * for the read path (issue #4725). Visibility mirrors `factRecall`:
+ * same-session facts plus explicitly global ones (`scope` is an optional
+ * column on `facts`; `SELECT *` tolerates banks without it, in which case
+ * only same-session facts resolve). The row is shaped like the
+ * working/episodic hits with the full triple as content;
+ * `memory_store: "fact"` marks it read-only — no update/forget/invalidate
+ * path mutates `facts`.
+ */
+function getFact(beam: BeamMemoryState, memoryId: string): Row | null {
+	const fact = beam.db.prepare("SELECT * FROM facts WHERE fact_id = ?").get(memoryId) as Row | null | undefined;
+	if (fact == null) return null;
+	if (fact.session_id !== beam.sessionId && fact.scope !== "global") return null;
+	const subject = typeof fact.subject === "string" ? fact.subject : "";
+	const predicate = typeof fact.predicate === "string" ? fact.predicate : "";
+	const object = typeof fact.object === "string" ? fact.object : "";
+	return {
+		id: fact.fact_id,
+		content: [subject, predicate, object].filter(part => part.length > 0).join(" "),
+		source: "facts",
+		timestamp: fact.timestamp ?? null,
+		session_id: fact.session_id ?? null,
+		importance: fact.confidence ?? null,
+		metadata: JSON.stringify({
+			subject,
+			predicate,
+			object,
+			source_msg_id: fact.source_msg_id ?? null,
+		}),
+		created_at: fact.created_at ?? null,
+		memory_store: "fact",
+	};
 }
 
 export function forgetWorking(beam: BeamMemoryState, memoryId: string): boolean {
@@ -676,7 +794,7 @@ export function forgetWorking(beam: BeamMemoryState, memoryId: string): boolean 
 			.run(memoryId, beam.sessionId);
 		deleted = result.changes;
 		if (deleted > 0) {
-			beam.db.prepare("DELETE FROM annotations WHERE memory_id = ?").run(memoryId);
+			purgeWorkingMemoryArtifacts(beam.db, [memoryId]);
 		}
 	});
 	if (deleted > 0) invalidateCaches(beam);
@@ -772,6 +890,10 @@ export function importFromDict(beam: BeamMemoryState, data: Record<string, unkno
 		consolidation_log: { inserted: 0 },
 	} satisfies ImportStats;
 	const db: Database = beam.db;
+	// Imported working-memory rows are durable, not scratch: stamp any that
+	// arrive unconsolidated so the TTL trim treats them as consolidated and can
+	// never silently discard a restored bank (issue #4819).
+	const importedAt = toUtcIso();
 	const oldToNewRowid = new Map<number, number>();
 
 	transaction(db, () => {
@@ -786,6 +908,7 @@ export function importFromDict(beam: BeamMemoryState, data: Record<string, unkno
 			}
 			if (exists) {
 				db.prepare("DELETE FROM working_memory WHERE id = ?").run(id);
+				purgeWorkingMemoryArtifacts(db, [id]);
 				stats.working_memory.overwritten++;
 			} else {
 				stats.working_memory.inserted++;
@@ -812,7 +935,7 @@ export function importFromDict(beam: BeamMemoryState, data: Record<string, unkno
 				sqlBinding(item.last_recalled, null),
 				sqlBinding(item.created_at, null),
 				clampVeracity(item.veracity),
-				sqlBinding(item.consolidated_at, null),
+				item.consolidated_at == null ? importedAt : sqlBinding(item.consolidated_at, importedAt),
 				sqlBinding(item.memory_type, "unknown"),
 				sqlBinding(item.embed_text, null),
 				sqlBinding(item.author_id, null),

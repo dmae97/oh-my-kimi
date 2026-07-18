@@ -31,12 +31,19 @@ CHUNKS = [(0, 8), (6, 14), (13, 21)]
 
 
 def main() -> None:
-    keys = {"openrouter": load_env_key("OPENROUTER_API_KEY"), "anthropic": "", "openai": ""}
+    keys = {
+        "openrouter": load_env_key("OPENROUTER_API_KEY"),
+        "anthropic": "",
+        "openai": "",
+    }
     paras = squad.load_paragraphs(CACHE)
     flow, offsets = squad.build_flow(paras, 400_000)
     questions = squad.sample_chunk_questions(paras, offsets, 0, len(flow), 25, 42)
     shape = SHAPES[SHAPE_NAME]
-    frame_dir = CACHE / f"prod-frames-{SHAPE_NAME}-{sha8(flow, json.dumps(shape, sort_keys=True))}"
+    frame_dir = (
+        CACHE
+        / f"prod-frames-{SHAPE_NAME}-{sha8(flow, json.dumps(shape, sort_keys=True))}"
+    )
     pngs = sorted(frame_dir.glob("page-*.png"))
     assert len(pngs) == 21, len(pngs)
     cols = SIZE // shape["cellWidth"]
@@ -63,14 +70,25 @@ def main() -> None:
         if not qs:
             continue
         chunk_pngs = pngs[lo:hi]
-        preamble = load_prompt("qa-image-multi.md").format(k=len(chunk_pngs), cols=cols, rows=rows)
-        ctx = [{"text": preamble}, *({"image_path": p} for p in chunk_pngs), {"text": "End of images.", "cache": True}]
+        preamble = load_prompt("qa-image-multi.md").format(
+            k=len(chunk_pngs), cols=cols, rows=rows
+        )
+        ctx = [
+            {"text": preamble},
+            *({"image_path": p} for p in chunk_pngs),
+            {"text": "End of images.", "cache": True},
+        ]
         q_block = "\n".join(f"{i + 1}. {q['q']}" for i, q in enumerate(qs))
         messages = [{"role": "user", "content": [*ctx, {"text": q_block}]}]
         qa = cached(
-            MODEL, "qa-mono-prod-chunk8", {"messages": messages, "effort": None},
+            MODEL,
+            "qa-mono-prod-chunk8",
+            {"messages": messages, "effort": None},
             lambda m=messages: dict(
-                zip(("text", "usage", "stop"), llm_complete(keys, MODEL, m, max_tokens=32768, effort=None))
+                zip(
+                    ("text", "usage", "stop"),
+                    llm_complete(keys, MODEL, m, max_tokens=32768, effort=None),
+                )
             ),
             False,
         )
@@ -78,19 +96,28 @@ def main() -> None:
             answers_by_q[q["q"]] = a
         usages.append(qa["usage"])
         stops.append(qa["stop"])
-        print(f"chunk {ci} frames[{lo}:{hi}] nq={len(qs)} in={qa['usage']['in']} stop={qa['stop']}")
+        print(
+            f"chunk {ci} frames[{lo}:{hi}] nq={len(qs)} in={qa['usage']['in']} stop={qa['stop']}"
+        )
 
     rows_out = [
         {
-            "model": MODEL, "cond": "diag-chunk8-8on16-bw", "pos_rel": q["pos_rel"], "q": q["q"],
-            "answer": answers_by_q.get(q["q"], ""), "golds": q["golds"],
+            "model": MODEL,
+            "cond": "diag-chunk8-8on16-bw",
+            "pos_rel": q["pos_rel"],
+            "q": q["q"],
+            "answer": answers_by_q.get(q["q"], ""),
+            "golds": q["golds"],
             "em": squad.exact_match(answers_by_q.get(q["q"], ""), q["golds"]),
             "f1": squad.f1(answers_by_q.get(q["q"], ""), q["golds"]),
             "abstained": "unreadable" in answers_by_q.get(q["q"], "").lower(),
         }
         for q in questions
     ]
-    u = {k: sum(x[k] for x in usages) for k in ("in", "out", "cache_w", "cache_r", "reasoning")}
+    u = {
+        k: sum(x[k] for x in usages)
+        for k in ("in", "out", "cache_w", "cache_r", "reasoning")
+    }
     price_in, price_out = MODELS[MODEL]
     cost = u["in"] / 1e6 * price_in + u["out"] / 1e6 * price_out
     quart = []
@@ -98,20 +125,34 @@ def main() -> None:
         sel = [r["f1"] for r in rows_out if lo <= r["pos_rel"] < hi]
         quart.append(sum(sel) / len(sel) if sel else float("nan"))
     summary = {
-        "cond": "diag-chunk8-8on16-bw", "n": len(rows_out), "imgs": 21,
+        "cond": "diag-chunk8-8on16-bw",
+        "n": len(rows_out),
+        "imgs": 21,
         "em": sum(r["em"] for r in rows_out) / len(rows_out),
         "f1": sum(r["f1"] for r in rows_out) / len(rows_out),
         "abst": sum(r["abstained"] for r in rows_out),
-        "tok_in": u["in"], "tok_out": u["out"], "reas": u["reasoning"], "cost": cost,
-        "stop": next((s for s in stops if s == "max_tokens"), stops[-1] if stops else ""),
-        "q1": quart[0], "q2": quart[1], "q3": quart[2], "q4": quart[3],
+        "tok_in": u["in"],
+        "tok_out": u["out"],
+        "reas": u["reasoning"],
+        "cost": cost,
+        "stop": next(
+            (s for s in stops if s == "max_tokens"), stops[-1] if stops else ""
+        ),
+        "q1": quart[0],
+        "q2": quart[1],
+        "q3": quart[2],
+        "q4": quart[3],
     }
     out_dir = RESULTS / "diag-kimi-chunk8-8on16-bw"
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "records.jsonl").write_text("\n".join(json.dumps(r) for r in rows_out))
     (out_dir / "summary.json").write_text(json.dumps([summary], indent=1))
-    print(f"diag-chunk8 f1={summary['f1']:.3f} em={summary['em']:.3f} abst={summary['abst']} ${summary['cost']:.2f}")
-    print("F1 by quartile: " + "  ".join(f"q{i + 1}={v:.3f}" for i, v in enumerate(quart)))
+    print(
+        f"diag-chunk8 f1={summary['f1']:.3f} em={summary['em']:.3f} abst={summary['abst']} ${summary['cost']:.2f}"
+    )
+    print(
+        "F1 by quartile: " + "  ".join(f"q{i + 1}={v:.3f}" for i, v in enumerate(quart))
+    )
 
 
 if __name__ == "__main__":

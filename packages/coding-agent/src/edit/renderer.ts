@@ -423,22 +423,25 @@ function formatStreamingDiff(
 	cache?: RenderedStringCache,
 ): string {
 	if (!diff) return "";
-	// Clamp the collapsed tail to the viewport so a tall or fast-growing diff
-	// cannot outgrow the live window. Otherwise its mutating tail scrolls above
-	// the native-scrollback commit boundary and the engine re-commits a fresh
-	// snapshot every streamed frame, stacking duplicate "… more lines above"
-	// previews in history. The budget is VISUAL rows (a long wrapped line counts
+	// Clamp the tail to the viewport so a tall or fast-growing diff cannot
+	// outgrow the live window. Otherwise its mutating rows scroll above the
+	// native-scrollback commit boundary mid-stream and freeze into immutable
+	// history as a stale preview snapshot; the finalize repair then recommits
+	// the final render below it — a duplicated block on the tape. Collapsed
+	// gets a short fixed tail; expanded widens it to the viewport-sized window,
+	// never unbounded. The budget is VISUAL rows (a long wrapped line counts
 	// for more than one) at the framed block's inner width (border only —
-	// contentPaddingLeft is 0); only the visible suffix is syntax-colored, so the
-	// cheap raw-line wrap walk keeps the per-chunk cost bounded. innerWidth/budget
-	// are in the cache salt so a resize re-slices.
+	// contentPaddingLeft is 0); only the visible suffix is syntax-colored, so
+	// the cheap raw-line wrap walk keeps the per-chunk cost bounded.
+	// innerWidth/budget are in the cache salt so a resize re-slices.
 	const innerWidth = Math.max(1, width - 2);
-	const budget = expanded ? Number.POSITIVE_INFINITY : Math.min(EDIT_STREAMING_PREVIEW_LINES, previewWindowRows());
+	const budget = expanded ? previewWindowRows() : Math.min(EDIT_STREAMING_PREVIEW_LINES, previewWindowRows());
 	let text = cachedRenderedString(cache, uiTheme, expanded, `${rawPath}:${innerWidth}:${budget}`, diff, () => {
 		// "Cursor" tail window: pin the last rows to the bottom so freshly streamed
 		// changes stay on screen. The whole-file diff is recomputed every chunk and
 		// its Myers alignment is not monotonic in payload length, so a hunk-aware
-		// window stutters as rows move between hunks. Expanded lifts the cap.
+		// window stutters as rows move between hunks. Expanded widens the window
+		// to the viewport; the full diff appears once the result finalizes.
 		const allLines = diff.replace(/\n+$/u, "").split("\n");
 		let visualUsed = 0;
 		let cut = allLines.length;
@@ -679,21 +682,35 @@ function wrapEditRendererLine(line: string, width: number): string[] {
 	const startAnsi = line.match(/^((?:\x1b\[[0-9;]*m)*)/)?.[1] ?? "";
 	const bodyWithReset = line.slice(startAnsi.length);
 	const body = bodyWithReset.endsWith("\x1b[39m") ? bodyWithReset.slice(0, -"\x1b[39m".length) : bodyWithReset;
-	const diffMatch = /^([+\-\s])(\s*\d+)([|│])(.*)$/s.exec(body);
+	// Gutter shapes produced by formatCodeFrameLine: "-315│", " 313│", "+322│",
+	// plus the deduplicated forms "   +│" and "    │" whose repeated line number
+	// renderDiff blanked (single-line replacement pairs and insert-then-context
+	// runs) — all │-separated. ASCII "|" gutters exist only in raw canonical
+	// diff rows passed through by the plain fallback ("-42|old", " 42|ctx"),
+	// which always carry a marker column ("+"/"-"/space) and a line number. So
+	// the number is optional for "│", while "|" requires the full canonical
+	// shape; anything else (a body line merely starting with "|", error text
+	// like "123|…") is not a diff row and wraps generically.
+	const diffMatch = /^(\s*[+-]?\s*\d*)([|│])(.*)$/s.exec(body);
 
-	if (!diffMatch) {
+	if (!diffMatch || diffMatch[1].length === 0 || (diffMatch[2] === "|" && !/^[+\-\s]\s*\d+$/.test(diffMatch[1]))) {
 		return wrapTextWithAnsi(line, width);
 	}
 
-	const [, marker, lineNum, separator, content] = diffMatch;
-	const prefix = `${marker}${lineNum}${separator}`;
+	const [, gutter, separator, content] = diffMatch;
+	const prefix = `${gutter}${separator}`;
 	const prefixWidth = visibleWidth(prefix);
 	const contentWidth = Math.max(1, width - prefixWidth);
 	const continuationPrefix = `${" ".repeat(Math.max(0, prefixWidth - 1))}${separator}`;
 	const wrappedContent = wrapTextWithAnsi(content ?? "", contentWidth);
 
+	// Each visual row is a standalone terminal line: wrapTextWithAnsi re-opens
+	// active SGR state at the next row's start, so a row that breaks inside an
+	// intra-line diff highlight still ends with inverse video active. Close it
+	// alongside the foreground reset — otherwise the frame padding appended
+	// after the row is painted as an inverse block (default-foreground cells).
 	return wrappedContent.map(
-		(segment, index) => `${startAnsi}${index === 0 ? prefix : continuationPrefix}${segment}\x1b[39m`,
+		(segment, index) => `${startAnsi}${index === 0 ? prefix : continuationPrefix}${segment}\x1b[27m\x1b[39m`,
 	);
 }
 

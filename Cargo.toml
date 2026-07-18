@@ -4,7 +4,7 @@ exclude = ["crates/vendor/brush-core", "crates/vendor/brush-builtins"]
 resolver = "3"
 
 [workspace.package]
-version = "16.3.11"
+version = "17.0.3"
 edition = "2024"
 license = "MIT"
 authors = ["Can Boluk"]
@@ -237,10 +237,6 @@ smallvec = { version = "1.15.1", features = [
 # ──────────────────────────────────────────────────────────────────────────────
 xxhash-rust = { version = "0.8", features = ["xxh64"] }
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Memory Mapping
-# ──────────────────────────────────────────────────────────────────────────────
-memmap2 = "0.9"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # System & Platform
@@ -269,6 +265,7 @@ napi-derive = "3"
 # Terminal & PTY
 # ──────────────────────────────────────────────────────────────────────────────
 arboard = { version = "3.6.1", features = ["wayland-data-control"] }
+clipboard-win = "5.4"
 icy_sixel = "0.5"
 portable-pty = "0.9"
 
@@ -277,6 +274,7 @@ portable-pty = "0.9"
 # ──────────────────────────────────────────────────────────────────────────────
 globset = "0.4"
 grep-matcher = "0.1"
+grep-pcre2 = "0.1"
 grep-regex = "0.1"
 grep-searcher = "0.1"
 ignore = "0.4"

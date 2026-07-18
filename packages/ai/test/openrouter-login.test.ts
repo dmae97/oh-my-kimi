@@ -55,7 +55,7 @@ describe("openrouter login wiring", () => {
 		});
 
 		const credential = await storage.get("openrouter");
-		expect(credential).toEqual({ type: "api_key", key: "sk-or-validated" });
+		expect(credential).toEqual({ type: "api_key", key: "sk-or-validated", source: "login" });
 
 		const authCall = fetchCalls.find(call => call.url.includes("/api/v1/auth/key"));
 		expect(authCall).toBeDefined();

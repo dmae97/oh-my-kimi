@@ -6,7 +6,9 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import {
 	nextActionableTask,
 	resolveTodoMarkdownPath,
+	selectCollapsedTodos,
 	TODO_STRIKE_HOLD_FRAMES,
+	type TodoItem,
 	type TodoPhase,
 	TodoTool,
 	todoMatchesAnyDescription,
@@ -420,8 +422,9 @@ describe("todoToolRenderer.renderResult phase collapsing", () => {
 			task: "a1",
 		});
 		const rendered = Bun.stripANSI(component.render(100).join("\n"));
-		// Active phase renders its full task list.
-		expect(rendered).toContain("a1");
+		// Active phase's collapsed viewport omits the completed task and shows the
+		// promoted current one (#5873).
+		expect(rendered).not.toContain("a1");
 		expect(rendered).toContain("a2");
 		// Untouched phases collapse: headers + progress counts, no task contents.
 		expect(rendered).toContain("II. Beta");
@@ -462,6 +465,88 @@ describe("todoToolRenderer.renderResult phase collapsing", () => {
 		});
 		// No empty body line survives between phases.
 		expect(innerLines(component).every(line => line.length > 0)).toBe(true);
+	});
+});
+
+describe("selectCollapsedTodos walking viewport (#5873)", () => {
+	const mk = (n: number, inProgress: number[]): TodoItem[] =>
+		Array.from({ length: n }, (_, i) => ({
+			content: `Task ${i + 1}`,
+			status: inProgress.includes(i + 1) ? "in_progress" : "pending",
+		}));
+	const never = () => false;
+	const contents = (sel: { items: TodoItem[] }) => sel.items.map(t => t.content);
+
+	it("starts at the sole in-progress task and fills with following tasks", () => {
+		const sel = selectCollapsedTodos(mk(14, [6]), never, 8);
+		expect(contents(sel)).toEqual([
+			"Task 6",
+			"Task 7",
+			"Task 8",
+			"Task 9",
+			"Task 10",
+			"Task 11",
+			"Task 12",
+			"Task 13",
+		]);
+		expect(sel.summary).toContain("6 more todos");
+	});
+
+	it("omits completed and abandoned tasks in collapsed mode", () => {
+		const tasks: TodoItem[] = [
+			{ content: "done", status: "completed" },
+			{ content: "dropped", status: "abandoned" },
+			{ content: "current", status: "in_progress" },
+			{ content: "next", status: "pending" },
+		];
+		const sel = selectCollapsedTodos(tasks, never, 5);
+		expect(contents(sel)).toEqual(["current", "next"]);
+		expect(sel.summary).toBe("");
+	});
+
+	it("places every subagent-matched todo at the head in todo order", () => {
+		const tasks = mk(14, []); // all pending
+		const matched = (t: TodoItem) => t.content === "Task 3" || t.content === "Task 9";
+		const sel = selectCollapsedTodos(tasks, matched, 5);
+		// Both matched actives lead, then following pending fill from the first active.
+		expect(contents(sel).slice(0, 2)).toEqual(["Task 3", "Task 9"]);
+		expect(contents(sel)).toHaveLength(5);
+	});
+
+	it("caps active todos and counts the hidden actives in the summary", () => {
+		const tasks = mk(10, []);
+		const matched = (t: TodoItem) =>
+			["Task 1", "Task 2", "Task 3", "Task 4", "Task 5", "Task 6", "Task 7"].includes(t.content);
+		const sel = selectCollapsedTodos(tasks, matched, 5);
+		expect(contents(sel)).toEqual(["Task 1", "Task 2", "Task 3", "Task 4", "Task 5"]);
+		expect(sel.summary).toBe("… 2 more active todos");
+		// No unrelated pending rows leak in.
+		expect(contents(sel).some(c => ["Task 8", "Task 9", "Task 10"].includes(c))).toBe(false);
+	});
+
+	it("keeps a summary when actives exactly fill the cap but pending remains", () => {
+		// 5 matched actives + 1 trailing pending, cap 5. The active-overflow branch
+		// must NOT swallow the hidden pending work with an empty summary (#5878).
+		const tasks = mk(6, []);
+		const matched = (t: TodoItem) => ["Task 1", "Task 2", "Task 3", "Task 4", "Task 5"].includes(t.content);
+		const sel = selectCollapsedTodos(tasks, matched, 5);
+		expect(contents(sel)).toEqual(["Task 1", "Task 2", "Task 3", "Task 4", "Task 5"]);
+		expect(sel.summary).toBe("… 1 more todo");
+	});
+
+	it("returns the whole open set with no summary when it fits", () => {
+		const sel = selectCollapsedTodos(mk(3, [2]), never, 5);
+		expect(contents(sel)).toEqual(["Task 1", "Task 2", "Task 3"]);
+		expect(sel.summary).toBe("");
+	});
+
+	it("falls back to closed tasks when the phase has no open work", () => {
+		const tasks: TodoItem[] = [
+			{ content: "done a", status: "completed" },
+			{ content: "done b", status: "completed" },
+		];
+		const sel = selectCollapsedTodos(tasks, never, 5);
+		expect(contents(sel)).toEqual(["done a", "done b"]);
 	});
 });
 

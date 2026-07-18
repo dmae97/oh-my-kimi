@@ -39,7 +39,15 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import squad  # noqa: E402
-from bdf import _DIMMED, _stopword_mask, FontCfg, capacity, ensure_font, parse_bdf, render  # noqa: E402
+from bdf import (
+    _DIMMED,
+    _stopword_mask,
+    FontCfg,
+    capacity,
+    ensure_font,
+    parse_bdf,
+    render,
+)  # noqa: E402
 from providers import llm_complete, load_env_key  # noqa: E402
 from run import CACHE, QA_CACHE, RESULTS, load_prompt, sha8  # noqa: E402
 
@@ -47,7 +55,9 @@ MODEL = "claude-fable-5"
 PRICE = (10.0, 50.0)  # $/M in, out
 FONTS = {
     "8on16": FontCfg("8on16", "8x13", 8, 16),  # 8x13 glyphs, patch-aligned 16 px pitch
-    "6on7x14": FontCfg("6on7x14", "6x12", 7, 14),  # 6x12 glyphs, 7x14 patch-aligned cell
+    "6on7x14": FontCfg(
+        "6on7x14", "6x12", 7, 14
+    ),  # 6x12 glyphs, 7x14 patch-aligned cell
     "6x12": FontCfg("6x12", "6x12", 6, 12),  # fable's round-0 winner font
 }
 CONDITIONS = ("img-8on16-dim", "img-6on7x14-dim", "doc-6x12-dim", "doc-8on16-dim")
@@ -57,8 +67,16 @@ _WHITE = (255, 255, 255)
 _BLACK = (0, 0, 0)
 
 # img-6x12-dim per length: (f1, se, cost); text ceiling: (f1, se, cost).
-BASE_IMG = {50: (0.9556, 0.0348, 0.132), 150: (0.9113, 0.0244, 0.437), 250: (0.9233, 0.0163, 0.724)}
-BASE_TEXT = {50: (0.9556, 0.0348, 0.144), 150: (0.9043, 0.0216, 0.498), 250: (0.9197, 0.0184, 0.734)}
+BASE_IMG = {
+    50: (0.9556, 0.0348, 0.132),
+    150: (0.9113, 0.0244, 0.437),
+    250: (0.9233, 0.0163, 0.724),
+}
+BASE_TEXT = {
+    50: (0.9556, 0.0348, 0.144),
+    150: (0.9043, 0.0216, 0.498),
+    250: (0.9197, 0.0184, 0.734),
+}
 
 
 def cached(model: str, tag: str, payload: object, fn, fresh: bool) -> dict:
@@ -208,18 +226,28 @@ def render_doc(lines: list[dict], cfg: FontCfg, size: int, cache: Path) -> Image
 def qa_call(cond: str, messages: list[dict], ctx: dict) -> dict:
     args, keys = ctx["args"], ctx["keys"]
     return cached(
-        MODEL, f"exp16-qa-{cond}", {"messages": messages, "size": args.size, "effort": args.effort},
+        MODEL,
+        f"exp16-qa-{cond}",
+        {"messages": messages, "size": args.size, "effort": args.effort},
         lambda: dict(
             zip(
                 ("text", "usage", "stop"),
-                llm_complete(keys, MODEL, messages, max_tokens=args.max_tokens, effort=args.effort),
+                llm_complete(
+                    keys,
+                    MODEL,
+                    messages,
+                    max_tokens=args.max_tokens,
+                    effort=args.effort,
+                ),
             )
         ),
         args.fresh,
     )
 
 
-def score(questions: list[dict], qa: dict, cond: str, start: int, ctx: dict) -> list[dict]:
+def score(
+    questions: list[dict], qa: dict, cond: str, start: int, ctx: dict
+) -> list[dict]:
     answers = squad.parse_numbered(qa["text"], len(questions))
     records = []
     for q, a in zip(questions, answers):
@@ -245,7 +273,9 @@ def score(questions: list[dict], qa: dict, cond: str, start: int, ctx: dict) -> 
 def run_grid_chunk(cond: str, start: int, end: int, ctx: dict) -> list[dict]:
     """Row-major grid cell: chunk the flow by capacity, one QA call per chunk."""
     args, flow, paras, offsets = ctx["args"], ctx["flow"], ctx["paras"], ctx["offsets"]
-    questions = squad.sample_chunk_questions(paras, offsets, start, end, args.qpc, args.seed)
+    questions = squad.sample_chunk_questions(
+        paras, offsets, start, end, args.qpc, args.seed
+    )
     if not questions:
         return []
     chunk_text = flow[start:end]
@@ -274,13 +304,17 @@ def run_doc_page(cond: str, page: tuple[int, int], ctx: dict) -> list[dict]:
     i, j = page
     start = offsets[i]
     end = offsets[j - 1] + len(paras[j - 1]["ctx"])
-    questions = squad.sample_chunk_questions(paras, offsets, start, end, args.qpc, args.seed)
+    questions = squad.sample_chunk_questions(
+        paras, offsets, start, end, args.qpc, args.seed
+    )
     if not questions:
         return []
     _, font, _ = parse_condition(cond)
     cfg = FONTS[font]
     lines = ctx["lines"][cond][page]
-    page_key = sha8(cond, json.dumps([(p["title"], p["ctx"]) for p in paras[i:j]]), str(args.size))
+    page_key = sha8(
+        cond, json.dumps([(p["title"], p["ctx"]) for p in paras[i:j]]), str(args.size)
+    )
     png = CACHE / f"exp16-{cond}-{page_key}.png"
     if not png.exists() or png.stat().st_size == 0:
         atomic_save(render_doc(lines, cfg, args.size, CACHE), png)
@@ -291,7 +325,11 @@ def run_doc_page(cond: str, page: tuple[int, int], ctx: dict) -> list[dict]:
         {
             "role": "user",
             "content": [
-                {"text": load_prompt("exp04-qa-image.md").format(col_w=col_w, rows=rows)},
+                {
+                    "text": load_prompt("exp04-qa-image.md").format(
+                        col_w=col_w, rows=rows
+                    )
+                },
                 {"image_path": png},
                 {"text": q_block},
             ],
@@ -306,8 +344,13 @@ def aggregate(records: list[dict], price_in: float, price_out: float) -> dict:
     mean_f1 = sum(f1s) / n
     se = (sum((x - mean_f1) ** 2 for x in f1s) / (n * (n - 1))) ** 0.5 if n > 1 else 0.0
     us = [u for r in records if "usage" in r for u in r["usage"]]
-    tok = {k: sum(u.get(k, 0) for u in us) for k in ("in", "out", "cache_w", "cache_r", "reasoning")}
-    cost_in = (tok["in"] + 1.25 * tok["cache_w"] + 0.1 * tok["cache_r"]) / 1e6 * price_in
+    tok = {
+        k: sum(u.get(k, 0) for u in us)
+        for k in ("in", "out", "cache_w", "cache_r", "reasoning")
+    }
+    cost_in = (
+        (tok["in"] + 1.25 * tok["cache_w"] + 0.1 * tok["cache_r"]) / 1e6 * price_in
+    )
     cost_out = tok["out"] / 1e6 * price_out
     return {
         "n": n,
@@ -333,7 +376,11 @@ def main() -> None:
     ap.add_argument("--max-tokens", type=int, default=32768)
     ap.add_argument("--effort", default=None)
     ap.add_argument("--fresh", action="store_true")
-    ap.add_argument("--render-only", action="store_true", help="render sample pages + capacity stats, no API")
+    ap.add_argument(
+        "--render-only",
+        action="store_true",
+        help="render sample pages + capacity stats, no API",
+    )
     ap.add_argument("--env", default="~/.env")
     args = ap.parse_args()
 
@@ -365,8 +412,13 @@ def main() -> None:
                 col_w = (cols - GUTTER) // 2
                 pages = pack_pages(paras, col_w, 2 * rows)
                 doc_pages[cond] = pages
-                page_lines[cond] = {pg: layout_page(paras[pg[0] : pg[1]], col_w) for pg in pages}
-                page_chars = [offsets[j - 1] + len(paras[j - 1]["ctx"]) - offsets[i] for i, j in pages]
+                page_lines[cond] = {
+                    pg: layout_page(paras[pg[0] : pg[1]], col_w) for pg in pages
+                }
+                page_chars = [
+                    offsets[j - 1] + len(paras[j - 1]["ctx"]) - offsets[i]
+                    for i, j in pages
+                ]
                 capacity_stats[f"{cond}@{length}"] = {
                     "pages": len(pages),
                     "mean_chars_page": round(sum(page_chars) / len(pages)),
@@ -381,8 +433,13 @@ def main() -> None:
                     "corpus_chars": len(flow),
                 }
         ctx = {
-            "args": args, "flow": flow, "paras": paras, "offsets": offsets,
-            "keys": keys, "length": length, "lines": page_lines,
+            "args": args,
+            "flow": flow,
+            "paras": paras,
+            "offsets": offsets,
+            "keys": keys,
+            "length": length,
+            "lines": page_lines,
         }
         for cond in conditions:
             kind, font, _ = parse_condition(cond)
@@ -392,7 +449,9 @@ def main() -> None:
             else:
                 budget = capacity(FONTS[font], args.size)[2]
                 for start in range(0, len(flow), budget):
-                    tasks.append(("img", cond, (start, min(start + budget, len(flow))), ctx))
+                    tasks.append(
+                        ("img", cond, (start, min(start + budget, len(flow))), ctx)
+                    )
 
     for key, st in sorted(capacity_stats.items()):
         print(
@@ -411,7 +470,11 @@ def main() -> None:
                     col_w = (cols - GUTTER) // 2
                     i, j = pack_pages(paras, col_w, 2 * rows)[0]
                     lines = layout_page(paras[i:j], col_w)
-                    key = sha8(cond, json.dumps([(p["title"], p["ctx"]) for p in paras[i:j]]), str(args.size))
+                    key = sha8(
+                        cond,
+                        json.dumps([(p["title"], p["ctx"]) for p in paras[i:j]]),
+                        str(args.size),
+                    )
                     png = CACHE / f"exp16-{cond}-{key}.png"
                     atomic_save(render_doc(lines, cfg, args.size, CACHE), png)
                 else:
@@ -419,7 +482,10 @@ def main() -> None:
                     cap = capacity(cfg, args.size)[2]
                     chunk_text = flow[:cap]
                     _, _, variant = parse_condition(cond)
-                    png = CACHE / f"exp16-{font}-{variant}-{sha8(chunk_text, str(args.size))}.png"
+                    png = (
+                        CACHE
+                        / f"exp16-{font}-{variant}-{sha8(chunk_text, str(args.size))}.png"
+                    )
                     atomic_save(render(chunk_text, cfg, CACHE, args.size, variant), png)
                 print(f"  sample: {png}")
         return
@@ -449,9 +515,18 @@ def main() -> None:
             sub = [r for r in records if r["length"] == length and r["cond"] == cond]
             if not sub:
                 continue
-            cells.append({"model": MODEL, "length": length, "condition": cond, **aggregate(sub, *PRICE)})
+            cells.append(
+                {
+                    "model": MODEL,
+                    "length": length,
+                    "condition": cond,
+                    **aggregate(sub, *PRICE),
+                }
+            )
     (out_dir / "summary.json").write_text(
-        json.dumps({"args": vars(args), "capacity": capacity_stats, "cells": cells}, indent=1)
+        json.dumps(
+            {"args": vars(args), "capacity": capacity_stats, "cells": cells}, indent=1
+        )
     )
     with (out_dir / "matrix.csv").open("w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=list(cells[0].keys()))
@@ -461,7 +536,11 @@ def main() -> None:
     for c in cells:
         bi, bt = BASE_IMG.get(c["length"]), BASE_TEXT.get(c["length"])
         comb_se = (c["f1_se"] ** 2 + bi[1] ** 2) ** 0.5 if bi else 0.0
-        d_img = f"vs 6x12-dim {c['f1'] - bi[0]:+.3f} ({(c['f1'] - bi[0]) / comb_se:+.1f}se)" if bi else ""
+        d_img = (
+            f"vs 6x12-dim {c['f1'] - bi[0]:+.3f} ({(c['f1'] - bi[0]) / comb_se:+.1f}se)"
+            if bi
+            else ""
+        )
         d_txt = f" vs text {c['f1'] - bt[0]:+.3f}" if bt else ""
         flag = "  ** beats text ceiling" if bt and c["f1"] > bt[0] else ""
         print(

@@ -14,6 +14,7 @@ import {
 	fetchResourceMetadataScopes,
 	loadAllMCPConfigs,
 	MCPManager,
+	type OAuthEndpoints,
 } from "../../mcp";
 import { connectToServer, disconnectServer, listTools } from "../../mcp/client";
 import {
@@ -88,12 +89,14 @@ function raceAbortSignal<T>(promise: Promise<T>, signal: AbortSignal, createErro
 const MCP_AUTH_MIN_WRAP_WIDTH = 16;
 
 /**
- * Wrap `url` into rows that each fit inside `width`, prefixed by a shared
- * single-column indent so nested composition doesn't touch column 0. When the
- * label + URL fit on one line, returns a single row; otherwise puts the label
- * on its own row and slices the URL into fixed-width chunks. URL chunks are
- * plain code points — browsers strip whitespace when pasted into the address
- * bar, so a multi-row selection copies back to the intact URL.
+ * Wrap `url` into rows that each fit inside `width`. When the label + URL fit
+ * on one line, returns a single indented row; otherwise puts the label on its
+ * own indented row and slices the URL into fixed-width chunks that start at
+ * column 0. Continuation chunks carry ZERO leading bytes on purpose: a
+ * multi-row terminal selection includes the newline plus any leading indent,
+ * and while address bars strip newlines they preserve or percent-encode
+ * embedded spaces — an indent would corrupt the URL at every chunk boundary
+ * (silently, when the damage lands inside a query value).
  */
 function wrapUrlRows(label: string, url: string, width: number): string[] {
 	const indent = " ";
@@ -103,10 +106,9 @@ function wrapUrlRows(label: string, url: string, width: number): string[] {
 	if (inlineWidth <= effective) {
 		return [`${indent}${theme.fg("muted", `${label} ${sanitized}`)}`];
 	}
-	const chunkWidth = Math.max(1, effective - indent.length);
 	const rows: string[] = [`${indent}${theme.fg("muted", label)}`];
-	for (let i = 0; i < sanitized.length; i += chunkWidth) {
-		rows.push(`${indent}${theme.fg("muted", sanitized.slice(i, i + chunkWidth))}`);
+	for (let i = 0; i < sanitized.length; i += effective) {
+		rows.push(theme.fg("muted", sanitized.slice(i, i + effective)));
 	}
 	return rows;
 }
@@ -602,6 +604,7 @@ export class MCPCommandController {
 									callbackPath: finalConfig.oauth?.callbackPath,
 									redirectUri: finalConfig.oauth?.redirectUri,
 									prompt: finalConfig.oauth?.prompt,
+									registrationUrl: oauth.registrationUrl,
 									serverUrl: finalConfig.url,
 									resource: oauthResource,
 									stripSameOriginResource: oauthResourceIsFallback,
@@ -683,6 +686,7 @@ export class MCPCommandController {
 			redirectUri?: string;
 			prompt?: string;
 			serverUrl?: string;
+			registrationUrl?: string;
 			resource?: string;
 			stripSameOriginResource?: boolean;
 			/**
@@ -746,6 +750,7 @@ export class MCPCommandController {
 				{
 					authorizationUrl: authUrl,
 					tokenUrl: tokenUrl,
+					registrationUrl: opts?.registrationUrl,
 					clientId: resolvedClientId,
 					clientSecret: resolvedClientSecret,
 					scopes: scopes || undefined,
@@ -1037,13 +1042,7 @@ export class MCPCommandController {
 		return next;
 	}
 
-	async #resolveOAuthEndpointsFromServer(config: MCPServerConfig): Promise<{
-		authorizationUrl: string;
-		tokenUrl: string;
-		clientId?: string;
-		scopes?: string;
-		resource?: string;
-	}> {
+	async #resolveOAuthEndpointsFromServer(config: MCPServerConfig): Promise<OAuthEndpoints> {
 		// Stdio servers manage credentials inside the child process; OMP's OAuth
 		// flow only applies to http/sse transports. Without this guard the
 		// unauthenticated preflight below spawns the child, which happily reuses
@@ -1179,7 +1178,7 @@ export class MCPCommandController {
 			if (isConnected && this.ctx.mcpManager) {
 				const serverTools = this.ctx.mcpManager.getTools().filter(t => t.mcpServerName === name);
 				if (serverTools.length > 0) {
-					const currentActive = this.ctx.session.getActiveToolNames();
+					const currentActive = this.ctx.session.getEnabledToolNames();
 					const toActivate = serverTools.map(t => t.name).filter(n => this.ctx.session.getToolByName(n));
 					if (toActivate.length > 0) {
 						await this.ctx.session.setActiveToolsByName([...new Set([...currentActive, ...toActivate])]);
@@ -1738,6 +1737,7 @@ export class MCPCommandController {
 					callbackPath: found.config.oauth?.callbackPath,
 					redirectUri: found.config.oauth?.redirectUri,
 					prompt: found.config.oauth?.prompt,
+					registrationUrl: oauth.registrationUrl,
 					serverUrl,
 					resource: oauthResource,
 					stripSameOriginResource: oauthResourceIsFallback,

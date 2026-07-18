@@ -10,6 +10,7 @@ import {
 } from "@oh-my-pi/pi-tui/kitty-graphics";
 import {
 	type CellDimensions,
+	encodeKitty,
 	encodeKittyDeleteImage,
 	encodeKittyPlacement,
 	encodeKittyTransmit,
@@ -17,6 +18,7 @@ import {
 	ImageProtocol,
 	setCellDimensions,
 	TERMINAL,
+	wrapTmuxPassthrough,
 } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import { VirtualTerminal } from "./virtual-terminal";
 
@@ -25,6 +27,17 @@ const terminal = TERMINAL as unknown as MutableTerminalInfo;
 
 const BASE64_ONE_PIXEL_PNG =
 	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg==";
+
+const ORIGINAL_TMUX = Bun.env.TMUX;
+
+beforeEach(() => {
+	delete Bun.env.TMUX;
+});
+
+afterEach(() => {
+	if (ORIGINAL_TMUX === undefined) delete Bun.env.TMUX;
+	else Bun.env.TMUX = ORIGINAL_TMUX;
+});
 
 /** Drive one render pass against the budget with `count` images (ids 1..count, stable across passes). */
 function pass(budget: ImageBudget, count: number): { suppressed: boolean[]; reset: boolean; purge: readonly number[] } {
@@ -270,6 +283,40 @@ describe("ImageBudget", () => {
 describe("encodeKittyDeleteImage", () => {
 	it("emits an APC delete-by-id that frees the image and suppresses the reply", () => {
 		expect(encodeKittyDeleteImage(42)).toBe("\x1b_Ga=d,d=I,i=42,q=2\x1b\\");
+	});
+});
+
+describe("tmux Kitty graphics passthrough", () => {
+	beforeEach(() => {
+		Bun.env.TMUX = "/tmp/tmux-1000/default,1,0";
+	});
+
+	it("wraps every Kitty graphics command in a tmux DCS envelope", () => {
+		const expected = (payload: string) => `\x1bPtmux;${payload.replaceAll("\x1b", "\x1b\x1b")}\x1b\\`;
+
+		expect(encodeKitty("AA==", { columns: 1, rows: 1 })).toBe(expected("\x1b_Ga=T,f=100,q=2,C=1,c=1,r=1;AA==\x1b\\"));
+		expect(encodeKittyTransmit("AA==", 9)).toBe(expected("\x1b_Ga=t,f=100,q=2,i=9;AA==\x1b\\"));
+		expect(encodeKittyPlacement({ imageId: 9, placementId: 9, columns: 3, rows: 2 })).toBe(
+			expected("\x1b_Ga=p,q=2,C=1,i=9,p=9,c=3,r=2\x1b\\"),
+		);
+		expect(encodeKittyVirtualPlacement({ imageId: 9, placementId: 9, columns: 3, rows: 2 })).toBe(
+			expected("\x1b_Ga=p,U=1,q=2,i=9,p=9,c=3,r=2\x1b\\"),
+		);
+		expect(encodeKittyDeleteImage(9)).toBe(expected("\x1b_Ga=d,d=I,i=9,q=2\x1b\\"));
+	});
+
+	it("wraps each quiet chunk of a multi-part Kitty transmission separately", () => {
+		const sequence = encodeKittyTransmit("A".repeat(4097), 9);
+		expect(sequence.match(/\x1bPtmux;/gu)).toHaveLength(2);
+		expect(sequence.match(/\x1b\x1b_G/gu)).toHaveLength(2);
+		expect(sequence.match(/\x1b\x1b\\\x1b\\/gu)).toHaveLength(2);
+		expect(sequence).toContain("\x1b\x1b_Gq=2,m=0;");
+	});
+
+	it("leaves Kitty graphics commands bare outside tmux", () => {
+		delete Bun.env.TMUX;
+		expect(encodeKittyTransmit("AA==", 9)).toBe("\x1b_Ga=t,f=100,q=2,i=9;AA==\x1b\\");
+		expect(wrapTmuxPassthrough("\x1b_Gpayload\x1b\\")).toBe("\x1bPtmux;\x1b\x1b_Gpayload\x1b\x1b\\\x1b\\");
 	});
 });
 
@@ -709,6 +756,71 @@ describe("TUI inline-image budget", () => {
 			const output = writes.join("");
 			expect(output).toContain("\x1b_Ga=t");
 			expect(output).toContain(BASE64_ONE_PIXEL_PNG);
+		} finally {
+			tui.stop();
+			terminal.id = originalId;
+			setKittyGraphics(originalGraphics);
+		}
+	});
+
+	it("keeps a deferred fullscreen exit until a Ghostty image repaint can emit it", () => {
+		const originalId = terminal.id;
+		const originalGraphics = { ...getKittyGraphics() };
+		const term = new VirtualTerminal(40, 12);
+		const writes: string[] = [];
+		const realWrite = term.write.bind(term);
+		vi.spyOn(term, "write").mockImplementation((data: string) => {
+			writes.push(data);
+			realWrite(data);
+		});
+		let now = 0;
+		const scheduled: Array<{ delayMs: number; callback: () => void; canceled: boolean }> = [];
+		const renderScheduler = {
+			now: () => now,
+			scheduleImmediate: (callback: () => void) => callback(),
+			scheduleRender: (callback: () => void, delayMs: number) => {
+				const entry = { delayMs, callback, canceled: false };
+				scheduled.push(entry);
+				return {
+					cancel: () => {
+						entry.canceled = true;
+					},
+				};
+			},
+		};
+
+		terminal.id = "ghostty";
+		terminal.imageProtocol = ImageProtocol.Kitty;
+		setKittyGraphics({ unicodePlaceholders: true });
+		const tui = new TUI(term, undefined, { renderScheduler });
+		tui.addChild(new Text("old session", 0, 0));
+
+		try {
+			tui.start();
+			const overlay = tui.showOverlay(new Text("session selector", 0, 0), {
+				width: "100%",
+				maxHeight: "100%",
+				fullscreen: true,
+			});
+			tui.addChild(makeImage(tui.imageBudget, "resumed-image"));
+			tui.requestRender(true, { clearScrollback: true });
+			overlay.hide();
+
+			const queued = scheduled.find(entry => !entry.canceled);
+			expect(queued).toBeDefined();
+			now = 40;
+			queued!.canceled = true;
+			queued!.callback();
+
+			const delayed = scheduled.find(entry => !entry.canceled);
+			expect(delayed).toBeDefined();
+			now = 100;
+			delayed!.canceled = true;
+			delayed!.callback();
+
+			const exitPaint = writes.find(write => write.includes("\x1b[?1049l"));
+			expect(exitPaint).toContain("\x1b[3J");
+			expect(exitPaint).toContain(BASE64_ONE_PIXEL_PNG);
 		} finally {
 			tui.stop();
 			terminal.id = originalId;

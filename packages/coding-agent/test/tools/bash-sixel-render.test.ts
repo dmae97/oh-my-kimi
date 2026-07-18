@@ -128,6 +128,34 @@ describe("bashToolRenderer", () => {
 		expect(rendered).not.toContain("Wall time: 1.23 seconds");
 	});
 
+	it("renders a backgrounded job as a static footer notice", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const uiTheme = theme!;
+		const component = bashToolRenderer.renderResult(
+			{
+				content: [
+					{
+						type: "text",
+						text: "started\n\nBackgrounded as job bash-42; result will be delivered automatically.",
+					},
+				],
+				details: {
+					timeoutSeconds: 300,
+					async: { state: "running", jobId: "bash-42", type: "bash" },
+				},
+				isError: false,
+			},
+			{ expanded: false, isPartial: false },
+			uiTheme,
+			{ command: "sleep 30" },
+		);
+		const rendered = sanitizeText(component.render(120).join("\n"));
+		expect(rendered).toContain("started");
+		expect(rendered).toContain("Backgrounded: bash-42");
+		expect(rendered).not.toContain("result will be delivered automatically");
+	});
+
 	it("folds raw output artifact notices into the status footer", async () => {
 		const theme = await getThemeByName("dark");
 		expect(theme).toBeDefined();
@@ -175,6 +203,28 @@ describe("bashToolRenderer", () => {
 		expect(rendered).not.toContain("Wall time: 0.02 seconds");
 		// The command's own output still shows.
 		expect(rendered).toContain("boom");
+	});
+
+	it("renders a timed-out command with a warning border instead of an error border", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const uiTheme = theme!;
+		const component = bashToolRenderer.renderResult(
+			{
+				content: [{ type: "text", text: "[Command timed out after 1 seconds]\n" }],
+				details: { timeoutSeconds: 1, timedOut: true },
+				isError: true,
+			},
+			{ expanded: false, isPartial: false },
+			uiTheme,
+			{ command: "sleep 3", timeout: 1 },
+		);
+		const rendered = component.render(120).join("\n");
+		const warningAnsi = uiTheme.fg("warning", "").replace("\x1b[39m", "");
+		const errorAnsi = uiTheme.fg("error", "").replace("\x1b[39m", "");
+
+		expect(rendered).toContain(warningAnsi);
+		expect(rendered).not.toContain(errorAnsi);
 	});
 
 	it("omits the status footer for a successful command", async () => {

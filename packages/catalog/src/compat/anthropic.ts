@@ -99,20 +99,17 @@ export function buildAnthropicCompat(spec: ModelSpec<"anthropic-messages">): Res
 	// (issue #4192).
 	const isZenmux = modelMatchesHost(spec, "zenmux");
 	const requiresThinkingEnabled = modelMatchesHost(spec, "moonshotNative") && matchesKimiK27CodeFamily(spec);
+	const isVertex = isVertexAnthropicRoute(baseUrl);
+	const isBedrock = isBedrockAnthropicRoute(baseUrl);
+	const isAzure = isAzureAnthropicRoute(baseUrl);
 	const signingEndpoint =
-		official ||
-		isCopilot ||
-		isZenmux ||
-		isCloudflareAnthropicGateway(baseUrl) ||
-		isVertexAnthropicRoute(baseUrl) ||
-		isBedrockAnthropicRoute(baseUrl) ||
-		isAzureAnthropicRoute(baseUrl);
+		official || isCopilot || isZenmux || isCloudflareAnthropicGateway(baseUrl) || isVertex || isBedrock || isAzure;
 	const compat: ResolvedAnthropicCompat = {
 		officialEndpoint: official,
 		signingEndpoint,
-		disableStrictTools: false,
+		disableStrictTools: isAzure,
 		disableAdaptiveThinking: false,
-		supportsEagerToolInputStreaming: !isCopilot,
+		supportsEagerToolInputStreaming: official,
 		// Long cache retention is only sent to the official API by default;
 		// proxies opt in explicitly via `compat.supportsLongCacheRetention: true`.
 		supportsLongCacheRetention: official,

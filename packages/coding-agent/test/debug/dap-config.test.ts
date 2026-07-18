@@ -2,7 +2,14 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getAdapterConfigs, resolveAdapter, selectLaunchAdapter } from "../../src/dap/config";
+import * as piUtils from "@oh-my-pi/pi-utils";
+import {
+	getAdapterConfigs,
+	type LaunchAdapterSelection,
+	resolveAdapter,
+	selectLaunchAdapter,
+} from "../../src/dap/config";
+import type { DapResolvedAdapter } from "../../src/dap/types";
 import { injectPluginDirRoots } from "../../src/discovery/helpers";
 
 const tempDirs: string[] = [];
@@ -13,6 +20,45 @@ async function makeTempDir(prefix: string): Promise<string> {
 	const cwd = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
 	tempDirs.push(cwd);
 	return cwd;
+}
+
+interface NestedGoProgram {
+	moduleRoot: string;
+	program: string;
+}
+
+async function writeExecutable(filePath: string): Promise<void> {
+	await fs.mkdir(path.dirname(filePath), { recursive: true });
+	await fs.writeFile(filePath, process.platform === "win32" ? "@echo off\r\n" : "#!/bin/sh\n");
+	await fs.chmod(filePath, 0o755);
+}
+
+async function writeDlvOverride(cwd: string, command: string): Promise<void> {
+	await fs.writeFile(path.join(cwd, "dap.json"), JSON.stringify({ adapters: { dlv: { command } } }));
+}
+
+async function setupMissingDlvProject(cwd: string): Promise<string> {
+	const missingCommand = path.join(cwd, "tools", "missing-dlv");
+	await fs.writeFile(path.join(cwd, "go.mod"), "module example.com/app\n\ngo 1.22\n");
+	await writeExecutable(path.join(cwd, "bin", "gdb"));
+	await writeDlvOverride(cwd, missingCommand);
+	return missingCommand;
+}
+
+async function setupNestedGoProgram(cwd: string): Promise<NestedGoProgram> {
+	const moduleRoot = path.join(cwd, "services", "api");
+	const program = path.join(moduleRoot, "main.go");
+	await fs.mkdir(moduleRoot, { recursive: true });
+	await fs.writeFile(path.join(moduleRoot, "go.mod"), "module example.com/api\n\ngo 1.22\n");
+	await fs.writeFile(program, "package main\n\nfunc main() {}\n");
+	return { moduleRoot, program };
+}
+
+function requireSelectedAdapter(selection: LaunchAdapterSelection): DapResolvedAdapter {
+	if (selection.kind !== "adapter") {
+		throw new Error(`Expected an available adapter, received '${selection.kind}'`);
+	}
+	return selection.adapter;
 }
 
 afterEach(async () => {
@@ -63,8 +109,8 @@ describe("DAP adapter configuration", () => {
 		expect(adapter?.launchDefaults).toEqual({ request: "launch", mainClass: "" });
 		expect(adapter?.attachDefaults).toEqual({ request: "attach", host: "127.0.0.1" });
 
-		const selected = selectLaunchAdapter(path.join("src", "Main.java"), cwd);
-		expect(selected?.name).toBe("custom-jvm");
+		const selected = requireSelectedAdapter(selectLaunchAdapter(path.join("src", "Main.java"), cwd));
+		expect(selected.name).toBe("custom-jvm");
 	});
 
 	it("merges partial user overrides over built-in adapters", async () => {
@@ -116,9 +162,9 @@ describe("DAP adapter configuration", () => {
 			].join("\n"),
 		);
 
-		const selected = selectLaunchAdapter("Main.kt", cwd);
-		expect(selected?.name).toBe("yaml-kotlin");
-		expect(selected?.launchDefaults).toEqual({ request: "launch", projectRoot: "." });
+		const selected = requireSelectedAdapter(selectLaunchAdapter("Main.kt", cwd));
+		expect(selected.name).toBe("yaml-kotlin");
+		expect(selected.launchDefaults).toEqual({ request: "launch", projectRoot: "." });
 	});
 
 	it("resolves relative adapter commands from the debug cwd", async () => {
@@ -194,5 +240,101 @@ describe("DAP adapter configuration", () => {
 		const config = getAdapterConfigs(cwd);
 		expect(config["missing-command"]).toBeUndefined();
 		expect(config.valid?.command).toBe("bun");
+	});
+
+	it("reports missing dlv for Go source instead of falling back to a native debugger", async () => {
+		const cwd = await makeTempDir("omp-dap-go-source-missing-");
+		const missingCommand = await setupMissingDlvProject(cwd);
+		const program = path.join(cwd, "main.go");
+		await fs.writeFile(program, "package main\n\nfunc main() {}\n");
+
+		const selection = selectLaunchAdapter(program, cwd);
+
+		expect(selection).toEqual({ kind: "unavailable", adapterName: "dlv", command: missingCommand });
+	});
+
+	it("reports missing dlv for Go package directories instead of selecting a native debugger", async () => {
+		const cwd = await makeTempDir("omp-dap-go-directory-missing-");
+		const missingCommand = await setupMissingDlvProject(cwd);
+		const program = path.join(cwd, "cmd", "server");
+		await fs.mkdir(program, { recursive: true });
+
+		const selection = selectLaunchAdapter(program, cwd, undefined, "directory");
+
+		expect(selection).toEqual({ kind: "unavailable", adapterName: "dlv", command: missingCommand });
+	});
+
+	it("prefers a nested module adapter over cwd and PATH for inferred launches", async () => {
+		const cwd = await makeTempDir("omp-dap-go-nested-local-");
+		const { moduleRoot, program } = await setupNestedGoProgram(cwd);
+		const nestedDlv = path.join(moduleRoot, "bin", "dlv");
+		await writeExecutable(nestedDlv);
+		await fs.writeFile(path.join(cwd, "go.mod"), "module example.com/repo\n\ngo 1.22\n");
+		await writeExecutable(path.join(cwd, "bin", "dlv"));
+		const whichSpy = vi.spyOn(piUtils, "$which").mockReturnValue(path.join(cwd, "global", "dlv"));
+
+		const selected = requireSelectedAdapter(selectLaunchAdapter(program, cwd));
+
+		expect(selected.resolvedCommand).toBe(nestedDlv);
+		expect(whichSpy).not.toHaveBeenCalled();
+	});
+
+	it("uses a nested module adapter when dlv is requested explicitly", async () => {
+		const cwd = await makeTempDir("omp-dap-go-nested-explicit-");
+		const { moduleRoot, program } = await setupNestedGoProgram(cwd);
+		const nestedDlv = path.join(moduleRoot, "bin", "dlv");
+		await writeExecutable(nestedDlv);
+		const whichSpy = vi.spyOn(piUtils, "$which").mockReturnValue(path.join(cwd, "global", "dlv"));
+
+		const selected = requireSelectedAdapter(selectLaunchAdapter(program, cwd, "dlv"));
+
+		expect(selected.resolvedCommand).toBe(nestedDlv);
+		expect(whichSpy).not.toHaveBeenCalled();
+	});
+
+	it("prefers the session cwd adapter over PATH after a nested-root miss", async () => {
+		const cwd = await makeTempDir("omp-dap-go-nested-cwd-");
+		const { program } = await setupNestedGoProgram(cwd);
+		const cwdDlv = path.join(cwd, "bin", "dlv");
+		await fs.writeFile(path.join(cwd, "go.mod"), "module example.com/repo\n\ngo 1.22\n");
+		await writeExecutable(cwdDlv);
+		const whichSpy = vi.spyOn(piUtils, "$which").mockReturnValue(path.join(cwd, "global", "dlv"));
+
+		const selected = requireSelectedAdapter(selectLaunchAdapter(program, cwd));
+
+		expect(selected.resolvedCommand).toBe(cwdDlv);
+		expect(whichSpy).not.toHaveBeenCalled();
+	});
+
+	it("resolves a local dlv for Go workspaces rooted by go.work", async () => {
+		const cwd = await makeTempDir("omp-dap-go-work-");
+		const program = path.join(cwd, "cmd", "worker");
+		const localDlv = path.join(cwd, "bin", "dlv");
+		await fs.writeFile(path.join(cwd, "go.work"), "go 1.22\n\nuse ./cmd/worker\n");
+		await fs.mkdir(program, { recursive: true });
+		await writeExecutable(localDlv);
+
+		const selected = requireSelectedAdapter(selectLaunchAdapter(program, cwd, undefined, "directory"));
+
+		expect(selected.resolvedCommand).toBe(localDlv);
+	});
+
+	it("re-resolves an adapter installed after an earlier miss", async () => {
+		const cwd = await makeTempDir("omp-dap-go-fresh-");
+		const program = path.join(cwd, "main.go");
+		const command = path.join(cwd, "tools", process.platform === "win32" ? "dlv.cmd" : "dlv");
+		await fs.writeFile(path.join(cwd, "go.mod"), "module example.com/cache\n\ngo 1.22\n");
+		await fs.writeFile(program, "package main\n\nfunc main() {}\n");
+		await writeDlvOverride(cwd, command);
+
+		expect(selectLaunchAdapter(program, cwd)).toEqual({
+			kind: "unavailable",
+			adapterName: "dlv",
+			command,
+		});
+
+		await writeExecutable(command);
+		const selected = requireSelectedAdapter(selectLaunchAdapter(program, cwd));
+		expect(selected.resolvedCommand).toBe(command);
 	});
 });

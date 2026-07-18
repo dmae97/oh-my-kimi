@@ -68,6 +68,13 @@ export interface SoftToolRequirement {
 	id: string;
 	/** Tool that must be called before the loop runs other tools or yields. */
 	toolName: string;
+	/**
+	 * Per-call compliance check: a turn satisfies the requirement only when every
+	 * tool call passes. Defaults to `name === toolName`. Lets a host demand a
+	 * specific invocation shape (e.g. `write` targeting a virtual device path)
+	 * instead of any call to `toolName`. Escalation still forces `toolName`.
+	 */
+	satisfies?(toolCall: { name: string; arguments?: Record<string, unknown> }): boolean;
 	/** Host-owned reminder messages, injected once per `id` activation. */
 	reminder: AgentMessage[];
 }
@@ -81,6 +88,17 @@ export type ToolChoiceDirective = ToolChoice | SoftToolRequirement;
 /** True when a {@link ToolChoiceDirective} is a soft requirement, not a hard choice. */
 export function isSoftToolRequirement(directive: ToolChoiceDirective | undefined): directive is SoftToolRequirement {
 	return typeof directive === "object" && directive !== null && (directive as SoftToolRequirement).soft === true;
+}
+
+/** Source category for a queued steering interrupt observed without consuming the queue. */
+export type SteeringInterruptSource = "user" | "system" | "unknown";
+
+/** Non-consuming summary of whether queued steering should interrupt a tool batch. */
+export interface SteeringQueueState {
+	/** True when at least one steering message is queued. */
+	queued: boolean;
+	/** Best-effort origin used only to word synthetic skipped-tool results. */
+	source?: SteeringInterruptSource;
 }
 
 /**
@@ -194,10 +212,14 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * restore queued messages while in-flight tools settle, and an external
 	 * abort in that window leaves the queue intact for a post-abort continue.
 	 *
+	 * Returning `true` is treated as user-originated steering for compatibility.
+	 * Return a {@link SteeringQueueState} when the queue can distinguish system
+	 * advisories from real user messages.
+	 *
 	 * When omitted, steering never interrupts a running tool batch; queued
 	 * messages are still delivered at the next injection boundary.
 	 */
-	hasSteeringMessages?: () => boolean | Promise<boolean>;
+	hasSteeringMessages?: () => boolean | SteeringQueueState | Promise<boolean | SteeringQueueState>;
 
 	/**
 	 * Peeks whether IRC messages should interrupt an interruptible waiting tool.
@@ -573,6 +595,17 @@ export interface RenderResultOptions {
 export type ToolTier = "read" | "write" | "exec";
 
 /**
+ * How an enabled tool is presented to the model. `"essential"` tools are exposed
+ * as normal top-level tools. `"discoverable"` tools are removed from the top-level
+ * schema and either mounted under `xd://` device URLs (when that transport is
+ * active) or surfaced through BM25 tool search — keeping their schemas off every
+ * request. Selection (settings, `hidden`, `defaultInactive`, explicit `--tools`,
+ * provider availability) decides whether a tool is enabled; `loadMode` only
+ * decides how an enabled tool is presented.
+ */
+export type ToolLoadMode = "essential" | "discoverable";
+
+/**
  * Per-tool approval declaration.
  * - bare tier ("read" / "write" / "exec") — static classification.
  * - object form — adds a `reason` (shown in the prompt) and/or `override: true`
@@ -610,8 +643,8 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	hidden?: boolean;
 	/** If true, tool can stage a pending action that requires explicit resolution via the resolve tool. */
 	deferrable?: boolean;
-	/** Built-in tool loading behavior. "essential" loads initially; "discoverable" can be activated by tool search. */
-	loadMode?: "essential" | "discoverable";
+	/** How an enabled tool is presented. See {@link ToolLoadMode}. Omitted is treated as `"essential"` for built-ins; custom-tool adapters normalize omission to `"discoverable"`. */
+	loadMode?: ToolLoadMode;
 	/** Short one-line summary used for tool discovery indexes. */
 	summary?: string;
 	/**

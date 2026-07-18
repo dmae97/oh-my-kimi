@@ -146,14 +146,18 @@ export class BashExecutionComponent extends Container {
 	#updateDisplay(): void {
 		const availableLines = this.#outputLines;
 
-		// Apply preview truncation based on expanded state
+		// Full output is shown when expanded or when sixel passthrough renders
+		// the raw payload; the collapsed preview shows only the tail window.
 		const previewLogicalLines = availableLines.slice(-PREVIEW_LINES);
-		const hiddenLineCount = availableLines.length - previewLogicalLines.length;
 		const sixelLineMask =
 			TERMINAL.imageProtocol === ImageProtocol.Sixel && isSixelPassthroughEnabled()
 				? getSixelLineMask(availableLines)
 				: undefined;
 		const hasSixelOutput = sixelLineMask?.some(Boolean) ?? false;
+		const showingAllLines = this.#expanded || hasSixelOutput;
+		// Only the collapsed preview hides lines; when the full output is shown
+		// the footer must not keep advertising hidden lines / ctrl+o.
+		const hiddenLineCount = showingAllLines ? 0 : availableLines.length - previewLogicalLines.length;
 
 		// Rebuild content container
 		this.#contentContainer.clear();
@@ -163,7 +167,7 @@ export class BashExecutionComponent extends Container {
 
 		// Output
 		if (availableLines.length > 0) {
-			if (this.#expanded || hasSixelOutput) {
+			if (showingAllLines) {
 				const displayText = availableLines
 					.map((line, index) => (sixelLineMask?.[index] ? line : theme.fg("muted", line)))
 					.join("\n");

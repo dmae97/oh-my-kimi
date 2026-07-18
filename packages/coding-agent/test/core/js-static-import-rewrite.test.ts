@@ -182,3 +182,39 @@ describe("rewriteImports", () => {
 		expect(wrapped.source).not.toContain(`${IMPORT} type`);
 	});
 });
+
+// Cross-cell persistence: cells run through indirect eval, so bindings survive only if
+// they land on globalThis. Cells with top-level `await` run inside an async IIFE, where
+// declarations are function-scoped — wrapCode must publish them back to the global object
+// or the next cell sees ReferenceError.
+describe("wrapCode cross-cell persistence", () => {
+	it("publishes top-level function declarations and their sibling consts from async-wrapped cells", async () => {
+		const globals = globalThis as Record<string, unknown>;
+		const wrapped = await wrapCode(
+			"async function ompPersistedFn(n) { return (await Promise.resolve(n)) + 1; }\nconst ompPersistedTotal = await ompPersistedFn(41);",
+		);
+		expect(wrapped.asyncWrapped).toBe(true);
+		try {
+			await indirectEval(wrapped.source);
+			const fn = globals.ompPersistedFn as (n: number) => Promise<number>;
+			expect(typeof fn).toBe("function");
+			expect(await fn(1)).toBe(2);
+			expect(globals.ompPersistedTotal).toBe(42);
+		} finally {
+			delete globals.ompPersistedFn;
+			delete globals.ompPersistedTotal;
+		}
+	});
+
+	it("publishes explicit top-level var declarations from async-wrapped cells", async () => {
+		const globals = globalThis as Record<string, unknown>;
+		const wrapped = await wrapCode("await Promise.resolve();\nvar ompPersistedVar = 5;");
+		expect(wrapped.asyncWrapped).toBe(true);
+		try {
+			await indirectEval(wrapped.source);
+			expect(globals.ompPersistedVar).toBe(5);
+		} finally {
+			delete globals.ompPersistedVar;
+		}
+	});
+});

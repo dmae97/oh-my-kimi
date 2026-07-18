@@ -1,4 +1,4 @@
-/** Gallery fixtures for the search tools (grep, search_tool_bm25, ast_grep). */
+/** Gallery fixtures for the search tools (grep, ast_grep). */
 import type { GalleryFixture } from "./types";
 
 export const searchFixtures: Record<string, GalleryFixture> = {
@@ -72,84 +72,6 @@ export const searchFixtures: Record<string, GalleryFixture> = {
 			details: {
 				error: "Invalid regex pattern: unclosed group near index 8",
 			},
-		},
-	},
-
-	search_tool_bm25: {
-		label: "SearchTools",
-		streamingArgs: {
-			query: "read pdf and ext",
-		},
-		args: {
-			query: "read pdf and extract tables",
-			limit: 5,
-		},
-		result: {
-			content: [
-				{
-					type: "text",
-					text: JSON.stringify({
-						query: "read pdf and extract tables",
-						activated_tools: ["docling_extract_tables", "docling_convert", "pdf_read_text"],
-						match_count: 4,
-						total_tools: 142,
-					}),
-				},
-			],
-			details: {
-				query: "read pdf and extract tables",
-				limit: 5,
-				total_tools: 142,
-				activated_tools: ["docling_extract_tables", "docling_convert", "pdf_read_text"],
-				active_selected_tools: ["read", "grep", "edit", "bash"],
-				tools: [
-					{
-						name: "docling_extract_tables",
-						label: "Extract Tables",
-						description: "Extract tabular data from PDF documents into CSV or JSON rows.",
-						server_name: "docling",
-						mcp_tool_name: "extract_tables",
-						schema_keys: ["path", "pages", "format"],
-						score: 9.412037,
-					},
-					{
-						name: "docling_convert",
-						label: "Convert Document",
-						description: "Convert PDF, DOCX, or PPTX into structured Markdown with layout preserved.",
-						server_name: "docling",
-						mcp_tool_name: "convert",
-						schema_keys: ["path", "target", "ocr"],
-						score: 6.83102,
-					},
-					{
-						name: "pdf_read_text",
-						label: "Read PDF Text",
-						description: "Read raw text from a PDF, optionally scoped to a page range.",
-						server_name: "pdf-tools",
-						mcp_tool_name: "read_text",
-						schema_keys: ["path", "page_start", "page_end"],
-						score: 5.207884,
-					},
-					{
-						name: "tabula_scan",
-						label: "Scan Tables",
-						description: "Detect table bounding boxes on scanned PDF pages before extraction.",
-						server_name: "pdf-tools",
-						mcp_tool_name: "scan",
-						schema_keys: ["path", "dpi"],
-						score: 3.119556,
-					},
-				],
-			},
-		},
-		errorResult: {
-			content: [
-				{
-					type: "text",
-					text: "Tool discovery is disabled. Enable tools.discoveryMode or mcp.discoveryMode to use search_tool_bm25.",
-				},
-			],
-			isError: true,
 		},
 	},
 

@@ -113,9 +113,7 @@ def test_bot_login_normalizes_mention_case_and_app_suffix(
     assert cfg.bot_login == "roboomp"
 
 
-def test_maintainer_logins_normalize_csv_entries(
-    monkeypatch: pytest.MonkeyPatch, env: dict[str, str]
-) -> None:
+def test_maintainer_logins_normalize_csv_entries(monkeypatch: pytest.MonkeyPatch, env: dict[str, str]) -> None:
     monkeypatch.setenv("ROBOMP_MAINTAINER_LOGINS", " can1357, @ROBOOMP , @Alice[bot] ,, ")
     reset_settings_cache()
     cfg = Settings()  # type: ignore[call-arg]

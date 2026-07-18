@@ -27,6 +27,7 @@ describe("issue #816 — plan mode pendingModelSwitch leak", () => {
 		tempDir = TempDir.createSync("@pi-issue-816-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
 		modelRegistry = new ModelRegistry(authStorage);
 		const defaultModel = modelRegistry.find("anthropic", "claude-sonnet-4-5");
 		if (!defaultModel) throw new Error("Expected claude-sonnet-4-5 in registry");
@@ -92,6 +93,72 @@ describe("issue #816 — plan mode pendingModelSwitch leak", () => {
 		// Otherwise the next user turn lands on the plan-role model even though
 		// the user is no longer in plan mode.
 		expect(setModelSpy).not.toHaveBeenCalled();
+	});
+
+	it("discards a deferred plan-role change when the role returns to the active model", async () => {
+		await mode.init({ suppressWelcomeIntro: true });
+		await mode.handlePlanModeCommand();
+		const activePlanModel = session.model;
+		const haiku = modelRegistry.find("anthropic", "claude-haiku-4-5");
+		const opus = modelRegistry.find("anthropic", "claude-opus-4-5");
+		if (!activePlanModel || !haiku || !opus) throw new Error("Expected plan models");
+		const replacementPlanModel =
+			activePlanModel.provider === haiku.provider && activePlanModel.id === haiku.id ? opus : haiku;
+
+		let isStreaming = false;
+		Object.defineProperty(session, "isStreaming", { configurable: true, get: () => isStreaming });
+
+		isStreaming = true;
+		session.settings.setModelRole("plan", `${replacementPlanModel.provider}/${replacementPlanModel.id}`);
+		session.settings.setModelRole("plan", `${activePlanModel.provider}/${activePlanModel.id}`);
+		isStreaming = false;
+
+		const setModelSpy = vi.spyOn(session, "setModelTemporary").mockResolvedValue(undefined);
+		await mode.flushPendingModelSwitch();
+
+		expect(setModelSpy).not.toHaveBeenCalled();
+	});
+
+	it("applies a plan-role reassignment to an active plan session", async () => {
+		await mode.init({ suppressWelcomeIntro: true });
+		await mode.handlePlanModeCommand();
+		const activePlanModel = session.model;
+		const haiku = modelRegistry.find("anthropic", "claude-haiku-4-5");
+		const opus = modelRegistry.find("anthropic", "claude-opus-4-5");
+		if (!activePlanModel || !haiku || !opus) throw new Error("Expected plan models");
+		const replacementPlanModel =
+			activePlanModel.provider === haiku.provider && activePlanModel.id === haiku.id ? opus : haiku;
+
+		const setModelSpy = vi.spyOn(session, "setModelTemporary").mockResolvedValue(undefined);
+		session.settings.setModelRole("plan", `${replacementPlanModel.provider}/${replacementPlanModel.id}`);
+		await Promise.resolve();
+
+		expect(setModelSpy).toHaveBeenCalledWith(replacementPlanModel, undefined);
+	});
+
+	it("keeps plan state coherent when restoring the previous model fails", async () => {
+		const planModel = modelRegistry.find("anthropic", "claude-haiku-4-5");
+		if (!planModel) throw new Error("Expected claude-haiku-4-5 in registry");
+
+		vi.spyOn(session, "resolveRoleModelWithThinking").mockReturnValue({
+			model: planModel,
+			thinkingLevel: undefined,
+			explicitThinkingLevel: false,
+			warning: undefined,
+		});
+		vi.spyOn(session, "sendPlanModeContext").mockResolvedValue(undefined);
+		const setModelSpy = vi.spyOn(session, "setModelTemporary");
+
+		await mode.handlePlanModeCommand();
+		expect(mode.planModeEnabled).toBe(true);
+		expect(session.getPlanModeState()?.enabled).toBe(true);
+
+		setModelSpy.mockRejectedValueOnce(new Error("model restore failed"));
+		vi.spyOn(mode, "showHookConfirm").mockResolvedValue(true);
+		await expect(mode.handlePlanModeCommand()).rejects.toThrow("model restore failed");
+
+		expect(mode.planModeEnabled).toBe(true);
+		expect(session.getPlanModeState()?.enabled).toBe(true);
 	});
 
 	it("does not enter plan mode when plan.enabled is false", async () => {

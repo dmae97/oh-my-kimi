@@ -4,6 +4,7 @@
  * Loads configuration from ~/.claude/plugins/cache/ based on installed_plugins.json registry.
  * Priority: 70 (below claude.ts at 80, so user overrides in .claude/ take precedence)
  */
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { logger } from "@oh-my-pi/pi-utils";
 import { registerProvider } from "../capability";
@@ -23,21 +24,21 @@ import {
 	scanSkillsFromDir,
 } from "./helpers";
 
-import { substitutePluginRoot } from "./substitute-plugin-root";
+import { resolvePluginStdioPaths, substitutePluginRoot } from "./substitute-plugin-root";
 
 const PROVIDER_ID = "claude-plugins";
 const DISPLAY_NAME = "Claude Code Marketplace";
 const PRIORITY = 70; // Below claude.ts (80) so user .claude/ overrides win
 
 interface ClaudePluginManifest {
-	skills?: string;
-	"slash-commands"?: string;
-	commands?: string;
+	skills?: string | string[];
+	"slash-commands"?: string | string[];
+	commands?: string | string[];
 }
 
 interface ResolvedPluginDir {
-	dir: string;
-	warning?: string;
+	dirs: string[];
+	warnings: string[];
 }
 
 async function readPluginManifest(root: ClaudePluginRoot): Promise<ClaudePluginManifest | null> {
@@ -54,43 +55,116 @@ async function readPluginManifest(root: ClaudePluginRoot): Promise<ClaudePluginM
 	}
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+async function skillsManifestReplacesFallback(root: ClaudePluginRoot): Promise<boolean> {
+	const raw = await readFile(path.join(root.path, "marketplace.json"));
+	if (raw === null) return false;
+
+	try {
+		const parsed: unknown = JSON.parse(raw);
+		if (!isRecord(parsed)) return false;
+		const plugins = parsed.plugins;
+		return (
+			Array.isArray(plugins) &&
+			plugins.some(entry => isRecord(entry) && entry.name === root.plugin && entry.source === "./")
+		);
+	} catch {
+		return false;
+	}
+}
+
 function isWithinPluginRoot(rootPath: string, targetPath: string): boolean {
 	const relative = path.relative(rootPath, targetPath);
 	return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+/**
+ * Resolve a manifest-declared directory field to absolute paths within the
+ * plugin root.
+ *
+ * Manifest path fields may be `string` or `string[]`
+ * (https://code.claude.com/docs/en/plugins-reference#path-behavior-rules);
+ * both shapes are normalized here. The first `manifestKeys` entry that
+ * supplies at least one non-empty path wins (later keys are ignored — used for
+ * the `commands` > `slash-commands` legacy fallback).
+ *
+ * `fallback` is the default subdirectory (e.g. `skills/`, `commands/`) and
+ * `includeFallback` controls the Claude-documented merge semantic per field:
+ *
+ * - `skills` **adds to** the default: `fallback` is always scanned, and any
+ *   manifest entries load alongside it. Callers pass `includeFallback: true`.
+ * - `commands` / `slash-commands` **replace** the default: an explicit
+ *   manifest key means the default `commands/` directory is not scanned.
+ *   Callers pass `includeFallback: false` (the manifest itself may still
+ *   list `./commands` explicitly to keep it).
+ *
+ * When no matching key is set, the fallback is used regardless. Entries that
+ * resolve outside the plugin root are dropped with a warning so misconfigured
+ * manifests remain observable and cannot escape via traversal.
+ */
 async function resolvePluginDir(
 	root: ClaudePluginRoot,
 	manifestKeys: ReadonlyArray<keyof ClaudePluginManifest>,
 	fallback: string,
+	includeFallback: boolean,
 ): Promise<ResolvedPluginDir> {
 	const manifest = await readPluginManifest(root);
 	const fallbackDir = path.join(root.path, fallback);
 
-	let configured: string | undefined;
+	let configured: string[] | undefined;
 	let matchedKey: keyof ClaudePluginManifest | undefined;
 	for (const key of manifestKeys) {
 		const val = manifest?.[key];
-		if (typeof val === "string" && val.trim()) {
-			configured = val.trim();
+		const candidates: string[] = [];
+		if (typeof val === "string") {
+			const trimmed = val.trim();
+			if (trimmed) candidates.push(trimmed);
+		} else if (Array.isArray(val)) {
+			for (const entry of val) {
+				if (typeof entry !== "string") continue;
+				const trimmed = entry.trim();
+				if (trimmed) candidates.push(trimmed);
+			}
+		}
+		if (candidates.length > 0) {
+			configured = candidates;
 			matchedKey = key;
 			break;
 		}
 	}
 
 	if (configured === undefined) {
-		return { dir: fallbackDir };
+		return { dirs: [fallbackDir], warnings: [] };
 	}
 
-	const resolved = path.resolve(root.path, configured);
-	if (isWithinPluginRoot(root.path, resolved)) {
-		return { dir: resolved };
+	// Dedup preserves order: default entry (when included) first, then declared
+	// entries in manifest order. Deduping the paths themselves means a plugin
+	// author can still list `./commands` explicitly when they want the default
+	// alongside extras without producing double-loads.
+	const seen = new Set<string>();
+	const dirs: string[] = [];
+	const warnings: string[] = [];
+	if (includeFallback) {
+		seen.add(fallbackDir);
+		dirs.push(fallbackDir);
+	}
+	for (const entry of configured) {
+		const resolved = path.resolve(root.path, entry);
+		if (!isWithinPluginRoot(root.path, resolved)) {
+			warnings.push(
+				`[claude-plugins] Ignoring ${String(matchedKey)} path outside plugin root for ${root.id}: ${entry}`,
+			);
+			continue;
+		}
+		if (seen.has(resolved)) continue;
+		seen.add(resolved);
+		dirs.push(resolved);
 	}
 
-	return {
-		dir: fallbackDir,
-		warning: `[claude-plugins] Ignoring ${String(matchedKey)} path outside plugin root for ${root.id}: ${configured}`,
-	};
+	return { dirs, warnings };
 }
 
 // =============================================================================
@@ -104,24 +178,37 @@ async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
 	warnings.push(...rootWarnings);
 	const results = await Promise.all(
 		roots.map(async root => {
-			const { dir: skillsDir, warning } = await resolvePluginDir(root, ["skills"], "skills");
-			const result = await scanSkillsFromDir(ctx, {
-				dir: skillsDir,
-				providerId: PROVIDER_ID,
-				level: root.scope,
-			});
-			return { root, result, warning };
+			const includeFallback = !(await skillsManifestReplacesFallback(root));
+			const { dirs: skillsDirs, warnings: resolveWarnings } = await resolvePluginDir(
+				root,
+				["skills"],
+				"skills",
+				includeFallback,
+			);
+			const scanResults = await Promise.all(
+				skillsDirs.map(dir =>
+					scanSkillsFromDir(ctx, {
+						dir,
+						providerId: PROVIDER_ID,
+						level: root.scope,
+						includeSelf: true,
+					}),
+				),
+			);
+			return { scanResults, resolveWarnings };
 		}),
 	);
-	for (const { result, warning } of results) {
-		if (warning) warnings.push(warning);
+	for (const { scanResults, resolveWarnings } of results) {
+		warnings.push(...resolveWarnings);
 		// Intentionally do NOT prefix skill names with `root.plugin`.
 		// The `plugin:name` format breaks skill:// URL parsing (colons are
 		// ambiguous with port separators) and is unintuitive for callers.
 		// Dedup-by-key in the capability layer already handles name collisions
 		// across providers using priority ordering.
-		items.push(...result.items);
-		if (result.warnings) warnings.push(...result.warnings);
+		for (const result of scanResults) {
+			items.push(...result.items);
+			if (result.warnings) warnings.push(...result.warnings);
+		}
 	}
 	return { items, warnings };
 }
@@ -139,28 +226,62 @@ async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashComm
 
 	const results = await Promise.all(
 		roots.map(async root => {
-			const { dir: commandsDir, warning } = await resolvePluginDir(root, ["commands", "slash-commands"], "commands");
-			const commandResult = await loadFilesFromDir<SlashCommand>(ctx, commandsDir, PROVIDER_ID, root.scope, {
-				extensions: ["md"],
-				transform: (name, content, filePath, source) => {
-					const cmdName = name.replace(/\.md$/, "");
-					return {
-						name: root.plugin ? `${root.plugin}:${cmdName}` : cmdName,
-						path: filePath,
-						content,
-						level: root.scope,
-						_source: source,
-					};
-				},
-			});
-			return { commandResult, warning };
+			const { dirs: commandsDirs, warnings: resolveWarnings } = await resolvePluginDir(
+				root,
+				["commands", "slash-commands"],
+				"commands",
+				false,
+			);
+			const commandResults = await Promise.all(
+				commandsDirs.map(async dir => {
+					try {
+						const stats = await fs.stat(dir);
+						if (stats.isFile()) {
+							if (path.extname(dir) !== ".md") return { items: [], warnings: [] };
+							const content = await readFile(dir);
+							if (content === null) return { items: [], warnings: [`Failed to read file: ${dir}`] };
+							const cmdName = path.basename(dir).replace(/\.md$/, "");
+							return {
+								items: [
+									{
+										name: root.plugin ? `${root.plugin}:${cmdName}` : cmdName,
+										path: dir,
+										content,
+										level: root.scope,
+										_source: createSourceMeta(PROVIDER_ID, dir, root.scope),
+									},
+								],
+								warnings: [],
+							};
+						}
+					} catch {
+						// Missing entries behave like missing directories: no items, no warning.
+					}
+					return loadFilesFromDir<SlashCommand>(ctx, dir, PROVIDER_ID, root.scope, {
+						extensions: ["md"],
+						transform: (name, content, filePath, source) => {
+							const cmdName = name.replace(/\.md$/, "");
+							return {
+								name: root.plugin ? `${root.plugin}:${cmdName}` : cmdName,
+								path: filePath,
+								content,
+								level: root.scope,
+								_source: source,
+							};
+						},
+					});
+				}),
+			);
+			return { commandResults, resolveWarnings };
 		}),
 	);
 
-	for (const { commandResult, warning } of results) {
-		if (warning) warnings.push(warning);
-		items.push(...commandResult.items);
-		if (commandResult.warnings) warnings.push(...commandResult.warnings);
+	for (const { commandResults, resolveWarnings } of results) {
+		warnings.push(...resolveWarnings);
+		for (const commandResult of commandResults) {
+			items.push(...commandResult.items);
+			if (commandResult.warnings) warnings.push(...commandResult.warnings);
+		}
 	}
 
 	return { items, warnings };
@@ -320,14 +441,20 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 				continue;
 			}
 			const namespacedName = root.plugin ? `${root.plugin}:${serverName}` : serverName;
+			const substitutedCommand =
+				raw.command !== undefined ? substitutePluginRoot(raw.command, root.path) : undefined;
+			const substitutedCwd = raw.cwd !== undefined ? substitutePluginRoot(raw.cwd, root.path) : undefined;
+			// Root relative command/cwd at the plugin's config directory, not the
+			// session cwd (MCP stdio spawning resolves relative values there).
+			const rooted = resolvePluginStdioPaths({ command: substitutedCommand, cwd: substitutedCwd }, root.path);
 			const server: MCPServer = {
 				name: namespacedName,
 				...(raw.enabled !== undefined && { enabled: raw.enabled }),
 				...(raw.timeout !== undefined && { timeout: raw.timeout }),
-				...(raw.command !== undefined && { command: substitutePluginRoot(raw.command, root.path) }),
+				...(rooted.command !== undefined && { command: rooted.command }),
 				...(raw.args !== undefined && { args: substitutePluginRoot(raw.args, root.path) }),
 				...(raw.env !== undefined && { env: substitutePluginRoot(raw.env, root.path) }),
-				...(raw.cwd !== undefined && { cwd: substitutePluginRoot(raw.cwd, root.path) }),
+				...(rooted.cwd !== undefined && { cwd: rooted.cwd }),
 				...(raw.url !== undefined && { url: expandEnvVarsDeep(raw.url) }),
 				...(raw.headers !== undefined && { headers: expandEnvVarsDeep(raw.headers) }),
 				...(raw.auth !== undefined && { auth: raw.auth }),

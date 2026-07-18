@@ -5,6 +5,7 @@ condition:
   - "\\.read\\(\\)\\.unwrap\\(\\)"
   - "\\.write\\(\\)\\.unwrap\\(\\)"
 scope: "tool:edit(*.rs), tool:write(*.rs)"
+interruptMode: never
 ---
 
 Use `parking_lot::{Mutex, RwLock}` instead of `std::sync::{Mutex, RwLock}` when code immediately unwraps lock results.

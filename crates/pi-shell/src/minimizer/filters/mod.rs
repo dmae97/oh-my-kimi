@@ -376,6 +376,7 @@ fn uv_wrapper_tool<'a>(ctx: &'a MinimizerCtx<'_>) -> Option<&'a str> {
 /// is already a single flag token and needs no entry here.
 const WRAPPER_VALUE_OPTIONS: &[&str] = &[
 	// uv run
+	"--extra",
 	"--with",
 	"--with-requirements",
 	"--with-editable",
@@ -633,7 +634,7 @@ mod tests {
 	#[test]
 	fn uv_run_pytest_routes_to_python_filter() {
 		let config = MinimizerConfig::default();
-		let context = ctx("uv", Some("run"), "uv run pytest", &config);
+		let context = ctx("uv", Some("run"), "uv run --extra turso pytest", &config);
 		let input = "============================= test session starts \
 		             ==============================\ncollected 2 items\n\na.py .\nb.py \
 		             F\n\n=================================== FAILURES \

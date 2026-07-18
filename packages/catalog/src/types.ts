@@ -148,7 +148,7 @@ export interface Usage {
 	};
 }
 
-export type OpenAIReasoningFormat = "openai" | "openrouter" | "zai" | "qwen" | "qwen-chat-template";
+export type OpenAIReasoningFormat = "openai" | "openrouter" | "zai" | "kimi" | "qwen" | "qwen-chat-template";
 
 export type OpenAIReasoningDisableMode =
 	| "omit"
@@ -205,8 +205,10 @@ export interface OpenAICompat {
 	requiresThinkingAsText?: boolean;
 	/** Whether tool call IDs must be normalized to Mistral format (exactly 9 alphanumeric chars). Default: auto-detected from URL. */
 	requiresMistralToolIds?: boolean;
-	/** Format for reasoning/thinking parameter. "openai" uses reasoning_effort, "openrouter" uses reasoning: { effort }, "zai" uses thinking: { type: "enabled" | "disabled" } (also used by Moonshot Kimi), "qwen" uses top-level enable_thinking, and "qwen-chat-template" uses chat_template_kwargs.enable_thinking. Default: "openai". */
+	/** Format for reasoning/thinking parameter. `"kimi"` uses `thinking: { type, effort }`; other values select their provider-native reasoning fields. Default: `"openai"`. */
 	thinkingFormat?: OpenAIReasoningFormat;
+	/** Kimi Code transport selected by live per-model protocol metadata. User settings take precedence. */
+	kimiApiFormat?: "openai" | "anthropic";
 	/** Request-time disable encoding for the selected reasoning/thinking format. Default: derived from `thinkingFormat`. */
 	reasoningDisableMode?: OpenAIReasoningDisableMode;
 	/** Whether the provider rejects `reasoning.effort`/`reasoning_effort` even when the model reasons natively. Default: false unless reasoning effort is unsupported. */
@@ -327,6 +329,15 @@ export interface OpenAICompat {
 	toolStrictMode?: "all_strict" | "none";
 	/** Whether request shaping may send reasoning params at all. Default: auto-detected (disabled for GitHub Copilot chat-completions). */
 	supportsReasoningParams?: boolean;
+	/**
+	 * Whether the endpoint accepts explicit sampling parameters (`temperature`,
+	 * `top_p`, `top_k`, `min_p`, penalties). OpenAI proprietary reasoning models
+	 * (o-series, gpt-5+) reject them with `400 Unsupported parameter:
+	 * 'temperature' is not supported with this model` on every serving host
+	 * (official, Azure, GitHub Copilot). When unset, auto-detected from the
+	 * model id. Default: true. Issue #5606.
+	 */
+	supportsSamplingParams?: boolean;
 	/** Always send a max-token field when the caller did not provide one. Default: auto-detected (Kimi-family models derive TPM limits from max_tokens). */
 	alwaysSendMaxTokens?: boolean;
 	/** Whether Responses-API tool-call/result history must be strictly paired. Default: auto-detected (Azure OpenAI, GitHub Copilot). */
@@ -372,7 +383,7 @@ export interface AnthropicCompat {
 	 * tags: 'disabled', 'enabled'`.
 	 */
 	disableAdaptiveThinking?: boolean;
-	/** Whether tools may include Anthropic's per-tool eager_input_streaming flag. Default: true. */
+	/** Whether tools may include Anthropic's per-tool eager_input_streaming flag. Default: true for the canonical Anthropic API. */
 	supportsEagerToolInputStreaming?: boolean;
 	/** Whether long prompt-cache retention (`ttl: "1h"`) is supported. Default: true for canonical Anthropic API. */
 	supportsLongCacheRetention?: boolean;
@@ -464,7 +475,10 @@ export interface ResolvedOpenAISharedCompat {
 	supportsReasoningEffort: boolean;
 	reasoningEffortMap: Partial<Record<Effort, string>>;
 	supportsReasoningParams: boolean;
+	supportsSamplingParams: boolean;
 	thinkingFormat: OpenAIReasoningFormat;
+	/** Kimi Code transport selected by live per-model protocol metadata. */
+	kimiApiFormat?: OpenAICompat["kimiApiFormat"];
 	reasoningDisableMode: OpenAIReasoningDisableMode;
 	omitReasoningEffort: boolean;
 	includeEncryptedReasoning: boolean;
@@ -516,7 +530,9 @@ export type ResolvedOpenAICompat = ResolvedOpenAISharedCompat &
 			| "supportsReasoningEffort"
 			| "reasoningEffortMap"
 			| "supportsReasoningParams"
+			| "supportsSamplingParams"
 			| "thinkingFormat"
+			| "kimiApiFormat"
 			| "reasoningDisableMode"
 			| "omitReasoningEffort"
 			| "includeEncryptedReasoning"
@@ -691,6 +707,13 @@ export interface Model<TApi extends Api = Api> {
 	 * everything local (selection, caching, usage attribution) keys on `id`.
 	 */
 	requestModelId?: string;
+	/**
+	 * `reasoning.mode` to send on OpenAI Responses-family requests. Set on
+	 * generated pro aliases (`gpt-5.6-*-pro` on `openai`/`openai-codex`) that
+	 * pair a base wire id (`requestModelId`) with OpenAI's pro reasoning
+	 * serving path. Absent everywhere else; providers omit the wire field.
+	 */
+	reasoningMode?: "pro";
 	name: string;
 	api: TApi;
 	provider: Provider;
@@ -711,6 +734,8 @@ export interface Model<TApi extends Api = Api> {
 	supportsTools?: boolean;
 	/** GitLab Duo Workflow root namespace selected during catalog discovery. */
 	gitlabDuoWorkflowRootNamespaceId?: string;
+	/** Cursor `max_mode` request flag returned by `GetUsableModels` for premium models that require max mode. */
+	cursorMaxMode?: boolean;
 	cost: {
 		input: number; // $/million tokens
 		output: number; // $/million tokens
@@ -751,6 +776,8 @@ export interface Model<TApi extends Api = Api> {
 	transport?: "pi-native";
 	/** Hint that websocket transport should be preferred when supported by the provider implementation. */
 	preferWebsockets?: boolean;
+	/** Codex Responses Lite transport: send the lite marker and carry instructions/tools as input items (mirrors codex-rs `use_responses_lite`). */
+	useResponsesLite?: boolean;
 	/** Preferred model to switch to when context promotion is triggered (model id or provider/id). */
 	contextPromotionTarget?: string;
 	/** Preferred model to use only for compaction (model id or provider/id); the active session model is unchanged. */

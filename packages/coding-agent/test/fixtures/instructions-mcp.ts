@@ -28,6 +28,7 @@ export const SERVER_INSTRUCTIONS =
 
 /** Single tool advertised by the fixture so `tools/list` is non-empty. */
 export const TOOL_NAME = "do_thing";
+export const TOOL_RESULT = "MCP_DEFERRED_SMOKE_OK_5c92";
 
 type JsonRpcRequest = {
 	jsonrpc: "2.0";
@@ -52,11 +53,13 @@ function buildResult(method: string): Record<string, unknown> {
 				tools: [
 					{
 						name: TOOL_NAME,
-						description: "Fixture tool; never actually called by this test.",
+						description: "Fixture tool returning a deterministic sentinel.",
 						inputSchema: { type: "object", properties: {}, additionalProperties: false },
 					},
 				],
 			};
+		case "tools/call":
+			return { content: [{ type: "text", text: TOOL_RESULT }], isError: false };
 		default:
 			// `ping` and any other request: a benign empty result keeps the
 			// transport happy without modelling methods the test never exercises.

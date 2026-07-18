@@ -67,7 +67,6 @@ def _git_subprocess_env() -> dict[str, str]:
     return env
 
 
-
 # git matches `http.<url>.*` / `credential.<url>.*` against the FULL request
 # URL, and the longest path-prefix wins — so a base-only override loses to an
 # agent-planted repo-local key like `http.<url>/info/refs.proxy=http://evil`,

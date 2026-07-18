@@ -127,12 +127,13 @@ export function buildBetaHeader(baseBetas: readonly string[], extraBetas: readon
 
 const midConversationSystemBeta = "mid-conversation-system-2026-04-07";
 const contextManagementBeta = "context-management-2025-06-27";
+const structuredOutputsBeta = "structured-outputs-2025-12-15";
 const claudeCodeUtilityBetaDefaults = [
 	"oauth-2025-04-20",
 	"interleaved-thinking-2025-05-14",
 	contextManagementBeta,
 	"prompt-caching-scope-2026-01-05",
-	"structured-outputs-2025-12-15",
+	structuredOutputsBeta,
 ] as const;
 const claudeCodeAgentBetaDefaults = [
 	"claude-code-20250219",
@@ -159,10 +160,12 @@ function buildClaudeCodeBetas(
 	agentRequest: boolean,
 	thinkingRequest: boolean,
 	redactThinking: boolean,
+	disableStrictTools = false,
 ): readonly string[] {
-	if (!agentRequest && !redactThinking) return claudeCodeUtilityBetaDefaults;
+	if (!agentRequest && !redactThinking && !disableStrictTools) return claudeCodeUtilityBetaDefaults;
 	const betas: string[] = [];
 	for (const beta of agentRequest ? claudeCodeAgentBetaDefaults : claudeCodeUtilityBetaDefaults) {
+		if (disableStrictTools && beta === structuredOutputsBeta) continue;
 		betas.push(beta);
 		// Match CC's header order: redact-thinking immediately follows interleaved-thinking.
 		if (redactThinking && beta === interleavedThinkingBeta) betas.push(redactThinkingBeta);
@@ -1098,6 +1101,7 @@ export type AnthropicClientOptionsArgs = {
 	hasTools?: boolean;
 	thinkingEnabled?: boolean;
 	thinkingDisplay?: AnthropicThinkingDisplay;
+	disableStrictTools?: boolean;
 	fetch?: FetchImpl;
 	claudeCodeSessionId?: string;
 };
@@ -1161,6 +1165,25 @@ function resolveAnthropicBaseUrl(model: Model<"anthropic-messages">, apiKey?: st
 		return normalizeAnthropicBaseUrl(model.baseUrl) ?? "https://api.anthropic.com";
 	}
 	return normalizeAnthropicBaseUrl(model.baseUrl);
+}
+
+function resolveEagerToolInputStreamingSupport(
+	model: Model<"anthropic-messages">,
+	effectiveBaseUrl: string | undefined,
+): boolean {
+	if (!model.compat.supportsEagerToolInputStreaming) return false;
+	// First-party Anthropic endpoints accept the per-tool flag.
+	if (isOfficialAnthropicApiUrl(effectiveBaseUrl)) return true;
+	// Non-official effective endpoint. `supportsEagerToolInputStreaming` may be
+	// stale-true here because compat is materialized once at build time and is
+	// never rebuilt for a baseUrl-only reroute — either a runtime provider
+	// override (`pi.registerProvider("anthropic", { baseUrl })`) or Foundry
+	// (`CLAUDE_CODE_USE_FOUNDRY`). Both leave the canonical model's resolved
+	// compat in place. `officialEndpoint` records whether compat was built for
+	// the canonical Anthropic URL, so only endpoints whose compat was authored
+	// for a non-official host (an explicit `compat.supportsEagerToolInputStreaming`
+	// opt-in on a custom `baseUrl`) still send the field.
+	return !model.compat.officialEndpoint;
 }
 
 function parseAnthropicCustomHeaders(rawHeaders: string | undefined): Record<string, string> | undefined {
@@ -1459,6 +1482,16 @@ async function* observeDecodedAnthropicSdkEvents(
 const PROVIDER_MAX_RETRIES = 10;
 
 /**
+ * How long `ping` keepalives may keep extending the idle deadline without any
+ * semantic stream progress, as a multiple of the idle timeout. Anthropic pings
+ * across legitimate generation gaps, so pings count as liveness — but a wedged
+ * upstream that pings forever while producing no events must eventually trip
+ * the idle watchdog instead of hanging an active tool-call stream without a
+ * recovery path (#4900).
+ */
+const PING_PROGRESS_MAX_IDLE_MULTIPLIER = 3;
+
+/**
  * Log a malformed-stream-envelope anomaly without aborting the turn. The strict
  * parser would `throw new AnthropicStreamEnvelopeError(...)` here; we instead
  * surface a warning and let the caller skip the offending event (or finalize what
@@ -1727,6 +1760,7 @@ const streamAnthropicOnce = (
 			}
 			const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? "";
 			const baseUrl = resolveAnthropicBaseUrl(model, apiKey) ?? "https://api.anthropic.com";
+			const supportsEagerToolInputStreaming = resolveEagerToolInputStreamingSupport(model, baseUrl);
 			const providerSessionState = getAnthropicProviderSessionState(
 				options?.providerSessionState,
 				baseUrl,
@@ -1738,6 +1772,23 @@ const streamAnthropicOnce = (
 			let forceDemoteUnsignedThinking = providerSessionState?.replayUnsignedThinkingDisabled ?? false;
 			const mergedCallerHeaders = mergeHeaders(model.headers, options?.headers);
 			const umansGatewayWebSearchHeader = getUmansWebSearchHeader(model, mergedCallerHeaders);
+			// Keep fallback payloads aligned with the top-level Vertex effort gate:
+			// no nested effort field means the fallback scan cannot re-add its beta.
+			let fallbacks = options?.fallbacks;
+			if (
+				model.provider === "google-vertex" &&
+				fallbacks?.some(entry => entry.output_config?.effort !== undefined)
+			) {
+				fallbacks = fallbacks.map(entry => {
+					const outputConfig = entry.output_config;
+					if (outputConfig?.effort === undefined) return entry;
+					return {
+						...entry,
+						output_config:
+							outputConfig.task_budget === undefined ? undefined : { task_budget: outputConfig.task_budget },
+					};
+				});
+			}
 
 			let client: AnthropicMessagesClientLike;
 			let isOAuthToken: boolean;
@@ -1762,6 +1813,10 @@ const streamAnthropicOnce = (
 				// the toggle cannot 400); the beta must accompany the field in both.
 				// MiniMax uses `thinking.type:"adaptive"` itself as the control surface,
 				// so the sentinel "adaptive" value intentionally sends no output_config.
+				// Skip Vertex rawPredict: that adapter needs betas in the body
+				// (`anthropic_beta`), not as an `anthropic-beta` HTTP header, so the
+				// effort field is dropped from the body there too (see buildParams) and
+				// advertising the beta would only earn a 400 (#5614).
 				const sendsAdaptiveEffortPin =
 					options?.thinkingEnabled === false &&
 					model.thinking?.mode === "anthropic-adaptive" &&
@@ -1769,6 +1824,7 @@ const streamAnthropicOnce = (
 					!usesAdaptiveThinkingTagOnly(model);
 				if (
 					model.reasoning &&
+					model.provider !== "google-vertex" &&
 					((options?.thinkingEnabled && options.effort !== "adaptive") || sendsAdaptiveEffortPin) &&
 					!extraBetas.includes(effortBeta)
 				) {
@@ -1802,11 +1858,11 @@ const streamAnthropicOnce = (
 				// `output_config.task_budget`) reuse the same top-level betas
 				// Anthropic requires for the primary request, so scan the chain
 				// and add every companion beta the fallback entries touch.
-				if (options?.fallbacks?.length) {
+				if (fallbacks?.length) {
 					if (!extraBetas.includes(serverSideFallbackBeta)) {
 						extraBetas.push(serverSideFallbackBeta);
 					}
-					for (const entry of options.fallbacks) {
+					for (const entry of fallbacks) {
 						if (entry.speed === "fast" && !extraBetas.includes(fastModeBeta)) {
 							extraBetas.push(fastModeBeta);
 						}
@@ -1833,21 +1889,20 @@ const streamAnthropicOnce = (
 					thinkingDisplay: options?.thinkingDisplay,
 					fetch: options?.fetch,
 					claudeCodeSessionId: options?.sessionId ?? extractClaudeMetadataSessionId(options?.metadata?.user_id),
+					disableStrictTools,
 				});
 				client = created.client;
 				isOAuthToken = created.isOAuthToken;
 			}
 			const preparedContext = await prepareAnthropicManyImageContext(context, model.input.includes("image"));
 			const prepareParams = async (): Promise<MessageCreateParamsStreaming> => {
-				let nextParams = buildParams(
-					model,
-					preparedContext,
-					isOAuthToken,
-					options,
+				let nextParams = buildParams(model, preparedContext, isOAuthToken, options, {
 					disableStrictTools,
-					umansGatewayWebSearchHeader !== undefined,
+					useUmansGatewayWebSearch: umansGatewayWebSearchHeader !== undefined,
 					forceDemoteUnsignedThinking,
-				);
+					supportsEagerToolInputStreaming,
+					fallbacks,
+				});
 				if (disableStrictTools) {
 					dropAnthropicStrictTools(nextParams);
 				}
@@ -1873,9 +1928,9 @@ const streamAnthropicOnce = (
 
 			// Opt-in flag: the response parser only honors `fallback` content
 			// blocks and `usage.iterations` when the current request opted into
-			// the server-side-fallback beta chain. Leaving `options.fallbacks`
-			// unset preserves the pre-fallback stream shape on every event.
-			const serverSideFallback = !!options?.fallbacks?.length;
+			// server-side-fallback beta chain. Leaving `fallbacks` unset preserves
+			// the pre-fallback stream shape on every event.
+			const serverSideFallback = !!fallbacks?.length;
 			type Block = (
 				| ThinkingContent
 				| RedactedThinkingContent
@@ -2002,11 +2057,20 @@ const streamAnthropicOnce = (
 						}
 					>();
 
-					// Pings keep the idle deadline alive once content is flowing, but a
-					// ping before message_start must not consume the first-event watchdog:
-					// it would flip the (retryable) pre-content stall classification into
-					// a terminal mid-stream idle timeout.
+					// Pings keep the idle deadline alive once content is flowing (Anthropic
+					// bridges legitimate generation gaps with keepalives), but only within a
+					// bounded window: a wedged upstream that pings forever while the model
+					// produces nothing must still trip the idle watchdog, otherwise an
+					// active tool-call stream hangs unrecoverably with no retry (#4900).
+					// A ping before message_start must not consume the first-event watchdog
+					// either: it would flip the (retryable) pre-content stall classification
+					// into a terminal mid-stream idle timeout.
 					let sawNonPingEvent = false;
+					let lastNonPingProgressAtMs = 0;
+					const pingProgressCapMs =
+						idleTimeoutMs !== undefined && idleTimeoutMs > 0
+							? idleTimeoutMs * PING_PROGRESS_MAX_IDLE_MULTIPLIER
+							: undefined;
 					const timedAnthropicStream = iterateWithIdleTimeout(anthropicStream, {
 						idleTimeoutMs,
 						firstItemTimeoutMs: firstEventTimeoutMs,
@@ -2016,8 +2080,13 @@ const streamAnthropicOnce = (
 						onFirstItemTimeout: () => activeAbortTracker.abortLocally(firstEventTimeoutAbortError),
 						abortSignal: options?.signal,
 						isProgressItem: item => {
-							if ((item as AnthropicStreamEvent).type === "ping") return sawNonPingEvent;
+							if ((item as AnthropicStreamEvent).type === "ping") {
+								if (!sawNonPingEvent) return false;
+								if (pingProgressCapMs === undefined) return true;
+								return Date.now() - lastNonPingProgressAtMs < pingProgressCapMs;
+							}
 							sawNonPingEvent = true;
+							lastNonPingProgressAtMs = Date.now();
 							return true;
 						},
 					});
@@ -2648,12 +2717,16 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		thinkingDisplay,
 		isOAuth,
 		claudeCodeSessionId,
+		disableStrictTools: disableStrictToolsOverride,
 	} = args;
 	const compat = model.compat;
+	const disableStrictTools = disableStrictToolsOverride ?? compat.disableStrictTools;
 	const needsInterleavedBeta = interleavedThinking && !model.thinking?.supportsDisplay;
-	const needsFineGrainedToolStreamingBeta = hasTools && !compat.supportsEagerToolInputStreaming;
 	const oauthToken = isOAuth ?? isAnthropicOAuthToken(apiKey);
 	const baseUrl = resolveAnthropicBaseUrl(model, apiKey);
+	const supportsEagerToolInputStreaming = resolveEagerToolInputStreamingSupport(model, baseUrl);
+	const needsFineGrainedToolStreamingBeta =
+		hasTools && isOfficialAnthropicApiUrl(baseUrl) && !supportsEagerToolInputStreaming;
 	const foundryCustomHeaders = resolveAnthropicCustomHeaders(model);
 	const tlsFetchOptions = buildClaudeCodeTlsFetchOptions(model, baseUrl);
 	// Disable Bun's native ~300s pre-response fetch timeout (issue #2422).
@@ -2668,9 +2741,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	if (model.provider === "github-copilot") {
 		const copilotApiKey = parseGitHubCopilotApiKey(apiKey).accessToken;
 		// The GitHub Copilot Anthropic proxy doesn't accept Anthropic beta
-		// features (and the catalog already forces `supportsEagerToolInputStreaming
-		// = false` for this host, so `needsFineGrainedToolStreamingBeta` is true
-		// whenever tools are present). Forward only caller-supplied betas.
+		// features. Forward only caller-supplied betas.
 		const betaFeatures = [...extraBetas];
 		const defaultHeaders = mergeHeaders(
 			{
@@ -2722,7 +2793,12 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		isCloudflareAiGateway: model.provider === "cloudflare-ai-gateway",
 		claudeCodeSessionId,
 		claudeCodeBetas: oauthToken
-			? buildClaudeCodeBetas(hasTools || thinkingEnabled, thinkingEnabled, thinkingDisplay === "omitted")
+			? buildClaudeCodeBetas(
+					hasTools || thinkingEnabled,
+					thinkingEnabled,
+					thinkingDisplay === "omitted",
+					disableStrictTools,
+				)
 			: [],
 	});
 
@@ -3093,15 +3169,29 @@ function extractClaudeCodeFirstUserMessageText(messages: readonly Message[]): st
 	return "";
 }
 
+type AnthropicParamBuildOptions = {
+	disableStrictTools: boolean;
+	useUmansGatewayWebSearch: boolean;
+	forceDemoteUnsignedThinking: boolean;
+	supportsEagerToolInputStreaming: boolean;
+	/** Sanitized server-side fallback entries; defaults to `options?.fallbacks` when omitted. */
+	fallbacks?: AnthropicOptions["fallbacks"];
+};
+
 function buildParams(
 	model: Model<"anthropic-messages">,
 	context: Context,
 	isOAuthToken: boolean,
-	options?: AnthropicOptions,
-	disableStrictTools = false,
-	useUmansGatewayWebSearch = false,
-	forceDemoteUnsignedThinking = false,
+	options: AnthropicOptions | undefined,
+	buildOptions: AnthropicParamBuildOptions,
 ): MessageCreateParamsStreaming {
+	const {
+		disableStrictTools,
+		useUmansGatewayWebSearch,
+		forceDemoteUnsignedThinking,
+		supportsEagerToolInputStreaming,
+		fallbacks = options?.fallbacks,
+	} = buildOptions;
 	// A session-scoped auto-demote (learned from a live signing 400) clones the
 	// resolved compat with `replayUnsignedThinking: false` so every subsequent
 	// downstream read (convertAnthropicMessages, transformMessages) sees the
@@ -3129,7 +3219,7 @@ function buildParams(
 			context.tools,
 			isOAuthToken,
 			disableStrictTools || model.provider === "github-copilot",
-			model.compat.supportsEagerToolInputStreaming,
+			supportsEagerToolInputStreaming,
 			model.compat.escapeBuiltinToolNames,
 			useUmansGatewayWebSearch,
 		);
@@ -3219,9 +3309,12 @@ function buildParams(
 		? { edits: [{ type: "clear_thinking_20251015" as const, keep: "all" as const }] }
 		: undefined;
 
-	// Pre-compute output_config.
+	// Pre-compute output_config. Skip `effort` on Vertex rawPredict: it requires
+	// the `effort-2025-11-24` beta, which that adapter can only accept in the body
+	// (`anthropic_beta`), never as the `anthropic-beta` HTTP header this path sets
+	// — so the field is dropped alongside the beta to avoid a 400 (#5614).
 	const outputConfigEntries: AnthropicOutputConfig = {};
-	if (outputConfigEffort) outputConfigEntries.effort = outputConfigEffort;
+	if (outputConfigEffort && model.provider !== "google-vertex") outputConfigEntries.effort = outputConfigEffort;
 	if (options?.taskBudget) outputConfigEntries.task_budget = options.taskBudget;
 	const outputConfig = Object.keys(outputConfigEntries).length ? outputConfigEntries : undefined;
 
@@ -3236,7 +3329,7 @@ function buildParams(
 	const params: MessageCreateParamsStreaming = {
 		model: options?.requestModelId ?? model.requestModelId ?? model.id,
 		messages: convertAnthropicMessages(context.messages, effectiveModel, isOAuthToken, {
-			serverSideFallbackEnabled: !!options?.fallbacks?.length,
+			serverSideFallbackEnabled: !!fallbacks?.length,
 		}),
 		...(systemBlocks && { system: systemBlocks }),
 		...(tools !== undefined && { tools }),
@@ -3245,7 +3338,7 @@ function buildParams(
 		...(thinking && { thinking }),
 		...(contextManagement && { context_management: contextManagement }),
 		...(outputConfig && { output_config: outputConfig }),
-		...(options?.fallbacks?.length ? { fallbacks: options.fallbacks } : {}),
+		...(fallbacks?.length ? { fallbacks } : {}),
 		stream: true,
 	};
 
@@ -3528,6 +3621,40 @@ export function convertAnthropicMessages(
 						input: toWellFormedDeep(block.arguments ?? {}),
 					});
 				}
+			}
+			// Anthropic's replay validator rejects any non-`tool_use` block that
+			// appears after a `tool_use` inside an assistant turn (400:
+			// "tool_use ids were found without tool_result blocks immediately
+			// after: <id>"). A persisted turn can violate this when a mid-turn
+			// server-side fallback handoff lands after the primary model already
+			// emitted a tool_use — the replayed content is then e.g.
+			// [thinking, text, tool_use, fallback, text, tool_use] — and also for
+			// the older cross-provider [text, tool_use, text] shape (issue #544).
+			// Stable-partition into [...non-tool_use, ...tool_use], preserving each
+			// side's relative order: the non-tool_use chain (thinking → text →
+			// fallback → text) carries thinking signatures and the fallback
+			// boundary marker whose order Anthropic verifies, while tool_use blocks
+			// are unsigned and safe to defer to the tail. Fast-path untouched when
+			// already in order so prompt-cache prefixes stay byte-identical.
+			let sawToolUse = false;
+			let needsPartition = false;
+			for (const block of blocks) {
+				if (block.type === "tool_use") {
+					sawToolUse = true;
+				} else if (sawToolUse) {
+					needsPartition = true;
+					break;
+				}
+			}
+			if (needsPartition) {
+				const nonToolUse: ContentBlockParam[] = [];
+				const toolUse: ContentBlockParam[] = [];
+				for (const block of blocks) {
+					if (block.type === "tool_use") toolUse.push(block);
+					else nonToolUse.push(block);
+				}
+				blocks.length = 0;
+				blocks.push(...nonToolUse, ...toolUse);
 			}
 			if (blocks.length === 0) continue;
 			params.push({

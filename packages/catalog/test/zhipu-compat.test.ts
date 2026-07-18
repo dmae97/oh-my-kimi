@@ -120,6 +120,39 @@ describe("openai-completions compat — zhipu-coding-plan branch", () => {
 	});
 });
 
+describe("openai-completions compat — GLM coding-plan stream idle timeout", () => {
+	function glm52(provider: string, baseUrl: string): ModelSpec<"openai-completions"> {
+		return { ...baseModel, id: "glm-5.2", name: "GLM-5.2", provider, baseUrl };
+	}
+
+	// GLM coding-plan SKUs idle for minutes mid-reasoning; the 600s watchdog
+	// floor must apply on every gateway that fronts them, not just the native
+	// Z.AI/Zhipu hosts (issue #4758: GLM-5.2 via opencode-go stalled with
+	// "OpenAI completions stream stalled while waiting for the next event").
+	it("widens the idle timeout to 600s for GLM-5.x on Z.AI, Zhipu, and OpenCode gateways", () => {
+		expect(buildOpenAICompat(glm52("zai", "https://api.z.ai/api/coding/paas/v4")).streamIdleTimeoutMs).toBe(600_000);
+		expect(
+			buildOpenAICompat(glm52("zhipu-coding-plan", "https://open.bigmodel.cn/api/coding/paas/v4"))
+				.streamIdleTimeoutMs,
+		).toBe(600_000);
+		expect(buildOpenAICompat(glm52("opencode-go", "https://opencode.ai/zen/go/v1")).streamIdleTimeoutMs).toBe(
+			600_000,
+		);
+		expect(buildOpenAICompat(glm52("opencode-zen", "https://opencode.ai/zen/v1")).streamIdleTimeoutMs).toBe(600_000);
+	});
+
+	it("does not widen non-GLM models on the OpenCode gateway via the GLM floor", () => {
+		const kimi = buildOpenAICompat({
+			...baseModel,
+			id: "kimi-k2.5",
+			name: "Kimi K2.5",
+			provider: "opencode-go",
+			baseUrl: "https://opencode.ai/zen/go/v1",
+		});
+		expect(kimi.streamIdleTimeoutMs).toBeUndefined();
+	});
+});
+
 describe("zhipu-coding-plan model discovery", () => {
 	it("uses the dedicated Coding Plan endpoint by default", async () => {
 		let requestedUrl = "";

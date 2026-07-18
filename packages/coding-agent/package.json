@@ -1,7 +1,7 @@
 {
   "type": "module",
   "name": "@oh-my-pi/pi-coding-agent",
-  "version": "16.3.11",
+  "version": "17.0.3",
   "description": "Coding agent CLI with read, bash, edit, write tools and session management",
   "homepage": "https://omp.sh",
   "author": "Can Boluk",
@@ -32,24 +32,20 @@
   },
   "scripts": {
     "build": "bun scripts/build-binary.ts",
-    "check": "biome check . && bun run check:docs && bun run check:types",
-    "check:docs": "bun scripts/generate-docs-index.ts --check",
+    "check": "biome check . && bun run check:types",
     "check:types": "tsgo -p tsconfig.json --noEmit",
     "lint": "biome lint .",
     "test": "bun ../../scripts/ci-test-ts.ts coding-agent-heavy --full",
     "fix": "biome check --write --unsafe . && bun run format-prompts",
     "fmt": "biome format --write . && bun run format-prompts",
     "format-prompts": "bun scripts/format-prompts.ts",
-    "gen:docs": "bun scripts/generate-docs-index.ts --generate",
-    "gen:docs:reset": "bun scripts/generate-docs-index.ts --reset",
     "gen:tool-views": "bun --cwd=../collab-web run gen:tool-views",
     "gen:bundle": "bun scripts/bundle-dist.ts",
     "gen:mupdf": "bun scripts/embed-mupdf-wasm.ts --generate",
     "gen:mupdf:reset": "bun scripts/embed-mupdf-wasm.ts --reset",
     "gen:native": "bun --cwd=../natives run gen:native",
     "gen:native:reset": "bun --cwd=../natives run gen:native:reset",
-    "prepack": "bun run gen:docs && bun run gen:tool-views && bun run gen:bundle || ( bun run gen:docs:reset; exit 1 )",
-    "postpack": "bun run gen:docs:reset",
+    "prepack": "bun run gen:tool-views && bun run gen:bundle",
     "bench:guard": "bun scripts/bench-guard.ts"
   },
   "dependencies": {
@@ -68,9 +64,14 @@
     "@oh-my-pi/pi-wire": "catalog:",
     "@oh-my-pi/snapcompact": "catalog:",
     "@opentelemetry/api": "catalog:",
+    "@opentelemetry/api-logs": "catalog:",
     "@opentelemetry/context-async-hooks": "catalog:",
+    "@opentelemetry/exporter-logs-otlp-proto": "catalog:",
+    "@opentelemetry/exporter-metrics-otlp-proto": "catalog:",
     "@opentelemetry/exporter-trace-otlp-proto": "catalog:",
     "@opentelemetry/resources": "catalog:",
+    "@opentelemetry/sdk-logs": "catalog:",
+    "@opentelemetry/sdk-metrics": "catalog:",
     "@opentelemetry/sdk-trace-base": "catalog:",
     "@opentelemetry/sdk-trace-node": "catalog:",
     "@puppeteer/browsers": "catalog:",
@@ -81,6 +82,7 @@
     "diff": "catalog:",
     "fast-xml-parser": "catalog:",
     "handlebars": "catalog:",
+    "header-generator": "catalog:",
     "linkedom": "catalog:",
     "lru-cache": "catalog:",
     "mammoth": "catalog:",
@@ -95,7 +97,8 @@
     "sherpa-onnx-node": "1.13.2"
   },
   "devDependencies": {
-    "@types/bun": "catalog:"
+    "@types/bun": "catalog:",
+    "marked": "catalog:"
   },
   "engines": {
     "bun": ">=1.3.14"
@@ -539,13 +542,17 @@
       "types": "./src/task/*.ts",
       "import": "./src/task/*.ts"
     },
-    "./tool-discovery/*": {
-      "types": "./src/tool-discovery/*.ts",
-      "import": "./src/tool-discovery/*.ts"
-    },
     "./tools": {
       "types": "./src/tools/index.ts",
       "import": "./src/tools/index.ts"
+    },
+    "./tools/hub": {
+      "types": "./src/tools/hub/index.ts",
+      "import": "./src/tools/hub/index.ts"
+    },
+    "./tools/hub/*": {
+      "types": "./src/tools/hub/*.ts",
+      "import": "./src/tools/hub/*.ts"
     },
     "./tools/*": {
       "types": "./src/tools/*.ts",

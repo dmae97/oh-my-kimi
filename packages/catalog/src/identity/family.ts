@@ -42,6 +42,16 @@ export const isKimiK26ModelId = memo((modelId: string): boolean => {
 });
 
 /**
+ * Kimi K3 in any namespace form (`kimi-k3`, `kimi-k3.1`, `kimi-k3-turbo`,
+ * `moonshotai/kimi-k3`). K3 always reasons and drives thinking via OpenAI-style
+ * `reasoning_effort: "max"`, not the K2.x binary `thinking: { type }` block —
+ * see the moonshot discovery mapper and `buildOpenAICompat`.
+ */
+export const isKimiK3ModelId = memo((modelId: string): boolean => {
+	return /(^|\/)kimi-k3(?:\.\d+)?(?:[-.:_]|$)/i.test(modelId);
+});
+
+/**
  * Claude ids in any namespace form: bare (`claude-*`), path-namespaced
  * (`anthropic/claude.x`), or dot-prefixed (`us.anthropic.claude-…`,
  * `global.anthropic.claude-…`, `au.anthropic.claude-…` — Bedrock cross-region
@@ -78,7 +88,7 @@ export const isMimoModelIdOrName = memo((value: string): boolean => {
 	return value.toLowerCase().includes("mimo");
 });
 
-const GROK_EFFORT_CAPABLE_PREFIXES = ["grok-3-mini", "grok-4.20-multi-agent", "grok-4.3"] as const;
+const GROK_EFFORT_CAPABLE_PREFIXES = ["grok-3-mini", "grok-4.20-multi-agent", "grok-4.3", "grok-4.5"] as const;
 
 /**
  * Grok SKUs that expose the wire `reasoning.effort` dial. Other Grok reasoners
@@ -162,6 +172,32 @@ export const supportsAllTurnsReasoningContext = isOpenAIWireGen54Plus;
  * the human-readable summary stream.
  */
 export const supportsCodexReasoningSummary = isOpenAIWireGen54Plus;
+
+/** OpenAI proprietary reasoning families keyed off the parsed gpt version (gpt-5+). */
+const isOpenAIWireGen5Plus = memo((modelId: string): boolean => {
+	const parsed = parseOpenAIModel(bareModelId(modelId));
+	if (!parsed) return false;
+	return semverGte(parsed.version, "5");
+});
+
+/** o-series reasoning ids (`o1`, `o1-pro`, `o3`, `o3-mini`, `o4-mini`, `openai/o3`, …). */
+const O_SERIES_REASONING_RE = /(^|\/)o[134](?:[-.]|$)/i;
+
+/**
+ * OpenAI proprietary models whose serving path rejects explicit sampling
+ * parameters (`temperature`, `top_p`, `top_k`, …) with
+ * `400 Unsupported parameter: 'temperature' is not supported with this model`.
+ * Covers the o-series and the entire gpt-5+ generation — base, `mini`, `nano`,
+ * `codex*`, the `luna`/`sol`/`terra` SKUs, and the `-chat-latest` variants,
+ * since even the non-reasoning gpt-5 chat models reject sampling params (see
+ * litellm#13781). Holds regardless of which OpenAI-serving host proxies the
+ * model (official, Azure, GitHub Copilot). Version floor (not an allowlist) so
+ * 6.x inherits automatically. Issue #5606.
+ */
+export const isOpenAISamplingRestrictedModelId = memo((modelId: string): boolean => {
+	const bare = bareModelId(modelId);
+	return isOpenAIWireGen5Plus(modelId) || O_SERIES_REASONING_RE.test(bare);
+});
 
 /**
  * Reasoning-capable GLM coding SKUs: glm-4.5 and up on the base / `-air` /

@@ -13,6 +13,13 @@ const CURSOR_GET_USABLE_MODELS_PATH = "/agent.v1.AgentService/GetUsableModels";
 const DEFAULT_CONTEXT_WINDOW = 200_000;
 const DEFAULT_MAX_TOKENS = 64_000;
 
+/**
+ * Model-id families whose native catalogs (anthropic, openai/openai-codex,
+ * google) are multimodal. Cursor-only or text-only families (`composer-*`,
+ * `grok-code-*`) intentionally stay outside this pattern.
+ */
+const CURSOR_MULTIMODAL_ID_PATTERN = /claude|gemini|gpt-|codex/;
+
 const OptionalDisplayNameSchema = type("unknown").pipe(raw => (typeof raw === "string" ? raw : undefined));
 const CursorAliasesSchema = type("unknown").pipe(raw => {
 	if (Array.isArray(raw)) {
@@ -28,6 +35,7 @@ const CursorModelDetailsSchema = type({
 	displayModelId: OptionalDisplayNameSchema.default(undefined),
 	aliases: CursorAliasesSchema.default(() => []),
 	"thinkingDetails?": "unknown",
+	maxMode: "boolean = false",
 });
 
 const CursorModelsInnerSchema = type("unknown[]");
@@ -283,6 +291,7 @@ function normalizeCursorModel(
 			name,
 			baseUrl: baseUrlOverride ?? reference.baseUrl,
 			reasoning,
+			cursorMaxMode: details.maxMode,
 		};
 	}
 	return {
@@ -292,10 +301,11 @@ function normalizeCursorModel(
 		provider: "cursor",
 		baseUrl: baseUrlOverride ?? CURSOR_DEFAULT_BASE_URL,
 		reasoning,
-		input: ["text"],
+		input: inferInputFromCursorId(id),
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: DEFAULT_CONTEXT_WINDOW,
 		maxTokens: DEFAULT_MAX_TOKENS,
+		cursorMaxMode: details.maxMode,
 	};
 }
 
@@ -311,4 +321,19 @@ function pickModelDisplayName(model: CursorModelDetailsValue, fallbackId: string
 		}
 	}
 	return fallbackId;
+}
+
+/**
+ * Infers input modalities for Cursor models without a bundled reference.
+ *
+ * `GetUsableModels` carries no per-model modality metadata, so classification
+ * falls back to the model family: families that are multimodal in OMP's own
+ * native catalogs accept images, everything else stays text-only. Mirrors
+ * `inferInputFromGeminiId` in ./gemini.ts.
+ */
+function inferInputFromCursorId(id: string): ("text" | "image")[] {
+	if (CURSOR_MULTIMODAL_ID_PATTERN.test(id.toLowerCase())) {
+		return ["text", "image"];
+	}
+	return ["text"];
 }

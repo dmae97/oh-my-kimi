@@ -12,6 +12,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
+from robomp.github_client import IssueIndexEntry
+
 EventState = Literal["queued", "running", "done", "failed", "skipped"]
 INACTIVE_EVENT_STATES: tuple[EventState, ...] = ("done", "failed", "skipped")
 
@@ -62,7 +64,7 @@ CREATE TABLE IF NOT EXISTS issues (
   session_dir    TEXT,
   pr_number      INTEGER,
   state          TEXT NOT NULL,
-  classification TEXT,         -- bug|enhancement|question|proposal|documentation|invalid|duplicate
+  classification TEXT,         -- bug|enhancement|question|proposal|documentation|wontfix|invalid|duplicate
   updated_at     TEXT NOT NULL
 );
 
@@ -113,6 +115,53 @@ CREATE TABLE IF NOT EXISTS pending_closures (
 );
 CREATE INDEX IF NOT EXISTS pending_closures_state_close_at
   ON pending_closures(state, close_at);
+
+-- Local mirror of every issue/PR in allowlisted repos, kept fresh by webhook
+-- upserts plus the periodic `IssueIndexSync` reconciler. `gh_search_issues`
+-- serves from here so triage lookups cost no GitHub API calls.
+CREATE TABLE IF NOT EXISTS issue_index (
+  repo         TEXT NOT NULL,
+  number       INTEGER NOT NULL,
+  is_pr        INTEGER NOT NULL DEFAULT 0,
+  title        TEXT NOT NULL DEFAULT '',
+  body         TEXT NOT NULL DEFAULT '',
+  state        TEXT NOT NULL DEFAULT 'open',
+  state_reason TEXT NOT NULL DEFAULT '',
+  merged_at    TEXT NOT NULL DEFAULT '',
+  author       TEXT NOT NULL DEFAULT '',
+  labels_json  TEXT NOT NULL DEFAULT '[]',
+  comments     INTEGER NOT NULL DEFAULT 0,
+  created_at   TEXT NOT NULL DEFAULT '',
+  updated_at   TEXT NOT NULL DEFAULT '',
+  html_url     TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (repo, number)
+);
+CREATE INDEX IF NOT EXISTS issue_index_repo_updated
+  ON issue_index(repo, updated_at);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS issue_index_fts USING fts5(
+  title, body, content='issue_index', content_rowid='rowid'
+);
+
+CREATE TRIGGER IF NOT EXISTS issue_index_ai AFTER INSERT ON issue_index BEGIN
+  INSERT INTO issue_index_fts(rowid, title, body) VALUES (new.rowid, new.title, new.body);
+END;
+CREATE TRIGGER IF NOT EXISTS issue_index_ad AFTER DELETE ON issue_index BEGIN
+  INSERT INTO issue_index_fts(issue_index_fts, rowid, title, body)
+    VALUES ('delete', old.rowid, old.title, old.body);
+END;
+CREATE TRIGGER IF NOT EXISTS issue_index_au AFTER UPDATE ON issue_index BEGIN
+  INSERT INTO issue_index_fts(issue_index_fts, rowid, title, body)
+    VALUES ('delete', old.rowid, old.title, old.body);
+  INSERT INTO issue_index_fts(rowid, title, body) VALUES (new.rowid, new.title, new.body);
+END;
+
+-- Per-repo reconcile watermark: the max `updated_at` the sync has fully
+-- ingested. Absent row = repo never backfilled.
+CREATE TABLE IF NOT EXISTS issue_index_sync (
+  repo        TEXT PRIMARY KEY,
+  last_synced TEXT NOT NULL
+);
 """
 
 
@@ -1162,6 +1211,136 @@ class Database:
                 (issue_key,),
             ).fetchone()
         return _pending_closure_from_row(row) if row is not None else None
+
+    # ---- issue search index ----
+    def upsert_issue_index(self, entry: IssueIndexEntry) -> None:
+        """Insert or refresh one issue/PR in the local search index."""
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO issue_index
+                  (repo, number, is_pr, title, body, state, state_reason, merged_at,
+                   author, labels_json, comments, created_at, updated_at, html_url)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(repo, number) DO UPDATE SET
+                  is_pr = excluded.is_pr,
+                  title = excluded.title,
+                  body = excluded.body,
+                  state = excluded.state,
+                  state_reason = excluded.state_reason,
+                  merged_at = excluded.merged_at,
+                  author = excluded.author,
+                  labels_json = excluded.labels_json,
+                  comments = excluded.comments,
+                  created_at = excluded.created_at,
+                  updated_at = excluded.updated_at,
+                  html_url = excluded.html_url
+                """,
+                (
+                    entry.repo,
+                    entry.number,
+                    1 if entry.is_pull_request else 0,
+                    entry.title,
+                    entry.body,
+                    entry.state,
+                    entry.state_reason,
+                    entry.merged_at,
+                    entry.author,
+                    json.dumps(list(entry.labels), separators=(",", ":")),
+                    entry.comments,
+                    entry.created_at,
+                    entry.updated_at,
+                    entry.html_url,
+                ),
+            )
+
+    def search_issue_index(
+        self,
+        repo: str,
+        *,
+        keywords: Iterable[str] = (),
+        is_pr: bool | None = None,
+        state: str | None = None,
+        merged: bool | None = None,
+        label: str | None = None,
+        author: str | None = None,
+        limit: int = 10,
+    ) -> list[IssueIndexEntry]:
+        """Query the local index. Keywords go through FTS5 (bm25-ranked, AND
+        semantics); the remaining filters are exact. With no keywords, results
+        order by `updated_at` descending.
+        """
+        conds = ["i.repo = ?"]
+        params: list[Any] = [repo]
+        if is_pr is not None:
+            conds.append("i.is_pr = ?")
+            params.append(1 if is_pr else 0)
+        if state is not None:
+            conds.append("i.state = ?")
+            params.append(state)
+        if merged is not None:
+            conds.append("i.merged_at != ''" if merged else "i.merged_at = ''")
+        if label is not None:
+            conds.append("EXISTS (SELECT 1 FROM json_each(i.labels_json) WHERE json_each.value = ?)")
+            params.append(label)
+        if author is not None:
+            conds.append("i.author = ?")
+            params.append(author)
+        terms = [t for t in keywords if t.strip()]
+        limit = max(1, min(int(limit), 50))
+        with self._lock:
+            if terms:
+                # Quote every term so reporter text can never inject FTS5 syntax.
+                match = " ".join('"' + t.replace('"', '""') + '"' for t in terms)
+                sql = (
+                    "SELECT i.* FROM issue_index_fts f JOIN issue_index i ON i.rowid = f.rowid "
+                    f"WHERE issue_index_fts MATCH ? AND {' AND '.join(conds)} "
+                    "ORDER BY bm25(issue_index_fts) LIMIT ?"
+                )
+                rows = self._conn.execute(sql, (match, *params, limit)).fetchall()
+            else:
+                sql = f"SELECT i.* FROM issue_index i WHERE {' AND '.join(conds)} ORDER BY i.updated_at DESC LIMIT ?"
+                rows = self._conn.execute(sql, (*params, limit)).fetchall()
+        return [_index_entry_from_row(row) for row in rows]
+
+    def issue_index_watermark(self, repo: str) -> str | None:
+        """Max `updated_at` fully ingested for `repo`; None = never backfilled."""
+        with self._lock:
+            row = self._conn.execute("SELECT last_synced FROM issue_index_sync WHERE repo = ?", (repo,)).fetchone()
+        return str(row["last_synced"]) if row is not None else None
+
+    def set_issue_index_watermark(self, repo: str, last_synced: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO issue_index_sync (repo, last_synced) VALUES (?, ?)
+                ON CONFLICT(repo) DO UPDATE SET last_synced = excluded.last_synced
+                """,
+                (repo, last_synced),
+            )
+
+
+def _index_entry_from_row(row: sqlite3.Row) -> IssueIndexEntry:
+    try:
+        labels = tuple(str(x) for x in json.loads(row["labels_json"]))
+    except (ValueError, TypeError):
+        labels = ()
+    return IssueIndexEntry(
+        repo=str(row["repo"]),
+        number=int(row["number"]),
+        is_pull_request=bool(row["is_pr"]),
+        title=str(row["title"]),
+        body=str(row["body"]),
+        state=str(row["state"]),
+        state_reason=str(row["state_reason"]),
+        merged_at=str(row["merged_at"]),
+        author=str(row["author"]),
+        labels=labels,
+        comments=int(row["comments"]),
+        created_at=str(row["created_at"]),
+        updated_at=str(row["updated_at"]),
+        html_url=str(row["html_url"]),
+    )
 
 
 _DB_SINGLETON: Database | None = None

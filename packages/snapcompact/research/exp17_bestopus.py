@@ -56,7 +56,11 @@ _BLACK = (0, 0, 0)
 _INK = (24, 24, 24)  # near-black body text, like a printed page
 
 # claude-opus-4-8 baselines, results/optimal-combined/matrix.csv (qpc 30, seed 42):
-BASELINE = {50: (0.9626, 0.0258, 0.143), 150: (0.8937, 0.0223, 0.380), 250: (0.8708, 0.0196, 0.559)}
+BASELINE = {
+    50: (0.9626, 0.0258, 0.143),
+    150: (0.8937, 0.0223, 0.380),
+    250: (0.8708, 0.0196, 0.559),
+}
 TEXT_CEIL = {50: (0.9278, 0.195), 150: (0.9112, 0.637), 250: (0.9268, 0.938)}
 
 
@@ -198,7 +202,11 @@ def render_unit_png(cond: str, unit: tuple[int, int], ctx: dict) -> Path:
             tmp.replace(png)
     else:
         i, j = unit
-        key = sha8(cond, json.dumps([(p["title"], p["ctx"]) for p in paras[i:j]]), str(args.size))
+        key = sha8(
+            cond,
+            json.dumps([(p["title"], p["ctx"]) for p in paras[i:j]]),
+            str(args.size),
+        )
         png = CACHE / f"exp17-{cond}-{key}.png"
         if not png.exists() or png.stat().st_size == 0:
             tmp = png.with_suffix(f".{uuid.uuid4().hex[:8]}.tmp.png")
@@ -217,7 +225,9 @@ def run_unit(cond: str, unit: tuple[int, int], ctx: dict) -> list[dict]:
         i, j = unit
         start = offsets[i]
         end = offsets[j - 1] + len(paras[j - 1]["ctx"])
-    questions = squad.sample_chunk_questions(paras, offsets, start, end, args.qpc, args.seed)
+    questions = squad.sample_chunk_questions(
+        paras, offsets, start, end, args.qpc, args.seed
+    )
     if not questions:
         return []
     q_block = "\n".join(f"{k + 1}. {q['q']}" for k, q in enumerate(questions))
@@ -226,7 +236,9 @@ def run_unit(cond: str, unit: tuple[int, int], ctx: dict) -> list[dict]:
     if kind == "grid":
         preamble = load_prompt("qa-image.md").format(cols=cols, rows=rows)
     else:
-        preamble = load_prompt("exp04-qa-image.md").format(col_w=(cols - GUTTER) // 2, rows=rows)
+        preamble = load_prompt("exp04-qa-image.md").format(
+            col_w=(cols - GUTTER) // 2, rows=rows
+        )
     messages = [
         {
             "role": "user",
@@ -238,11 +250,19 @@ def run_unit(cond: str, unit: tuple[int, int], ctx: dict) -> list[dict]:
         }
     ]
     qa = cached(
-        MODEL, "exp17-qa", {"messages": messages, "effort": args.effort},
+        MODEL,
+        "exp17-qa",
+        {"messages": messages, "effort": args.effort},
         lambda: dict(
             zip(
                 ("text", "usage", "stop"),
-                llm_complete(keys, MODEL, messages, max_tokens=args.max_tokens, effort=args.effort),
+                llm_complete(
+                    keys,
+                    MODEL,
+                    messages,
+                    max_tokens=args.max_tokens,
+                    effort=args.effort,
+                ),
             )
         ),
         args.fresh,
@@ -275,8 +295,13 @@ def aggregate(records: list[dict], price_in: float, price_out: float) -> dict:
     mean_f1 = sum(f1s) / n
     se = (sum((x - mean_f1) ** 2 for x in f1s) / (n * (n - 1))) ** 0.5 if n > 1 else 0.0
     us = [u for r in records if "usage" in r for u in r["usage"]]
-    tok = {k: sum(u.get(k, 0) for u in us) for k in ("in", "out", "cache_w", "cache_r", "reasoning")}
-    cost_in = (tok["in"] + 1.25 * tok["cache_w"] + 0.1 * tok["cache_r"]) / 1e6 * price_in
+    tok = {
+        k: sum(u.get(k, 0) for u in us)
+        for k in ("in", "out", "cache_w", "cache_r", "reasoning")
+    }
+    cost_in = (
+        (tok["in"] + 1.25 * tok["cache_w"] + 0.1 * tok["cache_r"]) / 1e6 * price_in
+    )
     cost_out = tok["out"] / 1e6 * price_out
     return {
         "n": n,
@@ -302,8 +327,16 @@ def main() -> None:
     ap.add_argument("--max-tokens", type=int, default=32768)
     ap.add_argument("--effort", default=None)
     ap.add_argument("--fresh", action="store_true")
-    ap.add_argument("--render-only", action="store_true", help="capacity stats + first-page PNGs, no API")
-    ap.add_argument("--report", action="store_true", help="reprint matrix from accumulated records only")
+    ap.add_argument(
+        "--render-only",
+        action="store_true",
+        help="capacity stats + first-page PNGs, no API",
+    )
+    ap.add_argument(
+        "--report",
+        action="store_true",
+        help="reprint matrix from accumulated records only",
+    )
     ap.add_argument("--env", default="~/.env")
     args = ap.parse_args()
 
@@ -320,29 +353,46 @@ def main() -> None:
     records: list[dict] = []
 
     if not args.report:
-        keys = {} if args.render_only else {"anthropic": load_env_key("ANTHROPIC_API_KEY", args.env)}
+        keys = (
+            {}
+            if args.render_only
+            else {"anthropic": load_env_key("ANTHROPIC_API_KEY", args.env)}
+        )
         tasks = []
         capacity_stats = {}
         for length in lengths:
             paras = all_paras[:length]
             flow, offsets = squad.build_flow(paras)
             ctx = {
-                "args": args, "flow": flow, "paras": paras, "offsets": offsets,
-                "keys": keys, "length": length, "lines": {},
+                "args": args,
+                "flow": flow,
+                "paras": paras,
+                "offsets": offsets,
+                "keys": keys,
+                "length": length,
+                "lines": {},
             }
             for cond in conditions:
                 kind, cfg = parse_cond(cond)
                 cols, rows, grid_cap = capacity(cfg, args.size)
                 if kind == "grid":
-                    units = [(s, min(s + grid_cap, len(flow))) for s in range(0, len(flow), grid_cap)]
+                    units = [
+                        (s, min(s + grid_cap, len(flow)))
+                        for s in range(0, len(flow), grid_cap)
+                    ]
                     chars = [e - s for s, e in units]
                 else:
                     col_w = (cols - GUTTER) // 2
                     pages = pack_pages(paras, col_w, 2 * rows)
                     for pg in pages:
-                        ctx["lines"][(cond, pg)] = layout_page(paras[pg[0] : pg[1]], col_w)
+                        ctx["lines"][(cond, pg)] = layout_page(
+                            paras[pg[0] : pg[1]], col_w
+                        )
                     units = pages
-                    chars = [offsets[j - 1] + len(paras[j - 1]["ctx"]) - offsets[i] for i, j in pages]
+                    chars = [
+                        offsets[j - 1] + len(paras[j - 1]["ctx"]) - offsets[i]
+                        for i, j in pages
+                    ]
                 capacity_stats[f"{cond}@{length}"] = {
                     "pages": len(units),
                     "mean_chars_page": round(sum(chars) / len(units)),
@@ -381,7 +431,9 @@ def main() -> None:
         if records_path.exists():
             with records_path.open() as fh:
                 old = [json.loads(ln) for ln in fh if ln.strip()]
-        records = [r for r in old if (r["length"], r["cond"]) not in ran_cells] + records
+        records = [
+            r for r in old if (r["length"], r["cond"]) not in ran_cells
+        ] + records
         with records_path.open("w") as fh:
             for r in records:
                 fh.write(json.dumps(r) + "\n")
@@ -393,16 +445,28 @@ def main() -> None:
     for length in sorted({r["length"] for r in records}):
         for cond in sorted({r["cond"] for r in records if r["length"] == length}):
             sub = [r for r in records if r["length"] == length and r["cond"] == cond]
-            cells.append({"model": MODEL, "length": length, "condition": cond, **aggregate(sub, *PRICES)})
+            cells.append(
+                {
+                    "model": MODEL,
+                    "length": length,
+                    "condition": cond,
+                    **aggregate(sub, *PRICES),
+                }
+            )
     (out_dir / "summary.json").write_text(
-        json.dumps({"args": vars(args), "baseline_img_8x13_bw": BASELINE, "cells": cells}, indent=1)
+        json.dumps(
+            {"args": vars(args), "baseline_img_8x13_bw": BASELINE, "cells": cells},
+            indent=1,
+        )
     )
     with (out_dir / "matrix.csv").open("w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=list(cells[0].keys()))
         writer.writeheader()
         writer.writerows(cells)
 
-    print(f"\n{'len':<5}{'condition':<22}{'n':>5}{'EM':>7}{'F1':>7}{'+-se':>7}{'$':>8}{'d/se vs 8x13-bw':>17}")
+    print(
+        f"\n{'len':<5}{'condition':<22}{'n':>5}{'EM':>7}{'F1':>7}{'+-se':>7}{'$':>8}{'d/se vs 8x13-bw':>17}"
+    )
     for c in cells:
         b_f1, b_se, b_cost = BASELINE[c["length"]]
         dse = (c["f1"] - b_f1) / ((c["f1_se"] ** 2 + b_se**2) ** 0.5 or 1)

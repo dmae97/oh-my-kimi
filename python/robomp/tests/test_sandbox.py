@@ -1110,7 +1110,9 @@ def test_remove_workspace(tmp_path: Path, upstream_repo: Path) -> None:
     assert not ws.root.exists()
 
 
-def test_remove_workspace_prunes_pool_after_failed_worktree_remove(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_remove_workspace_prunes_pool_after_failed_worktree_remove(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     mgr = SandboxManager(tmp_path)
     # Create a real repo_dir on disk so `repo_dir.exists()` is True on entry.
     ws_root = mgr.workspace_root("o/r", 7)
@@ -1184,6 +1186,7 @@ def test_remove_workspace_prunes_when_failed_remove_already_deleted_checkout(
     )
     prune_idx = next(i for i, (c, _) in enumerate(calls) if c == ["git", "worktree", "prune"])
     assert calls[prune_idx][1] == pool, "prune did not run in the repo's pool dir"
+
 
 def test_redact_credentials_strips_userinfo() -> None:
     from robomp.sandbox import redact_credentials
@@ -1911,7 +1914,9 @@ def test_run_timeout_raises_git_command_error_124(monkeypatch: pytest.MonkeyPatc
     assert seen["timeout"] == s._DEFAULT_SANDBOX_SUBPROCESS_TIMEOUT
 
 
-def test_ensure_workspace_raises_when_local_branch_probe_times_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ensure_workspace_raises_when_local_branch_probe_times_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     mgr = SandboxManager(tmp_path)
     mgr.natives_cache = None
     mgr.transport = SimpleNamespace(
@@ -1946,7 +1951,9 @@ def test_ensure_workspace_raises_when_local_branch_probe_times_out(tmp_path: Pat
         )
 
 
-def test_ensure_workspace_raises_when_remote_branch_probe_times_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ensure_workspace_raises_when_remote_branch_probe_times_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     mgr = SandboxManager(tmp_path)
     mgr.natives_cache = None
     mgr.transport = SimpleNamespace(

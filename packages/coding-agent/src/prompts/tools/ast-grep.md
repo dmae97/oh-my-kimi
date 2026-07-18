@@ -1,25 +1,19 @@
-Structural code search via ast-grep.
+Structural code search via ast-grep. Use when syntax shape matters more than text (calls, declarations, language constructs).
 
 <instruction>
-- Use when syntax shape matters more than text (calls, declarations, language constructs)
-- Narrow each call to one language
-- `pat` is ONE AST pattern; separate calls for unrelated patterns
-- `$NAME` captures one node; `$_` matches one without binding; `$$$NAME` captures zero-or-more; `$$$` matches zero-or-more without binding. Use `$$$NAME`, NOT `$$NAME` — the two-dollar form is invalid
-- Metavariable names are UPPERCASE and MUST be the whole AST node — partial text like `prefix$VAR`, `"hello $NAME"`, or `a $OP b` does NOT work
-- Same metavariable twice → both occurrences MUST match identical code (`$A == $A` matches `x == x`, not `x == y`)
-- Patterns MUST parse as a single valid AST node. Non-standalone snippets → wrap in context, e.g. `class $_ { … }`
-- C++ expression-statement calls need trailing `;`: `ns::doThing($ARG);`, `$CALLEE($ARG);`
-- TS declarations/methods — tolerate unknown annotations: `async function $NAME($$$ARGS): $_ { $$$BODY }` or `class $_ { method($ARG: $_): $_ { $$$BODY } }`
-- Declaration forms are distinct shapes — `function foo`, method `foo()`, `const foo = () => {}`; search the right form before concluding absence
-- Loosest existence check: `pat: "executeBash"` with narrow `path`
+- Narrow each call to one language. `pat` is ONE AST pattern; separate calls for unrelated patterns.
+- `$NAME` captures one node; `$_` matches without binding; `$$$NAME` zero-or-more; `$$$` zero-or-more unbound.
+  - Use `$$$NAME`, NOT `$$NAME` (invalid). Names UPPERCASE, whole node — `prefix$VAR` fails.
+- Same metavariable twice → MUST match identical code (`$A == $A` matches `x == x`, not `x == y`).
+- Patterns MUST parse as single AST node. Non-standalone → wrap: `class $_ { … }`.
+- C++ expression-statement calls need trailing `;`: `ns::doThing($ARG);`, `$CALLEE($ARG);`.
+- TS: tolerate annotations — `async function $NAME($$$ARGS): $_ { $$$BODY }`.
+- Declaration forms are distinct — `function foo`, method `foo()`, `const foo = () => {}`; search the right form before concluding absence.
+- Loosest existence check: `pat: "executeBash"` with narrow `path`.
 </instruction>
 
-<output>
-- Matches under a snapshot tag header: `[src/foo.ts#1A2B]`, `*42:` matched, ` 43:` context
-</output>
-
 <critical>
-- AVOID repo-root scans — narrow `path` first
-- Parse issues = query failure, not absence: fix the pattern or tighten `path` before concluding "no matches"
-- Broad cross-subsystem exploration: you SHOULD use the Task tool + explore subagent first
+- AVOID repo-root scans — narrow `path` first.
+- Parse issues = query failure, not absence: fix pattern or tighten `path` before concluding "no matches".
+- Broad cross-subsystem exploration → Task tool + scout subagent first.
 </critical>

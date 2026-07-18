@@ -114,6 +114,24 @@ describe("OAuthCallbackFlow /launch route", () => {
 		await login;
 	});
 
+	it("serves success copy that permits manual tab close", async () => {
+		const { info, login } = await startFlowAndWaitForAuth();
+		const authUrl = new URL(info.url);
+		const redirectUri = authUrl.searchParams.get("redirect_uri");
+		expect(redirectUri).toMatch(/^http:\/\/localhost:\d+\/callback$/);
+		const state = authUrl.searchParams.get("state") ?? "";
+
+		const callbackResponse = await fetch(`${redirectUri}?code=test-code&state=${encodeURIComponent(state)}`);
+		expect(callbackResponse.status).toBe(200);
+		const html = await callbackResponse.text();
+
+		expect(html).toContain("Authentication Successful");
+		expect(html).toContain("You have successfully logged in.<br>You can now close this tab.");
+		expect(html).toContain("Close Window");
+		expect(html).not.toContain("This window will close automatically.");
+		await login;
+	});
+
 	it("suppresses launchUrl and routes /launch to the callback handler when callbackPath is /launch", async () => {
 		const abort = new AbortController();
 		const authFired = Promise.withResolvers<OAuthAuthInfo>();
@@ -172,6 +190,63 @@ describe("OAuthCallbackFlow /launch route", () => {
 				// base class doesn't, and the launchUrl guard must still catch
 				// the collision defensively.
 				redirectUri: "http://localhost:14599/launch",
+			},
+		);
+		const login = flow.login().catch(() => undefined) as Promise<void>;
+		const info = await authFired.promise;
+
+		expect(info.launchUrl).toBeUndefined();
+
+		abort.abort("test done");
+		await login;
+	});
+
+	it("suppresses launchUrl for custom-scheme redirects that never return to the loopback server", async () => {
+		const abort = new AbortController();
+		const authFired = Promise.withResolvers<OAuthAuthInfo>();
+		const flow = new LaunchProbeFlow(
+			{
+				onAuth: info => {
+					authFired.resolve(info);
+				},
+				signal: abort.signal,
+			},
+			{
+				preferredPort: 0,
+				allowPortFallback: true,
+				// GitLab Duo shape: `new URL` parses this happily (pathname
+				// `/authentication`), so the guard must check scheme/host, not
+				// rely on a parse failure. A localhost /launch copy target for
+				// this flow would misrepresent the callback endpoint and point
+				// remote users at a URL that resolves nowhere.
+				redirectUri: "vscode://gitlab.gitlab-workflow/authentication",
+			},
+		);
+		const login = flow.login().catch(() => undefined) as Promise<void>;
+		const info = await authFired.promise;
+
+		expect(info.launchUrl).toBeUndefined();
+
+		abort.abort("test done");
+		await login;
+	});
+
+	it("suppresses launchUrl for fixed non-loopback HTTP redirects", async () => {
+		const abort = new AbortController();
+		const authFired = Promise.withResolvers<OAuthAuthInfo>();
+		const flow = new LaunchProbeFlow(
+			{
+				onAuth: info => {
+					authFired.resolve(info);
+				},
+				signal: abort.signal,
+			},
+			{
+				preferredPort: 0,
+				allowPortFallback: true,
+				// The provider redirects to a hosted endpoint; this machine's
+				// callback server never sees the redirect, so no launch URL.
+				redirectUri: "https://auth.example.com/oauth/callback",
 			},
 		);
 		const login = flow.login().catch(() => undefined) as Promise<void>;

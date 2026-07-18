@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createLspWritethrough, type FileDiagnosticsResult } from "@oh-my-pi/pi-coding-agent/lsp";
 import * as lspClient from "@oh-my-pi/pi-coding-agent/lsp/client";
 import * as lspConfig from "@oh-my-pi/pi-coding-agent/lsp/config";
 import type { Diagnostic, LspClient, ServerConfig } from "@oh-my-pi/pi-coding-agent/lsp/types";
 import { fileToUri } from "@oh-my-pi/pi-coding-agent/lsp/utils";
+import type { DeferredDiagnosticsEntry, ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
 import { type ptree, TempDir } from "@oh-my-pi/pi-utils";
 
 const TEST_SERVER: ServerConfig = {
@@ -291,6 +294,55 @@ describe("LSP diagnostics freshness", () => {
 		expect(result?.messages.some(m => m.includes("stale error"))).toBe(false);
 	});
 
+	it("returns completed pull diagnostics inside the inline write window", async () => {
+		const filePath = path.join(tempDir.path(), "pull-only.ts");
+		const uri = fileToUri(filePath);
+		const client = createClient(tempDir.path(), TEST_SERVER);
+		client.openFiles.set(uri, { version: 1, languageId: "typescript" });
+		client.serverCapabilities = { diagnosticProvider: true };
+
+		vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: {}, idleTimeoutMs: undefined });
+		vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["test-lsp", TEST_SERVER]]);
+		vi.spyOn(lspClient, "getOrCreateClient").mockResolvedValue(client);
+		vi.spyOn(lspClient, "syncContent").mockImplementation(async (mockClient, syncedFilePath) => {
+			const syncedUri = fileToUri(syncedFilePath);
+			mockClient.diagnostics.delete(syncedUri);
+			const openFile = mockClient.openFiles.get(syncedUri);
+			if (openFile) {
+				openFile.version += 1;
+			} else {
+				mockClient.openFiles.set(syncedUri, { version: 1, languageId: "typescript" });
+			}
+		});
+		vi.spyOn(lspClient, "notifySaved").mockResolvedValue();
+		vi.spyOn(lspClient, "sendRequest").mockResolvedValue({
+			kind: "full",
+			items: [createDiagnostic("pull error")],
+		});
+		const onDeferredDiagnostics = vi.fn();
+		const deferredController = new AbortController();
+		const handle = {
+			onDeferredDiagnostics,
+			signal: deferredController.signal,
+			finalize: () => {},
+		};
+
+		const writethrough = createLspWritethrough(tempDir.path(), { enableFormat: false, enableDiagnostics: true });
+		const inline = await writethrough(
+			filePath,
+			"export const value: number = 'x';\n",
+			undefined,
+			undefined,
+			undefined,
+			() => handle,
+		);
+		deferredController.abort();
+
+		expect(inline?.errored).toBe(true);
+		expect(inline?.messages.some(message => message.includes("pull error"))).toBe(true);
+		expect(onDeferredDiagnostics).not.toHaveBeenCalled();
+	});
+
 	it("returns promptly and delivers diagnostics via the deferred channel when the server is slow", async () => {
 		const filePath = path.join(tempDir.path(), "example.ts");
 		const uri = fileToUri(filePath);
@@ -349,6 +401,61 @@ describe("LSP diagnostics freshness", () => {
 		expect(lateResult.messages.some(m => m.includes("deferred error"))).toBe(true);
 
 		// The edit still landed on disk regardless of diagnostics timing.
+		expect(await Bun.file(filePath).text()).toBe("export const value: number = 'x';\n");
+	});
+
+	it("returns the write tool result before slow diagnostics and queues them for the agent", async () => {
+		const filePath = path.join(tempDir.path(), "write-tool.ts");
+		const uri = fileToUri(filePath);
+		const client = createClient(tempDir.path(), TEST_SERVER);
+		const clock = new VirtualClock(Date.now());
+		installVirtualTime(clock);
+
+		vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: {}, idleTimeoutMs: undefined });
+		vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["test-lsp", TEST_SERVER]]);
+		vi.spyOn(lspClient, "getOrCreateClient").mockResolvedValue(client);
+		vi.spyOn(lspClient, "syncContent").mockImplementation(async (mockClient, syncedFilePath) => {
+			const syncedUri = fileToUri(syncedFilePath);
+			mockClient.openFiles.set(syncedUri, { version: 1, languageId: "typescript" });
+		});
+		vi.spyOn(lspClient, "notifySaved").mockImplementation(async mockClient => {
+			clock.in(2000, () => {
+				publishDiagnostics(mockClient, uri, [createDiagnostic("write tool deferred error")], null);
+			});
+		});
+
+		const queued = Promise.withResolvers<DeferredDiagnosticsEntry>();
+		const mutationVersions = new Map<string, number>();
+		const session: ToolSession = {
+			cwd: tempDir.path(),
+			hasUI: false,
+			getSessionFile: () => null,
+			getSessionSpawns: () => "*",
+			settings: Settings.isolated({
+				"lsp.formatOnWrite": false,
+				"lsp.diagnosticsOnWrite": true,
+				"lsp.diagnosticsDeduplicate": true,
+			}),
+			enableLsp: true,
+			queueDeferredDiagnostics: entry => queued.resolve(entry),
+			bumpFileMutationVersion: target => {
+				const version = (mutationVersions.get(target) ?? 0) + 1;
+				mutationVersions.set(target, version);
+				return version;
+			},
+			getFileMutationVersion: target => mutationVersions.get(target) ?? 0,
+		};
+
+		const result = await new WriteTool(session).execute("write-deferred", {
+			path: filePath,
+			content: "export const value: number = 'x';\n",
+		});
+
+		expect(result.details?.diagnostics).toBeUndefined();
+		const late = await queued.promise;
+		expect(late.isStale()).toBe(false);
+		expect(late.errored).toBe(true);
+		expect(late.messages.some(message => message.includes("write tool deferred error"))).toBe(true);
 		expect(await Bun.file(filePath).text()).toBe("export const value: number = 'x';\n");
 	});
 

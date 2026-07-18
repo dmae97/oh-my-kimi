@@ -387,6 +387,7 @@ export interface LspServerCapabilities {
 	referencesProvider?: boolean;
 	documentSymbolProvider?: boolean;
 	workspaceSymbolProvider?: boolean;
+	diagnosticProvider?: boolean | Record<string, unknown>;
 	[key: string]: unknown;
 }
 
@@ -398,6 +399,8 @@ export interface LspClient {
 	requestId: number;
 	diagnostics: Map<string, PublishedDiagnostics>;
 	diagnosticsVersion: number;
+	/** Dynamic capability registrations keyed by the server-provided registration ID. */
+	dynamicCapabilityRegistrations?: Map<string, string>;
 	openFiles: Map<string, OpenFile>;
 	pendingRequests: Map<number | string, PendingRequest>;
 	messageBuffer: Uint8Array;

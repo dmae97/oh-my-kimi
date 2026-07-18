@@ -276,7 +276,7 @@ function commandMatchesNameOrAlias(cmd: CommandEntry, commandName: string): bool
 	return getCommandAliases(cmd).includes(commandName);
 }
 
-function scoreCommandTextMatch(lowerPrefix: string, lowerTarget: string): number {
+export function scoreCommandTextMatch(lowerPrefix: string, lowerTarget: string): number {
 	if (lowerPrefix.length === 0) return 1;
 	if (lowerPrefix === lowerTarget) return 1000;
 	// Flat score for every prefix match so same-prefix commands keep registry
@@ -359,9 +359,40 @@ function hasPromptTextBeforeSlash(
 	return textBeforeCursor.slice(0, slashStart).trim() !== "";
 }
 
+const SKILL_NAMESPACE = "skill:";
+
+/**
+ * Whether a mid-prompt slash token (`prose … /tok`) is skill-shaped enough to
+ * surface `name` in the skill popup. Deliberately stricter than submitted
+ * slash-command matching: a stray `/word` in running prose must not keep the
+ * popup alive through fuzzy name/description hits, so a token only matches as
+ * - a prefix of the `skill:` namespace (incl. the bare `/` entry point),
+ * - an explicit `skill:…` query (full fuzzy name/description search), or
+ * - a prefix of the skill's bare name (`/hum` → `skill:humanizer`).
+ * Anything else yields no items, letting the caller fall through to path
+ * completion or close the popup. Shared with the editor's accept-time
+ * staleness guard so Tab/Enter never accepts a skill the refreshed popup
+ * would no longer show.
+ */
+export function midPromptSkillTokenMatches(lowerToken: string, name: string, description?: string): boolean {
+	if (SKILL_NAMESPACE.startsWith(lowerToken)) return true;
+	const lowerName = name.toLowerCase();
+	if (lowerToken.startsWith(SKILL_NAMESPACE)) {
+		if (scoreCommandTextMatch(lowerToken, lowerName) > 0) return true;
+		return !!description && scoreCommandTextMatch(lowerToken, description.toLowerCase()) > 0;
+	}
+	return lowerName.startsWith(SKILL_NAMESPACE) && lowerName.slice(SKILL_NAMESPACE.length).startsWith(lowerToken);
+}
+
 function buildMidPromptSkillCompletions(commands: CommandEntry[], lowerPrefix: string): AutocompleteItem[] {
 	return buildSlashCommandCompletions(
-		commands.filter(cmd => getCommandName(cmd)?.startsWith("skill:")),
+		commands.filter(cmd => {
+			const name = getCommandName(cmd);
+			return (
+				name?.startsWith(SKILL_NAMESPACE) &&
+				midPromptSkillTokenMatches(lowerPrefix, name, getStaticCommandDescription(cmd))
+			);
+		}),
 		lowerPrefix,
 	);
 }
@@ -421,36 +452,41 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 						// Preserve the full text-before-cursor for submitted slash
 						// commands so the editor's Enter-staleness check still applies
 						// completion for `  /sk`. Mid-prompt skill lookup keeps only
-						// the slash token because accepting it replaces the whole draft.
+						// the slash token because acceptance replaces only that token.
 						prefix: isMidPromptSkillLookup ? commandText : textBeforeCursor,
 					};
 				}
+				if (!isMidPromptSkillLookup && slashStart === leadingSlashStart && !commandText.slice(1).includes("/")) {
+					return null;
+				}
+
 				// A slash token with no matching command may still be an absolute
 				// path (`/tmp/fo` at prompt start, `see /tmp` mid-prompt); fall
 				// through to file-path completion.
 			} else if (!isMidPromptSkillLookup) {
-				// Submitted slash commands own their argument text only when the
-				// matched command accepts args. No-arg slash-looking prompts such
-				// as `/settings @file` still fall through to prompt-composer
-				// completions because submit treats them as normal prompt text.
+				// Give matched commands first chance to complete arguments, then
+				// fall through to prompt-composer file completion when they have
+				// no argument provider or it has no matches.
 				const commandName = commandText.slice(1, spaceIndex); // Command without "/"
 				const argumentText = commandText.slice(spaceIndex + 1); // Text after space
 
 				const command = this.#commands.find(cmd => commandMatchesNameOrAlias(cmd, commandName));
-				if (command && (!("allowArgs" in command) || command.allowArgs !== false)) {
-					if (!("getArgumentCompletions" in command) || !command.getArgumentCompletions) {
-						return null; // No argument completion for this command
-					}
-
+				if (command && "allowArgs" in command && command.allowArgs === false && !/\S/.test(argumentText)) {
+					return null;
+				}
+				if (
+					command &&
+					(!("allowArgs" in command) || command.allowArgs !== false) &&
+					"getArgumentCompletions" in command &&
+					command.getArgumentCompletions
+				) {
 					const argumentSuggestions = await command.getArgumentCompletions(argumentText);
-					if (!Array.isArray(argumentSuggestions) || argumentSuggestions.length === 0) {
-						return null;
+					if (Array.isArray(argumentSuggestions) && argumentSuggestions.length > 0) {
+						return {
+							items: argumentSuggestions,
+							prefix: argumentText,
+						};
 					}
-
-					return {
-						items: argumentSuggestions,
-						prefix: argumentText,
-					};
 				}
 			}
 		}
@@ -645,15 +681,14 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 			return pathPrefix;
 		}
 
-		// For natural triggers, return if it looks like a path, ends with /, starts with ~/, .
-		// Only return empty string if the text looks like it's starting a path context
-		if (pathPrefix.includes("/") || pathPrefix.startsWith(".") || pathPrefix.startsWith("~/")) {
-			return pathPrefix;
-		}
-
-		// Return empty string only after a space (not for completely empty text)
-		// Empty text should not trigger file suggestions - that's for forced Tab completion
-		if (pathPrefix === "" && text.endsWith(" ")) {
+		// Automatic updates complete only unambiguous path syntax. Bare relative
+		// tokens remain available through explicit Tab completion.
+		if (
+			pathPrefix.startsWith("/") ||
+			pathPrefix.startsWith("./") ||
+			pathPrefix.startsWith("../") ||
+			pathPrefix.startsWith("~/")
+		) {
 			return pathPrefix;
 		}
 

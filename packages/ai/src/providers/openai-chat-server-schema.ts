@@ -114,6 +114,7 @@ export const toolChoiceSchema = type("'auto' | 'none' | 'required'")
 // ─── Messages ───────────────────────────────────────────────────────────────
 
 const baseContent = type("string").or(userContentPartSchema.array());
+const assistantContent = baseContent.or("null");
 
 export const systemMessageSchema = type({
 	role: "'system'",
@@ -132,7 +133,7 @@ export const userMessageSchema = type({
 
 export const assistantMessageSchema = type({
 	role: "'assistant'",
-	"content?": baseContent,
+	"content?": assistantContent,
 	"tool_calls?": toolCallSchema.array(),
 	// DeepSeek-style reasoning channel. The gateway emits it on the way out
 	// (encodeResponse/encodeStream); accept it back so thinking-mode
@@ -209,7 +210,7 @@ export const openaiChatRequestSchema = type({
 	"frequency_penalty?": "number",
 	"logit_bias?": type({ "[string]": "number" }),
 	"user?": "string",
-	"reasoning_effort?": "'minimal' | 'low' | 'medium' | 'high' | 'xhigh'",
+	"reasoning_effort?": "'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'",
 	"parallel_tool_calls?": "boolean",
 	"service_tier?": "'auto' | 'default' | 'flex' | 'scale' | 'priority'",
 	"metadata?": type({ "[string]": "unknown" }),

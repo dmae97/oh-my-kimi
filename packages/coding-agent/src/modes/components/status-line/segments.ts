@@ -129,9 +129,9 @@ const modelSegment: StatusLineSegment = {
 
 		// Fast-mode icon and thinking-level suffix trail the model name and are
 		// colored together with it as `statusLineModel`. The advisor "++" badge
-		// sits between the name and that tail in `accent`, so it reads as a
-		// distinct marker. theme.fg resets only the fg, so the spans are
-		// concatenated (not nested) to keep each color intact.
+		// sits between the name and that tail, so it reads as a distinct marker.
+		// theme.fg resets only the fg, so the spans are concatenated (not
+		// nested) to keep each color intact.
 		let tail = "";
 		if (ctx.session.isFastModeActive() && theme.icon.fast) {
 			tail += ` ${theme.icon.fast}`;
@@ -141,10 +141,25 @@ const modelSegment: StatusLineSegment = {
 		}
 
 		// `statusLineModel` is aliased to `accent` in many themes, so the badge
-		// uses `success` to stay visibly distinct from the model name color.
+		// uses status colors to stay visibly distinct from the model name color.
 		let content = theme.fg("statusLineModel", withIcon(modelIcon, modelName));
-		if (ctx.session.isAdvisorActive()) {
-			content += theme.fg("success", "++");
+		// Advisor "++" badge, colored by the worst status in the roster:
+		// success = all running, warning = quota-exhausted, error = failed,
+		// dim = everything paused/no-model. Per-advisor detail lives in
+		// `/advisor status`.
+		// Optional chaining: lightweight session doubles (test mocks) that don't
+		// implement getAdvisorStatusOverview skip the badge instead of crashing.
+		const advisorStats = ctx.session.getAdvisorStatusOverview?.();
+		if (advisorStats?.configured && advisorStats.advisors.length > 0) {
+			const statuses = advisorStats.advisors.map(a => a.status);
+			const badgeColor = statuses.includes("error")
+				? "error"
+				: statuses.includes("quota_exhausted")
+					? "warning"
+					: statuses.includes("running")
+						? "success"
+						: "dim";
+			content += theme.fg(badgeColor, "++");
 		}
 		if (tail) {
 			content += theme.fg("statusLineModel", tail);
@@ -208,9 +223,21 @@ const modeSegment: StatusLineSegment = {
 			return { content: theme.fg(color, content), visible: true };
 		}
 
+		const prewalk = ctx.prewalk;
+		if (prewalk?.enabled) {
+			const content = withIcon(theme.icon.prewalk, "Prewalk");
+			return { content: theme.fg("accent", content), visible: true };
+		}
+
 		const goal = ctx.goalMode;
 		if (goal && (goal.enabled || goal.paused)) {
 			return renderGoalMode(ctx, goal);
+		}
+
+		const vibe = ctx.vibeMode;
+		if (vibe?.enabled) {
+			const content = withIcon(theme.icon.agents, "Vibe");
+			return { content: theme.fg("accent", content), visible: true };
 		}
 
 		const loop = ctx.loopMode;

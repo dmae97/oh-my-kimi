@@ -2,6 +2,73 @@
 
 ## [Unreleased]
 
+## [17.0.2] - 2026-07-17
+
+### Added
+
+- Added a structured log sink API (`registerLogSink`, `LogEvent`, `LogLevel`) to the centralized logger, enabling out-of-band consumers (such as OpenTelemetry) to receive log events without affecting local file or console logging.
+
+### Changed
+
+- Bounded default `ptree.ChildProcess` stderr retention to a 32 KiB tail to prevent memory leaks in long-lived subprocesses. Full stderr capture must now be explicitly requested at spawn time using `{ stderr: "full" }` on `spawn` or `exec`.
+
+### Fixed
+
+- Fixed fatal cleanup failing to reach `process.exit()` when terminal stderr is revoked.
+- Isolated rotating log files and audit state per process to prevent concurrent instances from racing during compression and rotation.
+
+## [17.0.1] - 2026-07-16
+
+### Fixed
+
+- Added scoped graceful handling for stdio-write EPIPE rejections so protocol servers can await postmortem cleanup when their peer disconnects ([#4788](https://github.com/can1357/oh-my-pi/issues/4788)).
+
+## [17.0.0] - 2026-07-15
+
+### Fixed
+
+- Improved SSE streaming performance by batching complete lines into a single UTF-8 decode per chunk, reducing decoder overhead.
+- Fixed an issue in `parseFrontmatter` where a single malformed YAML line would corrupt sibling values by parsing each line independently.
+
+## [16.5.2] - 2026-07-14
+
+### Fixed
+
+- Improved CLI argument and flag validation error output to display a concise error message and command usage instead of a minified code frame.
+- Corrected required variadic positionals to render as `MODELS...` instead of `[MODELS]` in usage help.
+
+## [16.5.1] - 2026-07-14
+
+### Added
+
+- Added terminal stderr guard utilities (suppressTerminalStderr and restoreTerminalStderr) to prevent macOS runtime diagnostics from corrupting TUI viewports while ensuring crash reports remain visible.
+
+### Fixed
+
+- Fixed an issue in Mermaid ASCII routing where unreachable edge attachment points caused unbounded pathfinder searches.
+
+## [16.4.6] - 2026-07-12
+
+### Added
+
+- Added `AsyncDrain`, the deferred write-batching helper previously private to the coding-agent's prompt-history storage; now shared with model-perf recording.
+
+## [16.4.2] - 2026-07-10
+
+### Added
+
+- Added `stringifyJson` utility with support for BigInt serialization.
+
+## [16.3.12] - 2026-07-08
+
+### Added
+
+- Added `postmortem.interceptUnhandledRejections()` to register interceptors consulted before an unhandled rejection tears the process down; a consuming interceptor (e.g. the JS eval runtime claiming rejections floated by user cell code) keeps the process alive and owns reporting.
+
+### Fixed
+
+- Fixed child shell environment filtering to drop launch-directory `.env.local` values that Bun auto-loaded before OMP starts command shells. ([#4723](https://github.com/can1357/oh-my-pi/issues/4723))
+
 ## [16.3.10] - 2026-07-06
 
 ### Added

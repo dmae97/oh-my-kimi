@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent, type AgentMessage, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import * as compactionModule from "@oh-my-pi/pi-agent-core/compaction";
-import type { TextContent } from "@oh-my-pi/pi-ai";
+import type { Model, TextContent } from "@oh-my-pi/pi-ai";
+import * as codexResponses from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -57,10 +58,11 @@ function getMessageText(message: AgentMessage): string {
 	if (!("content" in message)) return "";
 	if (typeof message.content === "string") return message.content;
 	if (!Array.isArray(message.content)) return "";
-	return message.content
-		.filter(isTextContentBlock)
-		.map(content => content.text)
-		.join("\n");
+	const text: string[] = [];
+	for (const content of message.content) {
+		if (isTextContentBlock(content)) text.push(content.text);
+	}
+	return text.join("\n");
 }
 
 function createAssistantResponse(text: string) {
@@ -135,22 +137,23 @@ describe("AgentSession eager prelude re-injection after compaction", () => {
 
 	async function createHarness(
 		settingsOverride: Record<string, unknown> = {},
-		opts: { agentId?: string; agentKind?: "main" | "sub" } = {},
+		opts: { agentId?: string; agentKind?: "main" | "sub"; model?: Model } = {},
 	): Promise<Harness> {
 		const observedCalls: ObservedPromptCall[] = [];
 		const waiters: Array<{
 			predicate: (call: ObservedPromptCall) => boolean;
 			resolve: (call: ObservedPromptCall) => void;
 		}> = [];
-		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!bundled) throw new Error("Expected claude-sonnet-4-5 model to exist");
+		const defaultModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!defaultModel) throw new Error("Expected claude-sonnet-4-5 model to exist");
+		const selectedModel = opts.model ?? defaultModel;
 		// Pin the window and output reservation: usage figures below trip the
 		// context-full strategy at a 200k/64k threshold; catalog regeneration must
 		// not shift the headroom math.
-		const model = { ...bundled, contextWindow: 200_000, maxTokens: 64_000 };
+		const model = { ...selectedModel, contextWindow: 200_000, maxTokens: 64_000 };
 
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), `testauth-${cleanups.length}.db`));
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.setRuntimeApiKey(model.provider, "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), `models-${cleanups.length}.yml`));
 		const settings = Settings.isolated({
 			"compaction.enabled": true,
@@ -251,8 +254,26 @@ describe("AgentSession eager prelude re-injection after compaction", () => {
 		return { session, observedCalls, sessionManager, waitForCall };
 	}
 
+	function activateOngoingGoal(session: AgentSession): void {
+		const now = Date.now();
+		session.setGoalModeState({
+			enabled: true,
+			mode: "active",
+			goal: {
+				id: "eager-prelude-compaction",
+				objective: "finish the parser refactor",
+				status: "active",
+				tokensUsed: 0,
+				timeUsedSeconds: 0,
+				createdAt: now,
+				updatedAt: now,
+			},
+		});
+	}
+
 	/** Run the first prompt, drive a compaction, and resolve with the auto-continuation provider call. */
 	async function runToContinuation(session: AgentSession, waitForCall: WaitForCall): Promise<ObservedPromptCall> {
+		activateOngoingGoal(session);
 		await session.prompt("refactor the parser across modules");
 		emitHighUsageTurn(session);
 		return waitForCall(call => call.messageTexts.some(text => text.includes(CONTINUE_MARKER)));
@@ -345,6 +366,7 @@ describe("AgentSession eager prelude re-injection after compaction", () => {
 			"todo.eager": "preferred",
 		});
 		await session.prompt("refactor the parser across modules");
+		activateOngoingGoal(session);
 		// A surviving todo entry; pin firstKeptEntryId so compaction preserves it in the branch.
 		const todoEntryId = sessionManager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE, {
 			phases: [{ name: "Work", tasks: [{ content: "do the thing", status: "pending" }] }],
@@ -358,5 +380,26 @@ describe("AgentSession eager prelude re-injection after compaction", () => {
 		expect(session.getTodoPhases().length).toBeGreaterThan(0);
 		expect(continuation.messageTexts.some(text => text.includes("Consider calling"))).toBe(false);
 		expect(continuation.messageTexts.some(text => text.includes("You MUST call"))).toBe(false);
+	});
+
+	it("resets Codex provider history after successful auto-compaction", async () => {
+		const model = getBundledModel("openai-codex", "gpt-5.6-terra");
+		if (!model) throw new Error("Expected gpt-5.6-terra model to exist");
+		const resetSpy = vi.spyOn(codexResponses, "resetOpenAICodexHistoryAfterCompaction");
+		const { session, waitForCall } = await createHarness({}, { model });
+		stubCompaction();
+
+		await runToContinuation(session, waitForCall);
+
+		expect(resetSpy).toHaveBeenCalledTimes(1);
+		const reset = resetSpy.mock.calls[0]?.[0];
+		if (!reset) throw new Error("Expected Codex compaction reset");
+		expect(reset.providerSessionState).toBe(session.providerSessionState);
+		expect(reset.sessionId).toBe(session.sessionId);
+		expect(reset.compaction).toMatchObject({
+			trigger: "auto",
+			reason: "context_limit",
+			phase: "pre_turn",
+		});
 	});
 });

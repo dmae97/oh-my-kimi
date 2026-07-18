@@ -444,9 +444,10 @@ export async function getRecentRequests(limit?: number): Promise<MessageStats[]>
 	return dbGetRecentRequests(limit);
 }
 
-export async function getRecentErrors(limit?: number): Promise<MessageStats[]> {
+export async function getRecentErrors(range?: string | null, limit?: number): Promise<MessageStats[]> {
 	await initDb();
-	return dbGetRecentErrors(limit);
+	const { cutoff } = getTimeRangeConfig(range);
+	return dbGetRecentErrors(limit, cutoff);
 }
 
 export async function getRequestDetails(id: number): Promise<RequestDetails | null> {

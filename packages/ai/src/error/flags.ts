@@ -1,12 +1,13 @@
 import { isUnexpectedSocketCloseMessage } from "@oh-my-pi/pi-utils";
 import type { Api, AssistantMessage } from "../types";
+import { AwsCredentialsError } from "./aws";
 import {
 	AnthropicConnectionError,
 	AnthropicConnectionTimeoutError,
 	ProviderHttpError,
 	STREAM_ENVELOPE_ERROR_PREFIX,
 } from "./classes";
-import { isOpaqueStatusBody, matchesUsageLimitText, parseRateLimitReason } from "./rate-limit";
+import { isOpaqueStatusBody, isUsageLimitStatus, matchesUsageLimitText, parseRateLimitReason } from "./rate-limit";
 
 export const Flag = {
 	Class: 0x1000,
@@ -17,6 +18,7 @@ export const Flag = {
 	StaleResponsesItem: 0x0010_0000,
 	MalformedFunctionCall: 0x0020_0000,
 	ProviderFinishError: 0x0040_0000,
+	ContentBlocked: 0x0000_8000,
 	ContextOverflow: 0x0080_0000,
 	AuthFailed: 0x0100_0000,
 	SilentAbort: 0x0200_0000,
@@ -40,6 +42,7 @@ const KIND_MASK =
 	Flag.StaleResponsesItem |
 	Flag.MalformedFunctionCall |
 	Flag.ProviderFinishError |
+	Flag.ContentBlocked |
 	Flag.ContextOverflow |
 	Flag.AuthFailed |
 	Flag.SilentAbort |
@@ -92,6 +95,7 @@ const AUTH_FAILURE_PATTERN =
 	/\b(?:401|403|unauthorized|forbidden|authentication|auth[_ ]?unavailable|no auth available|(?:invalid|no)[_ ]?api[_ ]?key)\b/i;
 const MALFORMED_FUNCTION_CALL_PATTERN = /\bmalformed.?function.?call\b/i;
 const PROVIDER_FINISH_ERROR_PATTERN = /\bProvider (?:returned error finish_reason|finish_reason:\s*error)\b/i;
+const CONTENT_FILTER_PATTERN = /\b(?:incomplete:\s*)?content_filter\b/i;
 const STALE_RESPONSE_ITEM_PATTERNS = [/\bItem with id ['"][^'"]+['"] not found\.?/i, /previous[ _]?response/i] as const;
 const STALE_RESPONSE_ITEM_DETAIL_PATTERN = /not[ _]?found|invalid|expired|stale|zero[ _-]?data[ _-]?retention/i;
 /**
@@ -173,6 +177,7 @@ const ERROR_KIND_LABELS: readonly [Flag, string][] = [
 	[Flag.StaleResponsesItem, "stale-responses-item"],
 	[Flag.MalformedFunctionCall, "malformed-function-call"],
 	[Flag.ProviderFinishError, "provider-finish-error"],
+	[Flag.ContentBlocked, "content-blocked"],
 	[Flag.ContextOverflow, "context-overflow"],
 	[Flag.AuthFailed, "auth-failed"],
 	[Flag.SilentAbort, "silent-abort"],
@@ -199,6 +204,7 @@ export function is(id: number | undefined, flag: Flag): boolean {
 }
 
 export function retriable(id: number | undefined, opts?: { replayUnsafe?: boolean }): boolean {
+	if (is(id, Flag.ContentBlocked)) return false;
 	if (is(id, Flag.MalformedFunctionCall)) return true;
 	if (opts?.replayUnsafe) return false;
 	return ((id ?? 0) & RETRIABLE_KINDS) !== 0;
@@ -291,6 +297,10 @@ function isProviderFinishErrorText(text: string): boolean {
 	return PROVIDER_FINISH_ERROR_PATTERN.test(text);
 }
 
+function isContentBlockedText(text: string): boolean {
+	return CONTENT_FILTER_PATTERN.test(text);
+}
+
 function matchesOverflowText(text: string): boolean {
 	return OVERFLOW_PATTERNS.some(p => p.test(text)) || OVERFLOW_NO_BODY_PATTERN.test(text);
 }
@@ -301,13 +311,14 @@ function classifyText(errorMessage: string | undefined, errorStatus: number | un
 		if (matchesOverflowText(errorMessage)) kinds |= Flag.ContextOverflow;
 		if (isMalformedFunctionCallText(errorMessage)) kinds |= Flag.MalformedFunctionCall;
 		if (isProviderFinishErrorText(errorMessage)) kinds |= Flag.ProviderFinishError;
+		if (isContentBlockedText(errorMessage)) kinds |= Flag.ContentBlocked;
 		if (isAuthFailureText(errorMessage)) kinds |= Flag.AuthFailed;
 
 		const statusClean = errorStatus ? errorStatus : (status({ message: errorMessage }) ?? undefined);
 		const cleanMessage = errorMessage;
 		const isOpaque = isOpaqueStatusBody(cleanMessage);
 
-		const isLimitStatus = statusClean === 429;
+		const isLimitStatus = isUsageLimitStatus(statusClean);
 		if (
 			matchesUsageLimitText(cleanMessage) ||
 			(isLimitStatus && (isOpaque || parseRateLimitReason(cleanMessage) === "QUOTA_EXHAUSTED"))
@@ -346,7 +357,9 @@ export function classify(error: unknown, api?: Api): number {
 			}
 		}
 
-		if (link instanceof AnthropicConnectionTimeoutError) {
+		if (link instanceof AwsCredentialsError) {
+			kinds |= Flag.AuthFailed;
+		} else if (link instanceof AnthropicConnectionTimeoutError) {
 			kinds |= Flag.Timeout | Flag.Transient;
 		} else if (link instanceof AnthropicConnectionError) {
 			kinds |= Flag.Transient;

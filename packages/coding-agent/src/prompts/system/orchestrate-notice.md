@@ -21,7 +21,7 @@ You decompose, dispatch, verify, and iterate. Substantial and parallelizable wor
 <workflow>
 1. **Ingest.** Read every referenced file (audits, plans, prior agent output, current branch state). Run `git status` to see uncommitted changes.
 2. **Plan.** Materialize the full work surface in `todo` as ordered phases. Within each phase, list the parallelizable units.
-3. **Dispatch phase.** Launch all parallel `task` subagents in one message, then collect every result (async results / `job poll`) before moving on.
+3. **Dispatch phase.** Launch all parallel `task` subagents in one message, then collect every result (async results / `hub` wait) before moving on.
 4. **Verify phase.** Run the gates. On failure, dispatch fix-up subagents and re-verify. Do not advance with a red gate.
 5. **Commit phase** (if applicable). Focused message naming the phase.
 6. **Advance.** Mark the phase done in `todo`, immediately start the next phase. No summary message between phases — keep going.

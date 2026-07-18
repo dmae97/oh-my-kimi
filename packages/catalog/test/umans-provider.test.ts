@@ -12,24 +12,7 @@ import {
 import type { FetchImpl, ModelSpec } from "@oh-my-pi/pi-catalog/types";
 import modelsJson from "../src/models.json";
 
-interface BundledModel {
-	api: string;
-	provider: string;
-	baseUrl: string;
-	reasoning: boolean;
-	input: string[];
-	contextWindow: number | null;
-	maxTokens: number | null;
-	thinking?: {
-		defaultLevel?: string;
-		requiresEffort?: boolean;
-		efforts?: string[];
-		effortMap?: Record<string, string>;
-	};
-	compat?: {
-		escapeBuiltinToolNames?: boolean;
-	};
-}
+const bundledModels = modelsJson;
 
 describe("umans provider catalog", () => {
 	it("discovers Anthropic-route models from the public models info endpoint", async () => {
@@ -98,6 +81,7 @@ describe("umans provider catalog", () => {
 			baseUrl: "https://api.code.umans.ai",
 			reasoning: true,
 			input: ["text", "image"],
+			cost: { input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0 },
 			contextWindow: 262_144,
 			maxTokens: 32_768,
 			thinking: { defaultLevel: "medium" },
@@ -118,12 +102,11 @@ describe("umans provider catalog", () => {
 			thinking: {
 				mode: "anthropic-budget-effort",
 				defaultLevel: "high",
-				efforts: ["high", "xhigh"],
-				effortMap: { xhigh: "max" },
+				efforts: ["high", "max"],
 			},
 		});
 		if (!glm52) throw new Error("Umans GLM 5.2 was not discovered");
-		expect(glm52.thinking?.effortMap).toEqual({ [Effort.XHigh]: "max" });
+		expect(glm52.thinking?.effortMap).toBeUndefined();
 		expect(glm52.thinking?.defaultLevel).toBe(Effort.High);
 	});
 
@@ -180,8 +163,7 @@ describe("umans provider catalog", () => {
 	});
 
 	it("bundles Umans GLM via-handoff models as text-only", () => {
-		const providers = modelsJson as Record<string, Record<string, BundledModel>>;
-		const model = providers.umans?.["umans-glm-5.2"];
+		const model = bundledModels.umans?.["umans-glm-5.2"];
 		expect(model, "umans-glm-5.2 should be bundled").toBeDefined();
 		expect(model.input, "umans-glm-5.2 input should be text-only").toEqual(["text"]);
 	});
@@ -246,9 +228,21 @@ describe("umans provider catalog", () => {
 		}
 	});
 
-	it("maps the models.dev Umans provider to the Anthropic endpoint", () => {
+	it("maps the models.dev Umans PAYG pricing to the Anthropic endpoint", () => {
 		const models = mapModelsDevToModels(
 			{
+				"umans-ai": {
+					models: {
+						"umans-coder": {
+							name: "Umans Coder",
+							tool_call: true,
+							reasoning: true,
+							modalities: { input: ["text", "image"] },
+							limit: { context: 262_144, output: 262_144 },
+							cost: { input: 0.95, output: 4, cache_read: 0.19 },
+						},
+					},
+				},
 				"umans-ai-coding-plan": {
 					models: {
 						"umans-coder": {
@@ -273,14 +267,14 @@ describe("umans provider catalog", () => {
 			baseUrl: "https://api.code.umans.ai",
 			reasoning: true,
 			input: ["text", "image"],
+			cost: { input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0 },
 			contextWindow: 262_144,
 			maxTokens: 262_144,
 		});
 	});
 
 	it("bundles the default Umans coding model", () => {
-		const providers = modelsJson as Record<string, Record<string, BundledModel>>;
-		const model = providers.umans?.["umans-coder"];
+		const model = bundledModels.umans?.["umans-coder"];
 
 		expect(model).toBeDefined();
 		expect(model).toMatchObject({
@@ -295,9 +289,28 @@ describe("umans provider catalog", () => {
 		});
 	});
 
+	it("bundles published Umans PAYG pricing", () => {
+		const models = bundledModels.umans;
+
+		expect(models?.["umans-coder"].cost).toEqual({ input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0 });
+		expect(models?.["umans-kimi-k2.7"].cost).toEqual({
+			input: 0.95,
+			output: 4,
+			cacheRead: 0.19,
+			cacheWrite: 0,
+		});
+		expect(models?.["umans-glm-5.2"].cost).toEqual({ input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 });
+		expect(models?.["umans-flash"].cost).toEqual({ input: 0.15, output: 1, cacheRead: 0.05, cacheWrite: 0 });
+		expect(models?.["umans-qwen3.6-35b-a3b"].cost).toEqual({
+			input: 0.15,
+			output: 1,
+			cacheRead: 0.05,
+			cacheWrite: 0,
+		});
+	});
+
 	it("bundles Umans mandatory reasoning metadata", () => {
-		const providers = modelsJson as Record<string, Record<string, BundledModel>>;
-		const model = providers.umans?.["umans-kimi-k2.7"];
+		const model = bundledModels.umans?.["umans-kimi-k2.7"];
 
 		expect(model).toBeDefined();
 		expect(model.maxTokens).toBe(32_768);
@@ -307,15 +320,14 @@ describe("umans provider catalog", () => {
 		});
 	});
 
-	it("bundles Umans GLM 5.2 high/max reasoning metadata with the max wire effort", () => {
-		const providers = modelsJson as Record<string, Record<string, BundledModel>>;
-		const model = providers.umans?.["umans-glm-5.2"];
+	it("bundles Umans GLM 5.2 with the wire-exact high/max ladder", () => {
+		const model = bundledModels.umans?.["umans-glm-5.2"];
 
 		expect(model).toBeDefined();
 		expect(model.thinking).toMatchObject({
 			mode: "anthropic-budget-effort",
-			efforts: ["high", "xhigh"],
-			effortMap: { xhigh: "max" },
+			efforts: ["high", "max"],
 		});
+		expect("effortMap" in model.thinking).toBe(false);
 	});
 });

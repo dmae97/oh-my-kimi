@@ -16,7 +16,7 @@
  * `save` callback.
  */
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import type { Model } from "@oh-my-pi/pi-ai";
+import type { Model, UsageReport } from "@oh-my-pi/pi-ai";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import {
 	type Component,
@@ -38,9 +38,12 @@ import {
 import type { ModelRegistry } from "../../config/model-registry";
 import { formatModelSelectorValue } from "../../config/model-resolver";
 import type { Settings } from "../../config/settings";
+import type { PerAdvisorStat } from "../../session/agent-session";
+import type { OAuthAccountIdentity } from "../../session/auth-storage";
+import { formatCompactQuota } from "../controllers/command-controller";
 import { getSelectListTheme, theme } from "../theme/theme";
 import { HookEditorComponent } from "./hook-editor";
-import { ModelSelectorComponent } from "./model-selector";
+import { buildBrowserItems, ModelBrowser, sortModelItems } from "./model-browser";
 import {
 	bottomBorder,
 	divider,
@@ -63,6 +66,11 @@ export interface AdvisorConfigCallbacks {
 	requestRender: () => void;
 	/** Surface a transient status/warning line to the user. */
 	notify: (message: string) => void;
+	/** Live advisor usage stats; lets the preview show tokens/cost per advisor. */
+	getAdvisorStats?: () => PerAdvisorStat[];
+	getUsageReports?: () => Promise<UsageReport[] | null>;
+	/** Resolve the active OAuth identity for quota filtering (per-advisor account stickiness). */
+	resolveActiveAccount?: (provider: string, sessionId?: string) => OAuthAccountIdentity | undefined;
 }
 
 export interface AdvisorConfigDeps {
@@ -82,9 +90,9 @@ function previewLine(text: string | undefined): string {
 	return first.length > PREVIEW_WIDTH ? `${first.slice(0, PREVIEW_WIDTH - 1)}…` : first;
 }
 
-/** Default when the set is empty or exactly read/grep/glob; else the available-ordered subset. */
+/** Omitted means default read/grep/glob; an explicit empty set means no tools. */
 function commitTools(selected: ReadonlySet<string>, all: readonly string[]): string[] | undefined {
-	if (selected.size === 0) return undefined;
+	if (selected.size === 0) return [];
 	if (selected.size === ADVISOR_DEFAULT_TOOL_NAMES.size) {
 		let matchesDefault = true;
 		for (const name of ADVISOR_DEFAULT_TOOL_NAMES) {
@@ -96,6 +104,11 @@ function commitTools(selected: ReadonlySet<string>, all: readonly string[]): str
 		if (matchesDefault) return undefined;
 	}
 	return all.filter(name => selected.has(name));
+}
+
+function formatAdvisorTools(tools: readonly string[] | undefined, emptyLabel: string): string {
+	if (tools === undefined) return "read, grep, glob (default)";
+	return tools.length > 0 ? tools.join(", ") : emptyLabel;
 }
 
 /** Soft-wrap plain text to `width`, returning at least one (possibly empty) line. */
@@ -121,6 +134,8 @@ export class AdvisorConfigOverlayComponent implements Component {
 	#cb: AdvisorConfigCallbacks;
 	#scope: AdvisorConfigScope;
 	#doc: WatchdogConfigDoc;
+	/** Cached usage reports (quota/window/reset) prefetched on overlay open. */
+	#cachedReports: UsageReport[] | null = null;
 	#dirty = false;
 
 	#screen: Screen = "list";
@@ -152,6 +167,16 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#doc = doc;
 		this.#ensureRosterVisible();
 		this.#showList();
+		// Prefetch usage reports for quota display; non-fatal if unavailable.
+		if (callbacks.getUsageReports) {
+			void callbacks
+				.getUsageReports()
+				.then(r => {
+					this.#cachedReports = r;
+					this.#cb.requestRender();
+				})
+				.catch(() => {});
+		}
 	}
 
 	// ───────────────────────────── render ─────────────────────────────
@@ -266,10 +291,11 @@ export class AdvisorConfigOverlayComponent implements Component {
 
 	#advisorPreview(advisor: AdvisorConfig, bodyWidth: number): string[] {
 		const model = advisor.model?.trim() || this.#defaultModelLabel || "advisor role default";
-		const tools = advisor.tools?.length ? advisor.tools.join(", ") : "read, grep, glob (default)";
+		const tools = formatAdvisorTools(advisor.tools, "no tools");
 		const lines = [
 			theme.bold(advisor.name || "(unnamed)"),
 			"",
+			`${theme.fg("dim", "Enabled:")} ${advisor.enabled === false ? "○ off" : "● on"}`,
 			`${theme.fg("dim", "Model:")} ${model}`,
 			`${theme.fg("dim", "Tools:")} ${tools}`,
 			"",
@@ -277,6 +303,34 @@ export class AdvisorConfigOverlayComponent implements Component {
 		];
 		const instr = advisor.instructions?.trim();
 		lines.push(...(instr ? wrap(instr, bodyWidth) : [theme.fg("muted", "(none)")]));
+		// Show live usage stats when available from the session.
+		const liveStat = this.#cb.getAdvisorStats?.()?.find(s => s.name === (advisor.name || "default"));
+		if (liveStat && (liveStat.status === "running" || liveStat.status === "quota_exhausted")) {
+			lines.push("", theme.fg("dim", "Usage:"));
+			const spendParts: string[] = [
+				`${liveStat.tokens.input.toLocaleString()} in`,
+				`${liveStat.tokens.output.toLocaleString()} out`,
+			];
+			if (liveStat.tokens.cacheRead > 0) spendParts.push(`${liveStat.tokens.cacheRead.toLocaleString()} cache`);
+			lines.push(theme.fg("dim", `  Tokens: ${spendParts.join(", ")}`));
+			if (liveStat.cost > 0) lines.push(theme.fg("dim", `  Cost: $${liveStat.cost.toFixed(4)}`));
+			if (liveStat.contextWindow > 0) {
+				const pct = Math.round((liveStat.contextTokens / liveStat.contextWindow) * 100);
+				lines.push(
+					theme.fg(
+						"dim",
+						`  Context: ${liveStat.contextTokens.toLocaleString()}/${liveStat.contextWindow.toLocaleString()} (${pct}%)`,
+					),
+				);
+			}
+		}
+		const quotaProvider =
+			(advisor.model?.includes("/") ? advisor.model.split("/")[0] : null) ?? liveStat?.model?.provider;
+		if (this.#cachedReports && quotaProvider) {
+			const activeAccount = this.#cb.resolveActiveAccount?.(quotaProvider, liveStat?.sessionId);
+			const quota = formatCompactQuota(quotaProvider, this.#cachedReports, Date.now(), activeAccount);
+			if (quota) lines.push(theme.fg("dim", `  ${quota}`));
+		}
 		return lines.map(line => truncateToWidth(line, bodyWidth));
 	}
 
@@ -303,13 +357,17 @@ export class AdvisorConfigOverlayComponent implements Component {
 		const advisor = doc.advisors[0];
 		if (!advisor) return false;
 		return (
-			advisor.name === "default" && !advisor.model?.trim() && !advisor.tools?.length && !advisor.instructions?.trim()
+			advisor.name === "default" &&
+			!advisor.model?.trim() &&
+			advisor.tools === undefined &&
+			!advisor.instructions?.trim() &&
+			advisor.enabled !== false
 		);
 	}
 
 	#advisorSummary(advisor: AdvisorConfig): string {
 		const model = advisor.model?.trim() || this.#defaultModelLabel || "advisor role default";
-		const tools = advisor.tools?.length ? advisor.tools.join(", ") : "(default: read/grep/glob)";
+		const tools = formatAdvisorTools(advisor.tools, "no tools");
 		return `${model} · ${tools}`;
 	}
 
@@ -317,7 +375,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#ensureRosterVisible();
 		const items: SelectItem[] = this.#doc.advisors.map((advisor, index) => ({
 			value: `advisor:${index}`,
-			label: advisor.name || "(unnamed)",
+			label: `${advisor.enabled === false ? "○" : "●"} ${advisor.name || "(unnamed)"}`,
 			description: this.#advisorSummary(advisor),
 		}));
 		items.push({ value: "add", label: "+ Add advisor" });
@@ -384,9 +442,14 @@ export class AdvisorConfigOverlayComponent implements Component {
 			return;
 		}
 		const modelDescription = advisor.model?.trim() || this.#defaultModelLabel || "advisor role default";
-		const toolsDescription = advisor.tools?.length ? advisor.tools.join(", ") : "(default: read/grep/glob)";
+		const toolsDescription = formatAdvisorTools(advisor.tools, "no tools");
 		const items: SelectItem[] = [
 			{ value: "name", label: "Name", description: advisor.name },
+			{
+				value: "toggleEnabled",
+				label: "Enabled",
+				description: advisor.enabled === false ? "○ off" : "● on",
+			},
 			{ value: "model", label: "Model", description: modelDescription },
 		];
 		if (advisor.model?.trim()) {
@@ -406,6 +469,13 @@ export class AdvisorConfigOverlayComponent implements Component {
 
 	#onDetailSelect(index: number, field: string): void {
 		switch (field) {
+			case "toggleEnabled": {
+				const a = this.#doc.advisors[index];
+				a.enabled = a.enabled === false ? undefined : false;
+				this.#dirty = true;
+				this.#showDetail(index);
+				return;
+			}
 			case "name":
 				this.#showNameEditor(index);
 				return;
@@ -453,27 +523,37 @@ export class AdvisorConfigOverlayComponent implements Component {
 	}
 
 	#showModelPicker(index: number): void {
-		const picker = new ModelSelectorComponent(
-			this.#tui,
-			undefined,
-			this.#settings,
-			this.#modelRegistry,
-			this.#scopedModels,
-			(model, _role, _thinking, selector) => {
-				const base = selector ?? `${model.provider}/${model.id}`;
-				const efforts = getSupportedEfforts(model);
-				if (efforts.length === 0) {
-					this.#doc.advisors[index].model = base;
-					this.#dirty = true;
-					this.#showDetail(index);
-				} else {
-					this.#showThinkingPicker(index, base, efforts);
-				}
-			},
-			() => this.#showDetail(index),
-			{ directSelect: true, pickerHint: "Pick this advisor's model · Enter / click select · Esc back" },
-		);
-		this.#setScreen("model", picker, "Type to search · Enter / click pick model · Esc back");
+		const storage = this.#settings.getStorage();
+		const mruOrder = storage?.getModelUsageOrder() ?? [];
+		let models: ReadonlyArray<Model>;
+		if (this.#scopedModels.length > 0) {
+			models = this.#scopedModels.map(scoped => scoped.model);
+		} else {
+			try {
+				models = this.#modelRegistry.getAvailable();
+			} catch {
+				models = [];
+			}
+		}
+		const items = buildBrowserItems(models);
+		sortModelItems(items, { mruOrder });
+
+		const picker = new ModelBrowser(this.#settings, {});
+		picker.setMruOrder(mruOrder);
+		picker.setPerfStats(storage?.getModelPerf() ?? new Map());
+		picker.setItems(items);
+		picker.onActivate = item => {
+			const efforts = getSupportedEfforts(item.model);
+			if (efforts.length === 0) {
+				this.#doc.advisors[index].model = item.selector;
+				this.#dirty = true;
+				this.#showDetail(index);
+			} else {
+				this.#showThinkingPicker(index, item.selector, efforts);
+			}
+		};
+		picker.onCancel = () => this.#showDetail(index);
+		this.#setScreen("model", picker, "Type to search · Enter / click twice picks · Esc back");
 	}
 
 	#showThinkingPicker(index: number, selector: string, efforts: readonly string[]): void {
@@ -524,7 +604,7 @@ export class AdvisorConfigOverlayComponent implements Component {
 		this.#setScreen(
 			"tools",
 			list,
-			"Enter / click toggle · select Done or Esc to apply (empty or read/grep/glob = default)",
+			"Enter / click toggle · select Done or Esc to apply (empty = no tools; read/grep/glob = default)",
 		);
 	}
 

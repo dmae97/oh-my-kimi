@@ -85,7 +85,7 @@ function enabledEvalLanguages(backends: EvalBackendsAllowance): EvalLanguageToke
 
 const evalCellCommonFields = {
 	"title?": type("string").describe('short label shown in transcript (e.g. "imports", "load config")'),
-	"timeout?": type("number").describe("timeout for this eval call in seconds"),
+	"timeout?": type("number").describe("timeout for this eval call in seconds; 0 disables the cell timeout"),
 	"reset?": type("boolean").describe("wipe this language's kernel before running. Other languages are untouched."),
 };
 
@@ -538,11 +538,16 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 					// ordinary tool calls all count against the budget. The watchdog drives
 					// `combinedSignal`; we pass no wall-clock deadline downstream so the
 					// backends never arm a competing fixed timer.
-					const idleTimeoutMs = timeoutSecondsFromMs(cell.timeoutMs) * 1000;
-					const idle = new IdleTimeout(idleTimeoutMs);
-					const combinedSignal = signal
-						? AbortSignal.any([signal, idle.signal, sessionAbortController.signal])
-						: AbortSignal.any([idle.signal, sessionAbortController.signal]);
+					const idleTimeoutMs = cell.timeoutMs === 0 ? undefined : timeoutSecondsFromMs(cell.timeoutMs) * 1000;
+					const idle = idleTimeoutMs === undefined ? undefined : new IdleTimeout(idleTimeoutMs);
+					const combinedSignal =
+						signal && idle
+							? AbortSignal.any([signal, idle.signal, sessionAbortController.signal])
+							: signal
+								? AbortSignal.any([signal, sessionAbortController.signal])
+								: idle
+									? AbortSignal.any([idle.signal, sessionAbortController.signal])
+									: sessionAbortController.signal;
 
 					const cellResult = cellResults[i];
 					cellResult.status = "running";
@@ -570,11 +575,11 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 							},
 							onStatus: event => {
 								if (event.op === EVAL_TIMEOUT_PAUSE_OP) {
-									idle.pause();
+									idle?.pause();
 									return;
 								}
 								if (event.op === EVAL_TIMEOUT_RESUME_OP) {
-									idle.resume();
+									idle?.resume();
 									return;
 								}
 								cellResult.statusEvents ??= [];
@@ -583,7 +588,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 							},
 						});
 					} finally {
-						idle.dispose();
+						idle?.dispose();
 						activeLiveCell = undefined;
 					}
 					const durationMs = Date.now() - startTime;
@@ -763,5 +768,8 @@ async function summarizeFinal(
 		outputLines,
 		outputBytes,
 		artifactId: rawSummary.artifactId,
+		columnDroppedBytes: rawSummary.columnDroppedBytes,
+		columnTruncatedLines: rawSummary.columnTruncatedLines,
+		columnMax: rawSummary.columnMax,
 	};
 }

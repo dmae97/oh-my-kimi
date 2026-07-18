@@ -1,59 +1,24 @@
-Runs commands in the embedded shell — terminal ops: git, bun, cargo, python.
+Runs commands in a persistent shell session.
 
-# When to use bash — and when not to
-
-The shell invokes **real binaries** with simple args. It is NOT full GNU Bash.
-
-Use bash ONLY for: a single binary call, or one short pipeline that COMPUTES a fact and does not depend on shell-specific regex/quoting (`wc -l`, `sort | uniq -c`, `comm`, `diff`, a checksum, `git status`).
-
-Anything below → `eval` cell, not bash:
-- Inline interpreter scripts (`-e`/`-c`/`--eval`) when an eval runtime exists for that language
-- Heredocs (`<<EOF`), `while`/`for`/`if`/`case` shell control flow
-- `$(…)` command substitution nested inside another command
-- Pipelines with more than two stages, or stages that need control flow or quote/JSON escaping
-- Multiline commands, `&&`-chains mixing control flow
-- Quote/JSON escaping that fights the shell
-- GNU grep BRE extensions are not guaranteed in the embedded shell: use `grep -E 'json|tool'` for alternation instead of `grep 'json\|tool'`; use the built-in `grep` tool with `pattern: "json|tool"` (Rust regex, so `\bword\b` works there), or `eval` for exact text processing.
+Use ONLY for: single binary call or short pipeline that COMPUTES a fact (`wc -l`, `sort | uniq -c`, `comm`, `diff`).
+{{#if hasLaunch}}Services, watchers, debuggers, REPLs → `hub` (`op:"start"`).{{/if}}
+{{#if hasEval}}Inline scripts, heredocs, shell control flow, `$(…)`, multi-stage pipelines, `&&`-chains, quote/JSON escaping → `eval` cells.{{else}}Inline scripts, heredocs, shell control flow, `$(…)`, multi-stage pipelines, `&&`-chains → purpose-built tool or checked-in script.{{/if}}
 
 <instruction>
-- `cwd` sets the working dir, not `cd dir && …`
-- `env: { NAME: "…" }` for multiline / quote-heavy / untrusted values; reference `$NAME`
-- Quote expansions (`"$NAME"`) to preserve exact content
-- `pty: true` only when the command needs a real terminal (`sudo`, `ssh` needing input); default `false`
-- `;` only when later commands should run despite earlier failures
-- Multiple bash calls per message run concurrently. NEVER split order-dependent commands across parallel calls — chain with `&&` in one call.
-- Internal URIs (`skill://`, `agent://`, …) auto-resolve to FS paths
-- Need exact pipeline semantics (`cmd | head`, multi-stage filtering) or output truncation? Prefer `eval` and process the stream directly.
-{{#if asyncEnabled}}
-- `async: true` for long-running commands when you don't need immediate output: returns a background job ID; result delivered as a follow-up.
-{{/if}}
+- `cwd` sets working dir (not `cd dir && …`). `env: { NAME: "…" }` for multiline/quote-heavy values; `"$NAME"` to expand.
+- `pty: true` only for real terminal needs (`sudo`, `ssh`); default `false`.
+- Multiple calls run concurrently; NEVER split order-dependent commands — chain with `&&` in one call (`;` only to continue past failure).
+- Internal URIs (`skill://`, `agent://`, …) auto-resolve to FS paths.
+{{#if asyncEnabled}}- `async: true` defers reporting for finite commands needing no later input.{{/if}}
 </instruction>
 
 <critical>
-- The embedded shell invokes real binaries with simple args; it is NOT full GNU Bash. Loops, conditionals, heredocs, inline interpreter scripts (`-e`/`-c`/`--eval`) when an eval runtime exists, several piped stages, exact pipeline semantics, or quote/JSON escaping mean you're writing a program → use `eval` cells: restartable, stateful, and free of shell-quoting traps.
+{{#if hasGrep}}- NEVER shell out to search: `grep`/`rg` → built-in `grep`.{{/if}}
+{{#if hasRead}}{{#if hasGlob}}- NEVER use `ls` or `find` — `ls` → `read`, `find` → `glob`. NON-NEGOTIABLE.{{/if}}{{/if}}
+- Avoid head/tail/redirections: stderr merged, output auto-truncated, full capture at `artifact://<id>`.
+{{#if hasLaunch}}- NEVER launch daemons/watchers/servers/debuggers/REPLs through bash — use `hub` (`op:"start"`).{{/if}}
 </critical>
 
-<output>
-- Returns output (stderr merged into stdout); exit code shown on non-zero exit.
-- Truncated output → `artifact://<id>` (linked in metadata).
-</output>
-
-{{#if asyncEnabled}}
-# Timeout and async
-
-- `timeout` is seconds, clamped to `1..3600`; the process is killed on elapse.
-- `async: true` defers only reporting — it does NOT extend the timeout; a daemon with `async: true` is still killed at the clamped timeout.
-- Need >3600s? Detach/manage lifecycle yourself (`cmd &`, supervisor, self-restarting script). The shell session persists across calls.
-{{/if}}
-{{#if autoBackgroundEnabled}}
-
-## Auto-background
-
-- A long-running foreground call may convert to a background job; the final result arrives as a follow-up tool call. NOT a failure — don't retry or wait synchronously.
-- Need the result inline (e.g. piping into another command)? Raise `timeout` above expected duration{{#if asyncEnabled}}, or set `async: true` up front{{/if}}.
-{{/if}}
-
-# Output minimizer
-
-- Long output truncated; test/lint runner output filtered to failures. When visible text changed, a `[raw output: artifact://<id>]` footer links the full capture — read it if a run looks suspicious or you need exact bytes.
-- No footer = what you see is exactly what the command emitted.
+{{#if asyncEnabled}}- `timeout`: nonzero clamped 1–3600, killed on elapse. `async: true` defers reporting only, doesn't extend timeout.{{/if}}
+{{#if autoBackgroundEnabled}}- Long foreground calls may auto-background; result arrives as follow-up — NOT a failure. Need inline? Raise timeout{{#if asyncEnabled}} or `async: true`{{/if}}.{{/if}}
+- Long output truncated, test/lint filtered to failures. Footer links full capture. No footer = what you see is exact output.

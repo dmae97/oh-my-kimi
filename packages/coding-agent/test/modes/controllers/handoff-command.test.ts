@@ -12,6 +12,9 @@ function createContainer() {
 		clear() {
 			this.children = [];
 		},
+		disposeChildren() {
+			this.children = [];
+		},
 	};
 }
 

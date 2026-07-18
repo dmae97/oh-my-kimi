@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, setSystemTime, spyOn, vi } from "bun:test";
-import { TUI } from "@oh-my-pi/pi-tui";
+import { Container, TUI } from "@oh-my-pi/pi-tui";
 import { Loader, type LoaderMessageColorFn } from "@oh-my-pi/pi-tui/components/loader";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { VirtualTerminal } from "./virtual-terminal";
@@ -36,41 +36,24 @@ describe("Loader component", () => {
 
 	it("keeps spinner cadence when animated messages repaint at 30fps", () => {
 		vi.useFakeTimers();
-		const ui = { requestComponentRender: vi.fn() } as unknown as TUI;
+		const ui = { requestDirectWrite: vi.fn(), requestComponentRender: vi.fn() };
 		const colorMessage = ((text: string) => text) as LoaderMessageColorFn & { animated: true };
 		colorMessage.animated = true;
-		const loader = new Loader(ui, text => text, colorMessage, "Checking", ["0", "1", "2", "3"]);
+		const loader = new Loader(ui as unknown as TUI, text => text, colorMessage, "Checking", ["0", "1", "2", "3"]);
 
 		vi.advanceTimersByTime(170);
 
+		expect(ui.requestDirectWrite).toHaveBeenCalledTimes(3);
+		expect(ui.requestComponentRender).not.toHaveBeenCalled();
 		expect(loader.render(20).join("\n")).toContain("2 Checking");
 		loader.stop();
 	});
 
-	it("skips animated render requests when composed text is unchanged before the spinner advances", () => {
+	it("falls back to component-scoped renders for lightweight TUI stubs", () => {
 		vi.useFakeTimers();
-		const ui = { requestComponentRender: vi.fn() } as unknown as TUI;
-		const colorMessage = ((text: string) => text) as LoaderMessageColorFn & { animated: true };
-		colorMessage.animated = true;
-		const loader = new Loader(ui, text => text, colorMessage, "Checking", ["0", "1"]);
-
-		expect(ui.requestComponentRender).toHaveBeenCalledTimes(1);
-
-		vi.advanceTimersByTime(34);
-		expect(ui.requestComponentRender).toHaveBeenCalledTimes(1);
-
-		vi.advanceTimersByTime(67);
-		expect(ui.requestComponentRender).toHaveBeenCalledTimes(2);
-		expect(loader.render(20).join("\n")).toContain("1 Checking");
-
-		loader.stop();
-	});
-
-	it("requests render for message changes but not repeated identical messages", () => {
-		vi.useFakeTimers();
-		const ui = { requestComponentRender: vi.fn() } as unknown as TUI;
+		const ui = { requestComponentRender: vi.fn() };
 		const loader = new Loader(
-			ui,
+			ui as unknown as TUI,
 			text => text,
 			text => text,
 			"Checking",
@@ -83,44 +66,114 @@ describe("Loader component", () => {
 		expect(ui.requestComponentRender).toHaveBeenCalledTimes(2);
 		expect(loader.render(30).join("\n")).toContain("0 Still checking");
 
-		loader.setMessage("Still checking");
-		expect(ui.requestComponentRender).toHaveBeenCalledTimes(2);
+		loader.stop();
+	});
+
+	it("skips animated render requests when composed text is unchanged before the spinner advances", () => {
+		vi.useFakeTimers();
+		const ui = { requestDirectWrite: vi.fn(), requestComponentRender: vi.fn() };
+		const colorMessage = ((text: string) => text) as LoaderMessageColorFn & { animated: true };
+		colorMessage.animated = true;
+		const loader = new Loader(ui as unknown as TUI, text => text, colorMessage, "Checking", ["0", "1"]);
+
+		expect(ui.requestDirectWrite).toHaveBeenCalledTimes(1);
+		expect(ui.requestComponentRender).not.toHaveBeenCalled();
+
+		vi.advanceTimersByTime(34);
+		expect(ui.requestDirectWrite).toHaveBeenCalledTimes(1);
+
+		vi.advanceTimersByTime(67);
+		expect(ui.requestDirectWrite).toHaveBeenCalledTimes(2);
+		expect(ui.requestComponentRender).not.toHaveBeenCalled();
+		expect(loader.render(20).join("\n")).toContain("1 Checking");
 
 		loader.stop();
 	});
 
-	it("requests render when animated message bytes change between spinner frames", () => {
+	it("requests direct writes for message changes but not repeated identical messages", () => {
+		vi.useFakeTimers();
+		const ui = { requestDirectWrite: vi.fn(), requestComponentRender: vi.fn() };
+		const loader = new Loader(
+			ui as unknown as TUI,
+			text => text,
+			text => text,
+			"Checking",
+			["0"],
+		);
+
+		expect(ui.requestDirectWrite).toHaveBeenCalledTimes(1);
+		expect(ui.requestComponentRender).not.toHaveBeenCalled();
+
+		loader.setMessage("Still checking");
+		expect(ui.requestDirectWrite).toHaveBeenCalledTimes(2);
+		expect(loader.render(30).join("\n")).toContain("0 Still checking");
+
+		loader.setMessage("Still checking");
+		expect(ui.requestDirectWrite).toHaveBeenCalledTimes(2);
+		expect(ui.requestComponentRender).not.toHaveBeenCalled();
+
+		loader.stop();
+	});
+
+	it("requests direct writes when animated message bytes change between spinner frames", () => {
 		vi.useFakeTimers();
 		setSystemTime(new Date(1_000));
-		const ui = { synchronizedOutput: true, requestComponentRender: vi.fn() } as unknown as TUI;
+		const ui = { synchronizedOutput: true, requestDirectWrite: vi.fn(), requestComponentRender: vi.fn() };
 		const colorMessage = ((text: string) => `${text}-${Date.now()}`) as LoaderMessageColorFn & { animated: true };
 		colorMessage.animated = true;
-		const loader = new Loader(ui, text => text, colorMessage, "Checking", ["0"]);
+		const loader = new Loader(ui as unknown as TUI, text => text, colorMessage, "Checking", ["0"]);
 
-		expect(ui.requestComponentRender).toHaveBeenCalledTimes(1);
+		expect(ui.requestDirectWrite).toHaveBeenCalledTimes(1);
+		expect(ui.requestComponentRender).not.toHaveBeenCalled();
 
 		vi.advanceTimersByTime(34);
-		expect(ui.requestComponentRender).toHaveBeenCalledTimes(2);
+		expect(ui.requestDirectWrite).toHaveBeenCalledTimes(2);
+		expect(ui.requestComponentRender).not.toHaveBeenCalled();
 		expect(loader.render(40).join("\n")).toContain("0 Checking-");
 
+		loader.stop();
+	});
+
+	it("reuses text layout when only animated ANSI styling changes", () => {
+		vi.useFakeTimers();
+		let colorFrame = 0;
+		const ui = { synchronizedOutput: true, requestDirectWrite: vi.fn(), requestComponentRender: vi.fn() };
+		const colorMessage = ((text: string) => `\x1b[3${colorFrame++ % 3}m${text}\x1b[0m`) as LoaderMessageColorFn & {
+			animated: true;
+		};
+		colorMessage.animated = true;
+		const loader = new Loader(ui as unknown as TUI, text => text, colorMessage, "Checking", ["⠸"]);
+		const stringWidth = spyOn(Bun, "stringWidth");
+
+		const initial = loader.render(40);
+		stringWidth.mockClear();
+		vi.advanceTimersByTime(34);
+		const animated = loader.render(40);
+
+		expect(ui.requestDirectWrite).toHaveBeenCalledTimes(2);
+		expect(stringWidth).not.toHaveBeenCalled();
+		expect(initial[1]).not.toBe(animated[1]);
+		expect(visibleWidth(initial[1])).toBe(visibleWidth(animated[1]));
 		loader.stop();
 	});
 
 	it("holds animated message-only frames when synchronized output is unavailable", () => {
 		vi.useFakeTimers();
 		setSystemTime(new Date(1_000));
-		const ui = { synchronizedOutput: false, requestComponentRender: vi.fn() } as unknown as TUI;
+		const ui = { synchronizedOutput: false, requestDirectWrite: vi.fn(), requestComponentRender: vi.fn() };
 		const colorMessage = ((text: string) => `${text}-${Date.now()}`) as LoaderMessageColorFn & { animated: true };
 		colorMessage.animated = true;
-		const loader = new Loader(ui, text => text, colorMessage, "Checking", ["0", "1"]);
+		const loader = new Loader(ui as unknown as TUI, text => text, colorMessage, "Checking", ["0", "1"]);
 
-		expect(ui.requestComponentRender).toHaveBeenCalledTimes(1);
+		expect(ui.requestDirectWrite).toHaveBeenCalledTimes(1);
+		expect(ui.requestComponentRender).not.toHaveBeenCalled();
 
 		vi.advanceTimersByTime(34);
-		expect(ui.requestComponentRender).toHaveBeenCalledTimes(1);
+		expect(ui.requestDirectWrite).toHaveBeenCalledTimes(1);
 
 		vi.advanceTimersByTime(67);
-		expect(ui.requestComponentRender).toHaveBeenCalledTimes(2);
+		expect(ui.requestDirectWrite).toHaveBeenCalledTimes(2);
+		expect(ui.requestComponentRender).not.toHaveBeenCalled();
 		expect(loader.render(40).join("\n")).toContain("1 Checking-");
 
 		loader.stop();
@@ -136,12 +189,36 @@ describe("Loader component", () => {
 			"Checking",
 			["a", "b", "c"],
 		);
-		const spy = spyOn(tui, "requestComponentRender");
+		const spy = spyOn(tui, "requestDirectWrite");
 		loader.dispose();
 		const after = spy.mock.calls.length;
 		await Bun.sleep(40); // longer than the spinner interval
 		expect(spy.mock.calls.length).toBe(after);
 		expect(() => loader.dispose()).not.toThrow(); // idempotent
+		tui.stop();
+	});
+
+	it("container disposeChildren stops detached loader repaints", () => {
+		vi.useFakeTimers();
+		const term = new VirtualTerminal(20, 4);
+		const tui = new TUI(term);
+		const spy = spyOn(tui, "requestDirectWrite");
+		const container = new Container();
+		const loader = new Loader(
+			tui,
+			text => text,
+			text => text,
+			"Checking",
+			["0", "1"],
+		);
+		container.addChild(loader);
+		const afterMount = spy.mock.calls.length;
+
+		container.disposeChildren();
+		vi.advanceTimersByTime(200);
+
+		expect(spy.mock.calls.length).toBe(afterMount);
+		expect(container.children).toEqual([]);
 		tui.stop();
 	});
 });

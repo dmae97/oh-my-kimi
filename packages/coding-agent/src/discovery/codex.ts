@@ -37,6 +37,7 @@ import {
 	SOURCE_PATHS,
 	scanSkillsFromDir,
 } from "./helpers";
+import { resolvePluginStdioPaths } from "./substitute-plugin-root";
 
 const PROVIDER_ID = "codex";
 const DISPLAY_NAME = "OpenAI Codex";
@@ -87,7 +88,7 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 
 	const items: MCPServer[] = [];
 	if (userConfig) {
-		const servers = extractMCPServersFromToml(userConfig);
+		const servers = extractMCPServersFromToml(userConfig, path.dirname(userConfigPath));
 		for (const [name, config] of Object.entries(servers)) {
 			items.push({
 				name,
@@ -97,7 +98,7 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 		}
 	}
 	if (projectConfig) {
-		const servers = extractMCPServersFromToml(projectConfig);
+		const servers = extractMCPServersFromToml(projectConfig, path.dirname(projectConfigPath));
 		for (const [name, config] of Object.entries(servers)) {
 			items.push({
 				name,
@@ -139,7 +140,10 @@ interface CodexMCPConfig {
 	disabled_tools?: string[];
 }
 
-function extractMCPServersFromToml(toml: Record<string, unknown>): Record<string, Partial<MCPServer>> {
+function extractMCPServersFromToml(
+	toml: Record<string, unknown>,
+	configDir: string,
+): Record<string, Partial<MCPServer>> {
 	// Check for [mcp_servers.*] sections (Codex format)
 	if (!toml.mcp_servers || typeof toml.mcp_servers !== "object") {
 		return {};
@@ -149,10 +153,16 @@ function extractMCPServersFromToml(toml: Record<string, unknown>): Record<string
 	const result: Record<string, Partial<MCPServer>> = {};
 
 	for (const [name, config] of Object.entries(codexServers)) {
+		// Root relative cwd/command against the Codex config directory. Codex
+		// spawns the process with the resolved cwd, so a relative command is
+		// resolved by the OS from there — pass "cwd" so e.g. cwd="server",
+		// command="./bin/mcp" resolves to <configDir>/server/bin/mcp.
+		const rooted = resolvePluginStdioPaths({ command: config.command, cwd: config.cwd }, configDir, "cwd");
 		const server: Partial<MCPServer> = {
-			command: config.command,
+			...(rooted.command !== undefined && { command: rooted.command }),
 			args: config.args,
 			url: config.url,
+			...(rooted.cwd !== undefined && { cwd: rooted.cwd }),
 		};
 
 		// Build env by merging explicit env and forwarded env_vars

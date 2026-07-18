@@ -12,11 +12,12 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-async function writeSessionFile(): Promise<void> {
+async function writeSessionFile(options?: { includeCost?: boolean }): Promise<void> {
 	const sessionDir = path.join(getSessionsDir(), "--tmp--sync-serial");
 	await fs.mkdir(sessionDir, { recursive: true });
 	const timestamp = new Date().toISOString();
 	const sessionFile = path.join(sessionDir, "session.jsonl");
+	const includeCost = options?.includeCost ?? true;
 	const assistant = {
 		type: "message",
 		id: "assistant-1",
@@ -34,7 +35,7 @@ async function writeSessionFile(): Promise<void> {
 				cacheRead: 0,
 				cacheWrite: 0,
 				totalTokens: 3,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				...(includeCost ? { cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } : {}),
 			},
 			stopReason: "stop",
 			timestamp: Date.now(),
@@ -56,6 +57,17 @@ describe("stats sync serial mode", () => {
 		expect(synced.files).toBe(1);
 		expect(overall.totalRequests).toBe(1);
 		expect(workerSpy).not.toHaveBeenCalled();
+	});
+
+	it("syncs legacy session usage without a cost breakdown", async () => {
+		await writeSessionFile({ includeCost: false });
+
+		const synced = await syncAllSessions({ workers: 1 });
+		const overall = getOverallStats();
+
+		expect(synced).toEqual({ processed: 1, files: 1 });
+		expect(overall.totalRequests).toBe(1);
+		expect(overall.totalCost).toBeGreaterThan(0);
 	});
 
 	it("uses the serial parser by default on macOS", async () => {

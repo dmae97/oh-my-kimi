@@ -20,6 +20,7 @@ truncations, and a Pareto frontier.
 Output:
   scripts/session-stats/out/read-optimizer.png
 """
+
 from __future__ import annotations
 
 import argparse
@@ -51,12 +52,54 @@ READ_MAX_COLUMN = 768
 
 _RANGE_RE = re.compile(r"^(\d+)(?:([-+])(\d+))?$")
 TEXT_EXTS = {
-    ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs",
-    ".rs", ".go", ".py", ".rb", ".java", ".kt", ".kts", ".c", ".cc",
-    ".cpp", ".h", ".hpp", ".cs", ".swift", ".php", ".lua", ".sh",
-    ".bash", ".zsh", ".fish", ".md", ".txt", ".json", ".jsonc", ".json5",
-    ".yaml", ".yml", ".toml", ".xml", ".html", ".css", ".scss", ".sql",
-    ".adoc", ".typ", ".rsx", ".vue", ".svelte", ".dockerfile", "",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".mts",
+    ".cts",
+    ".mjs",
+    ".cjs",
+    ".rs",
+    ".go",
+    ".py",
+    ".rb",
+    ".java",
+    ".kt",
+    ".kts",
+    ".c",
+    ".cc",
+    ".cpp",
+    ".h",
+    ".hpp",
+    ".cs",
+    ".swift",
+    ".php",
+    ".lua",
+    ".sh",
+    ".bash",
+    ".zsh",
+    ".fish",
+    ".md",
+    ".txt",
+    ".json",
+    ".jsonc",
+    ".json5",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".xml",
+    ".html",
+    ".css",
+    ".scss",
+    ".sql",
+    ".adoc",
+    ".typ",
+    ".rsx",
+    ".vue",
+    ".svelte",
+    ".dockerfile",
+    "",
 }
 
 
@@ -65,7 +108,7 @@ class ReadCall:
     session: str
     file: str
     seq: int
-    kind: str        # explicit | open | default | raw | conflicts | other
+    kind: str  # explicit | open | default | raw | conflicts | other
     start: int | None
     end: int | None
     arg_tokens: int
@@ -179,7 +222,12 @@ def parse_call(row) -> ReadCall | None:
     if kind == "default":
         offset = obj.get("offset")
         limit = obj.get("limit")
-        if isinstance(offset, int) and offset >= 1 and isinstance(limit, int) and limit >= 1:
+        if (
+            isinstance(offset, int)
+            and offset >= 1
+            and isinstance(limit, int)
+            and limit >= 1
+        ):
             kind = "explicit"
             start = offset
             end = offset + limit - 1
@@ -258,7 +306,9 @@ def is_covered(intervals: list[tuple[int, int]], target: tuple[int, int]) -> boo
     return False
 
 
-def add_interval(intervals: list[tuple[int, int]], item: tuple[int, int]) -> list[tuple[int, int]]:
+def add_interval(
+    intervals: list[tuple[int, int]], item: tuple[int, int]
+) -> list[tuple[int, int]]:
     s, e = item
     out: list[tuple[int, int]] = []
     placed = False
@@ -278,7 +328,9 @@ def add_interval(intervals: list[tuple[int, int]], item: tuple[int, int]) -> lis
     return out
 
 
-def estimate_cost(call: ReadCall, delivered: tuple[int, int]) -> tuple[float, bool, bool]:
+def estimate_cost(
+    call: ReadCall, delivered: tuple[int, int]
+) -> tuple[float, bool, bool]:
     lines = max(0, delivered[1] - delivered[0] + 1)
     line_tokens = call.token_per_line * lines
     # Approximate byte cap. The implementation scales byte cap as
@@ -289,10 +341,16 @@ def estimate_cost(call: ReadCall, delivered: tuple[int, int]) -> tuple[float, bo
     bytes_limited = approx_bytes > byte_budget
     if bytes_limited:
         line_tokens = byte_budget / 4
-    return call.arg_tokens + line_tokens, call.kind == "explicit" and lines >= call.config_max_lines if False else False, bytes_limited
+    return (
+        call.arg_tokens + line_tokens,
+        call.kind == "explicit" and lines >= call.config_max_lines if False else False,
+        bytes_limited,
+    )
 
 
-def load_reads(conn: sqlite3.Connection, since_ms: int) -> dict[tuple[str, str], list[ReadCall]]:
+def load_reads(
+    conn: sqlite3.Connection, since_ms: int
+) -> dict[tuple[str, str], list[ReadCall]]:
     sql = """
         SELECT c.session_file, c.seq, c.arg_json,
                COALESCE(c.arg_tokens,0), COALESCE(r.result_tokens,0)
@@ -372,7 +430,9 @@ def replay(groups: dict[tuple[str, str], list[ReadCall]], cfg: Config) -> Replay
             lines = delivered[1] - delivered[0] + 1
             if lines >= cfg.max_lines and call.kind == "explicit":
                 # Candidate max cap would truncate this explicit request.
-                requested_len = max(1, (call.end or call.start or 1) - (call.start or 1) + 1)
+                requested_len = max(
+                    1, (call.end or call.start or 1) - (call.start or 1) + 1
+                )
                 if requested_len + cfg.leading + cfg.trailing > cfg.max_lines:
                     trunc += 1
             line_tokens = call.token_per_line * lines
@@ -443,10 +503,18 @@ def candidate_grid(args) -> list[Config]:
     return out
 
 
-def pareto(results: list[ReplayResult], max_truncations: int, max_regret_tokens: float = math.inf) -> list[ReplayResult]:
+def pareto(
+    results: list[ReplayResult],
+    max_truncations: int,
+    max_regret_tokens: float = math.inf,
+) -> list[ReplayResult]:
     # Frontier over (tokens lower, calls lower), excluding configs that truncate
     # more explicit requests than today's cap.
-    clean = [r for r in results if r.truncations <= max_truncations and r.tokens <= max_regret_tokens]
+    clean = [
+        r
+        for r in results
+        if r.truncations <= max_truncations and r.tokens <= max_regret_tokens
+    ]
     clean.sort(key=lambda r: (r.tokens, r.calls))
     frontier: list[ReplayResult] = []
     best_calls = math.inf
@@ -457,13 +525,16 @@ def pareto(results: list[ReplayResult], max_truncations: int, max_regret_tokens:
     return frontier
 
 
-def choose_recommended(results: list[ReplayResult], current: ReplayResult) -> ReplayResult:
+def choose_recommended(
+    results: list[ReplayResult], current: ReplayResult
+) -> ReplayResult:
     # Objective: minimize tokens plus a small penalty for still needing calls,
     # while requiring no *additional* explicit-request truncations and at least
     # current first-call coverage. One avoided read call is valued at ~250
     # tokens of ergonomics.
     viable = [
-        r for r in results
+        r
+        for r in results
         if r.truncations <= current.truncations
         and r.first_cover_rate >= current.first_cover_rate
         and r.tokens <= current.tokens * 1.02
@@ -472,7 +543,14 @@ def choose_recommended(results: list[ReplayResult], current: ReplayResult) -> Re
         viable = [r for r in results if r.truncations <= current.truncations]
     if not viable:
         viable = results
-    return min(viable, key=lambda r: r.tokens + 250 * r.calls + 100_000 * max(0, r.truncations - current.truncations))
+    return min(
+        viable,
+        key=lambda r: (
+            r.tokens
+            + 250 * r.calls
+            + 100_000 * max(0, r.truncations - current.truncations)
+        ),
+    )
 
 
 def print_result(prefix: str, r: ReplayResult, baseline: ReplayResult) -> None:
@@ -480,15 +558,17 @@ def print_result(prefix: str, r: ReplayResult, baseline: ReplayResult) -> None:
     dcalls = r.calls - baseline.calls
     print(
         f"{prefix:<14} {r.config.label():<22} "
-        f"tokens={r.tokens/1e6:8.2f}M ({dtok/baseline.tokens*100:+6.2f}%)  "
+        f"tokens={r.tokens / 1e6:8.2f}M ({dtok / baseline.tokens * 100:+6.2f}%)  "
         f"calls={r.calls:7,} ({dcalls:+7,})  "
         f"skipped={r.skipped_calls:6,}  "
-        f"first-cover={r.first_cover_rate*100:5.1f}%  "
+        f"first-cover={r.first_cover_rate * 100:5.1f}%  "
         f"trunc={r.truncations:4,}"
     )
 
 
-def plot(results: list[ReplayResult], current: ReplayResult, recommended: ReplayResult) -> Path:
+def plot(
+    results: list[ReplayResult], current: ReplayResult, recommended: ReplayResult
+) -> Path:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     plt.rcParams.update({"figure.dpi": 110, "font.size": 10})
     fig, axes = plt.subplots(2, 2, figsize=(15, 9))
@@ -499,9 +579,25 @@ def plot(results: list[ReplayResult], current: ReplayResult, recommended: Replay
     sizes = np.array([20 + min(80, r.config.trailing * 5) for r in results])
 
     ax = axes[0, 0]
-    sc = ax.scatter(xs, ys, c=colors, s=sizes, cmap="viridis", alpha=0.65, edgecolors="none")
-    ax.scatter([current.calls], [current.tokens / 1e6], marker="*", s=180, color="#111", label="current")
-    ax.scatter([recommended.calls], [recommended.tokens / 1e6], marker="*", s=180, color="#dc2626", label="recommended")
+    sc = ax.scatter(
+        xs, ys, c=colors, s=sizes, cmap="viridis", alpha=0.65, edgecolors="none"
+    )
+    ax.scatter(
+        [current.calls],
+        [current.tokens / 1e6],
+        marker="*",
+        s=180,
+        color="#111",
+        label="current",
+    )
+    ax.scatter(
+        [recommended.calls],
+        [recommended.tokens / 1e6],
+        marker="*",
+        s=180,
+        color="#dc2626",
+        label="recommended",
+    )
     ax.set_xlabel("paid read calls after replay")
     ax.set_ylabel("estimated read tokens (M)")
     ax.set_title("candidate trade-off: tokens vs follow-up calls")
@@ -513,10 +609,34 @@ def plot(results: list[ReplayResult], current: ReplayResult, recommended: Replay
     ax = axes[0, 1]
     frontier = pareto(results, current.truncations)
     frontier.sort(key=lambda r: r.calls)
-    ax.plot([r.calls for r in frontier], [r.tokens / 1e6 for r in frontier], color="#2563eb", linewidth=2)
-    ax.scatter([r.calls for r in frontier], [r.tokens / 1e6 for r in frontier], color="#2563eb", s=20)
-    ax.scatter([current.calls], [current.tokens / 1e6], marker="*", s=180, color="#111", label="current")
-    ax.scatter([recommended.calls], [recommended.tokens / 1e6], marker="*", s=180, color="#dc2626", label="recommended")
+    ax.plot(
+        [r.calls for r in frontier],
+        [r.tokens / 1e6 for r in frontier],
+        color="#2563eb",
+        linewidth=2,
+    )
+    ax.scatter(
+        [r.calls for r in frontier],
+        [r.tokens / 1e6 for r in frontier],
+        color="#2563eb",
+        s=20,
+    )
+    ax.scatter(
+        [current.calls],
+        [current.tokens / 1e6],
+        marker="*",
+        s=180,
+        color="#111",
+        label="current",
+    )
+    ax.scatter(
+        [recommended.calls],
+        [recommended.tokens / 1e6],
+        marker="*",
+        s=180,
+        color="#dc2626",
+        label="recommended",
+    )
     ax.set_xlabel("paid read calls")
     ax.set_ylabel("estimated read tokens (M)")
     ax.set_title("Pareto frontier (no extra explicit truncations)")
@@ -526,20 +646,31 @@ def plot(results: list[ReplayResult], current: ReplayResult, recommended: Replay
     ax = axes[1, 0]
     by_default: dict[int, list[ReplayResult]] = defaultdict(list)
     for r in results:
-        if r.truncations <= current.truncations and r.config.leading == recommended.config.leading and r.config.trailing == recommended.config.trailing:
+        if (
+            r.truncations <= current.truncations
+            and r.config.leading == recommended.config.leading
+            and r.config.trailing == recommended.config.trailing
+        ):
             by_default[r.config.default].append(r)
     defaults = sorted(by_default)
     vals = [min(v, key=lambda r: r.tokens).tokens / 1e6 for v in by_default.values()]
     ax.bar([str(d) for d in defaults], vals, color="#16a34a")
-    ax.axhline(current.tokens / 1e6, color="#111", linestyle="--", linewidth=1, label="current")
+    ax.axhline(
+        current.tokens / 1e6, color="#111", linestyle="--", linewidth=1, label="current"
+    )
     ax.set_xlabel("defaultLimit")
     ax.set_ylabel("best tokens (M)")
-    ax.set_title(f"defaultLimit sensitivity (L={recommended.config.leading}, T={recommended.config.trailing})")
+    ax.set_title(
+        f"defaultLimit sensitivity (L={recommended.config.leading}, T={recommended.config.trailing})"
+    )
     ax.legend(frameon=False)
     ax.grid(True, axis="y", alpha=0.25, linestyle="--")
 
     ax = axes[1, 1]
-    top = sorted([r for r in results if r.truncations <= current.truncations], key=lambda r: r.tokens + 250 * r.calls)[:12]
+    top = sorted(
+        [r for r in results if r.truncations <= current.truncations],
+        key=lambda r: r.tokens + 250 * r.calls,
+    )[:12]
     labels = [r.config.label() for r in top]
     token_delta = [(r.tokens - current.tokens) / current.tokens * 100 for r in top]
     call_delta = [(r.calls - current.calls) / current.calls * 100 for r in top]
@@ -564,7 +695,9 @@ def plot(results: list[ReplayResult], current: ReplayResult, recommended: Replay
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="read configuration optimizer")
-    ap.add_argument("--since", default=DEFAULT_SINCE, help=f"YYYY-MM-DD (default {DEFAULT_SINCE})")
+    ap.add_argument(
+        "--since", default=DEFAULT_SINCE, help=f"YYYY-MM-DD (default {DEFAULT_SINCE})"
+    )
     ap.add_argument("--defaults", default="100,150,200,250,300,400,500,700,1000")
     ap.add_argument("--max-lines", default="500,750,1000,1500,2000,3000")
     ap.add_argument("--leading", default="0,3,5,10,20")
@@ -581,12 +714,19 @@ def main() -> int:
     groups = load_reads(conn, since_ms)
     conn.close()
     total_calls = sum(len(v) for v in groups.values())
-    print(f"loaded {total_calls:,} read calls across {len(groups):,} (session,file) groups since {args.since}")
+    print(
+        f"loaded {total_calls:,} read calls across {len(groups):,} (session,file) groups since {args.since}"
+    )
 
-    current = replay(groups, Config(CURRENT_DEFAULT, CURRENT_MAX_LINES, CURRENT_LEADING, CURRENT_TRAILING))
+    current = replay(
+        groups,
+        Config(CURRENT_DEFAULT, CURRENT_MAX_LINES, CURRENT_LEADING, CURRENT_TRAILING),
+    )
     configs = candidate_grid(args)
     # Ensure current is present even if user overrides grid.
-    cur_cfg = Config(CURRENT_DEFAULT, CURRENT_MAX_LINES, CURRENT_LEADING, CURRENT_TRAILING)
+    cur_cfg = Config(
+        CURRENT_DEFAULT, CURRENT_MAX_LINES, CURRENT_LEADING, CURRENT_TRAILING
+    )
     if cur_cfg not in configs:
         configs.append(cur_cfg)
     print(f"evaluating {len(configs):,} candidate configs")
@@ -598,22 +738,32 @@ def main() -> int:
     print_result("recommended", recommended, current)
 
     allowed = [r for r in results if r.truncations <= current.truncations]
-    print(f"\nTop token-minimizing configs (truncations <= current {current.truncations:,}):")
+    print(
+        f"\nTop token-minimizing configs (truncations <= current {current.truncations:,}):"
+    )
     for i, r in enumerate(sorted(allowed, key=lambda r: r.tokens)[: args.top], 1):
         print_result(f"#{i}", r, current)
 
-    print(f"\nTop balanced configs (tokens + 250 tokens/read-call objective, truncations <= current {current.truncations:,}):")
-    for i, r in enumerate(sorted(allowed, key=lambda r: r.tokens + 250 * r.calls)[: args.top], 1):
+    print(
+        f"\nTop balanced configs (tokens + 250 tokens/read-call objective, truncations <= current {current.truncations:,}):"
+    )
+    for i, r in enumerate(
+        sorted(allowed, key=lambda r: r.tokens + 250 * r.calls)[: args.top], 1
+    ):
         print_result(f"#{i}", r, current)
 
     no_call_increase = [r for r in allowed if r.calls <= current.calls]
-    print(f"\nBest configs with calls <= current (truncations <= current {current.truncations:,}):")
-    for i, r in enumerate(sorted(no_call_increase, key=lambda r: r.tokens)[: args.top], 1):
+    print(
+        f"\nBest configs with calls <= current (truncations <= current {current.truncations:,}):"
+    )
+    for i, r in enumerate(
+        sorted(no_call_increase, key=lambda r: r.tokens)[: args.top], 1
+    ):
         print_result(f"#{i}", r, current)
 
     print("\nRecommended breakdown:")
     print(f"  selector groups         : {recommended.selector_groups:,}")
-    print(f"  selector first-cover    : {recommended.first_cover_rate*100:.1f}%")
+    print(f"  selector first-cover    : {recommended.first_cover_rate * 100:.1f}%")
     print(f"  selector skipped calls  : {recommended.selector_skipped:,}")
     print(f"  default skipped calls   : {recommended.default_skipped:,}")
     print(f"  raw/unmodelled calls    : {recommended.raw_calls:,}")

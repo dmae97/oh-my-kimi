@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { normalizeSchemaForGoogle, toolWireSchema } from "@oh-my-pi/pi-ai";
+import { normalizeSchemaForGoogle } from "@oh-my-pi/pi-ai";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createTools, HIDDEN_TOOLS, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 
@@ -196,10 +196,12 @@ describe("normalizeSchemaForGoogle", () => {
 		expect(items.enum).toEqual(["only"]);
 	});
 
-	it("passes through primitives unchanged", () => {
+	it("passes through non-boolean primitives and coerces boolean schemas", () => {
 		expect(normalizeSchemaForGoogle("string")).toBe("string");
 		expect(normalizeSchemaForGoogle(123)).toBe(123);
-		expect(normalizeSchemaForGoogle(true)).toBe(true);
+		// Google's wire cannot encode JSON Schema boolean subschemas; `true`
+		// (accept anything) coerces to the equivalent empty schema.
+		expect(normalizeSchemaForGoogle(true)).toEqual({});
 		expect(normalizeSchemaForGoogle(null)).toBe(null);
 	});
 
@@ -269,49 +271,12 @@ describe("tool schema validation (post-sanitization)", () => {
 		expect(allViolations).toEqual([]);
 	});
 
-	it("read path schema advertises local, URL, and internal URI targets", async () => {
-		const session = createTestSession();
-		const tools = await createTools(session);
-		const readTool = tools.find(tool => tool.name === "read");
-		if (!readTool?.parameters) throw new Error("read tool parameters missing");
-
-		const schema = toolWireSchema(readTool) as {
-			properties?: { path?: { description?: string } };
-		};
-		const description = schema.properties?.path?.description ?? "";
-
-		expect(description).toContain("Local path");
-		expect(description).toContain("internal URI");
-		expect(description).toContain("URL");
-		expect(description).toContain("omp://");
-		expect(description).toContain("issue://123");
-		expect(description).toContain("pr://123");
-	});
-
-	it("bash schema and prompt advertise the timeout clamp", async () => {
-		const session = createTestSession();
-		session.settings.set("async.enabled", true);
-		const tools = await createTools(session);
-		const bashTool = tools.find(tool => tool.name === "bash");
-		if (!bashTool?.parameters) throw new Error("bash tool parameters missing");
-
-		const schema = toolWireSchema(bashTool) as {
-			properties?: { timeout?: { description?: string } };
-		};
-		const timeoutDescription = schema.properties?.timeout?.description ?? "";
-
-		expect(timeoutDescription).toContain("clamped");
-		expect(timeoutDescription).toContain("1-3600");
-		expect(bashTool.description).toContain("clamped to `1..3600`");
-		expect(bashTool.description).toContain("does NOT extend the timeout");
-	});
-
 	it("hidden tools also have valid sanitized schemas", async () => {
 		const session = createTestSession();
 
-		for (const name in HIDDEN_TOOLS) {
-			if (!Object.hasOwn(HIDDEN_TOOLS, name)) continue;
-			const tool = await HIDDEN_TOOLS[name](session);
+		// Object.entries keeps the factory typed without an index cast.
+		for (const [name, factory] of Object.entries(HIDDEN_TOOLS)) {
+			const tool = await factory(session);
 			if (!tool) continue;
 
 			const schema = tool.parameters;

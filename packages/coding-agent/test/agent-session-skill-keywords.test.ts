@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
-import { Agent } from "@oh-my-pi/pi-agent-core";
-import type { TextContent } from "@oh-my-pi/pi-ai";
+import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -16,10 +15,21 @@ import {
 } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { type } from "arktype";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 type ObservedSkillTurn = {
 	texts: string[];
+};
+
+// 4644 gates the workflowz notice on an active `task` tool; keep one active so
+// keyword steering exercises the notice path.
+const mockTaskTool: AgentTool = {
+	name: "task",
+	label: "Task",
+	description: "Mock task tool",
+	parameters: type({}),
+	execute: async () => ({ content: [{ type: "text" as const, text: "ok" }] }),
 };
 
 describe("AgentSession skill prompt keyword steering", () => {
@@ -43,7 +53,7 @@ describe("AgentSession skill prompt keyword steering", () => {
 			initialState: {
 				model,
 				systemPrompt: ["Test"],
-				tools: [],
+				tools: [mockTaskTool],
 				messages: [],
 			},
 			convertToLlm,
@@ -53,10 +63,11 @@ describe("AgentSession skill prompt keyword steering", () => {
 						const content = message.content;
 						if (typeof content === "string") return content;
 						if (!Array.isArray(content)) return "";
-						return content
-							.filter((block): block is TextContent => block.type === "text")
-							.map(block => block.text)
-							.join("\n");
+						const text: string[] = [];
+						for (const block of content) {
+							if (block.type === "text") text.push(block.text);
+						}
+						return text.join("\n");
 					}),
 				});
 				const stream = new AssistantMessageEventStream();

@@ -32,4 +32,24 @@ describe("omp commit command lifecycle (issue #1041)", () => {
 		expect(runCommitSpy.mock.invocationCallOrder[0]).toBeLessThan(quitSpy.mock.invocationCallOrder[0]);
 		expect(quitSpy).toHaveBeenCalledWith(0);
 	});
+
+	it("does not convert commit pipeline failures into exit 0", async () => {
+		const initThemeSpy = vi.spyOn(themeModule, "initTheme").mockResolvedValue(undefined);
+		const runCommitSpy = vi
+			.spyOn(commitModule, "runCommitCommand")
+			.mockRejectedValue(new Error("commit was not created"));
+		const quitSpy = vi.spyOn(postmortem, "quit").mockResolvedValue(undefined);
+
+		const command = new CommitCommand([], {
+			bin: "omp",
+			version: "0.0.0-test",
+			commands: new Map(),
+		});
+
+		await expect(command.run()).rejects.toThrow("commit was not created");
+
+		expect(initThemeSpy).toHaveBeenCalledTimes(1);
+		expect(runCommitSpy).toHaveBeenCalledTimes(1);
+		expect(quitSpy).not.toHaveBeenCalled();
+	});
 });

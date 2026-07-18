@@ -29,6 +29,7 @@ import {
 	mistralModelManagerOptions,
 	moonshotModelManagerOptions,
 	nanoGptModelManagerOptions,
+	novitaModelManagerOptions,
 	nvidiaModelManagerOptions,
 	ollamaModelManagerOptions,
 	openaiModelManagerOptions,
@@ -272,6 +273,14 @@ export const CATALOG_PROVIDERS = [
 		catalogDiscovery: { label: "NVIDIA" },
 	},
 	{
+		id: "novita",
+		defaultModel: "moonshotai/kimi-k2.7-code",
+		envVars: ["NOVITA_API_KEY"],
+		createModelManagerOptions: (config: ModelManagerConfig) => novitaModelManagerOptions(config),
+		dynamicModelsAuthoritative: true,
+		catalogDiscovery: { label: "Novita", allowUnauthenticated: true },
+	},
+	{
 		id: "ollama",
 		defaultModel: "gpt-oss:20b",
 		envVars: ["OLLAMA_API_KEY"],
@@ -302,12 +311,14 @@ export const CATALOG_PROVIDERS = [
 		defaultModel: "kimi-k2.7-code",
 		envVars: ["OPENCODE_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => opencodeGoModelManagerOptions(config),
+		dynamicModelsAuthoritative: true,
 	},
 	{
 		id: "opencode-zen",
 		defaultModel: "claude-opus-4-8",
 		envVars: ["OPENCODE_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => opencodeZenModelManagerOptions(config),
+		dynamicModelsAuthoritative: true,
 	},
 	{
 		id: "openrouter",

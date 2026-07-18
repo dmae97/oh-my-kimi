@@ -76,7 +76,7 @@ import {
 	createInitialResponsesAssistantMessage,
 	createOpenAIStrictToolsState,
 	disableStrictToolsForScope,
-	getOpenAIResponsesPromptCacheKey,
+	getOpenAIPromptCacheKey,
 	getOpenAIResponsesRoutingSessionId,
 	getOpenAIStrictToolsScope,
 	getOpenRouterResponsesSessionId,
@@ -95,7 +95,7 @@ import {
 
 // OpenAI Responses-specific options
 export interface OpenAIResponsesOptions extends StreamOptions {
-	reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh";
+	reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	reasoningSummary?: "auto" | "detailed" | "concise" | null;
 	serviceTier?: ServiceTier;
 	textVerbosity?: "low" | "medium" | "high";
@@ -390,7 +390,7 @@ const streamOpenAIResponsesOnce = (
 			// stable prompt-cache key independently. Side-channel calls use this to
 			// avoid perturbing provider conversation state without cold-starting the cache.
 			const routingSessionId = getOpenAIResponsesRoutingSessionId(options);
-			const promptCacheSessionId = getOpenAIResponsesPromptCacheKey(options);
+			const promptCacheSessionId = getOpenAIPromptCacheKey(options);
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
 			const { headers, copilotPremiumRequests, baseUrl } = resolveOpenAIRequestSetup(model, {
 				apiKey,
@@ -594,7 +594,11 @@ const streamOpenAIResponsesOnce = (
 						error instanceof Error &&
 						/previous[ _]?response/i.test(error.message) &&
 						/zero[ _-]?data[ _-]?retention/i.test(error.message);
-					if (!zdrRejection && !isOpenAIResponsesStalePreviousResponseError(error)) {
+					const isPromptBlocked =
+						error instanceof Error &&
+						((error as { code?: string }).code === "invalid_prompt" ||
+							/invalid_prompt|Request blocked/i.test(error.message));
+					if (!zdrRejection && !isPromptBlocked && !isOpenAIResponsesStalePreviousResponseError(error)) {
 						throw error;
 					}
 					// Server rejected the chain baseline: reset, count the failure (or
@@ -668,7 +672,7 @@ const streamOpenAIResponsesOnce = (
 			}
 
 			// Detect premature stream closure: the HTTP stream ended without the
-			// provider sending `response.completed` or `response.incomplete`.
+			// provider sending a recognized terminal response event.
 			// Custom/proxy providers may drop the connection mid-stream; without
 			// this guard the incomplete output is silently surfaced as a successful
 			// "stop".
@@ -818,7 +822,7 @@ export function buildParams(
 	}
 
 	const cacheRetention = resolveCacheRetention(options?.cacheRetention);
-	const promptCacheKey = getOpenAIResponsesPromptCacheKey(options);
+	const promptCacheKey = getOpenAIPromptCacheKey(options);
 	const modelId = applyWireModelIdTransform(
 		model.requestModelId ?? model.id,
 		model.compat.wireModelIdMode,
@@ -897,13 +901,26 @@ export function buildParams(
 		filterReasoningHistory: options?.filterReasoningHistory,
 		omitReasoningEffort: options?.omitReasoningEffort,
 	});
+	const reasoningSummary =
+		model.provider === "xai-oauth"
+			? options?.reasoning === undefined
+				? undefined
+				: null
+			: options?.reasoningSummary;
 	applyResponsesCompatPolicy(params, reasoningPolicy, {
-		reasoningSummary: options?.reasoningSummary,
+		reasoningSummary,
 		mapEffort: effort =>
 			model.compat.reasoningEffortMap?.[effort as NonNullable<OpenAIResponsesOptions["reasoning"]>] ??
 			model.thinking?.effortMap?.[effort as NonNullable<OpenAIResponsesOptions["reasoning"]>] ??
 			effort,
 	});
+	// Catalog pro aliases (`gpt-5.6-*-pro`): merge AFTER the compat policy so the
+	// mode survives every policy branch (disabled/omitted effort included) while
+	// keeping whatever effort/summary the policy produced — mode and effort are
+	// independent wire fields.
+	if (model.reasoningMode) {
+		params.reasoning = { ...params.reasoning, mode: model.reasoningMode };
+	}
 
 	applyOpenAIGatewayRouting(params, model.compat);
 

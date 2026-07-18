@@ -60,6 +60,112 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 		expect(mod.html).toBe("<html>PLAN-UI</html>");
 	});
 
+	it("loads CommonJS helpers required by an ES module extension", async () => {
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "cjs-helper-ext", version: "1.0.0" }),
+			"config.js": 'module.exports = { value: "config-ok" };\n',
+			"index.js": [
+				'import { createRequire } from "node:module";',
+				"const require = createRequire(import.meta.url);",
+				'const { value } = require("./config.js");',
+				"export { value };",
+				"export default function (pi) { void pi; }",
+			].join("\n"),
+		});
+
+		const mod = (await loadLegacyPiModule(path.join(dir, "index.js"))) as { value: string };
+
+		expect(mod.value).toBe("config-ok");
+	});
+
+	it("loads a default import from linkedom's CommonJS canvas fallback", async () => {
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "linkedom-consumer", version: "1.0.0", type: "module" }),
+			"index.js": 'export { canvasValue } from "linkedom";\n',
+			"node_modules/linkedom/package.json": JSON.stringify({
+				name: "linkedom",
+				version: "0.18.12",
+				type: "module",
+				exports: "./index.js",
+			}),
+			"node_modules/linkedom/index.js": [
+				'import Canvas from "./commonjs/canvas.cjs";',
+				"export const canvasValue = Canvas.createCanvas();",
+			].join("\n"),
+			"node_modules/linkedom/commonjs/canvas.cjs": [
+				"try {",
+				'  module.exports = require("canvas");',
+				"} catch {",
+				'  module.exports = require("./canvas-shim.cjs");',
+				"}",
+			].join("\n"),
+			"node_modules/linkedom/commonjs/canvas-shim.cjs":
+				'module.exports = { createCanvas: () => "linkedom-canvas-shim" };\n',
+		});
+
+		const mod = await loadLegacyPiModule(path.join(dir, "index.js"));
+
+		expect(Reflect.get(Object(mod), "canvasValue")).toBe("linkedom-canvas-shim");
+	});
+
+	it("preserves named ESM imports from CommonJS helpers", async () => {
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "named-cjs-ext", version: "1.0.0", type: "module" }),
+			"index.js": [
+				'import { value } from "./helper.cjs";',
+				"export { value };",
+				"export default function (pi) { void pi; }",
+			].join("\n"),
+			"helper.cjs": 'module.exports = { value: "named-cjs-ok" };\n',
+		});
+
+		const mod = (await loadLegacyPiModule(path.join(dir, "index.js"))) as { value: string };
+
+		expect(mod.value).toBe("named-cjs-ok");
+	});
+
+	it("reads a lazy CommonJS helper at import time", async () => {
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "lazy-cjs-ext", version: "1.0.0", type: "module" }),
+			"index.js": [
+				'export const loadValue = () => import("./helper.cjs").then(mod => mod.default.value);',
+				"export default function (pi) { void pi; }",
+			].join("\n"),
+			"helper.cjs": 'module.exports = { value: "v1" };\n',
+		});
+		const helper = path.join(dir, "helper.cjs");
+		const mod = (await loadLegacyPiModule(path.join(dir, "index.js"))) as { loadValue(): Promise<string> };
+
+		await fs.writeFile(helper, 'module.exports = { value: "v2" };\n', "utf8");
+
+		expect(await mod.loadValue()).toBe("v2");
+	});
+
+	it("reloads an edited CommonJS helper imported from ESM", async () => {
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "cjs-reload-ext", version: "1.0.0", type: "module" }),
+			"index.js": [
+				'import helper from "./helper.cjs";',
+				"export const helperValue = helper.value;",
+				"export default function (pi) { void pi; }",
+			].join("\n"),
+			"helper.cjs": 'module.exports = { value: "v1" };\n',
+		});
+		const entry = path.join(dir, "index.js");
+		const helper = path.join(dir, "helper.cjs");
+
+		const first = await loadLegacyPiModule(entry);
+		expect(Reflect.get(Object(first), "helperValue")).toBe("v1");
+
+		const firstHelperStat = await fs.stat(helper);
+		await fs.writeFile(helper, 'module.exports = { value: "v2" };\n', "utf8");
+		const bumpedHelperMtime = new Date(Math.ceil(firstHelperStat.mtimeMs) + 2_000);
+		await fs.utimes(helper, bumpedHelperMtime, bumpedHelperMtime);
+
+		const second = await loadLegacyPiModule(entry);
+		expect(Reflect.get(Object(second), "helperValue")).toBe("v2");
+	});
+
 	it("reloads an edited entry module without polluting fileURLToPath-derived paths", async () => {
 		const entrySource = (version: string): string =>
 			[
@@ -308,6 +414,22 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 		expect(mod.css).toBe(".x{color:red}");
 	});
 
+	it("leaves JSON import-attribute targets on Bun's native loader", async () => {
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "json-import-ext", version: "1.0.0" }),
+			"prices.json": JSON.stringify({ input: 0.15 }),
+			"index.ts": [
+				'import prices from "./prices.json" with { type: "json" };',
+				"export const inputPrice = prices.input;",
+				"export default function (pi) { void pi; }",
+			].join("\n"),
+		});
+
+		const mod = (await loadLegacyPiModule(path.join(dir, "index.ts"))) as { inputPrice: number };
+
+		expect(mod.inputPrice).toBe(0.15);
+	});
+
 	it("loads the extension's own node_modules deps natively while remapping legacy pi imports", async () => {
 		const dir = await writePackage({
 			"package.json": JSON.stringify({ name: "dep-ext", version: "1.0.0" }),
@@ -502,6 +624,72 @@ describe("legacy-pi in-place module loading (issue #1674)", () => {
 		expect(expectedEsmDepUrls.some(expected => rewritten.includes(expected))).toBe(true);
 		expect(expectedRootDepUrls.some(expected => rewritten.includes(expected))).toBe(true);
 		expect(rewritten).toContain('from "node:path"');
+	});
+
+	it("pins native-addon package requires to absolute extension paths", async () => {
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "native-require-ext", version: "1.0.0" }),
+			"node_modules/@fixture/native-platform/package.json": JSON.stringify({
+				name: "@fixture/native-platform",
+				version: "1.0.0",
+				main: "binding.node",
+			}),
+			"node_modules/@fixture/native-platform/binding.node": "native fixture",
+			"node_modules/plain-dep/package.json": JSON.stringify({
+				name: "plain-dep",
+				version: "1.0.0",
+				main: "index.js",
+			}),
+			"node_modules/plain-dep/index.js": "module.exports = {};",
+			"index.ts": "",
+		});
+		const importer = path.join(dir, "index.ts");
+		const rewritten = await __rewriteLegacyExtensionSourceForTests(
+			[
+				'const binding = require("@fixture/native-platform");',
+				'const plain = require("plain-dep");',
+				'const local = require("./local.node");',
+				"export { binding, plain, local };",
+			].join("\n"),
+			importer,
+		);
+
+		const addon = await fs.realpath(path.join(dir, "node_modules/@fixture/native-platform/binding.node"));
+		expect(rewritten).toContain(`require("${addon.replaceAll("\\", "/")}")`);
+		expect(rewritten).toContain('require("plain-dep")');
+		expect(rewritten).toContain('require("./local.node")');
+	});
+
+	it("preserves native-addon rewrites inside wrapped CommonJS dependencies", async () => {
+		const dir = await writePackage({
+			"package.json": JSON.stringify({ name: "native-cjs-consumer", version: "1.0.0", type: "module" }),
+			"index.js": [
+				'import loader from "native-loader";',
+				"export const loadSource = loader.load.toString();",
+				"export default function (pi) { void pi; }",
+			].join("\n"),
+			"node_modules/native-loader/package.json": JSON.stringify({
+				name: "native-loader",
+				version: "1.0.0",
+				main: "index.cjs",
+			}),
+			"node_modules/native-loader/index.cjs":
+				'module.exports = { load: () => require("@fixture/native-platform") };\n',
+			"node_modules/native-loader/node_modules/@fixture/native-platform/package.json": JSON.stringify({
+				name: "@fixture/native-platform",
+				version: "1.0.0",
+				main: "binding.node",
+			}),
+			"node_modules/native-loader/node_modules/@fixture/native-platform/binding.node": "native fixture",
+		});
+
+		const mod = await loadLegacyPiModule(path.join(dir, "index.js"));
+		const loadSource = Reflect.get(Object(mod), "loadSource");
+		const addon = await fs.realpath(
+			path.join(dir, "node_modules/native-loader/node_modules/@fixture/native-platform/binding.node"),
+		);
+
+		expect(loadSource).toContain(addon.replaceAll("\\", "/"));
 	});
 
 	it("remaps legacy pi-ai utils/oauth subpaths to registry OAuth exports", async () => {

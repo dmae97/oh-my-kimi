@@ -1,12 +1,16 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { stripVTControlCharacters } from "node:util";
-import { CURSOR_MARKER } from "@oh-my-pi/pi-tui";
+import { CURSOR_MARKER, TUI } from "@oh-my-pi/pi-tui";
 import { CombinedAutocompleteProvider } from "@oh-my-pi/pi-tui/autocomplete";
 import { Editor } from "@oh-my-pi/pi-tui/components/editor";
 import { KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "@oh-my-pi/pi-tui/keybindings";
 import { setKittyProtocolActive } from "@oh-my-pi/pi-tui/keys";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { defaultEditorTheme } from "./test-themes";
+import { VirtualTerminal } from "./virtual-terminal";
 
 describe("Editor component", () => {
 	afterEach(() => {
@@ -289,9 +293,12 @@ describe("Editor component", () => {
 	});
 
 	describe("autocomplete triggers", () => {
-		it("triggers slash-command autocomplete when typing slash", async () => {
+		it("triggers slash-command autocomplete without losing the hardware cursor anchor", async () => {
 			const editor = new Editor(defaultEditorTheme);
+			editor.focused = true;
+			editor.setUseTerminalCursor(true);
 			const { promise, resolve } = Promise.withResolvers<string>();
+			const { promise: autocompleteUpdated, resolve: resolveAutocompleteUpdated } = Promise.withResolvers<void>();
 
 			editor.setAutocompleteProvider({
 				async getSuggestions(lines, cursorLine, cursorCol) {
@@ -303,10 +310,42 @@ describe("Editor component", () => {
 					return { lines, cursorLine, cursorCol };
 				},
 			});
+			editor.onAutocompleteUpdate = resolveAutocompleteUpdated;
 
 			editor.handleInput("/");
 
 			await expect(promise).resolves.toBe("/");
+			await autocompleteUpdated;
+			expect(editor.isShowingAutocomplete()).toBe(true);
+			expect(editor.render(80).some(line => line.includes(CURSOR_MARKER))).toBe(true);
+		});
+
+		it("renders slash-command suggestions as compact item rows", async () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.setAutocompleteMaxVisible(10);
+			const longDescription =
+				"Plan and execute non-trivial architectural improvements to the codebase without turning each slash command into a multi-line block.";
+			editor.setAutocompleteProvider(
+				new CombinedAutocompleteProvider(
+					Array.from({ length: 12 }, (_, i) => ({
+						name: `cmd${i}`,
+						description: longDescription,
+					})),
+					"/tmp",
+				),
+			);
+
+			const { promise: autocompleteUpdated, resolve: resolveAutocompleteUpdated } = Promise.withResolvers<void>();
+			editor.onAutocompleteUpdate = resolveAutocompleteUpdated;
+
+			editor.handleInput("/");
+			await autocompleteUpdated;
+
+			const rendered = editor.render(80).map(line => stripVTControlCharacters(line));
+			for (let i = 0; i < 10; i += 1) {
+				expect(rendered.some(line => line.includes(`cmd${i}`))).toBe(true);
+			}
+			expect(rendered.some(line => line.includes("cmd10"))).toBe(false);
 		});
 
 		it("triggers file-reference autocomplete when typing at-sign", async () => {
@@ -395,6 +434,46 @@ describe("Editor component", () => {
 
 			expect(editor.getText()).toBe("/help ");
 			expect(editor.isShowingAutocomplete()).toBe(false);
+		});
+
+		it("does not open file autocomplete after tab-completing no-arg slash commands", async () => {
+			vi.useFakeTimers();
+			const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "slash-tab-no-arg-"));
+			try {
+				await Bun.write(path.join(baseDir, "visible-file.ts"), "export {};\n");
+				const editor = new Editor(defaultEditorTheme);
+				editor.setAutocompleteProvider(
+					new CombinedAutocompleteProvider([{ name: "quit", description: "Quit", allowArgs: false }], baseDir),
+				);
+
+				let nextUpdate = Promise.withResolvers<void>();
+				editor.onAutocompleteUpdate = () => nextUpdate.resolve();
+				editor.handleInput("/");
+				await nextUpdate.promise;
+
+				nextUpdate = Promise.withResolvers<void>();
+				editor.onAutocompleteUpdate = () => nextUpdate.resolve();
+				editor.handleInput("q");
+				vi.advanceTimersByTime(100);
+				await nextUpdate.promise;
+
+				const chainedUpdates = Promise.withResolvers<void>();
+				let updateCount = 0;
+				editor.onAutocompleteUpdate = () => {
+					updateCount += 1;
+					if (updateCount === 2) {
+						chainedUpdates.resolve();
+					}
+				};
+				editor.handleInput("	");
+				await chainedUpdates.promise;
+
+				expect(editor.getText()).toBe("/quit ");
+				expect(editor.isShowingAutocomplete()).toBe(false);
+			} finally {
+				vi.useRealTimers();
+				await fs.rm(baseDir, { recursive: true, force: true });
+			}
 		});
 	});
 
@@ -590,6 +669,11 @@ describe("Editor component", () => {
 			editor.handleInput("\x17");
 			expect(editor.getText()).toBe("foo bar");
 
+			// snake_case identifier deletes as a single word (issue #4776)
+			editor.setText("allowed_openai_params");
+			editor.handleInput("\x17");
+			expect(editor.getText()).toBe("");
+
 			// Delete across multiple lines
 			editor.setText("line one\nline two");
 			editor.handleInput("\x17");
@@ -773,6 +857,47 @@ describe("Editor component", () => {
 						expect(visibleWidth(stripped)).toBeLessThanOrEqual(width);
 					}
 				}
+			}
+		});
+
+		it("keeps the terminal-cursor editor compact by default", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.focused = true;
+			editor.setUseTerminalCursor(true);
+			editor.setText("ast");
+
+			const lines = editor.render(20).map(line => stripVTControlCharacters(line.replaceAll(CURSOR_MARKER, "")));
+			expect(lines).toEqual(["+------------------+", "+- ast            -+"]);
+		});
+
+		it("keeps terminal-local IME preedit from displacing the editor border (#5563)", async () => {
+			const width = 20;
+			const terminal = new VirtualTerminal(width, 6, 1_000);
+			const tui = new TUI(terminal, true);
+			const editor = new Editor(defaultEditorTheme);
+			editor.setImeSafeCursorLayout(true);
+			tui.addChild(editor);
+			tui.setFocus(editor);
+
+			try {
+				tui.start();
+				await terminal.waitForRender();
+				for (const char of "ast") editor.handleInput(char);
+				tui.requestRender();
+				await terminal.waitForRender();
+
+				const beforePreedit = terminal.getViewport().map(row => row.trimEnd());
+				expect(beforePreedit.slice(0, 3)).toEqual(["+------------------+", "|  ast", "+------------------+"]);
+
+				// macOS Terminal renders marked text locally in insertion mode before
+				// committed bytes reach OMP. The open cursor row must not carry right
+				// chrome that the marked text can shift onto another row.
+				terminal.write("\x1b[4hast，\x1b[4l");
+				const afterPreedit = terminal.getViewport().map(row => row.trimEnd());
+				expect(afterPreedit[1]).toBe("|  astast，");
+				expect(afterPreedit[2]).toBe(beforePreedit[2]);
+			} finally {
+				tui.stop();
 			}
 		});
 
@@ -1934,6 +2059,27 @@ describe("Editor component", () => {
 
 			editor.handleInput("\x1b[6~"); // PageDown
 			expect(editor.getCursor()).toEqual({ line: 6, col: 2 });
+		});
+
+		it("PageUp/PageDown on an idle editor never step prompt history (#4754)", () => {
+			const editor = new Editor(defaultEditorTheme);
+
+			editor.addToHistory("first prompt");
+			editor.addToHistory("second prompt");
+			editor.render(80);
+			expect(editor.getText()).toBe("");
+
+			editor.handleInput("\x1b[5~"); // PageUp on empty editor
+			expect(editor.getText()).toBe("");
+
+			editor.handleInput("\x1b[6~"); // PageDown on empty editor
+			expect(editor.getText()).toBe("");
+
+			// While browsing history (entered via Up), PageUp must not advance it.
+			editor.handleInput("\x1b[A"); // Up - shows "second prompt"
+			expect(editor.getText()).toBe("second prompt");
+			editor.handleInput("\x1b[5~"); // PageUp - stays put
+			expect(editor.getText()).toBe("second prompt");
 		});
 
 		it("moves correctly through wrapped visual lines without getting stuck", () => {

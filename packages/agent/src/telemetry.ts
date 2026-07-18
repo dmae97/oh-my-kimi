@@ -957,6 +957,9 @@ function assistantContentToOtelParts(content: AssistantMessage["content"]): Otel
 			case "text":
 				parts.push({ type: "text", content: part.text });
 				break;
+			case "image":
+				parts.push({ type: "blob", modality: "image", mime_type: part.mimeType, content: part.data });
+				break;
 			case "thinking":
 				parts.push({ type: "reasoning", content: part.thinking });
 				break;

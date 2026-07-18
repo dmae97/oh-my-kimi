@@ -45,6 +45,30 @@ describe("BashTool execution results", () => {
 		expect(text).toContain("Command exited with code 3");
 	});
 
+	it("returns a warning-state timeout result with one timeout notice", async () => {
+		const tool = new BashTool(makeSession());
+		const result = await tool.execute("call-timeout", { command: "sleep 3", timeout: 1 });
+
+		expect(result.isError).toBe(true);
+		expect(result.details?.timedOut).toBe(true);
+		const text = result.content.find(c => c.type === "text")?.text ?? "";
+		expect(text.match(/\[Command timed out after 1 seconds\]/gu)).toHaveLength(1);
+	});
+
+	it("preserves the executor cancellation notice without classifying it as a timeout", async () => {
+		const tool = new BashTool(makeSession());
+		const controller = new AbortController();
+		const execution = tool.execute("call-cancel", { command: "sleep 3" }, controller.signal);
+		await Bun.sleep(20);
+		controller.abort();
+
+		const error = await execution.catch(error => error);
+		expect(error).toBeInstanceOf(Error);
+		const message = (error as Error).message;
+		expect(message.match(/\[Command cancelled\]/gu)).toHaveLength(1);
+		expect(message).not.toContain("Command aborted");
+	});
+
 	it("returns a success result with no exit-code detail for a zero exit", async () => {
 		const tool = new BashTool(makeSession());
 		const result = await tool.execute("call-ok", { command: "printf hi" });

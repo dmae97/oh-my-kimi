@@ -12,7 +12,7 @@ import type { ToolSession } from "../sdk";
 import type { SessionEntry } from "../session/session-entries";
 import { framedBlock, renderStatusLine, renderTreeList } from "../tui";
 import { normalizePathLikeInput, resolveToCwd } from "./path-utils";
-import { formatErrorDetail, PREVIEW_LIMITS } from "./render-utils";
+import { formatErrorDetail, formatMoreItems, PREVIEW_LIMITS, pluralize } from "./render-utils";
 
 // =============================================================================
 // Types
@@ -212,6 +212,80 @@ export function todoMatchesAnyDescription(content: string, descriptions: readonl
 		if (candidate.length >= TODO_DESCRIPTION_MIN_OVERLAP && target.includes(candidate)) return true;
 	}
 	return false;
+}
+
+/**
+ * A todo the collapsed viewport treats as current work: the literal
+ * `in_progress` task or a pending task a live subagent is executing. Both
+ * collapsed views (transient tool result + sticky HUD) run this same policy so
+ * they can never disagree about what the agent is doing (#5873).
+ */
+function isActiveTodo<T extends { status: TodoStatus }>(task: T, isMatched: (task: T) => boolean): boolean {
+	return task.status === "in_progress" || (task.status === "pending" && isMatched(task));
+}
+
+/** Result of {@link selectCollapsedTodos}: the rows to render plus an optional
+ *  summary line (empty string ⇒ no summary row). */
+export interface CollapsedTodoSelection<T> {
+	items: T[];
+	summary: string;
+}
+
+/**
+ * Walking-viewport selection for a phase's collapsed todo preview (#5873).
+ *
+ * Policy, applied to `tasks` in todo order:
+ * 1. While the phase has open work, completed/abandoned tasks are omitted. A
+ *    phase with no open tasks left falls back to its closed tasks so the sticky
+ *    HUD's closed-todo persistence still has something to render.
+ * 2. Every active task (in-progress, or pending matched to a live subagent) is
+ *    placed at the head in stable todo order — never dropped for lying outside
+ *    an ordinary window.
+ * 3. Remaining rows up to `cap` are filled with the pending tasks that follow
+ *    the first active one, in todo order (falling back to leading pending tasks
+ *    when no active task exists), so a freshly-promoted task leads the preview.
+ * 4. When active tasks alone exceed `cap`, only the first `cap` active tasks are
+ *    shown and the summary counts the hidden *active* todos, never replacing
+ *    them with unrelated pending rows.
+ *
+ * The summary otherwise counts the remaining tasks in the display base. Returns
+ * the whole base with an empty summary when it already fits.
+ */
+export function selectCollapsedTodos<T extends { status: TodoStatus }>(
+	tasks: T[],
+	isMatched: (task: T) => boolean,
+	cap: number,
+): CollapsedTodoSelection<T> {
+	const open = tasks.filter(task => task.status === "pending" || task.status === "in_progress");
+	// No open work: fall back to the closed tasks so a settled phase still
+	// renders (HUD closed-todo persistence). Closed tasks are never active.
+	const base = open.length > 0 ? open : tasks;
+	if (base.length <= cap) return { items: base, summary: "" };
+
+	const active = base.filter(task => isActiveTodo(task, isMatched));
+	// Only when active work strictly exceeds the cap do we drop pending rows and
+	// count hidden *actives*. At exactly `cap` actives, fall through so the normal
+	// branch still surfaces any following pending work in the summary.
+	if (active.length > cap) {
+		const hiddenActive = active.length - cap;
+		return {
+			items: active.slice(0, cap),
+			summary: `… ${hiddenActive} more active ${pluralize("todo", hiddenActive)}`,
+		};
+	}
+
+	// Fill trailing rows with tasks following the first active one, so the
+	// promoted/current task leads and its successors follow in todo order.
+	const firstActiveIdx = active.length > 0 ? base.indexOf(active[0]) : 0;
+	const fill: T[] = [];
+	for (let i = firstActiveIdx; i < base.length && active.length + fill.length < cap; i++) {
+		const task = base[i];
+		if (isActiveTodo(task, isMatched)) continue;
+		fill.push(task);
+	}
+	const items = [...active, ...fill];
+	const hidden = base.length - items.length;
+	return { items, summary: hidden > 0 ? formatMoreItems(hidden, "todo") : "" };
 }
 
 function resolveTaskOrError(
@@ -755,6 +829,7 @@ function formatTodoLine(
 	prefix: string,
 	completionKeys: Set<string>,
 	frame: number | undefined,
+	matched = false,
 ): string {
 	const checkbox = uiTheme.checkbox;
 	switch (item.status) {
@@ -771,7 +846,9 @@ function formatTodoLine(
 		case "abandoned":
 			return uiTheme.fg("error", `${prefix}${checkbox.unchecked} ${strikethroughText(item.content)}`);
 		default:
-			return uiTheme.fg("dim", `${prefix}${checkbox.unchecked} ${item.content}`);
+			// A pending todo lit by a live subagent match renders accent, matching
+			// the sticky HUD's convention (#5873).
+			return uiTheme.fg(matched ? "accent" : "dim", `${prefix}${checkbox.unchecked} ${item.content}`);
 	}
 }
 
@@ -820,6 +897,21 @@ function formatPhaseSummary(phase: TodoPhase, oneBasedIndex: number, uiTheme: Th
 	const done = phase.tasks.filter(task => task.status === "completed").length;
 	const name = uiTheme.fg("dim", chalk.bold(formatPhaseDisplayName(phase.name, oneBasedIndex)));
 	return `${name}${uiTheme.fg("dim", `  ${done}/${total}`)}`;
+}
+
+/**
+ * Live subagent descriptions the transient tool result uses to detect
+ * pending todos being executed by an in-flight subagent, so its collapsed
+ * viewport surfaces the same active work the sticky HUD does (#5873). Wired
+ * once by interactive mode from its observer registry; returns `[]` outside an
+ * interactive session (tests, SDK, transcript rebuilds), where only literal
+ * `in_progress` counts as active.
+ */
+let activeTodoDescriptionsProvider: () => readonly string[] = () => [];
+
+/** Wire the live-subagent description source for {@link todoToolRenderer}. */
+export function setActiveTodoDescriptionsProvider(provider: () => readonly string[]): void {
+	activeTodoDescriptionsProvider = provider;
 }
 
 export const todoToolRenderer = {
@@ -903,6 +995,12 @@ export const todoToolRenderer = {
 			// a single task flip doesn't redraw every phase's full task list. The
 			// manual expand toggle (and the no-signal fallback) still shows all.
 			const touched = expanded || !multiPhase ? null : computeTouchedPhases(args, phases, completedTasks);
+			// A pending todo counts as active work when an in-flight subagent is
+			// executing it — the transient result surfaces the same active set the
+			// sticky HUD does (#5873). Empty outside an interactive session.
+			const activeDescs = expanded ? [] : activeTodoDescriptionsProvider();
+			const isMatched = (task: TodoItem): boolean =>
+				activeDescs.length > 0 && todoMatchesAnyDescription(task.content, activeDescs);
 			const bodyLines: string[] = [];
 			for (let p = 0; p < phases.length; p++) {
 				const phase = phases[p];
@@ -914,17 +1012,32 @@ export const todoToolRenderer = {
 					bodyLines.push(uiTheme.fg("accent", chalk.bold(formatPhaseDisplayName(phase.name, p + 1))));
 				}
 				const completionKeys = completionKeysByPhase.get(phase.name) ?? EMPTY_COMPLETION_KEYS;
-				const treeLines = renderTreeList(
-					{
-						items: phase.tasks,
-						expanded,
-						maxCollapsed: PREVIEW_LIMITS.COLLAPSED_ITEMS,
-						itemType: "todo",
-						truncateFrom: "start",
-						renderItem: todo => formatTodoLine(todo, uiTheme, "", completionKeys, spinnerFrame),
-					},
-					uiTheme,
-				);
+				// Collapsed: walking viewport — completed/abandoned omitted, active
+				// work (in-progress / subagent-matched) pulled to the head, then
+				// following pending tasks (#5873). Expanded: every task in order.
+				const treeLines = expanded
+					? renderTreeList(
+							{
+								items: phase.tasks,
+								expanded,
+								itemType: "todo",
+								renderItem: todo => formatTodoLine(todo, uiTheme, "", completionKeys, spinnerFrame),
+							},
+							uiTheme,
+						)
+					: (() => {
+							const selection = selectCollapsedTodos(phase.tasks, isMatched, PREVIEW_LIMITS.COLLAPSED_ITEMS);
+							return renderTreeList(
+								{
+									items: selection.items,
+									itemType: "todo",
+									trailingSummary: selection.summary,
+									renderItem: todo =>
+										formatTodoLine(todo, uiTheme, "", completionKeys, spinnerFrame, isMatched(todo)),
+								},
+								uiTheme,
+							);
+						})();
 				for (const line of treeLines) {
 					bodyLines.push(`${indent}${line}`);
 				}

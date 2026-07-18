@@ -20,11 +20,19 @@ def load_paragraphs(cache: Path) -> list[dict]:
     out = []
     for art in data:
         for p in art["paragraphs"]:
-            out.append({"ctx": " ".join(p["context"].split()), "qas": p["qas"], "title": art["title"]})
+            out.append(
+                {
+                    "ctx": " ".join(p["context"].split()),
+                    "qas": p["qas"],
+                    "title": art["title"],
+                }
+            )
     return out
 
 
-def build_flow(paras: list[dict], max_chars: int | None = None) -> tuple[str, list[int]]:
+def build_flow(
+    paras: list[dict], max_chars: int | None = None
+) -> tuple[str, list[int]]:
     """Space-joined passage stream + start offset of each passage."""
     flow, offsets = "", []
     for p in paras:
@@ -95,7 +103,7 @@ def f1(pred: str, golds: list[str]) -> float:
 
 
 def parse_numbered(text: str, n: int) -> list[str]:
-    """Extract answers from a numbered list; missing entries become ''. """
+    """Extract answers from a numbered list; missing entries become ''."""
     answers = [""] * n
     for line in text.splitlines():
         m = re.match(r"\s*(\d+)[.):]\s*(.*\S)?\s*$", line)

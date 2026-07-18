@@ -47,7 +47,9 @@ EXP = "exp14"
 OUT_DIR = RESULTS / f"{EXP}-bestgpt"
 MODEL = "gpt-5.5"
 PRICE_IN, PRICE_OUT = 2.0, 16.0
-FONT = FontCfg("8on16", "8x13", 8, 16)  # exp01 winner: 8x13 glyphs, 16px patch-aligned pitch
+FONT = FontCfg(
+    "8on16", "8x13", 8, 16
+)  # exp01 winner: 8x13 glyphs, 16px patch-aligned pitch
 GUTTER = 3  # char cells between doc columns (as exp04)
 SCREEN_CELLS = "img-doc-8on16-bw@150,img-doc-8on16-sent@150,img-8on16-bw@150"
 _WHITE = (255, 255, 255)
@@ -200,16 +202,30 @@ def atomic_save(img: Image.Image, png: Path) -> None:
     tmp.replace(png)
 
 
-def qa_call(messages: list[dict], questions: list[dict], length: int, cond: str,
-            start: int, ctx: dict) -> list[dict]:
+def qa_call(
+    messages: list[dict],
+    questions: list[dict],
+    length: int,
+    cond: str,
+    start: int,
+    ctx: dict,
+) -> list[dict]:
     """One QA call + scoring; shared by doc and grid paths."""
     args, keys = ctx["args"], ctx["keys"]
     qa = cached(
-        MODEL, f"{EXP}-qa", {"messages": messages, "effort": args.effort},
+        MODEL,
+        f"{EXP}-qa",
+        {"messages": messages, "effort": args.effort},
         lambda: dict(
             zip(
                 ("text", "usage", "stop"),
-                llm_complete(keys, MODEL, messages, max_tokens=args.max_tokens, effort=args.effort),
+                llm_complete(
+                    keys,
+                    MODEL,
+                    messages,
+                    max_tokens=args.max_tokens,
+                    effort=args.effort,
+                ),
             )
         ),
         args.fresh,
@@ -237,17 +253,23 @@ def qa_call(messages: list[dict], questions: list[dict], length: int, cond: str,
     return records
 
 
-def run_doc_page(cond: str, length: int, page: tuple[int, int], ctx: dict) -> list[dict]:
+def run_doc_page(
+    cond: str, length: int, page: tuple[int, int], ctx: dict
+) -> list[dict]:
     args, paras, offsets = ctx["args"], ctx["paras"], ctx["offsets"]
     i, j = page
     start = offsets[i]
     end = offsets[j - 1] + len(paras[j - 1]["ctx"])
-    questions = squad.sample_chunk_questions(paras, offsets, start, end, args.qpc, args.seed)
+    questions = squad.sample_chunk_questions(
+        paras, offsets, start, end, args.qpc, args.seed
+    )
     if not questions:
         return []
     variant = cond.removeprefix("img-doc-8on16-")
     lines = ctx["lines"][page]
-    page_key = sha8(cond, json.dumps([(p["title"], p["ctx"]) for p in paras[i:j]]), str(args.size))
+    page_key = sha8(
+        cond, json.dumps([(p["title"], p["ctx"]) for p in paras[i:j]]), str(args.size)
+    )
     png = CACHE / f"{EXP}-doc-{variant}-{page_key}.png"
     if not png.exists() or png.stat().st_size == 0:
         atomic_save(render_doc(lines, args.size, variant, CACHE), png)
@@ -258,7 +280,11 @@ def run_doc_page(cond: str, length: int, page: tuple[int, int], ctx: dict) -> li
         {
             "role": "user",
             "content": [
-                {"text": load_prompt("exp04-qa-image.md").format(col_w=col_w, rows=rows)},
+                {
+                    "text": load_prompt("exp04-qa-image.md").format(
+                        col_w=col_w, rows=rows
+                    )
+                },
                 {"image_path": png},
                 {"text": q_block},
             ],
@@ -267,9 +293,13 @@ def run_doc_page(cond: str, length: int, page: tuple[int, int], ctx: dict) -> li
     return qa_call(messages, questions, length, cond, start, ctx)
 
 
-def run_grid_chunk(cond: str, length: int, start: int, end: int, ctx: dict) -> list[dict]:
+def run_grid_chunk(
+    cond: str, length: int, start: int, end: int, ctx: dict
+) -> list[dict]:
     args, flow, paras, offsets = ctx["args"], ctx["flow"], ctx["paras"], ctx["offsets"]
-    questions = squad.sample_chunk_questions(paras, offsets, start, end, args.qpc, args.seed)
+    questions = squad.sample_chunk_questions(
+        paras, offsets, start, end, args.qpc, args.seed
+    )
     if not questions:
         return []
     chunk_text = flow[start:end]
@@ -298,8 +328,13 @@ def aggregate(records: list[dict]) -> dict:
     mean_f1 = sum(f1s) / n
     se = (sum((x - mean_f1) ** 2 for x in f1s) / (n * (n - 1))) ** 0.5 if n > 1 else 0.0
     us = [u for r in records if "usage" in r for u in r["usage"]]
-    tok = {k: sum(u.get(k, 0) for u in us) for k in ("in", "out", "cache_w", "cache_r", "reasoning")}
-    cost_in = (tok["in"] + 1.25 * tok["cache_w"] + 0.1 * tok["cache_r"]) / 1e6 * PRICE_IN
+    tok = {
+        k: sum(u.get(k, 0) for u in us)
+        for k in ("in", "out", "cache_w", "cache_r", "reasoning")
+    }
+    cost_in = (
+        (tok["in"] + 1.25 * tok["cache_w"] + 0.1 * tok["cache_r"]) / 1e6 * PRICE_IN
+    )
     cost_out = tok["out"] / 1e6 * PRICE_OUT
     return {
         "n": n,
@@ -318,18 +353,35 @@ def cell_label(cond: str, effort: str | None) -> str:
     return f"{cond}+eff-{effort}" if effort else cond
 
 
-def write_outputs(records: list[dict], capacity_stats: dict, args_dict: dict) -> list[dict]:
+def write_outputs(
+    records: list[dict], capacity_stats: dict, args_dict: dict
+) -> list[dict]:
     with (OUT_DIR / "records.jsonl").open("w") as fh:
         for r in records:
             fh.write(json.dumps(r) + "\n")
-    cell_keys = sorted({(r["length"], r["cond"], r.get("effort")) for r in records},
-                       key=lambda k: (k[0], k[1], k[2] or ""))
+    cell_keys = sorted(
+        {(r["length"], r["cond"], r.get("effort")) for r in records},
+        key=lambda k: (k[0], k[1], k[2] or ""),
+    )
     cells = []
     for length, cond, effort in cell_keys:
-        sub = [r for r in records if r["length"] == length and r["cond"] == cond and r.get("effort") == effort]
-        cells.append({"model": MODEL, "length": length, "condition": cell_label(cond, effort), **aggregate(sub)})
+        sub = [
+            r
+            for r in records
+            if r["length"] == length and r["cond"] == cond and r.get("effort") == effort
+        ]
+        cells.append(
+            {
+                "model": MODEL,
+                "length": length,
+                "condition": cell_label(cond, effort),
+                **aggregate(sub),
+            }
+        )
     (OUT_DIR / "summary.json").write_text(
-        json.dumps({"args": args_dict, "capacity": capacity_stats, "cells": cells}, indent=1)
+        json.dumps(
+            {"args": args_dict, "capacity": capacity_stats, "cells": cells}, indent=1
+        )
     )
     with (OUT_DIR / "matrix.csv").open("w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=list(cells[0].keys()))
@@ -349,7 +401,9 @@ def main() -> None:
     ap.add_argument("--effort", default=None)
     ap.add_argument("--fresh", action="store_true")
     ap.add_argument("--render-only", action="store_true")
-    ap.add_argument("--report", action="store_true", help="re-aggregate existing records, no API")
+    ap.add_argument(
+        "--report", action="store_true", help="re-aggregate existing records, no API"
+    )
     ap.add_argument("--env", default="~/.env")
     args = ap.parse_args()
 
@@ -360,22 +414,28 @@ def main() -> None:
     cols, rows, grid_cap = capacity(FONT, args.size)
     col_w = (cols - GUTTER) // 2
     max_lines = 2 * rows
-    print(f"8on16 @ {args.size}px: grid {cols}x{rows} = {grid_cap} chars; "
-          f"doc 2 x {col_w} cols + gutter {GUTTER}, {max_lines} line slots")
+    print(
+        f"8on16 @ {args.size}px: grid {cols}x{rows} = {grid_cap} chars; "
+        f"doc 2 x {col_w} cols + gutter {GUTTER}, {max_lines} line slots"
+    )
 
     rec_path = OUT_DIR / "records.jsonl"
     existing: list[dict] = []
     if rec_path.exists():
-        existing = [json.loads(ln) for ln in rec_path.read_text().splitlines() if ln.strip()]
+        existing = [
+            json.loads(ln) for ln in rec_path.read_text().splitlines() if ln.strip()
+        ]
     cap_path = OUT_DIR / "capacity.json"
     capacity_stats: dict = json.loads(cap_path.read_text()) if cap_path.exists() else {}
 
     if args.report:
         cells = write_outputs(existing, capacity_stats, vars(args))
         for c in cells:
-            print(f"len {c['length']:<4} {c['condition']:<28} n={c['n']:<4} EM {c['em']:.3f}  "
-                  f"F1 {c['f1']:.3f} ±{c['f1_se']:.3f}  ${c['cost_usd']:.3f}  "
-                  f"out={c['tok_out']} rsn={c['tok_reasoning']}")
+            print(
+                f"len {c['length']:<4} {c['condition']:<28} n={c['n']:<4} EM {c['em']:.3f}  "
+                f"F1 {c['f1']:.3f} ±{c['f1_se']:.3f}  ${c['cost_usd']:.3f}  "
+                f"out={c['tok_out']} rsn={c['tok_reasoning']}"
+            )
         return
 
     cell_specs = []
@@ -398,7 +458,9 @@ def main() -> None:
         flow, offsets = squad.build_flow(paras)
         pages = pack_pages(paras, col_w, max_lines)
         page_lines = {pg: layout_page(paras[pg[0] : pg[1]], col_w) for pg in pages}
-        page_chars = [offsets[j - 1] + len(paras[j - 1]["ctx"]) - offsets[i] for i, j in pages]
+        page_chars = [
+            offsets[j - 1] + len(paras[j - 1]["ctx"]) - offsets[i] for i, j in pages
+        ]
         capacity_stats[str(length)] = {
             "doc_pages": len(pages),
             "mean_chars_page": round(sum(page_chars) / len(pages)),
@@ -409,10 +471,19 @@ def main() -> None:
             "grid_pages": -(-len(flow) // grid_cap),
         }
         st = capacity_stats[str(length)]
-        print(f"  len {length}: {st['doc_pages']} doc pages (mean {st['mean_chars_page']} chars, "
-              f"{round(100 * st['mean_chars_page'] / grid_cap)}% of grid {grid_cap}); "
-              f"grid {st['grid_pages']} pages; corpus {st['corpus_chars']}")
-        ctx = {"args": args, "paras": paras, "flow": flow, "offsets": offsets, "keys": keys, "lines": page_lines}
+        print(
+            f"  len {length}: {st['doc_pages']} doc pages (mean {st['mean_chars_page']} chars, "
+            f"{round(100 * st['mean_chars_page'] / grid_cap)}% of grid {grid_cap}); "
+            f"grid {st['grid_pages']} pages; corpus {st['corpus_chars']}"
+        )
+        ctx = {
+            "args": args,
+            "paras": paras,
+            "flow": flow,
+            "offsets": offsets,
+            "keys": keys,
+            "lines": page_lines,
+        }
         for cond, ln in cell_specs:
             if ln != length:
                 continue
@@ -421,7 +492,15 @@ def main() -> None:
                     tasks.append(("doc", cond, length, pg, ctx))
             else:
                 for start in range(0, len(flow), grid_cap):
-                    tasks.append(("grid", cond, length, (start, min(start + grid_cap, len(flow))), ctx))
+                    tasks.append(
+                        (
+                            "grid",
+                            cond,
+                            length,
+                            (start, min(start + grid_cap, len(flow))),
+                            ctx,
+                        )
+                    )
 
     cap_path.write_text(json.dumps(capacity_stats, indent=1))
 
@@ -432,13 +511,22 @@ def main() -> None:
             if kind == "doc":
                 variant = cond.removeprefix("img-doc-8on16-")
                 i, j = unit
-                key = sha8(cond, json.dumps([(p["title"], p["ctx"]) for p in ctx["paras"][i:j]]), str(args.size))
+                key = sha8(
+                    cond,
+                    json.dumps([(p["title"], p["ctx"]) for p in ctx["paras"][i:j]]),
+                    str(args.size),
+                )
                 png = CACHE / f"{EXP}-doc-{variant}-{key}.png"
-                atomic_save(render_doc(ctx["lines"][unit], args.size, variant, CACHE), png)
+                atomic_save(
+                    render_doc(ctx["lines"][unit], args.size, variant, CACHE), png
+                )
             else:
                 variant = cond.removeprefix("img-8on16-")
                 chunk_text = ctx["flow"][unit[0] : unit[1]]
-                png = CACHE / f"{EXP}-8on16-{variant}-{sha8(chunk_text, str(args.size))}.png"
+                png = (
+                    CACHE
+                    / f"{EXP}-8on16-{variant}-{sha8(chunk_text, str(args.size))}.png"
+                )
                 atomic_save(render(chunk_text, FONT, CACHE, args.size, variant), png)
             print(f"  sample: {png}")
         return
@@ -452,7 +540,9 @@ def main() -> None:
             if kind == "doc":
                 futures.append(pool.submit(run_doc_page, cond, length, unit, ctx))
             else:
-                futures.append(pool.submit(run_grid_chunk, cond, length, unit[0], unit[1], ctx))
+                futures.append(
+                    pool.submit(run_grid_chunk, cond, length, unit[0], unit[1], ctx)
+                )
         for fut in futures:
             new_records.extend(fut.result())
             done += 1
@@ -460,14 +550,18 @@ def main() -> None:
 
     # merge: drop existing records for cells just re-run, keep everything else
     rerun = {(ln, cond, args.effort) for cond, ln in cell_specs}
-    kept = [r for r in existing if (r["length"], r["cond"], r.get("effort")) not in rerun]
+    kept = [
+        r for r in existing if (r["length"], r["cond"], r.get("effort")) not in rerun
+    ]
     records = kept + new_records
 
     cells = write_outputs(records, capacity_stats, vars(args))
     for c in cells:
-        print(f"len {c['length']:<4} {c['condition']:<28} n={c['n']:<4} EM {c['em']:.3f}  "
-              f"F1 {c['f1']:.3f} ±{c['f1_se']:.3f}  ${c['cost_usd']:.3f}  "
-              f"out={c['tok_out']} rsn={c['tok_reasoning']}")
+        print(
+            f"len {c['length']:<4} {c['condition']:<28} n={c['n']:<4} EM {c['em']:.3f}  "
+            f"F1 {c['f1']:.3f} ±{c['f1_se']:.3f}  ${c['cost_usd']:.3f}  "
+            f"out={c['tok_out']} rsn={c['tok_reasoning']}"
+        )
     print(f"\n-> {OUT_DIR}/records.jsonl, matrix.csv, summary.json")
 
 

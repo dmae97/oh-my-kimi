@@ -5,9 +5,10 @@
  * - `omp -p "prompt"` - text output
  * - `omp --mode json "prompt"` - JSON event stream
  */
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import { logger, sanitizeText } from "@oh-my-pi/pi-utils";
-import type { AgentSession } from "../session/agent-session";
+import { type AgentSession, type AgentSessionEvent, SHUTDOWN_CONSOLIDATE_BUDGET_MS } from "../session/agent-session";
 import { isSilentAbort } from "../session/messages";
 import { flushTelemetryExport } from "../telemetry-export";
 import { initializeExtensions } from "./runtime-init";
@@ -26,6 +27,54 @@ export interface PrintModeOptions {
 	initialImages?: ImageContent[];
 	/** If true, include thinking blocks in text output */
 	printThoughts?: boolean;
+}
+
+/** Drop the provider-opaque replay payload (e.g. encrypted reasoning items) before printing. */
+function stripProviderPayload<T extends AgentMessage>(message: T): T {
+	if (!("providerPayload" in message) || message.providerPayload === undefined) return message;
+	const { providerPayload: _providerPayload, ...rest } = message;
+	return rest as T;
+}
+
+/**
+ * Shape an event for `--mode json` output.
+ *
+ * Removes two classes of bloat so transcripts grow linearly with conversation
+ * size instead of quadratically (a single long turn used to re-serialize its
+ * whole in-progress message on every streamed delta, producing multi-GB logs):
+ * - `message_update` snapshots (`message`, `assistantMessageEvent.partial`,
+ *   and the `done`/`error` payloads) are dropped; only the incremental delta
+ *   is printed. The authoritative message follows in `message_end`.
+ * - `providerPayload` is transport-native replay state, opaque and useless
+ *   outside this process.
+ */
+export function printableEvent(event: AgentSessionEvent): unknown {
+	switch (event.type) {
+		case "message_update": {
+			const streamEvent = event.assistantMessageEvent;
+			if (streamEvent.type === "done" || streamEvent.type === "error") {
+				return {
+					type: "message_update",
+					assistantMessageEvent: { type: streamEvent.type, reason: streamEvent.reason },
+				};
+			}
+			const { partial: _partial, ...rest } = streamEvent;
+			return { type: "message_update", assistantMessageEvent: rest };
+		}
+		case "message_start":
+		case "message_end":
+			return { ...event, message: stripProviderPayload(event.message) };
+		case "turn_end":
+			return {
+				...event,
+				message: stripProviderPayload(event.message),
+				toolResults: event.toolResults.map(stripProviderPayload),
+			};
+		case "agent_end":
+			return { ...event, messages: event.messages.map(stripProviderPayload) };
+		default:
+			return event;
+	}
 }
 
 /**
@@ -58,17 +107,26 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 	session.subscribe(event => {
 		// In JSON mode, output all events
 		if (mode === "json") {
-			process.stdout.write(`${JSON.stringify(event)}\n`);
+			process.stdout.write(`${JSON.stringify(printableEvent(event))}\n`);
 		}
 	});
 
+	let wroteTextWorkingIndicator = false;
+	const writeTextWorkingIndicator = (): void => {
+		if (mode !== "text" || wroteTextWorkingIndicator) return;
+		process.stderr.write("Working...\n");
+		wroteTextWorkingIndicator = true;
+	};
+
 	// Send initial message with attachments
 	if (initialMessage !== undefined) {
+		writeTextWorkingIndicator();
 		await logger.time("print:prompt:initial", () => session.prompt(initialMessage, { images: initialImages }));
 	}
 
 	// Send remaining messages
 	for (const message of messages) {
+		writeTextWorkingIndicator();
 		await logger.time("print:prompt:next", () => session.prompt(message));
 	}
 
@@ -86,10 +144,15 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 				!isSilentAbort(assistantMsg)
 			) {
 				const errorLine = sanitizeText(assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`);
-				// Flush before this hard exit — it bypasses the awaited postmortem.quit()
-				// in main(), and the postmortem `exit` handler can't await, so the error
-				// spans would otherwise stay buffered in the batch processor and drop.
+				// This branch hard-exits, bypassing the `await session.dispose()` at
+				// the end of runPrintMode. Flush telemetry and dispose the session
+				// HERE so error spans reach the exporter (the postmortem `exit`
+				// handler can't await) and the browser reaper installed in
+				// `dispose()` (releaseTabsForOwner) actually runs — otherwise an
+				// OMP-owned Chromium survives this exit (issue #5643). `dispose()`
+				// is idempotent, so the unreachable call below is a harmless no-op.
 				await flushTelemetryExport();
+				await session.dispose({ mnemopiConsolidateTimeoutMs: SHUTDOWN_CONSOLIDATE_BUDGET_MS });
 				const flushed = process.stderr.write(`${errorLine}\n`);
 				if (flushed) {
 					process.exit(1);
@@ -126,5 +189,5 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 		});
 	});
 
-	await session.dispose();
+	await session.dispose({ mnemopiConsolidateTimeoutMs: SHUTDOWN_CONSOLIDATE_BUDGET_MS });
 }

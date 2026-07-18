@@ -270,19 +270,30 @@ describe("AgentLifecycleManager", () => {
 		expect(stub.disposeCalls()).toBe(0);
 	});
 
-	it("isParking is true exactly while park's dispose is in flight; parked only after it completes", async () => {
+	it("isParking is true while park is in flight; session is detached before dispose", async () => {
 		const gate = deferred();
 		const stub = makeSessionStub(() => gate.promise);
 		registerIdleSub("7-Sub", stub.session);
 		lifecycle.adopt("7-Sub", { idleTtlMs: 0 });
 
-		// park() runs synchronously up to `await session.dispose()`, which we hold open.
+		// park() registers the in-flight entry synchronously, then yields a
+		// cancel window before detach. During dispose we hold the gate open.
 		const parking = lifecycle.park("7-Sub");
+
+		expect(lifecycle.isParking("7-Sub")).toBe(true);
+		expect(registry.get("7-Sub")?.status).toBe("idle"); // cancel window not yet elapsed
+		expect(registry.get("7-Sub")?.session).toBe(stub.session);
+
+		// Cancel window + detach + start dispose.
+		await Promise.resolve();
+		await Promise.resolve();
 
 		expect(stub.disposeCalls()).toBe(1);
 		expect(lifecycle.isParking("7-Sub")).toBe(true);
-		expect(registry.get("7-Sub")).toBeDefined();
-		expect(registry.get("7-Sub")?.status).toBe("idle"); // not yet flipped
+		// Detach + parked happen BEFORE dispose resolves — callers never see a
+		// dying session attached to an idle ref.
+		expect(registry.get("7-Sub")?.status).toBe("parked");
+		expect(registry.get("7-Sub")?.session).toBeNull();
 
 		gate.resolve();
 		await parking;
@@ -290,6 +301,154 @@ describe("AgentLifecycleManager", () => {
 		expect(lifecycle.isParking("7-Sub")).toBe(false);
 		expect(registry.get("7-Sub")?.status).toBe("parked");
 		expect(registry.get("7-Sub")?.session).toBeNull();
+	});
+
+	it("ensureLive during pre-detach park cancels park and keeps the live session", async () => {
+		const gate = deferred();
+		const stub = makeSessionStub(() => gate.promise);
+		registerIdleSub("Race-Keep", stub.session, "/tmp/Race-Keep.jsonl");
+		lifecycle.adopt("Race-Keep", { idleTtlMs: 0 });
+
+		const parking = lifecycle.park("Race-Keep");
+		// Same tick as park start: cancel window is still open.
+		const live = lifecycle.ensureLive("Race-Keep");
+
+		const session = await live;
+		await parking;
+
+		expect(session).toBe(stub.session);
+		expect(stub.disposeCalls()).toBe(0);
+		expect(lifecycle.isParking("Race-Keep")).toBe(false);
+		expect(registry.get("Race-Keep")?.status).toBe("idle");
+		expect(registry.get("Race-Keep")?.session).toBe(stub.session);
+	});
+
+	it("ensureLive after park detaches waits for dispose then revives once", async () => {
+		const gate = deferred();
+		const stub = makeSessionStub(() => gate.promise);
+		const revived = makeSessionStub();
+		let reviverRuns = 0;
+		registerIdleSub("Race-Revive", stub.session, "/tmp/Race-Revive.jsonl");
+		lifecycle.adopt("Race-Revive", {
+			idleTtlMs: 0,
+			revive: async () => {
+				reviverRuns++;
+				return revived.session;
+			},
+		});
+
+		const parking = lifecycle.park("Race-Revive");
+		// Let park pass the cancel window and detach before ensureLive.
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(registry.get("Race-Revive")?.status).toBe("parked");
+		expect(registry.get("Race-Revive")?.session).toBeNull();
+		expect(stub.disposeCalls()).toBe(1);
+
+		const first = lifecycle.ensureLive("Race-Revive");
+		const second = lifecycle.ensureLive("Race-Revive");
+
+		// ensureLive is blocked on park until dispose finishes — never hands out
+		// the dying session.
+		let firstSettled = false;
+		void first.then(() => {
+			firstSettled = true;
+		});
+		await flushAsync();
+		expect(firstSettled).toBe(false);
+		expect(reviverRuns).toBe(0);
+
+		gate.resolve();
+		const [a, b] = await Promise.all([first, second, parking]);
+
+		expect(reviverRuns).toBe(1);
+		expect(a).toBe(revived.session);
+		expect(b).toBe(revived.session);
+		expect(registry.get("Race-Revive")?.status).toBe("idle");
+		expect(registry.get("Race-Revive")?.session).toBe(revived.session);
+		expect(stub.disposeCalls()).toBe(1);
+	});
+
+	it("concurrent park calls coalesce into one dispose", async () => {
+		const stub = makeSessionStub();
+		registerIdleSub("Race-ParkOnce", stub.session);
+		lifecycle.adopt("Race-ParkOnce", { idleTtlMs: 0 });
+
+		const a = lifecycle.park("Race-ParkOnce");
+		const b = lifecycle.park("Race-ParkOnce");
+		await Promise.all([a, b]);
+
+		expect(stub.disposeCalls()).toBe(1);
+		expect(registry.get("Race-ParkOnce")?.status).toBe("parked");
+		expect(registry.get("Race-ParkOnce")?.session).toBeNull();
+	});
+
+	it("dispose failure still leaves the agent parked and detached", async () => {
+		const stub = makeSessionStub(async () => {
+			throw new Error("dispose blew up");
+		});
+		registerIdleSub("Park-FailDispose", stub.session, "/tmp/Park-FailDispose.jsonl");
+		lifecycle.adopt("Park-FailDispose", {
+			idleTtlMs: 0,
+			revive: async () => makeSessionStub().session,
+		});
+
+		await lifecycle.park("Park-FailDispose");
+
+		expect(stub.disposeCalls()).toBe(1);
+		expect(registry.get("Park-FailDispose")?.status).toBe("parked");
+		expect(registry.get("Park-FailDispose")?.session).toBeNull();
+		expect(lifecycle.isParking("Park-FailDispose")).toBe(false);
+
+		// Still revivable after a failed dispose.
+		const session = await lifecycle.ensureLive("Park-FailDispose");
+		expect(session).toBeTruthy();
+		expect(registry.get("Park-FailDispose")?.status).toBe("idle");
+	});
+
+	it("revive failure leaves the agent parked without a live session", async () => {
+		const gate = deferred();
+		const stub = makeSessionStub(() => gate.promise);
+		registerIdleSub("Park-FailRevive", stub.session, "/tmp/Park-FailRevive.jsonl");
+		lifecycle.adopt("Park-FailRevive", {
+			idleTtlMs: 0,
+			revive: async () => {
+				throw new Error("revive blew up");
+			},
+		});
+
+		const parking = lifecycle.park("Park-FailRevive");
+		await Promise.resolve();
+		await Promise.resolve();
+		const ensure = lifecycle.ensureLive("Park-FailRevive");
+		gate.resolve();
+		await parking;
+
+		await expect(ensure).rejects.toThrow(/revive blew up/);
+		expect(registry.get("Park-FailRevive")?.status).toBe("parked");
+		expect(registry.get("Park-FailRevive")?.session).toBeNull();
+		expect(lifecycle.has("Park-FailRevive")).toBe(true);
+	});
+
+	it("cancelled park re-arms the idle TTL so a later park still fires", async () => {
+		vi.useFakeTimers();
+		const stub = makeSessionStub();
+		registerIdleSub("Park-Rearm", stub.session, "/tmp/Park-Rearm.jsonl");
+		lifecycle.adopt("Park-Rearm", { idleTtlMs: TTL });
+
+		// Force an early park, then cancel it via ensureLive.
+		const parking = lifecycle.park("Park-Rearm");
+		const kept = await lifecycle.ensureLive("Park-Rearm");
+		await parking;
+		expect(kept).toBe(stub.session);
+		expect(stub.disposeCalls()).toBe(0);
+		expect(registry.get("Park-Rearm")?.status).toBe("idle");
+
+		// Fresh TTL from the cancel path.
+		vi.advanceTimersByTime(TTL);
+		await flushAsync();
+		expect(registry.get("Park-Rearm")?.status).toBe("parked");
+		expect(stub.disposeCalls()).toBe(1);
 	});
 
 	it("idleTtlMs <= 0 adopts without a timer: the agent never parks", async () => {

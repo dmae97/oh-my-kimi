@@ -23,17 +23,32 @@ QA_CACHE = CACHE / "qa"
 MODEL = "moonshotai/kimi-k2.6"
 
 
-def build_messages(shape_name: str, chars: int = 400_000, questions: int = 25, qpb: int = 5, seed: int = 42):
+def build_messages(
+    shape_name: str,
+    chars: int = 400_000,
+    questions: int = 25,
+    qpb: int = 5,
+    seed: int = 42,
+):
     paras = squad.load_paragraphs(CACHE)
     flow, offsets = squad.build_flow(paras, chars)
     qs = squad.sample_chunk_questions(paras, offsets, 0, len(flow), questions, seed)
     shape = SHAPES[shape_name]
-    frame_dir = CACHE / f"prod-frames-{shape_name}-{sha8(flow, json.dumps(shape, sort_keys=True))}"
+    frame_dir = (
+        CACHE
+        / f"prod-frames-{shape_name}-{sha8(flow, json.dumps(shape, sort_keys=True))}"
+    )
     pngs = sorted(frame_dir.glob("page-*.png"))
     repeat = shape.get("lineRepeat", 1)
-    cols = (SIZE // shape["cellWidth"] - 3) // 2 if shape.get("columns") == 2 else SIZE // shape["cellWidth"]
+    cols = (
+        (SIZE // shape["cellWidth"] - 3) // 2
+        if shape.get("columns") == 2
+        else SIZE // shape["cellWidth"]
+    )
     rows = SIZE // shape["cellHeight"] // repeat
-    preamble = load_prompt("qa-image-multi.md").format(k=len(pngs), cols=cols, rows=rows)
+    preamble = load_prompt("qa-image-multi.md").format(
+        k=len(pngs), cols=cols, rows=rows
+    )
     if shape.get("columns") == 2:
         preamble += (
             "\nNote: each image lays text out as two word-wrapped newspaper columns separated by a gutter; "
@@ -45,7 +60,11 @@ def build_messages(shape_name: str, chars: int = 400_000, questions: int = 25, q
             "background, then repeated on a pale highlight band. The copies show identical characters; "
             "cross-check between them when a glyph is hard to read, and do not treat copies as separate text."
         )
-    ctx_blocks = [{"text": preamble}, *({"image_path": p} for p in pngs), {"text": "End of images.", "cache": True}]
+    ctx_blocks = [
+        {"text": preamble},
+        *({"image_path": p} for p in pngs),
+        {"text": "End of images.", "cache": True},
+    ]
     batches = []
     for b in range(0, len(qs), qpb):
         batch = qs[b : b + qpb]
@@ -60,7 +79,13 @@ def main() -> None:
         pngs, batches = build_messages(shape_name)
         print(f"\n=== {shape_name}: {len(pngs)} frames ===")
         for bi, (batch, messages) in enumerate(batches):
-            key = sha8(MODEL, "qa-mono-prod", json.dumps({"messages": messages, "effort": None}, sort_keys=True, default=str))
+            key = sha8(
+                MODEL,
+                "qa-mono-prod",
+                json.dumps(
+                    {"messages": messages, "effort": None}, sort_keys=True, default=str
+                ),
+            )
             path = QA_CACHE / f"{key}.json"
             if not path.exists():
                 print(f"--- batch {bi}: cache MISS ({key})")

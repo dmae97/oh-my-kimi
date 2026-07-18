@@ -7,7 +7,7 @@ const DEFAULT_RETENTION_MS = 5 * 60 * 1000;
 const DEFAULT_MAX_RUNNING_JOBS = 15;
 
 /**
- * Adaptive ("smart") `job` poll-wait ladder (ms). A tight poll loop climbs
+ * Adaptive ("smart") `hub` poll-wait ladder (ms). A tight poll loop climbs
  * these rungs so each immediate re-poll backs off and stops spending turns on
  * "still running" frames; the floor (first rung) is the shortest wait and the
  * top rung is the longest a smart poll will ever block. Only used when
@@ -45,6 +45,12 @@ export interface AsyncJob {
 	 */
 	ownerId?: string;
 	/**
+	 * Registry id of the subagent this job runs (task/tan/vibe jobs). Lets
+	 * job-view code link a job row to its AgentRegistry ref even when the job
+	 * id differs from the agent id (vibe turn jobs, tan clones).
+	 */
+	agentId?: string;
+	/**
 	 * Job is registered but parked behind a caller-managed gate (e.g. a task
 	 * batch semaphore). Queued jobs do not count toward the running-job limit
 	 * until the caller invokes `markRunning()` from the run context.
@@ -79,6 +85,8 @@ export interface AsyncJobRegisterOptions {
 	id?: string;
 	/** Registry id of the agent that owns this job; used to scope cancelAll. */
 	ownerId?: string;
+	/** Registry id of the subagent this job runs; see {@link AsyncJob.agentId}. */
+	agentId?: string;
 	onProgress?: (text: string, details?: Record<string, unknown>) => void | Promise<void>;
 	/** Register the job in queued state; see {@link AsyncJob.queued}. */
 	queued?: boolean;
@@ -192,6 +200,7 @@ export class AsyncJobManager {
 			abortController,
 			promise: Promise.resolve(),
 			ownerId: options?.ownerId,
+			agentId: options?.agentId,
 			queued: options?.queued === true,
 		};
 
@@ -318,7 +327,7 @@ export class AsyncJobManager {
 	}
 
 	/**
-	 * Compute the next adaptive ("smart") wait (ms) for a blocking `job` poll by
+	 * Compute the next adaptive ("smart") wait (ms) for a blocking `hub` wait by
 	 * the given owner. Consecutive polls — those starting within
 	 * POLL_ESCALATION_RESET_MS of the previous poll returning — climb
 	 * POLL_WAIT_LADDER_MS so a tight wait loop backs off; a longer gap means the

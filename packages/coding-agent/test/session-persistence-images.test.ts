@@ -68,4 +68,61 @@ describe("session image persistence", () => {
 		expect(resolvedDetails.images[0]?.data).toBe(generatedImageData);
 		expect(resolvedDetails.images[1]?.data).toBe(typedDetailImageData);
 	});
+
+	it("externalizes and restores native Responses images in assistant content and provider history", async () => {
+		using tempDir = TempDir.createSync("@session-native-image-persistence-");
+		const blobStore = new BlobStore(tempDir.path());
+		const data = Buffer.alloc(1500, 4).toString("base64");
+		const original: SessionMessageEntry = {
+			type: "message",
+			id: "entry-native-image",
+			parentId: null,
+			timestamp: new Date(0).toISOString(),
+			message: {
+				role: "assistant",
+				content: [png(data)],
+				api: "openai-responses",
+				provider: "openai",
+				model: "gpt-image-test",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "stop",
+				providerPayload: {
+					type: "openaiResponsesHistory",
+					provider: "openai",
+					items: [{ type: "image_generation_call", id: "ig_1", status: "completed", result: data }],
+				},
+				timestamp: Date.now(),
+			},
+		};
+
+		const persisted = prepareEntryForPersistence(original, blobStore);
+		if (persisted.type !== "message" || persisted.message.role !== "assistant") {
+			throw new Error("expected persisted assistant message");
+		}
+		const persistedImage = persisted.message.content.find(block => block.type === "image");
+		const persistedItem = persisted.message.providerPayload?.items[0];
+		if (!persistedItem || typeof persistedItem.result !== "string") {
+			throw new Error("expected persisted image generation item");
+		}
+		expect(isBlobRef(persistedImage?.data ?? "")).toBe(true);
+		expect(isBlobRef(persistedItem.result)).toBe(true);
+
+		const loaded: FileEntry[] = [structuredClone(persisted)];
+		await resolveBlobRefsInEntries(loaded, blobStore);
+		const resolved = loaded[0];
+		if (resolved?.type !== "message" || resolved.message.role !== "assistant") {
+			throw new Error("expected resolved assistant message");
+		}
+		const resolvedImage = resolved.message.content.find(block => block.type === "image");
+		const resolvedItem = resolved.message.providerPayload?.items[0];
+		expect(resolvedImage?.data).toBe(data);
+		expect(resolvedItem?.result).toBe(data);
+	});
 });

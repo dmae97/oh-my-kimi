@@ -9,8 +9,7 @@
  * in either process.
  */
 
-import type { StandardEmbeddingModel } from "@oh-my-pi/pi-mnemopi/core";
-import { loadFastembed } from "@oh-my-pi/pi-mnemopi/core/fastembed-runtime";
+import { defaultLocalModelInitializer, type StandardEmbeddingModel } from "@oh-my-pi/pi-mnemopi/core";
 import type { MnemopiEmbedModelId, MnemopiEmbedTransport, MnemopiEmbedWorkerInbound } from "./embed-protocol";
 
 interface LoadedModel {
@@ -25,12 +24,14 @@ let loaded: Promise<LoadedModel> | null = null;
 let loadedKey = "";
 
 async function loadModel(model: MnemopiEmbedModelId, cacheDir: string | undefined): Promise<LoadedModel> {
-	const { FlagEmbedding } = await loadFastembed();
+	// Route through mnemopi's shared initializer so the worker inherits BOTH
+	// cache heals (sidecar re-fetch AND corrupt-model quarantine/retry) —
+	// fastembed/onnxruntime still load only in this child address space, the
+	// initializer calls loadFastembed() itself.
 	// Cast: `model` arrives as a string from the parent (resolved by
-	// mnemopi's `fastembedModelName`). Cast to the non-CUSTOM overload's
-	// argument so TypeScript picks the standard-model branch — the parent
-	// only ever passes pre-vetted fast-* identifiers.
-	const instance = await FlagEmbedding.init({
+	// mnemopi's `fastembedModelName`); the parent only ever passes pre-vetted
+	// fast-* identifiers.
+	const instance = await defaultLocalModelInitializer({
 		model: model as StandardEmbeddingModel,
 		cacheDir,
 		showDownloadProgress: false,

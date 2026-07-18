@@ -25,11 +25,10 @@ Set `bash.enabled: false` in settings to remove the model-facing `bash` tool fro
 `BashTool.execute()` currently handles input before execution as follows:
 
 - validates optional `env` names against shell-variable syntax,
-- when `bash.stripTrailingHeadTail` is enabled (default), applies conservative native fixups that remove safe trailing `| head` / `| tail` pipes and redundant trailing `2>&1`,
 - extracts a leading single-line `cd <path> && ...` into `cwd` when `cwd` was not supplied,
 - rejects `async: true` when `async.enabled` is false.
 
-There are no structured `head` or `tail` tool parameters in the current schema. Output limiting is handled by `OutputSink` truncation/artifacts, and the optional trailing-pipe fixup exists to avoid hiding output before the harness can capture it.
+There are no structured `head` or `tail` tool parameters in the current schema, and commands run exactly as written — no pre-execution rewrites. Output limiting is handled by `OutputSink` truncation/artifacts.
 
 ## 2) Optional interception (blocked-command path)
 
@@ -275,7 +274,6 @@ This component is wired by `CommandController.handleBashCommand()` and fed from 
 
 - [`src/tools/bash.ts`](../packages/coding-agent/src/tools/bash.ts) — tool entrypoint, input handling/interception, async and PTY/non-PTY selection, result/error mapping, bash tool renderer.
 - [`src/tools/bash-pty-selection.ts`](../packages/coding-agent/src/tools/bash-pty-selection.ts) — `canUseInteractiveBashPty` predicate for choosing the local PTY overlay.
-- [`src/tools/bash-command-fixup.ts`](../packages/coding-agent/src/tools/bash-command-fixup.ts) — native-backed conservative cleanup for trailing `head`/`tail` pipes and redundant `2>&1`.
 - [`src/tools/bash-interceptor.ts`](../packages/coding-agent/src/tools/bash-interceptor.ts) — interceptor rule matching and blocked-command messages.
 - [`src/exec/bash-executor.ts`](../packages/coding-agent/src/exec/bash-executor.ts) — non-PTY executor, shell session reuse, cancellation wiring, output sink integration.
 - [`src/exec/non-interactive-env.ts`](../packages/coding-agent/src/exec/non-interactive-env.ts) — non-interactive child-process env defaults (`buildNonInteractiveEnv`) used by the non-PTY executor.

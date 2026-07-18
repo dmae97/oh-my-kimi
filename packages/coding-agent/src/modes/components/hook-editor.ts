@@ -7,7 +7,7 @@
  *   (Ctrl+Q / Ctrl+Enter) submits, bordered popup
  * - Prompt-style (ask): Enter submits, Shift+Enter inserts newline, legacy ask chrome
  */
-import { Container, Editor, matchesKey, Spacer, Text, type TUI } from "@oh-my-pi/pi-tui";
+import { Container, Editor, type Focusable, matchesKey, Spacer, Text, type TUI } from "@oh-my-pi/pi-tui";
 import { getEditorTheme, theme } from "../../modes/theme/theme";
 import {
 	matchesAppExternalEditor,
@@ -20,14 +20,24 @@ import { DynamicBorder } from "./dynamic-border";
 export interface HookEditorOptions {
 	/** When true, use prompt-style keybindings with the legacy ask prompt chrome. */
 	promptStyle?: boolean;
+	/**
+	 * Max rows the inner Editor may occupy. When omitted, the editor is
+	 * bounded to the current terminal height minus the component's chrome
+	 * (≈10 rows) so long content scrolls instead of pushing the submit
+	 * hint out of view.
+	 */
+	maxHeight?: number;
 }
 
-export class HookEditorComponent extends Container {
+/** Interactive multiline dialog used by hooks and the ask tool's Other response. */
+export class HookEditorComponent extends Container implements Focusable {
 	#editor: Editor;
 	#onSubmitCallback: (value: string) => void;
 	#onCancelCallback: () => void;
 	#tui: TUI;
 	#promptStyle: boolean;
+	/** Focus state mirrored to the nested editor during rendering. */
+	focused = false;
 
 	constructor(
 		tui: TUI,
@@ -47,8 +57,11 @@ export class HookEditorComponent extends Container {
 		this.addChild(new DynamicBorder());
 		this.addChild(new Spacer(1));
 
-		// Title
-		this.addChild(new Text(theme.fg("accent", title), 1, 0));
+		// Title. Prompt-style renders the borderless editor's `> ` gutter at
+		// column 0, so pad the title to match; hook-style keeps the 1-col indent
+		// that lines up with its bordered editor body (#5313).
+		const chromePadX = this.#promptStyle ? 0 : 1;
+		this.addChild(new Text(theme.fg("accent", title), chromePadX, 0));
 		this.addChild(new Spacer(1));
 
 		// Editor
@@ -58,6 +71,11 @@ export class HookEditorComponent extends Container {
 			this.#editor.setPromptGutter("> ");
 			this.#editor.disableSubmit = true;
 		}
+		// Bound the editor so long content scrolls instead of pushing the
+		// submit hint off-screen. Caller may override via options.maxHeight.
+		const termRows = this.#tui.terminal?.rows ?? process.stdout.rows ?? 40;
+		this.#editor.setMaxHeight(options?.maxHeight ?? Math.max(3, termRows - 12));
+		this.#editor.setScrollbarVisible(true);
 		if (prefill) {
 			this.#editor.setText(prefill);
 		}
@@ -69,10 +87,22 @@ export class HookEditorComponent extends Container {
 		const hint = this.#promptStyle
 			? "enter or ctrl+q submit  esc cancel  ctrl+g external editor"
 			: "ctrl+q/ctrl+enter submit  esc cancel  ctrl+g external editor";
-		this.addChild(new Text(theme.fg("dim", hint), 1, 0));
+		this.addChild(new Text(theme.fg("dim", hint), chromePadX, 0));
 
 		this.addChild(new Spacer(1));
 		this.addChild(new DynamicBorder());
+	}
+
+	/** Keep the nested editor's software/hardware cursor mode aligned with the dialog focus target. */
+	setUseTerminalCursor(useTerminalCursor: boolean): void {
+		if (this.#editor.getUseTerminalCursor() === useTerminalCursor) return;
+		this.#editor.setUseTerminalCursor(useTerminalCursor);
+	}
+
+	/** Render the dialog after forwarding its focus state to the nested editor. */
+	override render(width: number): readonly string[] {
+		this.#editor.focused = this.focused;
+		return super.render(width);
 	}
 
 	handleInput(keyData: string): void {

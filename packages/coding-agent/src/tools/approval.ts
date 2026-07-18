@@ -75,6 +75,17 @@ function getToolDecision(tool: ApprovalSubject, args: unknown): Omit<ResolvedApp
 	return normalizeDecision(decision);
 }
 
+/**
+ * Evaluate a tool's own approval declaration against `args` and return the
+ * resulting capability tier, defaulting to `exec` when the tool omits an
+ * approval. Unlike reading `tool.approval` directly, this runs function-valued
+ * approvals — the write tool's `xd://` gate uses it to take a mounted device's
+ * argument-dependent tier instead of falling back to `exec`.
+ */
+export function resolveToolTier(tool: ApprovalSubject, args: unknown): ToolTier {
+	return getToolDecision(tool, args).tier;
+}
+
 function modeApprovesTier(mode: ApprovalMode, tier: ToolTier): boolean {
 	return TIER_RANK[tier] <= TIER_RANK[APPROVAL_MODE_MAX_TIER[mode]];
 }

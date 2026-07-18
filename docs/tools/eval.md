@@ -179,9 +179,9 @@ Both runtimes expose `completion()` — a single stateless completion against a 
   - JS: `await completion(prompt, { model?, system?, schema? })`
   - Python: `completion(prompt, *, model="default", system=None, schema=None)`
 - `model` selects a tier (default `"default"`):
-  - `"smol"` → `pi/smol` role (fast / cheap)
-  - `"default"` → the session's active model, falling back to the `pi/default` role
-  - `"slow"` → `pi/slow` role; requests high reasoning effort only on reasoning-capable models
+  - `"smol"` → `@smol` role (fast / cheap)
+  - `"default"` → the session's active model, falling back to the `@default` role
+  - `"slow"` → `@slow` role; requests high reasoning effort only on reasoning-capable models
 - `system` (optional) supplies a system prompt.
 - `schema` (optional) is a plain JSON-Schema object. When present, the model is forced to call a single synthetic `respond` tool with that schema (loose, non-strict), and the helper returns the parsed object. When absent, the helper returns the completion string.
 - Errors surface as exceptions: unresolved tier, missing API key, an `error`/`aborted` stop reason, or empty output each raise.

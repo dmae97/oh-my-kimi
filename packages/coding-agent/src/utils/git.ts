@@ -197,7 +197,6 @@ const GIT_NON_INTERACTIVE_ENV = {
 	GIT_ASKPASS: "true",
 	GIT_EDITOR: "true",
 	GIT_TERMINAL_PROMPT: "0",
-	GPG_TTY: "not a tty",
 	SSH_ASKPASS: "/usr/bin/false",
 } satisfies Record<string, string>;
 const GH_NON_INTERACTIVE_ENV = {

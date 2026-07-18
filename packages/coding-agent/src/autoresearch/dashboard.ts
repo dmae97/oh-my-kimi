@@ -95,9 +95,9 @@ export function createDashboardController(): DashboardController {
 								done(undefined);
 								return;
 							}
-							if (matchesKey(data, "up") || data === "k") {
+							if (matchesKey(data, "up") || matchesKey(data, "k")) {
 								scrollOffset = Math.max(0, scrollOffset - 1);
-							} else if (matchesKey(data, "down") || data === "j") {
+							} else if (matchesKey(data, "down") || matchesKey(data, "j")) {
 								scrollOffset = Math.min(maxScroll, scrollOffset + 1);
 							} else if (matchesKey(data, "pageUp")) {
 								scrollOffset = Math.max(0, scrollOffset - viewportRows);

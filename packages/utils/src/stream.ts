@@ -150,6 +150,29 @@ class ConcatSink {
 			}
 		}
 	}
+
+	appendAndFlushText(chunk: Uint8Array, decoder: TextDecoder): string | undefined {
+		const lastNewline = chunk.lastIndexOf(LF);
+		if (lastNewline === -1) {
+			this.append(chunk);
+			return undefined;
+		}
+
+		const completeEnd = lastNewline + 1;
+		let text: string;
+		if (this.isEmpty) {
+			const complete = completeEnd === chunk.length ? chunk : chunk.subarray(0, completeEnd);
+			text = decoder.decode(complete);
+		} else {
+			this.append(completeEnd === chunk.length ? chunk : chunk.subarray(0, completeEnd));
+			text = decoder.decode(this.flush());
+			this.clear();
+		}
+		if (completeEnd < chunk.length) {
+			this.append(chunk.subarray(completeEnd));
+		}
+		return text;
+	}
 	*pullJSONL<T>(chunk: Uint8Array, beg: number, end: number) {
 		if (this.isEmpty) {
 			const { values, error, read, done } = parseJsonlChunkCompat(chunk, beg, end);
@@ -275,14 +298,9 @@ interface SseEventState {
 	raw: string[];
 }
 
-// Single decoder reused for all line decodes. Safe because lines are split on
-// LF (0x0a) which is always a single-byte ASCII char in UTF-8 and never appears
-// inside a multi-byte sequence — so each line is itself a complete UTF-8 run.
-const SSE_LINE_DECODER = new TextDecoder("utf-8");
-
-function decodeSseLineBytes(line: Uint8Array, end: number): string {
-	return end === line.length ? SSE_LINE_DECODER.decode(line) : SSE_LINE_DECODER.decode(line.subarray(0, end));
-}
+// Complete lines are decoded in one batch per source chunk. Each batch ends on
+// LF, which cannot split a multi-byte UTF-8 sequence.
+const SSE_DECODER = new TextDecoder("utf-8");
 
 function flushSseEvent(state: SseEventState): ServerSentEvent | null {
 	if (state.event === null && state.data === null) {
@@ -300,25 +318,25 @@ function flushSseEvent(state: SseEventState): ServerSentEvent | null {
 	return event;
 }
 
-function pushSseLine(line: Uint8Array, state: SseEventState): ServerSentEvent | null {
-	// `appendAndFlushLines` splits on LF only; strip a trailing CR so CRLF sources
+function pushSseLine(line: string, state: SseEventState): ServerSentEvent | null {
+	// Complete-line batches split on LF only; strip a trailing CR so CRLF sources
 	// don't leak `\r` into field values.
-	let end = line.length;
-	if (end > 0 && line[end - 1] === 0x0d /* '\r' */) end--;
-	if (end === 0) return flushSseEvent(state);
+	if (line.charCodeAt(line.length - 1) === 0x0d /* '\r' */) {
+		line = line.slice(0, -1);
+	}
+	if (line.length === 0) return flushSseEvent(state);
 
 	// Comment line: keep in `raw` for diagnostic context, skip parsing.
-	if (line[0] === 0x3a /* ':' */) {
-		state.raw.push(decodeSseLineBytes(line, end));
+	if (line.charCodeAt(0) === 0x3a /* ':' */) {
+		state.raw.push(line);
 		return null;
 	}
 
-	const text = decodeSseLineBytes(line, end);
-	state.raw.push(text);
+	state.raw.push(line);
 
-	const colon = text.indexOf(":");
-	const fieldName = colon === -1 ? text : text.slice(0, colon);
-	let value = colon === -1 ? "" : text.slice(colon + 1);
+	const colon = line.indexOf(":");
+	const fieldName = colon === -1 ? line : line.slice(0, colon);
+	let value = colon === -1 ? "" : line.slice(colon + 1);
 	if (value.charCodeAt(0) === 0x20 /* ' ' */) value = value.slice(1);
 
 	if (fieldName === "event") {
@@ -344,9 +362,8 @@ function pushSseLine(line: Uint8Array, state: SseEventState): ServerSentEvent | 
  * Use `readSseJson` instead when every event is a single `data:` JSON object
  * and you don't need access to the `event:` field.
  *
- * Internally backed by a Buffer-based line reader (`ConcatSink`) so chunk
- * concatenation is O(n) and never triggers per-line string slicing of the
- * accumulated buffer.
+ * Internally backed by a Buffer-based reader (`ConcatSink`) that batches all
+ * complete lines in each source chunk into one UTF-8 decode.
  *
  * @example
  * ```ts
@@ -365,9 +382,14 @@ export async function* readSseEvents(
 	const source = abortableSource(stream, signal);
 	try {
 		for await (const chunk of source) {
-			for (const line of lineBuffer.appendAndFlushLines(chunk)) {
-				const event = pushSseLine(line, state);
+			const text = lineBuffer.appendAndFlushText(chunk, SSE_DECODER);
+			if (text === undefined) continue;
+			let start = 0;
+			while (start < text.length) {
+				const newline = text.indexOf("\n", start);
+				const event = pushSseLine(text.slice(start, newline), state);
 				if (event) yield event;
+				start = newline + 1;
 			}
 		}
 		// Treat any trailing partial line (no terminating LF) as a complete line.
@@ -375,7 +397,7 @@ export async function* readSseEvents(
 			const tail = lineBuffer.flush();
 			if (tail) {
 				lineBuffer.clear();
-				const event = pushSseLine(tail, state);
+				const event = pushSseLine(SSE_DECODER.decode(tail), state);
 				if (event) {
 					trailingEvents.add(event);
 					yield event;

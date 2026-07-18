@@ -33,7 +33,12 @@ const THINKING_LEVEL_METADATA: Record<ThinkingLevel, ThinkingLevelMetadata> = {
 	[ThinkingLevel.XHigh]: {
 		value: ThinkingLevel.XHigh,
 		label: "xhigh",
-		description: "Maximum reasoning (~32k tokens)",
+		description: "Extended reasoning (~32k tokens)",
+	},
+	[ThinkingLevel.Max]: {
+		value: ThinkingLevel.Max,
+		label: "max",
+		description: "Maximum reasoning the model supports",
 	},
 };
 
@@ -43,7 +48,7 @@ const EFFORT_BY_SELECTOR: Readonly<Record<string, Effort>> = {
 	[Effort.Medium]: Effort.Medium,
 	[Effort.High]: Effort.High,
 	[Effort.XHigh]: Effort.XHigh,
-	max: Effort.XHigh,
+	[Effort.Max]: Effort.Max,
 };
 const THINKING_LEVEL_BY_SELECTOR: Readonly<Record<string, ThinkingLevel>> = {
 	[ThinkingLevel.Inherit]: ThinkingLevel.Inherit,
@@ -53,21 +58,29 @@ const THINKING_LEVEL_BY_SELECTOR: Readonly<Record<string, ThinkingLevel>> = {
 	[ThinkingLevel.Medium]: ThinkingLevel.Medium,
 	[ThinkingLevel.High]: ThinkingLevel.High,
 	[ThinkingLevel.XHigh]: ThinkingLevel.XHigh,
+	[ThinkingLevel.Max]: ThinkingLevel.Max,
 };
 
 function getOwnSelector<T>(selectors: Readonly<Record<string, T>>, value: string | null | undefined): T | undefined {
-	return value === undefined || value === null || !Object.hasOwn(selectors, value) ? undefined : selectors[value];
+	if (value === undefined || value === null) return undefined;
+	if (Object.hasOwn(selectors, value)) return selectors[value];
+	// Accept unambiguous abbreviations (`xhi` → xhigh, `med` → medium) so every
+	// selector surface (`--thinking`, `:suffix`, role values) parses alike.
+	// Two-character minimum keeps single letters (`m`) from guessing.
+	if (value.length < 2) return undefined;
+	const matches = Object.keys(selectors).filter(selector => selector.startsWith(value));
+	return matches.length === 1 ? selectors[matches[0]] : undefined;
 }
 
 /**
- * Parses a provider-facing effort value.
+ * Parses a provider-facing effort value. Accepts unambiguous abbreviations.
  */
 export function parseEffort(value: string | null | undefined): Effort | undefined {
 	return getOwnSelector(EFFORT_BY_SELECTOR, value);
 }
 
 /**
- * Parses an agent-local thinking selector.
+ * Parses an agent-local thinking selector. Accepts unambiguous abbreviations.
  */
 export function parseThinkingLevel(value: string | null | undefined): ThinkingLevel | undefined {
 	return getOwnSelector(THINKING_LEVEL_BY_SELECTOR, value);
@@ -149,7 +162,6 @@ const AUTO_THINKING_METADATA: ConfiguredThinkingLevelMetadata = {
  */
 export function parseConfiguredThinkingLevel(value: string | null | undefined): ConfiguredThinkingLevel | undefined {
 	if (value === AUTO_THINKING) return AUTO_THINKING;
-	if (value === "max") return ThinkingLevel.XHigh;
 	return parseThinkingLevel(value);
 }
 
@@ -160,7 +172,7 @@ export function getConfiguredThinkingLevelMetadata(level: ConfiguredThinkingLeve
 
 /**
  * Thinking selectors accepted by the `--thinking` CLI flag, in display order:
- * `off`, every concrete effort (`minimal`..`xhigh`), then `auto`. Single source
+ * `off`, every concrete effort (`minimal`..`max`), then `auto`. Single source
  * for the flag's `options` list, shell completions, and the "invalid level"
  * warning so all three stay in sync.
  */
@@ -168,7 +180,7 @@ export const CLI_THINKING_LEVELS: readonly string[] = [ThinkingLevel.Off, ...THI
 
 /**
  * Parses a `--thinking` CLI value. Accepts every {@link parseConfiguredThinkingLevel}
- * selector (`off`, `auto`, `minimal`..`xhigh`, plus the `max` alias) but rejects
+ * selector (`off`, `auto`, `minimal`..`max`) but rejects
  * `inherit`: an explicit `inherit` on the command line would suppress the
  * settings/scoped-model fallback during startup resolution only to resolve back
  * to the provider default, which is never what the user means.
@@ -211,9 +223,13 @@ export function clampAutoThinkingEffort(model: Model | undefined, effort: Effort
 /**
  * The provisional concrete level shown while `auto` is configured but before a
  * turn has been classified. Prefers the model's `defaultLevel`, otherwise High,
- * clamped into the auto range. Returns `undefined` for non-reasoning models.
+ * clamped into the auto range. Auto never provisions {@link Effort.Max} (the
+ * classifier ceiling is XHigh; only an explicit user request reaches Max), so a
+ * `defaultLevel` of `max` is capped at XHigh before clamping. Returns
+ * `undefined` for non-reasoning models.
  */
 export function resolveProvisionalAutoLevel(model: Model | undefined): Effort | undefined {
 	if (!model?.reasoning) return undefined;
-	return clampAutoThinkingEffort(model, model.thinking?.defaultLevel ?? Effort.High);
+	const preferred = model.thinking?.defaultLevel ?? Effort.High;
+	return clampAutoThinkingEffort(model, preferred === Effort.Max ? Effort.XHigh : preferred);
 }

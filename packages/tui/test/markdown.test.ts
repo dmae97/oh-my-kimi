@@ -446,6 +446,233 @@ describe("Markdown component", () => {
 			expect(dataLine, "Should have data row").toBeTruthy();
 		});
 
+		it("locks streamed table widths only after the table enters native scrollback", () => {
+			const initial = `| Entry | Value |
+| --- | --- |
+| short-entry | R000 |`;
+			const beforeCommit = `${initial}
+| medium-width-entry | R001 |`;
+			const afterCommit = `${beforeCommit}
+| much-longer-entry-that-arrives-after-commit | R002 |`;
+			const markdown = new Markdown(initial, 0, 0, defaultMarkdownTheme);
+			markdown.transientRenderCache = true;
+
+			const topBorder = (lines: readonly string[]): string => {
+				const plain = lines.map(line => stripVTControlCharacters(line).trimEnd());
+				const border = plain.find(line => line.startsWith("+"));
+				expect(border).toBeDefined();
+				return border!;
+			};
+
+			const initialBorder = topBorder(markdown.render(80));
+			markdown.setText(beforeCommit);
+			const growingLines = markdown.render(80);
+			const growingBorder = topBorder(growingLines);
+			// Wholly-live tables retain today's natural-width behavior.
+			expect(growingBorder).not.toBe(initialBorder);
+
+			const tableStart = growingLines.findIndex(line => stripVTControlCharacters(line).trimStart().startsWith("+"));
+			markdown.setNativeScrollbackCommittedRows(tableStart + 1);
+			markdown.setText(afterCommit);
+			const lockedLines = markdown.render(80);
+			expect(topBorder(lockedLines)).toBe(growingBorder);
+			expect(lockedLines.some(line => stripVTControlCharacters(line).includes("R002"))).toBe(true);
+
+			// Finalization must not swap in a canonical full-content layout from L2.
+			markdown.transientRenderCache = false;
+			expect(topBorder(markdown.render(80))).toBe(growingBorder);
+
+			// A destructive replay has no immutable old tape to protect and may
+			// recompute the natural width from the complete table.
+			markdown.prepareNativeScrollbackReplay();
+			expect(topBorder(markdown.render(80))).not.toBe(growingBorder);
+		});
+
+		it("keeps layout locks independent across streamed tables", () => {
+			const first = `| First table column | Value |
+| --- | --- |
+| medium-width-entry | A |`;
+			const second = `${first}
+
+| Entry | Value |
+| --- | --- |
+| short | R000 |`;
+			const widenedSecond = `${second}
+| much-longer-entry-that-arrives-after-commit | R001 |`;
+			const markdown = new Markdown(first, 0, 0, defaultMarkdownTheme);
+			markdown.transientRenderCache = true;
+			markdown.render(80);
+			markdown.setNativeScrollbackCommittedRows(1);
+
+			markdown.setText(second);
+			const secondLines = markdown.render(80);
+			const borders = secondLines
+				.map(line => stripVTControlCharacters(line).trimEnd())
+				.filter(line => line.startsWith("+"));
+			expect(borders).toHaveLength(6);
+			const secondTop = secondLines.findIndex(
+				(line, index) => index > 0 && stripVTControlCharacters(line).trimEnd() === borders[3],
+			);
+			expect(secondTop).toBeGreaterThan(0);
+			expect(borders[3]).not.toBe(borders[0]);
+
+			markdown.setNativeScrollbackCommittedRows(secondTop + 1);
+			markdown.setText(widenedSecond);
+			const widenedBorders = markdown
+				.render(80)
+				.map(line => stripVTControlCharacters(line).trimEnd())
+				.filter(line => line.startsWith("+"));
+			expect(widenedBorders[0]).toBe(borders[0]);
+			expect(widenedBorders[3]).toBe(borders[3]);
+		});
+
+		it("does not lock a quoted table until the table itself enters native scrollback", () => {
+			const initial = `> > Intro sentence deliberately long enough to wrap across several physical quote rows before the table.
+> >
+> > | Entry | Value |
+> > | --- | --- |
+> > | short | R000 |`;
+			const beforeCommit = `${initial}
+> > | medium-width-entry | R001 |`;
+			const afterCommit = `${beforeCommit}
+> > | entry-that-is-even-wider-than-the-locked-layout | R002 |`;
+			const markdown = new Markdown(initial, 0, 0, defaultMarkdownTheme);
+			markdown.transientRenderCache = true;
+
+			const tableGeometry = (lines: readonly string[]): { start: number; border: string } => {
+				const plain = lines.map(line => stripVTControlCharacters(line).trimEnd());
+				const header = plain.findIndex(line => line.includes("Entry") && line.includes("Value"));
+				expect(header).toBeGreaterThan(0);
+				return { start: header - 1, border: plain[header - 1]! };
+			};
+
+			const initialLines = markdown.render(48);
+			const initialTable = tableGeometry(initialLines);
+			expect(initialTable.start).toBeGreaterThan(2);
+			// Commit only the quote prose; the nested table remains wholly live.
+			markdown.setNativeScrollbackCommittedRows(initialTable.start);
+
+			markdown.setText(beforeCommit);
+			const growingLines = markdown.render(48);
+			const growingTable = tableGeometry(growingLines);
+			expect(growingTable.border).not.toBe(initialTable.border);
+
+			markdown.setNativeScrollbackCommittedRows(growingTable.start + 1);
+			markdown.setText(afterCommit);
+			const lockedLines = markdown.render(48);
+			expect(tableGeometry(lockedLines).border).toBe(growingTable.border);
+			expect(lockedLines.some(line => stripVTControlCharacters(line).includes("R002"))).toBe(true);
+		});
+
+		it("recomputes a locked streamed table after resize or non-append replacement", () => {
+			const short = `| Entry | Value |
+| --- | --- |
+| short | R000 |`;
+			const wide = `${short}
+| much-longer-entry-that-arrives-after-commit | R001 |`;
+			const topBorder = (lines: readonly string[]): string => {
+				const border = lines
+					.map(line => stripVTControlCharacters(line).trimEnd())
+					.find(line => line.startsWith("+"));
+				expect(border).toBeDefined();
+				return border!;
+			};
+			const markdown = new Markdown(short, 0, 0, defaultMarkdownTheme);
+			markdown.transientRenderCache = true;
+			const shortBorder = topBorder(markdown.render(80));
+			markdown.setNativeScrollbackCommittedRows(1);
+			markdown.setText(wide);
+			expect(topBorder(markdown.render(80))).toBe(shortBorder);
+
+			// A width change starts fresh geometry; the complete source can widen.
+			expect(topBorder(markdown.render(100))).not.toBe(shortBorder);
+
+			const replacement = `| New | Value |
+| --- | --- |
+| x | R100 |`;
+			const expandedReplacement = `${replacement}
+| replacement-column-can-grow | R101 |`;
+			markdown.setText(replacement);
+			const replacementBorder = topBorder(markdown.render(80));
+			markdown.setText(expandedReplacement);
+			expect(topBorder(markdown.render(80))).not.toBe(replacementBorder);
+		});
+
+		it("does not lock a table when earlier code prints an identical border", () => {
+			const table = `| Entry | Value |
+| --- | --- |
+| short | R000 |`;
+			const probe = new Markdown(table, 0, 0, defaultMarkdownTheme);
+			const narrowBorder = probe
+				.render(80)
+				.map(line => stripVTControlCharacters(line).trimEnd())
+				.find(line => line.startsWith("+"));
+			expect(narrowBorder).toBeDefined();
+
+			const source = `\`\`\`
+${narrowBorder}
+\`\`\`
+
+${table}`;
+			const markdown = new Markdown(source, 0, 0, defaultMarkdownTheme);
+			markdown.transientRenderCache = true;
+			const initialLines = markdown.render(80);
+			const plainInitialLines = initialLines.map(line => stripVTControlCharacters(line).trimEnd());
+			const codeBorderRow = plainInitialLines.indexOf(narrowBorder!);
+			const tableHeaderRow = plainInitialLines.findIndex(line => line.includes("Entry") && line.includes("Value"));
+			expect(codeBorderRow).toBeGreaterThanOrEqual(0);
+			expect(tableHeaderRow).toBeGreaterThan(codeBorderRow);
+			const actualTableStart = tableHeaderRow - 1;
+			expect(plainInitialLines[actualTableStart]!).toBe(narrowBorder!);
+
+			// Commit through the code block, but stop immediately before the real
+			// table. Textual border scanning used to mistake the code row for it.
+			markdown.setNativeScrollbackCommittedRows(actualTableStart);
+			markdown.setText(`${source}
+| much-longer-entry-that-arrives-after-commit | R001 |`);
+			const widenedBorder = markdown
+				.render(80)
+				.map(line => stripVTControlCharacters(line).trimEnd())
+				.filter(line => line.startsWith("+"))
+				.at(-1);
+			expect(widenedBorder).toBeDefined();
+			expect(widenedBorder).not.toBe(narrowBorder);
+		});
+
+		it("restores table layout metadata when finalization hits the shared render cache", () => {
+			clearRenderCache();
+			const short = `| Entry | Value |
+| --- | --- |
+| short | R000 |`;
+			const wide = `${short}
+| much-longer-entry-that-arrives-after-commit | R001 |`;
+			const topBorder = (lines: readonly string[]): string => {
+				const border = lines
+					.map(line => stripVTControlCharacters(line).trimEnd())
+					.find(line => line.startsWith("+"));
+				expect(border).toBeDefined();
+				return border!;
+			};
+
+			const markdown = new Markdown(short, 0, 0, defaultMarkdownTheme);
+			markdown.transientRenderCache = true;
+			const narrowBorder = topBorder(markdown.render(80));
+
+			// Pre-warm the canonical final render after this instance has retained
+			// metadata from its narrower transient frame.
+			const cachedWideBorder = topBorder(new Markdown(wide, 0, 0, defaultMarkdownTheme).render(80));
+			markdown.setText(wide);
+			markdown.transientRenderCache = false;
+			expect(topBorder(markdown.render(80))).toBe(cachedWideBorder);
+
+			// The frame served by L2 is now in native scrollback. Locking it must
+			// preserve the wide cached geometry, not the earlier transient geometry.
+			markdown.setNativeScrollbackCommittedRows(1);
+			expect(topBorder(markdown.render(80))).toBe(cachedWideBorder);
+			expect(cachedWideBorder).not.toBe(narrowBorder);
+			clearRenderCache();
+		});
+
 		it("should respect paddingX when calculating table width", () => {
 			const markdown = new Markdown(
 				`| Column One | Column Two |
@@ -1105,6 +1332,33 @@ bar`,
 			terminalState.hyperlinks = originalHyperlinks;
 		});
 
+		function inspectHyperlinks(line: string): { visible: string; targets: Array<string | null> } {
+			let activeTarget: string | null = null;
+			let visible = "";
+			const targets: Array<string | null> = [];
+
+			for (let i = 0; i < line.length; ) {
+				if (line.startsWith("\x1b]8;;", i)) {
+					const terminator = line.indexOf("\x07", i + 5);
+					activeTarget = line.slice(i + 5, terminator) || null;
+					i = terminator + 1;
+					continue;
+				}
+				if (line.startsWith("\x1b[", i)) {
+					i += 2;
+					while (i < line.length && (line.charCodeAt(i) < 0x40 || line.charCodeAt(i) > 0x7e)) i++;
+					i++;
+					continue;
+				}
+
+				visible += line[i];
+				targets.push(activeTarget);
+				i++;
+			}
+
+			return { visible, targets };
+		}
+
 		it("should not duplicate URL for autolinked emails", () => {
 			const markdown = new Markdown("Contact user@example.com for help", 0, 0, defaultMarkdownTheme);
 
@@ -1137,24 +1391,107 @@ bar`,
 			expect(output.includes("\x1b]8;;\x07")).toBeTruthy();
 		});
 
-		it("should keep wrapped URLs inside a single OSC 8 hyperlink span", () => {
+		it("should balance the complete OSC 8 target around every wrapped URL fragment", () => {
+			const url = "https://example.com/really/long/path/that/will/wrap/on/narrow/width";
+			const markdown = new Markdown(`Visit ${url} for more`, 0, 0, defaultMarkdownTheme);
+
+			const lines = markdown.render(32);
+			const linkedLines = lines.filter(line => inspectHyperlinks(line).targets.includes(url));
+			expect(linkedLines.length).toBeGreaterThan(1);
+			for (const line of linkedLines) {
+				expect(line.split(`\x1b]8;;${url}\x07`)).toHaveLength(2);
+				expect(line.match(/\x1b\]8;;\x07/g)).toHaveLength(1);
+				expect(new Set(inspectHyperlinks(line).targets.filter(target => target !== null))).toEqual(new Set([url]));
+			}
+		});
+
+		it("should isolate wrapped OSC 8 links from adjacent table cells", () => {
+			const issueUrl = "https://github.com/can1357/oh-my-pi/issues/5860";
 			const markdown = new Markdown(
-				"Visit https://example.com/really/long/path/that/will/wrap/on/narrow/width for more",
+				`| Issue | Title |
+|---|---|
+| [#5860](${issueUrl}) | feat(extensions): expose live service-tier state (/fast) to extensions |`,
 				0,
 				0,
 				defaultMarkdownTheme,
 			);
 
-			const lines = markdown.render(32);
-			expect(lines.length).toBeGreaterThan(1);
-			const output = lines.join("\n");
-			const openMatches =
-				output.match(
-					/\x1b\]8;;https:\/\/example\.com\/really\/long\/path\/that\/will\/wrap\/on\/narrow\/width\x07/g,
-				) || [];
-			const closeMatches = output.match(/\x1b\]8;;\x07/g) || [];
-			expect(openMatches.length).toBe(1);
-			expect(closeMatches.length).toBeGreaterThan(0);
+			const lines = markdown.render(80).map(inspectHyperlinks);
+			const issueRow = lines.find(line => line.visible.includes("#5860"));
+			expect(issueRow).toBeDefined();
+			if (!issueRow) throw new Error("Expected rendered issue row");
+
+			for (const line of lines) {
+				for (let i = 0; i < line.visible.length; i++) {
+					if (line.visible[i] === "|") expect(line.targets[i]).toBeNull();
+				}
+			}
+
+			const labelStart = issueRow.visible.indexOf("#5860");
+			const separator = issueRow.visible.indexOf("|", labelStart);
+			expect(issueRow.targets.slice(labelStart, labelStart + "#5860".length)).toEqual(
+				new Array("#5860".length).fill(issueUrl),
+			);
+			expect(issueRow.targets.slice(labelStart + "#5860".length, separator)).toEqual(
+				new Array(separator - labelStart - "#5860".length).fill(null),
+			);
+
+			const titleStart = issueRow.visible.indexOf("feat(extensions)");
+			expect(issueRow.targets.slice(titleStart, titleStart + "feat(extensions)".length)).toEqual(
+				new Array("feat(extensions)".length).fill(null),
+			);
+
+			const linkedText = lines
+				.flatMap(line => [...line.visible].filter((_, index) => line.targets[index] === issueUrl))
+				.join("");
+			expect(linkedText).toContain("#5860");
+			expect(linkedText).toContain(issueUrl);
+			expect(new Set(lines.flatMap(line => line.targets).filter(target => target !== null))).toEqual(
+				new Set([issueUrl]),
+			);
+		});
+
+		it("should balance OSC 8 links across explicit newlines in a table cell", () => {
+			const issueUrl = "https://github.com/can1357/oh-my-pi/issues/5860";
+			const markdown = new Markdown(
+				`| Issue | Title |
+|---|---|
+| [first<br>second](${issueUrl}) | plain title cell |`,
+				0,
+				0,
+				defaultMarkdownTheme,
+			);
+
+			const lines = markdown.render(40).map(inspectHyperlinks);
+			const firstRow = lines.find(line => line.visible.includes("first"));
+			const secondRow = lines.find(line => line.visible.includes("second"));
+			expect(firstRow).toBeDefined();
+			expect(secondRow).toBeDefined();
+			if (!firstRow || !secondRow) throw new Error("Expected both wrapped label rows");
+
+			// No cell border or padding may carry the link on either physical row.
+			for (const line of lines) {
+				for (let i = 0; i < line.visible.length; i++) {
+					if (line.visible[i] === "|") expect(line.targets[i]).toBeNull();
+				}
+			}
+
+			// Both label fragments split by <br> must still target the full URL.
+			for (const [row, label] of [
+				[firstRow, "first"],
+				[secondRow, "second"],
+			] as const) {
+				const start = row.visible.indexOf(label);
+				expect(row.targets.slice(start, start + label.length)).toEqual(new Array(label.length).fill(issueUrl));
+				const separator = row.visible.indexOf("|", start);
+				expect(row.targets.slice(start + label.length, separator)).toEqual(
+					new Array(separator - start - label.length).fill(null),
+				);
+			}
+
+			expect(new Set(lines.flatMap(line => line.targets).filter(target => target !== null))).toEqual(
+				new Set([issueUrl]),
+			);
 		});
 
 		it("should show URL for explicit markdown links with different text", () => {
@@ -1182,6 +1519,36 @@ bar`,
 				joinedPlain.includes("(mailto:test@example.com)"),
 				"Should show mailto URL in parentheses",
 			).toBeTruthy();
+		});
+
+		it("does not autolink www. glued to a path separator (issue #5652)", () => {
+			const filePath = "~/meta/www.share/blog/A5-memory-safety-type-system/index.dj";
+			const markdown = new Markdown(filePath, 0, 0, defaultMarkdownTheme);
+
+			const output = markdown.render(120).join("\n");
+			const plain = stripTerminalSequences(output);
+
+			// The bare path must render verbatim, with no injected `(http…)` URL.
+			expect(plain).toContain(filePath);
+			expect(plain.includes("http://www.share")).toBe(false);
+			// No OSC 8 hyperlink target should be emitted for the path.
+			expect(output.includes("\x1b]8;;http://www.share")).toBe(false);
+		});
+
+		it("does not autolink a scheme glued to preceding text", () => {
+			const text = "path/to/foohttp://bar.com/x";
+			const markdown = new Markdown(text, 0, 0, defaultMarkdownTheme);
+
+			const plain = stripTerminalSequences(markdown.render(120).join("\n"));
+			expect(plain).toContain(text);
+			expect(plain.includes("(http")).toBe(false);
+		});
+
+		it("still autolinks www. at a valid left boundary", () => {
+			const markdown = new Markdown("see www.example.com here", 0, 0, defaultMarkdownTheme);
+
+			const output = markdown.render(80).join("\n");
+			expect(output.includes("\x1b]8;;http://www.example.com\x07")).toBe(true);
 		});
 	});
 
@@ -1219,6 +1586,25 @@ bar`,
 				joinedPlain.includes("<div>") && joinedPlain.includes("</div>"),
 				"Should render HTML in code blocks",
 			).toBeTruthy();
+		});
+
+		it("should hide standalone empty HTML comments between visible text", () => {
+			const markdown = new Markdown(
+				"Before visible text\n\n<!-- -->\n\nAfter visible text",
+				0,
+				0,
+				defaultMarkdownTheme,
+			);
+
+			const plain = markdown
+				.render(80)
+				.map(line => stripVTControlCharacters(line))
+				.join("\n");
+
+			expect(plain).toContain("Before visible text");
+			expect(plain).toContain("After visible text");
+			expect(plain).not.toContain("<!--");
+			expect(plain).not.toContain("-->");
 		});
 
 		it("should strip inline span and text HTML tags but keep their contents", () => {
@@ -1516,6 +1902,18 @@ describe("Markdown.render reference stability", () => {
 		const a = new Markdown("Shared markdown body", 1, 0, defaultMarkdownTheme);
 		const b = new Markdown("Shared markdown body", 1, 0, defaultMarkdownTheme);
 		expect(b.render(40)).toBe(a.render(40));
+	});
+
+	it("does not share oversized renders through the L2 cache", () => {
+		const width = 80;
+		const paragraph = `cache-budget sentinel ${"x".repeat(120)}`;
+		const largeText = Array.from({ length: 160 }, (_, index) => `Paragraph ${index}: ${paragraph}`).join("\n\n");
+
+		const first = new Markdown(largeText, 0, 0, defaultMarkdownTheme).render(width);
+		const second = new Markdown(largeText, 0, 0, defaultMarkdownTheme).render(width);
+
+		expect(second).toEqual(first);
+		expect(second).not.toBe(first);
 	});
 
 	it("returns a new reference with updated content after setText", () => {
@@ -1830,11 +2228,11 @@ describe("Math rendering", () => {
 		expect(out).not.toContain("begin{cases}");
 	});
 
-	it("converts a $$-delimited matrix block to multi-line Unicode", () => {
+	it("converts a $$-delimited matrix block to a parenthesized grid", () => {
 		const md = new Markdown("$$\n\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}\n$$", 0, 0, defaultMarkdownTheme);
 		const out = plain(md);
-		expect(out).toContain("(a");
-		expect(out).toContain("d)");
+		expect(out).toContain("⎛ a");
+		expect(out).toContain("d ⎠");
 		expect(out).not.toContain("pmatrix");
 	});
 

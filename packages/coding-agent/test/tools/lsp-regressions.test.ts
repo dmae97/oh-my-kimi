@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { RenderResultOptions } from "@oh-my-pi/pi-agent-core";
+import type { AgentToolResult, RenderResultOptions } from "@oh-my-pi/pi-agent-core";
 import { preloadPluginRoots } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
 import { LspTool } from "@oh-my-pi/pi-coding-agent/lsp";
 import * as lspClient from "@oh-my-pi/pi-coding-agent/lsp/client";
@@ -20,6 +20,7 @@ import type {
 	DeleteFile,
 	Diagnostic,
 	LspClient,
+	LspToolDetails,
 	RenameFile,
 	ServerConfig,
 	SymbolInformation,
@@ -43,6 +44,7 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { clampTimeout } from "@oh-my-pi/pi-coding-agent/tools/tool-timeouts";
 import * as piUtils from "@oh-my-pi/pi-utils";
 import { sanitizeText, TempDir } from "@oh-my-pi/pi-utils";
+import type { Subprocess } from "bun";
 import DEFAULTS from "../../src/lsp/defaults.json" with { type: "json" };
 import { getLanguageFromPath } from "../../src/utils/lang-from-path";
 
@@ -189,6 +191,57 @@ function installFakeLsp(handler: FakeLspHandler): FakeLspServer {
 	return server;
 }
 
+type BunSpawnOptions = Bun.SpawnOptions.SpawnOptions<
+	Bun.SpawnOptions.Writable,
+	Bun.SpawnOptions.Readable,
+	Bun.SpawnOptions.Readable
+>;
+
+interface BunSpawnCall {
+	cmd: string[];
+	options?: BunSpawnOptions;
+}
+
+interface BunSpawnOutput {
+	stdout?: string;
+	stderr?: string;
+	exitCode?: number;
+}
+
+function textStream(text: string): ReadableStream<Uint8Array> {
+	const body = new Response(text).body;
+	if (!body) {
+		throw new Error("Failed to create text stream");
+	}
+	return body;
+}
+
+function completedProcess(stdout = "", stderr = "", exitCode = 0): Subprocess {
+	return {
+		pid: 12_345,
+		stdout: textStream(stdout),
+		stderr: textStream(stderr),
+		exited: Promise.resolve(exitCode),
+		kill: () => {},
+	} as Subprocess;
+}
+
+function recordBunSpawn(calls: BunSpawnCall[], outputForCommand: (cmd: string[]) => BunSpawnOutput = () => ({})): void {
+	vi.spyOn(Bun, "spawn").mockImplementation(((cmd: string[], options?: BunSpawnOptions) => {
+		const recordedCmd = [...cmd];
+		calls.push({ cmd: recordedCmd, options });
+		const output = outputForCommand(recordedCmd);
+		return completedProcess(output.stdout, output.stderr, output.exitCode);
+	}) as typeof Bun.spawn);
+}
+
+function textResult(result: AgentToolResult<LspToolDetails>): string {
+	return result.content
+		.filter(block => block.type === "text")
+		.map(block => block.text)
+		.join("\n");
+}
+
 describe("lsp regressions", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
@@ -307,6 +360,166 @@ describe("lsp regressions", () => {
 
 			expect(response.error).toBeUndefined();
 			expect(response.result).toEqual([{ uri: fileToUri(tempDir.path()), name: path.basename(tempDir.path()) }]);
+		} finally {
+			await lspClient.shutdownAll();
+			tempDir.removeSync();
+		}
+	});
+
+	it("sends initial workspace configuration after initialized before semantic requests (#5276)", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-initial-config-");
+		let receivedInitialConfiguration = false;
+		try {
+			const server = installFakeLsp((message, srv) => {
+				if (message.method === "initialize") {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: { capabilities: { hoverProvider: true } } });
+				} else if (message.method === "workspace/didChangeConfiguration") {
+					receivedInitialConfiguration = true;
+				} else if (message.method === "textDocument/hover" && receivedInitialConfiguration) {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: { contents: "configured hover" } });
+				} else if (message.method === "shutdown") {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: null });
+				} else if (message.method === "exit") {
+					srv.exit(0);
+				}
+			});
+			const settings = {
+				"typescript-language-server": {
+					preferences: {
+						includePackageJsonAutoImports: "on",
+						importModuleSpecifierPreference: "non-relative",
+					},
+					inlayHints: {
+						includeInlayEnumMemberValueHints: true,
+						includeInlayParameterNameHints: "all",
+					},
+				},
+			};
+			const config: ServerConfig = {
+				command: "fake-lsp",
+				fileTypes: ["ts"],
+				rootMarkers: [],
+				settings,
+			};
+
+			const client = await lspClient.getOrCreateClient(config, tempDir.path(), 1_000);
+			const result = await lspClient.sendRequest(
+				client,
+				"textDocument/hover",
+				{
+					textDocument: { uri: fileToUri(path.join(tempDir.path(), "src", "configured.ts")) },
+					position: { line: 0, character: 0 },
+				},
+				undefined,
+				50,
+			);
+
+			expect(result).toEqual({ contents: "configured hover" });
+			const methods = server.received.map(message => message.method);
+			expect(methods.slice(0, 4)).toEqual([
+				"initialize",
+				"initialized",
+				"workspace/didChangeConfiguration",
+				"textDocument/hover",
+			]);
+			expect(server.received[2].params).toEqual({ settings: config.settings });
+		} finally {
+			await lspClient.shutdownAll();
+			tempDir.removeSync();
+		}
+	});
+
+	it("answers missing workspace configuration sections with null in request order", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-configuration-null-");
+		try {
+			const server = installFakeLsp((message, srv) => {
+				if (message.method === "initialize") {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: { capabilities: {} } });
+				} else if (message.method === "initialized") {
+					srv.send({
+						jsonrpc: "2.0",
+						id: 5745,
+						method: "workspace/configuration",
+						params: {
+							items: [
+								{ section: "razor.format.attribute_indent_style" },
+								{ section: "html.auto_closing_tags" },
+								{},
+							],
+						},
+					});
+				} else if (message.method === "shutdown") {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: null });
+				} else if (message.method === "exit") {
+					srv.exit(0);
+				}
+			});
+			const config: ServerConfig = {
+				command: "fake-lsp",
+				fileTypes: ["cs"],
+				rootMarkers: [],
+				settings: { "html.auto_closing_tags": true },
+			};
+
+			await lspClient.getOrCreateClient(config, tempDir.path(), 1_000);
+			const response = await server.waitFor(message => message.id === 5745 && message.method === undefined);
+
+			expect(response.result).toEqual([null, true, null]);
+		} finally {
+			await lspClient.shutdownAll();
+			tempDir.removeSync();
+		}
+	});
+
+	it("keeps the session alive when configuration is pulled after didChangeConfiguration", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-configuration-session-");
+		let configurationAccepted = false;
+		try {
+			const server = installFakeLsp((message, srv) => {
+				if (message.method === "initialize") {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: { capabilities: { hoverProvider: true } } });
+				} else if (message.method === "workspace/didChangeConfiguration") {
+					srv.send({
+						jsonrpc: "2.0",
+						id: "roslyn-config",
+						method: "workspace/configuration",
+						params: { items: [{ section: "razor.format.attribute_indent_style" }] },
+					});
+				} else if (message.id === "roslyn-config" && message.method === undefined) {
+					if (Array.isArray(message.result) && message.result[0] === null) {
+						configurationAccepted = true;
+					} else {
+						srv.exit(-6);
+					}
+				} else if (message.method === "textDocument/hover" && configurationAccepted) {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: { contents: "string C.Target" } });
+				} else if (message.method === "shutdown") {
+					srv.send({ jsonrpc: "2.0", id: message.id, result: null });
+				} else if (message.method === "exit") {
+					srv.exit(0);
+				}
+			});
+			const config: ServerConfig = {
+				command: "fake-lsp",
+				fileTypes: ["cs"],
+				rootMarkers: [],
+			};
+
+			const client = await lspClient.getOrCreateClient(config, tempDir.path(), 1_000);
+			await server.waitFor(message => message.id === "roslyn-config" && message.method === undefined);
+			const result = await lspClient.sendRequest(
+				client,
+				"textDocument/hover",
+				{
+					textDocument: { uri: fileToUri(path.join(tempDir.path(), "Target.cs")) },
+					position: { line: 0, character: 6 },
+				},
+				undefined,
+				50,
+			);
+
+			expect(result).toEqual({ contents: "string C.Target" });
+			expect(configurationAccepted).toBe(true);
 		} finally {
 			await lspClient.shutdownAll();
 			tempDir.removeSync();
@@ -971,6 +1184,103 @@ describe("lsp regressions", () => {
 		expect(resultText.replace(/\s+/g, " ")).toContain("too many arguments in call");
 	});
 
+	for (const dynamicRegistration of [false, true]) {
+		it(`reports pull diagnostics advertised through ${dynamicRegistration ? "dynamic registration" : "server capabilities"}`, async () => {
+			const tempDir = TempDir.createSync("@omp-lsp-pull-diags-");
+			try {
+				const targetFile = path.join(tempDir.path(), "target.ts");
+				await Bun.write(targetFile, "const broken: string = 42;\n");
+				const diagnostic: Diagnostic = {
+					message: "Type 'number' is not assignable to type 'string'.",
+					severity: 1,
+					code: 2322,
+					source: "ts",
+					range: {
+						start: { line: 0, character: 6 },
+						end: { line: 0, character: 12 },
+					},
+				};
+
+				const fakeServer = installFakeLsp((message, server) => {
+					if (message.method === "initialize") {
+						server.send({
+							jsonrpc: "2.0",
+							id: message.id,
+							result: { capabilities: dynamicRegistration ? {} : { diagnosticProvider: true } },
+						});
+						server.send({
+							jsonrpc: "2.0",
+							method: "$/progress",
+							params: { token: "workspace", value: { kind: "begin" } },
+						});
+						server.send({
+							jsonrpc: "2.0",
+							method: "$/progress",
+							params: { token: "workspace", value: { kind: "end" } },
+						});
+					} else if (dynamicRegistration && message.method === "initialized") {
+						server.send({
+							jsonrpc: "2.0",
+							id: "register-diagnostics",
+							method: "client/registerCapability",
+							params: {
+								registrations: [
+									{
+										id: "pull-diagnostics",
+										method: "textDocument/diagnostic",
+										registerOptions: {},
+									},
+								],
+							},
+						});
+					} else if (message.method === "textDocument/diagnostic") {
+						server.send({
+							jsonrpc: "2.0",
+							id: message.id,
+							result: { kind: "full", items: [diagnostic] },
+						});
+					} else if (message.method === "shutdown") {
+						server.send({ jsonrpc: "2.0", id: message.id, result: null });
+					} else if (message.method === "exit") {
+						server.exit(0);
+					}
+				});
+
+				const serverConfig: ServerConfig = {
+					command: "fake-lsp",
+					fileTypes: ["ts"],
+					rootMarkers: [],
+				};
+				vi.spyOn(lspConfig, "loadConfig").mockReturnValue({
+					servers: { "fake-lsp": serverConfig },
+					idleTimeoutMs: undefined,
+				});
+				vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["fake-lsp", serverConfig]]);
+
+				const tool = new LspTool({ cwd: tempDir.path() } as ToolSession);
+				const result = await tool.execute(`pull-diagnostics-${dynamicRegistration}`, {
+					action: "diagnostics",
+					file: targetFile,
+					timeout: 20,
+				});
+				const initialize = fakeServer.received.find(message => message.method === "initialize");
+
+				expect(initialize).toMatchObject({
+					params: {
+						capabilities: {
+							textDocument: { diagnostic: { dynamicRegistration: true } },
+						},
+					},
+				});
+				expect(fakeServer.received.map(message => message.method)).toContain("textDocument/diagnostic");
+				expect(textResult(result)).toContain("Type 'number' is not assignable to type 'string'.");
+			} finally {
+				await lspClient.shutdownAll();
+				tempDir.removeSync();
+			}
+		}, 15_000);
+	}
+
 	it("does not reuse stale file diagnostics after another URI publishes", async () => {
 		const tempDir = TempDir.createSync("@omp-lsp-stale-diags-");
 		try {
@@ -1053,6 +1363,86 @@ describe("lsp regressions", () => {
 			expect(output).toBe("OK");
 		} finally {
 			vi.restoreAllMocks();
+			tempDir.removeSync();
+		}
+	});
+
+	it("treats a go.work-only root as a Go workspace for workspace diagnostics", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-go-work-only-");
+		const spawnCalls: BunSpawnCall[] = [];
+		recordBunSpawn(spawnCalls, cmd => {
+			if (cmd.join("\0") === "go\0work\0edit\0-json") {
+				return { stdout: JSON.stringify({ Use: [{ DiskPath: "./service" }] }) };
+			}
+			return {};
+		});
+
+		try {
+			const serviceDir = path.join(tempDir.path(), "service");
+			await fs.promises.mkdir(serviceDir, { recursive: true });
+			await Bun.write(path.join(tempDir.path(), "go.work"), ["go 1.22", "", "use ./service", ""].join("\n"));
+			await Bun.write(path.join(serviceDir, "go.mod"), "module example.com/service\n\ngo 1.22\n");
+
+			const tool = new LspTool({ cwd: tempDir.path() } as ToolSession);
+			const result = await tool.execute("go-work-only-diagnostics", {
+				action: "diagnostics",
+				file: "*",
+			});
+
+			const buildCalls = spawnCalls.filter(call => call.cmd[0] === "go" && call.cmd[1] === "build");
+			expect(buildCalls).toHaveLength(1);
+			expect(buildCalls[0]?.cmd).toEqual(["go", "build", "./service/..."]);
+			expect(buildCalls[0]?.options?.cwd).toBe(tempDir.path());
+			const output = textResult(result);
+			expect(output).toContain("Workspace diagnostics (");
+			expect(output).toContain("go build");
+			expect(output).toContain("No issues found");
+			expect(output).not.toContain("Cannot detect project type");
+		} finally {
+			tempDir.removeSync();
+		}
+	});
+
+	it("builds every go.work use module when go.work and go.mod coexist", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-go-work-before-mod-");
+		const spawnCalls: BunSpawnCall[] = [];
+		recordBunSpawn(spawnCalls, cmd => {
+			if (cmd.join("\0") === "go\0work\0edit\0-json") {
+				return {
+					stdout: JSON.stringify({
+						Use: [{ DiskPath: "." }, { DiskPath: "./service" }, { DiskPath: "./tools/helper" }],
+					}),
+				};
+			}
+			return {};
+		});
+
+		try {
+			const serviceDir = path.join(tempDir.path(), "service");
+			const helperDir = path.join(tempDir.path(), "tools", "helper");
+			await fs.promises.mkdir(serviceDir, { recursive: true });
+			await fs.promises.mkdir(helperDir, { recursive: true });
+			await Bun.write(path.join(tempDir.path(), "go.mod"), "module example.com/root\n\ngo 1.22\n");
+			await Bun.write(path.join(serviceDir, "go.mod"), "module example.com/service\n\ngo 1.22\n");
+			await Bun.write(path.join(helperDir, "go.mod"), "module example.com/helper\n\ngo 1.22\n");
+			await Bun.write(
+				path.join(tempDir.path(), "go.work"),
+				["go 1.22", "", "use (", "\t.", "\t./service", "\t./tools/helper", ")", ""].join("\n"),
+			);
+
+			const tool = new LspTool({ cwd: tempDir.path() } as ToolSession);
+			const result = await tool.execute("go-work-module-patterns", {
+				action: "diagnostics",
+				file: "*",
+			});
+
+			const buildCalls = spawnCalls.filter(call => call.cmd[0] === "go" && call.cmd[1] === "build");
+			expect(buildCalls).toHaveLength(1);
+			expect(buildCalls[0]?.cmd.slice(0, 2)).toEqual(["go", "build"]);
+			expect(buildCalls[0]?.cmd.slice(2).sort()).toEqual(["./...", "./service/...", "./tools/helper/..."]);
+			expect(textResult(result)).toContain("Workspace diagnostics (");
+			expect(textResult(result)).toContain("go build");
+		} finally {
 			tempDir.removeSync();
 		}
 	});

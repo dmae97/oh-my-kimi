@@ -2,13 +2,15 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { buildSystemPrompt as buildSdkSystemPrompt } from "@oh-my-pi/pi-coding-agent/sdk";
 import {
 	buildSystemPrompt,
+	buildSystemPromptToolMetadata,
 	DEFAULT_SYSTEM_PROMPT_TOOL_NAMES,
 	type SystemPromptToolMetadata,
 } from "@oh-my-pi/pi-coding-agent/system-prompt";
-import type { Tool } from "@oh-my-pi/pi-coding-agent/tools";
+import { createTools, type Tool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { cleanupTempHome } from "./helpers/temp-home-cleanup";
 
 const EMPTY_TREE = {
@@ -37,6 +39,12 @@ const TOOLS = new Map<string, SystemPromptToolMetadata>([
 		},
 	],
 ]);
+
+const DIRECT_WEB_SEARCH: SystemPromptToolMetadata = {
+	label: "Direct Web",
+	description: "Provider-callable direct search.",
+	parameters: { type: "object", properties: {} },
+};
 
 const SDK_TOOL: Tool = {
 	name: "sdk_custom",
@@ -92,6 +100,39 @@ describe("system prompt tool inventory", () => {
 		return text.slice(inventoryStart, inventoryEnd);
 	}
 
+	async function renderMountedWebSearch(opts: {
+		nativeTools: boolean;
+		directDefinition: boolean;
+	}): Promise<{ text: string; inventory: string }> {
+		const tools = new Map(TOOLS);
+		if (opts.directDefinition) tools.set("web_search", DIRECT_WEB_SEARCH);
+		const { systemPrompt } = await buildSystemPrompt({
+			cwd: tempDir,
+			contextFiles: [],
+			skills: [],
+			rules: [],
+			toolNames: ["read", "web_search"],
+			tools,
+			workspaceTree: { ...EMPTY_TREE, rootPath: tempDir },
+			nativeTools: opts.nativeTools,
+			inlineToolDescriptors: false,
+			xdevTools: [{ name: "web_search", summary: "Searches the web." }],
+			xdevDocs: "Mounted web search documentation.",
+		});
+		const text = systemPrompt.join("\n\n");
+		return { text, inventory: opts.nativeTools ? inventoryFrom(text) : text };
+	}
+
+	function makeToolSession(settings: Settings): ToolSession {
+		return {
+			cwd: tempDir,
+			hasUI: false,
+			getSessionFile: () => null,
+			getSessionSpawns: () => "*",
+			settings,
+		} as ToolSession;
+	}
+
 	it("renders a compact name list only when native tools are active and descriptors stay in schemas", async () => {
 		const text = await render({ nativeTools: true, inlineToolDescriptors: false });
 		expect(text).toContain("- Read: `read`");
@@ -118,6 +159,28 @@ describe("system prompt tool inventory", () => {
 		expect(text).not.toContain("- Read: `read`");
 	});
 
+	it.each([
+		["compact", true],
+		["inline", false],
+	] as const)("omits xd-only tools from the %s inventory", async (_mode, nativeTools) => {
+		const { text, inventory } = await renderMountedWebSearch({ nativeTools, directDefinition: false });
+
+		expect(inventory).toContain(nativeTools ? "`read`" : "# Tool: read");
+		expect(inventory).not.toContain(nativeTools ? "`web_search`" : "# Tool: web_search");
+		expect(text).toContain("# xd:// Tool Devices");
+		expect(text).toContain("Mounted web search documentation.");
+	});
+
+	it.each([
+		["compact", true],
+		["inline", false],
+	] as const)("keeps direct tools that share an xd device name in the %s inventory", async (_mode, nativeTools) => {
+		const { inventory } = await renderMountedWebSearch({ nativeTools, directDefinition: true });
+
+		expect(inventory).toContain(nativeTools ? "- Direct Web: `web_search`" : "# Tool: web_search");
+		if (!nativeTools) expect(inventory).toContain(DIRECT_WEB_SEARCH.description);
+	});
+
 	it("uses a conservative fallback inventory when no tools map is provided", async () => {
 		const { systemPrompt } = await buildSystemPrompt({
 			cwd: tempDir,
@@ -132,6 +195,46 @@ describe("system prompt tool inventory", () => {
 		}
 		expect(inventory).not.toContain("- `browser`");
 		expect(inventory).not.toContain("- `task`");
+		expect(inventory).not.toContain("- `eval`");
+	});
+
+	it("omits eval prompt guidance when every eval backend is disabled", async () => {
+		const settings = Settings.isolated({
+			"eval.py": false,
+			"eval.js": false,
+			"eval.rb": false,
+			"eval.jl": false,
+		});
+		const session = makeToolSession(settings);
+		const tools = await createTools(session, ["bash", "eval"]);
+		const toolNames = tools.map(tool => tool.name);
+		const bash = tools.find(tool => tool.name === "bash");
+
+		expect(toolNames).toContain("bash");
+		expect(toolNames).not.toContain("eval");
+		expect(bash?.description).toContain("purpose-built tool");
+		expect(bash?.description).not.toContain("eval` cell");
+		expect(bash?.description).not.toContain("use `eval` cells");
+		expect(bash?.description).not.toContain("Prefer `eval`");
+		expect(bash?.description).not.toContain("`grep` tool");
+		expect(bash?.description).not.toContain("`ls` → `read`");
+		expect(bash?.description).not.toContain("`find` → the `glob` tool");
+
+		const { systemPrompt } = await buildSystemPrompt({
+			cwd: tempDir,
+			contextFiles: [],
+			skills: [],
+			rules: [],
+			toolNames,
+			tools: buildSystemPromptToolMetadata(new Map(tools.map(tool => [tool.name, tool]))),
+			workspaceTree: { ...EMPTY_TREE, rootPath: tempDir },
+			nativeTools: true,
+			inlineToolDescriptors: true,
+		});
+		const text = systemPrompt.join("\n\n");
+
+		expect(text).not.toContain("Default for any compute");
+		expect(text).not.toContain("use `eval` cells");
 	});
 
 	it("SDK wrapper renders provided tools instead of the fallback inventory", async () => {

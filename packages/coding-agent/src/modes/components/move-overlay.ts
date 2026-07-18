@@ -25,7 +25,6 @@ interface DirEntry {
 }
 
 const MAX_RESULTS = 15;
-const OVERLAY_WIDTH = 68;
 
 /** TTL for the directory listing cache (ms). */
 const DIR_CACHE_TTL = 500;
@@ -230,8 +229,8 @@ export class MoveOverlay implements Component, Focusable {
 		}
 	}
 
-	render(_width: number): readonly string[] {
-		const w = OVERLAY_WIDTH;
+	render(width: number): readonly string[] {
+		const w = width;
 		const lines: string[] = [];
 
 		lines.push(topBorder(w, "Move to directory"));

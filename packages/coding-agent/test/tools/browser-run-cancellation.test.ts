@@ -57,6 +57,44 @@ describe("browser run cancellation", () => {
 		await expect(wait).rejects.toThrow("browser run ended");
 	});
 
+	it("resolves wait(predicate) with the first truthy value", async () => {
+		vi.useRealTimers();
+		const controller = new AbortController();
+		let calls = 0;
+
+		const wait = waitForBrowserRun(() => (++calls >= 3 ? "ready" : null), controller.signal, { interval: 10 });
+
+		await expect(wait).resolves.toBe("ready");
+		expect(calls).toBe(3);
+	});
+
+	it("fails wait(predicate) with a named timeout error instead of stalling", async () => {
+		vi.useRealTimers();
+		const controller = new AbortController();
+
+		const wait = waitForBrowserRun(() => false, controller.signal, { timeout: 50, interval: 10 });
+
+		await expect(wait).rejects.toThrow("wait(predicate) timed out after 50ms");
+	});
+
+	it("rejects wait(predicate) when the run aborts mid-poll", async () => {
+		vi.useRealTimers();
+		const controller = new AbortController();
+
+		const wait = waitForBrowserRun(() => false, controller.signal, { timeout: 5000 });
+		controller.abort(new Error("browser run ended"));
+
+		await expect(wait).rejects.toThrow("browser run ended");
+	});
+
+	it("rejects wait() input that is neither milliseconds nor a predicate", async () => {
+		const controller = new AbortController();
+
+		await expect(waitForBrowserRun("soon" as never, controller.signal)).rejects.toThrow(
+			"wait(...) expects milliseconds (number) or a predicate function to poll",
+		);
+	});
+
 	it("does not emit unhandledRejection for an unawaited wait aborted by run teardown", async () => {
 		const controller = new AbortController();
 
@@ -124,7 +162,7 @@ describe("browser run cancellation", () => {
 			once: true,
 		});
 		runtime.setRunScope({
-			wait: (ms: number): Promise<void> => waitForBrowserRun(ms, signal),
+			wait: (ms: number): Promise<unknown> => waitForBrowserRun(ms, signal),
 			tab: bindBrowserRunFacade(
 				{
 					goto: async (url: string): Promise<void> => {

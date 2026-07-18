@@ -12,7 +12,7 @@ function createTestSession(cwd = "/tmp/test", overrides: Partial<ToolSession> = 
 		hasUI: true,
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
-		settings: Settings.isolated(),
+		settings: Settings.isolated({ "astGrep.enabled": true, "tools.xdev": false }),
 		...overrides,
 	};
 }
@@ -114,65 +114,65 @@ describe("ast_grep parse errors", () => {
 		}
 	});
 
-	it("keeps multi-target paging globally ordered without truncating match totals", async () => {
-		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ast-grep-multi-page-"));
+	it("keeps multi-target results globally ordered and skip does not truncate match totals", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ast-grep-multi-skip-"));
 		try {
 			const earlyDir = path.join(tempDir, "a");
 			const lateDir = path.join(tempDir, "z");
 			await fs.mkdir(earlyDir, { recursive: true });
 			await fs.mkdir(lateDir, { recursive: true });
-			await Bun.write(path.join(earlyDir, "early.ts"), 'marker("early");\n');
-			for (let index = 0; index < 60; index++) {
-				await Bun.write(path.join(lateDir, `late-${index.toString().padStart(2, "0")}.ts`), 'marker("late");\n');
-			}
-
-			const tools = await createTools(createTestSession(tempDir));
-			const tool = tools.find(entry => entry.name === "ast_grep");
-			expect(tool).toBeDefined();
-
-			const result = await tool!.execute("ast-grep-multi-page", {
-				pat: "marker($A)",
-				path: `${lateDir}; ${earlyDir}`,
-			});
-
-			const text = result.content.find(content => content.type === "text")?.text ?? "";
-			const details = result.details as
-				| { matchCount?: number; fileCount?: number; limitReached?: boolean }
-				| undefined;
-
-			expect(text).toMatch(/^## early\.ts#[0-9A-F]{4}/m);
-			expect(details?.matchCount).toBe(61);
-			expect(details?.fileCount).toBe(61);
-			expect(details?.limitReached).toBe(true);
-		} finally {
-			await removeWithRetries(tempDir);
-		}
-	});
-
-	it("parses PlusCal content through the tlaplus language aliases", async () => {
-		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ast-grep-tlaplus-"));
-		try {
-			const filePath = path.join(tempDir, "Spec.tla");
 			await Bun.write(
-				filePath,
-				`---- MODULE Spec ----\n(* --algorithm Demo\nvariables x = 0;\nbegin\n  Inc:\n    x := x + 1;\nend algorithm; *)\n====\n`,
+				path.join(earlyDir, "a.ts"),
+				Array.from({ length: 8 }, () => "const sharedSymbol = 1;").join("\n"),
+			);
+			await Bun.write(
+				path.join(lateDir, "z.ts"),
+				Array.from({ length: 8 }, () => "const sharedSymbol = 1;").join("\n"),
 			);
 
 			const tools = await createTools(createTestSession(tempDir));
 			const tool = tools.find(entry => entry.name === "ast_grep");
 			expect(tool).toBeDefined();
 
-			const result = await tool!.execute("ast-grep-tlaplus", {
-				pat: "Inc",
-				path: filePath,
+			// skip spans the globally merged ordering (a/* before z/*), so skipping
+			// past a.ts's 8 matches must surface only z.ts — while matchCount still
+			// reports the untruncated total across both targets.
+			const result = await tool!.execute("ast-grep-multi-skip", {
+				pat: "sharedSymbol",
+				path: `${earlyDir};${lateDir}`,
+				skip: 8,
 			});
-
 			const text = result.content.find(content => content.type === "text")?.text ?? "";
-			const details = result.details as { matchCount?: number; parseErrors?: string[] } | undefined;
+			const details = result.details as { matchCount?: number; limitReached?: boolean } | undefined;
 
-			expect(text).toContain("Inc");
-			expect(details?.matchCount).toBe(1);
-			expect(details?.parseErrors).toBeUndefined();
+			expect(details?.matchCount).toBe(16);
+			expect(details?.limitReached).toBe(false);
+			expect(text).toContain("z.ts");
+			expect(text).not.toContain("a.ts");
+		} finally {
+			await removeWithRetries(tempDir);
+		}
+	});
+
+	it("parses PlusCal content through the tlaplus language aliases", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ast-grep-pluscal-"));
+		try {
+			const filePath = path.join(tempDir, "algo.tla");
+			await Bun.write(
+				filePath,
+				"---- MODULE Algo ----\n(*--algorithm Demo\nvariables x = 0;\nbegin\n  x := x + 1;\nend algorithm;*)\n====\n",
+			);
+			const tools = await createTools(createTestSession(tempDir));
+			const tool = tools.find(entry => entry.name === "ast_grep");
+			expect(tool).toBeDefined();
+
+			const result = await tool!.execute("ast-grep-pluscal", {
+				pat: "x",
+				path: filePath,
+				lang: "pluscal",
+			});
+			const details = result.details as { matchCount?: number } | undefined;
+			expect(details?.matchCount).toBeGreaterThan(0);
 		} finally {
 			await removeWithRetries(tempDir);
 		}

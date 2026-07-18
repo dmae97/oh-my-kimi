@@ -6,42 +6,45 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { type } from "arktype";
 
 // Contract: the single-spawn schema (`task.batch: false`; the exported
-// `taskSchema` instance) carries no batch fields. The batch shape (`tasks[]` +
-// shared `context`) is gated by the `task.batch` setting (default on, covered
-// by test/task/task-batch.test.ts), and a per-call `schema` input no longer
-// exists at all; follow-ups go through `irc` messaging.
+// `taskSchema` instance) carries no batch fields while accepting a caller
+// `outputSchema` and its validation mode. The batch shape (`tasks[]` + shared
+// `context`) is gated by the `task.batch` setting (default on, covered by
+// test/task/task-batch.test.ts).
 
 describe("task schema (single-spawn)", () => {
-	it("accepts {agent, assignment}", () => {
-		const parsed = taskSchema({ agent: "explore", assignment: "Map the auth module." });
+	it("accepts {agent, task}", () => {
+		const parsed = taskSchema({ agent: "explore", task: "Map the auth module." });
 		expect(parsed instanceof type.errors).toBe(false);
 	});
 
 	it("defaults agent to `task` when omitted", () => {
-		const parsed = taskSchema({ assignment: "Map the auth module." });
+		const parsed = taskSchema({ task: "Map the auth module." });
 		expect(parsed instanceof type.errors).toBe(false);
 		if (!(parsed instanceof type.errors)) {
 			expect(parsed.agent).toBe("task");
 		}
 	});
 
-	it("requires assignment", () => {
+	it("requires task", () => {
 		const parsed = taskSchema({ agent: "explore" });
 		expect(parsed instanceof type.errors).toBe(true);
 	});
 
-	it("strips tasks/context/schema from the single-spawn schema", () => {
+	it("retains caller outputSchema and schemaMode while stripping stale keys", () => {
+		const outputSchema = { type: "object", properties: { answer: { type: "string" } } };
 		const parsed = taskSchema({
 			agent: "explore",
-			assignment: "Map the auth module.",
+			task: "Map the auth module.",
+			outputSchema,
+			schemaMode: "strict",
 			context: "shared background",
-			tasks: [{ id: "A", assignment: "..." }],
+			tasks: [{ name: "A", task: "..." }],
 			schema: '{"properties":{}}',
 		});
 		expect(parsed instanceof type.errors).toBe(false);
 		if (!(parsed instanceof type.errors)) {
-			// Unknown keys are stripped: batch/context exist only on the batch
-			// schema and the per-call schema input was removed outright.
+			expect(parsed.outputSchema).toEqual(outputSchema);
+			expect(parsed.schemaMode).toBe("strict");
 			expect("tasks" in parsed).toBe(false);
 			expect("context" in parsed).toBe(false);
 			expect("schema" in parsed).toBe(false);
@@ -74,12 +77,12 @@ describe("task spawn validation", () => {
 	it("defaults a missing agent to `task`", async () => {
 		// With no `agent`, execute() normalizes to the `task` default, so the
 		// failure is unknown-agent (none discovered), not missing-agent.
-		const text = await executeText({ assignment: "..." });
+		const text = await executeText({ task: "..." });
 		expect(text).toContain('Unknown agent "task"');
 	});
 
-	it("rejects a missing assignment", async () => {
+	it("rejects a missing task", async () => {
 		const text = await executeText({ agent: "explore" });
-		expect(text).toContain("Missing `assignment`");
+		expect(text).toContain("Missing `task`");
 	});
 });

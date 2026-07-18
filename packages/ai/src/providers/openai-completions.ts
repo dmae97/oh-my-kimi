@@ -76,12 +76,14 @@ import {
 	applyOpenAIExtraBody,
 	applyOpenAIGatewayRouting,
 	applyOpenAIServiceTier,
+	applyOpenRouterReportedCost,
 	applyWireModelIdTransform,
 	calculateOpenAIUsageAccounting,
 	clearOpenAIStrictToolsState,
 	createInitialResponsesAssistantMessage,
 	createOpenAIStrictToolsState,
 	disableStrictToolsForScope,
+	getOpenAIPromptCacheKey,
 	getOpenAIStrictToolsScope,
 	isCompiledGrammarTooLargeStrictError,
 	isOpenRouterAnthropicModel,
@@ -92,9 +94,9 @@ import {
 	type OpenAIStrictToolsState,
 	parseAzureDeploymentNameMap,
 	resolveOpenAICompatPolicy,
+	resolveOpenAICompletionsOutputClamp,
 	resolveOpenAIOutputTokenParam,
 	resolveOpenAIRequestSetup,
-	resolveZaiReasoningOutputClamp,
 	shouldRetryWithoutStrictTools,
 } from "./openai-shared";
 import { transformMessages } from "./transform-messages";
@@ -153,6 +155,18 @@ function firstPositiveNumber(...values: unknown[]): number {
 		if (typeof value === "number" && value > 0) return value;
 	}
 	return 0;
+}
+
+function hasPositiveCacheReadTokenField(rawUsage: object): boolean {
+	const usageLike = rawUsage as OpenAICompletionsUsageLike;
+	if (typeof usageLike.cached_tokens === "number" && usageLike.cached_tokens > 0) return true;
+	if (typeof usageLike.prompt_cache_hit_tokens === "number" && usageLike.prompt_cache_hit_tokens > 0) return true;
+
+	const rawPromptTokenDetails = usageLike.prompt_tokens_details;
+	if (typeof rawPromptTokenDetails !== "object" || rawPromptTokenDetails === null) return false;
+
+	const promptTokenDetails = rawPromptTokenDetails as OpenAICompletionsPromptTokenDetails;
+	return typeof promptTokenDetails.cached_tokens === "number" && promptTokenDetails.cached_tokens > 0;
 }
 
 /**
@@ -446,7 +460,7 @@ export function isOpenAICompletionsProgressChunk(chunk: unknown): boolean {
 
 export interface OpenAICompletionsOptions extends StreamOptions {
 	toolChoice?: ToolChoice;
-	reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh";
+	reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	/** Force-disable reasoning where supported, or request the lowest effort on generic effort endpoints. */
 	disableReasoning?: boolean;
 	serviceTier?: ServiceTier;
@@ -616,6 +630,7 @@ const streamOpenAICompletionsOnce = (
 				apiKey,
 				options?.headers,
 				options?.initiatorOverride,
+				getOpenAIPromptCacheKey(options),
 			);
 			const premiumRequestsTotal = copilotPremiumRequests;
 			let appliedStrictTools = false;
@@ -988,9 +1003,18 @@ const streamOpenAICompletionsOnce = (
 
 			// Terminal-chunk bookkeeping for the post-finish grace window below.
 			// `streamFinishedAt` flips when a chunk carries `finish_reason`;
-			// `sawUsagePayload` flips when a usage payload was parsed.
+			// `sawUsagePayload` flips when a usage payload was parsed. Some
+			// OpenAI-compatible servers send basic usage with `finish_reason` and
+			// cache-read details in a trailing usage-only chunk, so only the
+			// no-choice terminal path may break while those details are pending.
 			let streamFinishedAt: number | undefined;
 			let sawUsagePayload = false;
+			let awaitTrailingUsageDetails = false;
+			const applyUsagePayload = (rawUsage: object): void => {
+				output.usage = parseChunkUsage(rawUsage, model, premiumRequestsTotal);
+				sawUsagePayload = true;
+				awaitTrailingUsageDetails = !hasPositiveCacheReadTokenField(rawUsage);
+			};
 			const timedOpenaiStream = iterateWithIdleTimeout(openaiStream, {
 				idleTimeoutMs,
 				firstItemTimeoutMs: firstEventTimeoutMs,
@@ -1028,8 +1052,7 @@ const streamOpenAICompletionsOnce = (
 				}
 
 				if (chunk.usage) {
-					output.usage = parseChunkUsage(chunk.usage, model, premiumRequestsTotal);
-					sawUsagePayload = true;
+					applyUsagePayload(chunk.usage);
 				}
 
 				const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
@@ -1044,8 +1067,7 @@ const streamOpenAICompletionsOnce = (
 				if (!chunk.usage) {
 					const choiceUsage = (choice as OpenAICompletionsChoiceUsage).usage;
 					if (typeof choiceUsage === "object" && choiceUsage !== null) {
-						output.usage = parseChunkUsage(choiceUsage, model, premiumRequestsTotal);
-						sawUsagePayload = true;
+						applyUsagePayload(choiceUsage);
 					}
 				}
 
@@ -1237,11 +1259,10 @@ const streamOpenAICompletionsOnce = (
 					}
 				}
 
-				// `finish_reason` + usage both observed: the chat-completions
-				// contract has nothing left to deliver. Break instead of waiting
-				// for `[DONE]`/connection close so hosts that hold the socket open
-				// can't park the turn until the idle watchdog errors it out.
-				if (streamFinishedAt !== undefined && sawUsagePayload) break;
+				// If usage arrived on the finish chunk without cache-read fields,
+				// keep draining through the grace window for vLLM-style trailing
+				// usage details instead of finalizing the incomplete accounting.
+				if (streamFinishedAt !== undefined && sawUsagePayload && !awaitTrailingUsageDetails) break;
 			}
 
 			if (streamMarkupHealing) {
@@ -1359,6 +1380,7 @@ function createRequestSetup(
 	apiKey?: string,
 	extraHeaders?: Record<string, string>,
 	initiatorOverride?: MessageAttribution,
+	promptCacheSessionId?: string,
 ): OpenAIRequestSetup & { baseUrl: string } {
 	const apiVersion = $env.AZURE_OPENAI_API_VERSION || "2024-10-21";
 	const deploymentName = parseAzureDeploymentNameMap($env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP).get(model.id) ?? model.id;
@@ -1366,6 +1388,7 @@ function createRequestSetup(
 		apiKey,
 		extraHeaders,
 		initiatorOverride,
+		promptCacheSessionId,
 		messages: context.messages,
 		defaultBaseUrl: "https://api.openai.com/v1",
 		// Provider auth/header overlay: Kimi-code hosts require shared client
@@ -1413,7 +1436,11 @@ function buildParams(
 	context: Context,
 	options: OpenAICompletionsOptions | undefined,
 	toolStrictModeOverride?: ToolStrictModeOverride,
-): { params: OpenAICompletionsParams; toolStrictMode: AppliedToolStrictMode; strictToolsApplied: boolean } {
+): {
+	params: OpenAICompletionsParams;
+	toolStrictMode: AppliedToolStrictMode;
+	strictToolsApplied: boolean;
+} {
 	const initialPolicy = resolveOpenAICompatForRequest(model, options);
 	const initialCompat = initialPolicy.compat as ResolvedOpenAICompat;
 
@@ -1434,30 +1461,34 @@ function buildParams(
 		params.store = false;
 	}
 
-	if (options?.temperature !== undefined) {
-		params.temperature = options.temperature;
-	}
-	if (options?.topP !== undefined) {
-		params.top_p = options.topP;
-	}
-	if (options?.topK !== undefined) {
-		params.top_k = options.topK;
-	}
-	if (options?.minP !== undefined) {
-		params.min_p = options.minP;
-	}
-	if (options?.presencePenalty !== undefined) {
-		params.presence_penalty = options.presencePenalty;
-	}
-	if (options?.repetitionPenalty !== undefined) {
-		params.repetition_penalty = options.repetitionPenalty;
+	// OpenAI proprietary reasoning models (o-series, gpt-5+) reject explicit
+	// sampling params with a 400 on every serving host (#5606).
+	if (initialCompat.supportsSamplingParams) {
+		if (options?.temperature !== undefined) {
+			params.temperature = options.temperature;
+		}
+		if (options?.topP !== undefined) {
+			params.top_p = options.topP;
+		}
+		if (options?.topK !== undefined) {
+			params.top_k = options.topK;
+		}
+		if (options?.minP !== undefined) {
+			params.min_p = options.minP;
+		}
+		if (options?.presencePenalty !== undefined) {
+			params.presence_penalty = options.presencePenalty;
+		}
+		if (options?.repetitionPenalty !== undefined) {
+			params.repetition_penalty = options.repetitionPenalty;
+		}
+		if (options?.frequencyPenalty !== undefined) {
+			params.frequency_penalty = options.frequencyPenalty;
+		}
 	}
 	if (options?.stopSequences?.length) {
 		const seqs = options.stopSequences;
 		params.stop = seqs.length === 1 ? seqs[0] : seqs.slice(0, 4);
-	}
-	if (options?.frequencyPenalty !== undefined) {
-		params.frequency_penalty = options.frequencyPenalty;
 	}
 	applyOpenAIServiceTier(params, options?.serviceTier, model);
 
@@ -1540,7 +1571,7 @@ function buildParams(
 		omitMaxOutputTokens: model.omitMaxOutputTokens ?? false,
 		isOpenRouterHost: compat.isOpenRouterHost,
 		alwaysSendMaxTokens: compat.alwaysSendMaxTokens,
-		providerOutputClamp: resolveZaiReasoningOutputClamp(model, compat),
+		providerOutputClamp: resolveOpenAICompletionsOutputClamp(model, compat),
 	});
 	if (outputToken) {
 		if (outputToken.field === "max_tokens") {
@@ -1603,6 +1634,7 @@ export function parseChunkUsage(
 		...(premiumRequests !== undefined ? { premiumRequests } : {}),
 	};
 	calculateCost(model, usage);
+	applyOpenRouterReportedCost(model, usage, rawUsage);
 	return usage;
 }
 

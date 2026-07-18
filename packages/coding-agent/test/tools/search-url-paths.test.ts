@@ -21,7 +21,14 @@ function createSession(testDir: string): ToolSession {
 			const id = String(nextArtifactId++);
 			return { id, path: path.join(artifactsDir, `${id}.${toolType}.log`) };
 		},
-		settings: Settings.isolated({ "fetch.enabled": true, "grep.contextBefore": 0, "grep.contextAfter": 0 }),
+		settings: Settings.isolated({
+			"fetch.enabled": true,
+			"grep.contextBefore": 0,
+			"grep.contextAfter": 0,
+			"astGrep.enabled": true,
+			"astEdit.enabled": true,
+			"tools.xdev": false,
+		}),
 	};
 }
 
@@ -54,7 +61,7 @@ describe("search tools with external URL paths", () => {
 		await removeWithRetries(testDir);
 	});
 
-	it("search fetches a URL through the read cache and greps the rendered text", async () => {
+	it("search fetches a URL and greps the rendered text", async () => {
 		stubLoadPage("alpha\nremote needle\nomega\n", "text/plain");
 		const tools = await createTools(createSession(testDir));
 		const tool = tools.find(entry => entry.name === "grep");
@@ -68,6 +75,35 @@ describe("search tools with external URL paths", () => {
 		const text = resultText(result);
 		expect(text).toContain("remote needle");
 		expect(text).not.toContain("Cannot search external URL");
+	});
+
+	it("refetches the same URL before each search", async () => {
+		let body = "first needle\n";
+		const loadPage = vi.spyOn(scrapers, "loadPage").mockImplementation(async requestedUrl => ({
+			ok: true,
+			status: 200,
+			finalUrl: requestedUrl,
+			contentType: "text/plain",
+			content: body,
+		}));
+		const tools = await createTools(createSession(testDir));
+		const tool = tools.find(entry => entry.name === "grep");
+		expect(tool).toBeDefined();
+
+		const first = await tool!.execute("search-url-first", {
+			pattern: "first|second",
+			path: "https://example.com/live.txt",
+		});
+		body = "second needle\n";
+		const second = await tool!.execute("search-url-second", {
+			pattern: "first|second",
+			path: "https://example.com/live.txt",
+		});
+
+		expect(resultText(first)).toContain("first needle");
+		expect(resultText(second)).toContain("second needle");
+		expect(resultText(second)).not.toContain("first needle");
+		expect(loadPage).toHaveBeenCalledTimes(2);
 	});
 
 	it("search applies URL line-range selectors after materialization", async () => {

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
 import { fetchLiteLLMRichModels, litellmModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
 import type { FetchImpl } from "@oh-my-pi/pi-catalog/types";
+import * as logger from "@oh-my-pi/pi-utils/logger";
 
 const ORIGINAL_LITELLM_BASE_URL = Bun.env.LITELLM_BASE_URL;
 const MODELS_DEV_URL = "https://models.dev/api.json";
@@ -125,7 +126,7 @@ describe("LiteLLM provider discovery", () => {
 		const models = await options.fetchDynamicModels?.();
 
 		expect(options.cacheProviderId).toBe(
-			`litellm:rich-v3:${Bun.hash("http://litellm.example:4100/v1").toString(36)}`,
+			`litellm:rich-v5:${Bun.hash("http://litellm.example:4100/v1").toString(36)}`,
 		);
 		expect(fetchMock).toHaveBeenCalledTimes(6);
 		expect(models).toHaveLength(1);
@@ -148,7 +149,7 @@ describe("LiteLLM provider discovery", () => {
 		const models = await options.fetchDynamicModels?.();
 
 		expect(options.cacheProviderId).toBe(
-			`litellm:rich-v3:${Bun.hash("http://litellm-config.example:4200/v1/").toString(36)}`,
+			`litellm:rich-v5:${Bun.hash("http://litellm-config.example:4200/v1/").toString(36)}`,
 		);
 		expect(fetchMock).toHaveBeenCalledTimes(6);
 		expect(models).toHaveLength(1);
@@ -238,6 +239,163 @@ describe("LiteLLM provider discovery", () => {
 		});
 	});
 
+	test("warns once when forbidden rich metadata forces /v1/models fallback", async () => {
+		const fetchMock = vi.fn(async (input: string | URL | Request) => {
+			const url = inputUrl(input);
+			if (url === MODELS_DEV_URL) {
+				return Response.json({});
+			}
+			if (url === "http://forbidden:4000/v1/models") {
+				return Response.json({ data: [{ id: "hosted_vllm/private-model" }] });
+			}
+			return new Response("Forbidden", { status: 403 });
+		}) as FetchImpl;
+		const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+		const options = litellmModelManagerOptions({
+			apiKey: "sk-restricted",
+			baseUrl: "http://forbidden:4000/v1",
+			fetch: fetchMock,
+		});
+
+		const models = await options.fetchDynamicModels?.();
+		await options.fetchDynamicModels?.();
+
+		expect(models?.[0]).toMatchObject({
+			id: "hosted_vllm/private-model",
+			contextWindow: null,
+			maxTokens: null,
+		});
+		expect(warnSpy).toHaveBeenCalledTimes(1);
+		expect(warnSpy).toHaveBeenCalledWith(
+			"LiteLLM rich model metadata unavailable; falling back to /v1/models",
+			expect.objectContaining({
+				endpoint: "http://forbidden:4000/model_group/info",
+				status: 403,
+				reason: "http-status",
+			}),
+		);
+	});
+
+	test("treats missing rich metadata endpoints as absent without warning", async () => {
+		const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+
+		const models = await fetchLiteLLMRichModels({
+			api: "openai-completions",
+			provider: "litellm",
+			apiKey: "sk-restricted",
+			baseUrl: "http://missing:4000/v1",
+			fetch: async () => new Response("Not Found", { status: 404 }),
+		});
+
+		expect(models).toBeNull();
+		expect(warnSpy).not.toHaveBeenCalled();
+	});
+
+	test("stays silent on retryable 401 rich failures so the caller's auth retry owns them", async () => {
+		const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+
+		const models = await fetchLiteLLMRichModels({
+			api: "openai-completions",
+			provider: "litellm",
+			apiKey: "sk-stale",
+			baseUrl: "http://unauthorized:4000/v1",
+			fetch: async () => new Response("Unauthorized", { status: 401 }),
+		});
+
+		expect(models).toBeNull();
+		expect(warnSpy).not.toHaveBeenCalled();
+	});
+
+	test("maps LiteLLM per-token cost onto cost.input/output for models missing from models.dev", async () => {
+		const fetchMock = vi.fn(async (input: string | URL | Request) => {
+			const url = inputUrl(input);
+			if (url === MODELS_DEV_URL) {
+				return Response.json({});
+			}
+			if (url === "http://primary:4000/model_group/info") {
+				return Response.json({
+					data: [
+						{
+							model_group: "openrouter/acme/big",
+							model_name: "Acme Big",
+							max_input_tokens: 262_144,
+							max_output_tokens: 16_384,
+							input_cost_per_token: 0.000_005,
+							output_cost_per_token: 0.000_03,
+							cache_read_input_token_cost: 0.000_000_5,
+							supports_vision: true,
+						},
+					],
+				});
+			}
+			if (url === "http://primary:4000/v1/models") {
+				throw new Error("/v1/models should not be called when rich metadata succeeds");
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		}) as FetchImpl;
+		const options = litellmModelManagerOptions({
+			apiKey: "sk-rich",
+			baseUrl: "http://primary:4000/v1",
+			fetch: fetchMock,
+		});
+
+		const models = await options.fetchDynamicModels?.();
+
+		expect(models).toHaveLength(1);
+		expect(models?.[0]).toMatchObject({
+			id: "openrouter/acme/big",
+			contextWindow: 262_144,
+			cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+		});
+	});
+
+	test("enriches LiteLLM rich models missing from models.dev with bundled reasoning metadata", async () => {
+		const fetchMock = vi.fn(async (input: string | URL | Request) => {
+			const url = inputUrl(input);
+			if (url === MODELS_DEV_URL) {
+				return Response.json({});
+			}
+			if (url === "http://primary:4000/model_group/info") {
+				return Response.json({
+					data: [
+						{
+							model_group: "glm-5.2",
+							model_name: "GLM-5.2",
+						},
+					],
+				});
+			}
+			if (url === "http://primary:4000/v1/models") {
+				throw new Error("/v1/models should not be called when model_group info has a real model");
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		}) as FetchImpl;
+		const options = litellmModelManagerOptions({
+			apiKey: "sk-rich",
+			baseUrl: "http://primary:4000/v1",
+			fetch: fetchMock,
+		});
+
+		const models = await options.fetchDynamicModels?.();
+
+		expect(models).toHaveLength(1);
+		expect(models?.[0]).toMatchObject({
+			id: "glm-5.2",
+			name: "GLM-5.2",
+			api: "openai-completions",
+			provider: "litellm",
+			baseUrl: "http://primary:4000/v1",
+			reasoning: true,
+			thinking: {
+				mode: "effort",
+				efforts: ["minimal", "low", "medium", "high", "max"],
+				effortMap: {
+					minimal: "none",
+				},
+			},
+		});
+	});
+
 	test("uses LiteLLM tool support metadata when rich endpoints succeed", async () => {
 		const fetchMock = vi.fn(async (input: string | URL | Request) => {
 			const url = inputUrl(input);
@@ -247,8 +405,13 @@ describe("LiteLLM provider discovery", () => {
 			if (url === "http://primary:4000/model_group/info") {
 				return Response.json({
 					data: [
-						{ model_group: "no-tools", providers: ["openai"], supports_function_calling: false },
-						{ model_group: "params-tools", supported_openai_params: ["tools"] },
+						{
+							model_group: "no-tools",
+							providers: ["openai"],
+							supports_vision: false,
+							supports_function_calling: false,
+						},
+						{ model_group: "params-tools", supports_vision: false, supported_openai_params: ["tools"] },
 					],
 				});
 			}
@@ -339,6 +502,7 @@ describe("LiteLLM provider discovery", () => {
 							max_input_tokens: 96_000,
 							max_output_tokens: 8_000,
 							supports_function_calling: true,
+							supports_vision: false,
 						},
 					],
 				});
@@ -422,6 +586,71 @@ describe("LiteLLM provider discovery", () => {
 		});
 	});
 
+	test("continues to LiteLLM model info when model_group omits vision metadata", async () => {
+		const calls: string[] = [];
+		const fetchMock = vi.fn(async (input: string | URL | Request) => {
+			const url = inputUrl(input);
+			calls.push(url);
+			if (url === MODELS_DEV_URL) {
+				return Response.json({});
+			}
+			if (url === "http://primary:4000/model_group/info") {
+				return Response.json({
+					data: [
+						{
+							model_group: "vision-proxy-model",
+							model_name: "Vision Proxy Model",
+							max_input_tokens: 64_000,
+							max_output_tokens: 8_000,
+						},
+					],
+				});
+			}
+			if (url === "http://primary:4000/v2/model/info") {
+				return Response.json({
+					data: [{ model_name: "unrelated-v2-model", model_info: { supports_vision: false } }],
+				});
+			}
+			if (url === "http://primary:4000/model/info") {
+				return Response.json({
+					data: [
+						{ model_name: "text-only-model", model_info: { supports_vision: false } },
+						{
+							model_name: "vision-proxy-model",
+							model_info: {
+								supports_vision: true,
+							},
+						},
+					],
+				});
+			}
+			if (url === "http://primary:4000/v1/models") {
+				throw new Error("/v1/models should not be called when LiteLLM model info succeeds");
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		}) as FetchImpl;
+		const options = litellmModelManagerOptions({
+			apiKey: "sk-rich",
+			baseUrl: "http://primary:4000/v1",
+			fetch: fetchMock,
+		});
+
+		const models = await options.fetchDynamicModels?.();
+
+		expect(calls).toContain("http://primary:4000/model_group/info");
+		expect(calls).toContain("http://primary:4000/v2/model/info");
+		expect(calls).toContain("http://primary:4000/model/info");
+		expect(calls).not.toContain("http://primary:4000/v1/models");
+		expect(models).toHaveLength(1);
+		expect(models?.find(model => model.id === "vision-proxy-model")).toMatchObject({
+			id: "vision-proxy-model",
+			name: "Vision Proxy Model",
+			input: ["text", "image"],
+			contextWindow: 64_000,
+			maxTokens: 8_000,
+		});
+	});
+
 	test("falls back from v2 model info to LiteLLM model info", async () => {
 		const calls: string[] = [];
 		const fetchMock = vi.fn(async (input: string | URL | Request) => {
@@ -431,7 +660,9 @@ describe("LiteLLM provider discovery", () => {
 				return new Response("{}", { status: 404 });
 			}
 			if (url === "http://primary:4000/model/info") {
-				return Response.json({ data: [{ model_name: "legacy-gpt", model_info: { max_input_tokens: 96_000 } }] });
+				return Response.json({
+					data: [{ model_name: "legacy-gpt", model_info: { max_input_tokens: 96_000, supports_vision: false } }],
+				});
 			}
 			throw new Error(`Unexpected URL: ${url}`);
 		}) as FetchImpl;
@@ -545,6 +776,54 @@ describe("LiteLLM provider discovery", () => {
 			name: "MiniMax M3",
 			contextWindow: 262_144,
 			maxTokens: 8_192,
+		});
+	});
+
+	test("enriches LiteLLM /v1/models fallback entries missing from models.dev with bundled reasoning metadata", async () => {
+		const calls: string[] = [];
+		const fetchMock = vi.fn(async (input: string | URL | Request) => {
+			const url = inputUrl(input);
+			calls.push(url);
+			if (url === MODELS_DEV_URL) {
+				return Response.json({});
+			}
+			if (
+				url === "http://primary:4000/model_group/info" ||
+				url === "http://primary:4000/v2/model/info" ||
+				url === "http://primary:4000/model/info" ||
+				url === "http://primary:4000/v1/model/info"
+			) {
+				return new Response("{}", { status: 404 });
+			}
+			if (url === "http://primary:4000/v1/models") {
+				return Response.json({ data: [{ id: "glm-5.2" }] });
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		}) as FetchImpl;
+		const options = litellmModelManagerOptions({
+			apiKey: "sk-fallback",
+			baseUrl: "http://primary:4000/v1",
+			fetch: fetchMock,
+		});
+
+		const models = await options.fetchDynamicModels?.();
+
+		expect(calls).toContain("http://primary:4000/v1/models");
+		expect(models).toHaveLength(1);
+		expect(models?.[0]).toMatchObject({
+			id: "glm-5.2",
+			name: "GLM-5.2",
+			api: "openai-completions",
+			provider: "litellm",
+			baseUrl: "http://primary:4000/v1",
+			reasoning: true,
+			thinking: {
+				mode: "effort",
+				efforts: ["minimal", "low", "medium", "high", "max"],
+				effortMap: {
+					minimal: "none",
+				},
+			},
 		});
 	});
 });

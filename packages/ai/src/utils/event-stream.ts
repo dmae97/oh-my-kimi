@@ -10,6 +10,14 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 	resultSettled = false;
 	#failed = false;
 	#error: unknown = undefined;
+	/**
+	 * Consumer-side local operations currently in flight for this stream — a
+	 * provider transport waiting on a server-requested local tool bridge
+	 * (e.g. the Cursor exec channel) before it can send the result upstream.
+	 * While non-zero, event silence is attributable to our own pending work,
+	 * not a provider stall; idle watchdogs consult {@link hasPendingLocalWork}.
+	 */
+	#pendingLocalWork = 0;
 	finalResultPromise: Promise<R>;
 	resolveFinalResult!: (result: R) => void;
 	rejectFinalResult!: (err: unknown) => void;
@@ -116,6 +124,24 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 	result(): Promise<R> {
 		return this.finalResultPromise;
 	}
+
+	/** True while local work tracked via {@link trackLocalWork} is pending. */
+	get hasPendingLocalWork(): boolean {
+		return this.#pendingLocalWork > 0;
+	}
+
+	/**
+	 * Track a local-work promise so idle watchdogs on this stream do not treat
+	 * the event silence while it is pending as a provider stall.
+	 */
+	async trackLocalWork<TWork>(work: Promise<TWork>): Promise<TWork> {
+		this.#pendingLocalWork++;
+		try {
+			return await work;
+		} finally {
+			this.#pendingLocalWork--;
+		}
+	}
 }
 
 export class AssistantMessageEventStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
@@ -168,4 +194,9 @@ export class AssistantMessageEventStream extends EventStream<AssistantMessageEve
 		}
 		this.endWaiting();
 	}
+}
+
+/** Create an assistant-message event stream for legacy extension providers. */
+export function createAssistantMessageEventStream(): AssistantMessageEventStream {
+	return new AssistantMessageEventStream();
 }
