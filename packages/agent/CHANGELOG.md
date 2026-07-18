@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Made tool interruptibility resolvable per call so unified tools can preserve side-effecting operation outcomes while allowing passive waits to yield to queued steering.
+
 ## [17.0.2] - 2026-07-17
 
 ### Fixed

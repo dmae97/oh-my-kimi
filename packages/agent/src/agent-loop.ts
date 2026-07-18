@@ -1824,11 +1824,25 @@ async function executeToolCalls(
 		const tool =
 			tools?.find(t => t.name === toolCall.name) ??
 			tools?.find(t => t.customWireName !== undefined && t.customWireName === toolCall.name);
+		const args = toolCall.arguments as Record<string, unknown>;
+		const interruptibleMode = tool?.interruptible;
+		let interruptible = false;
+		if (typeof interruptibleMode === "function") {
+			try {
+				interruptible = interruptibleMode(args);
+			} catch {
+				// Resolver failures default to preserving the tool's outcome.
+				interruptible = false;
+			}
+		} else {
+			interruptible = interruptibleMode === true;
+		}
 		return {
 			toolCall,
 			tool,
-			args: toolCall.arguments as Record<string, unknown>,
-			signal: tool?.interruptible ? interruptibleSignal : nonInterruptibleSignal,
+			args,
+			interruptible,
+			signal: interruptible ? interruptibleSignal : nonInterruptibleSignal,
 			started: false,
 			result: undefined as AgentToolResult<any> | undefined,
 			isError: false,
@@ -2210,16 +2224,16 @@ async function executeToolCalls(
 		}
 	}
 
-	// While an interruptible tool is in flight (e.g. a `job`/`irc` wait
-	// blocking on external work), queued steering or interrupting IRC would
-	// otherwise wait out the tool's own window. Poll only non-consuming queues
-	// and abort the shared tool signal so the boundary dequeue below injects
-	// the message promptly. Gated on immediate-interrupt mode + an
-	// interruptible tool; checkSteering is idempotent (no-op once triggered).
+	// While an interruptible tool call is in flight (e.g. a `hub` wait blocking
+	// on external work), queued steering or interrupting IRC would otherwise
+	// wait out the tool's own window. Poll only non-consuming queues and abort
+	// the shared tool signal so the boundary dequeue below injects the message
+	// promptly. Gated on immediate-interrupt mode + an interruptible call;
+	// checkSteering is idempotent (no-op once triggered).
 	const watchSteeringWhileRunning =
 		shouldInterruptImmediately &&
 		(hasSteeringMessages !== undefined || hasIrcInterrupts !== undefined) &&
-		records.some(r => r.tool?.interruptible === true);
+		records.some(record => record.interruptible);
 	const steeringWatchTimer = watchSteeringWhileRunning
 		? setInterval(() => void checkSteering(), STEERING_INTERRUPT_POLL_MS)
 		: undefined;
