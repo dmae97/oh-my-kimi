@@ -44,6 +44,7 @@ function createMockSession(
 ): AgentSession {
 	return {
 		state: { messages },
+		getLastAssistantMessage: () => messages.findLast(message => message.role === "assistant"),
 		sessionManager: {
 			getHeader: () => undefined,
 		},
