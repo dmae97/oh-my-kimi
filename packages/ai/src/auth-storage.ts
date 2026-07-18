@@ -4292,6 +4292,29 @@ export class AuthStorage {
 			hasPlanRequirement &&
 			candidates.some(candidate => getOpenAICodexPlanEligibility(candidate.usage, planRequirement) === true);
 
+		// Plan-gated Codex models rank on every resolve to re-verify account tiers,
+		// so the drain-urgency order can flip between two eligible accounts as their
+		// usage headroom shifts. Promote the session-preferred credential back to the
+		// front while it is unblocked and still plan-eligible (or the requirement is
+		// unenforced and the pin is not known-ineligible) so an active session never
+		// silently migrates accounts mid-conversation; blocked, exhausted, or
+		// known-ineligible pins still fall through to the ranked sibling.
+		if (hasPlanRequirement && sessionPreferredIndex !== undefined) {
+			const sessionPreferredCandidate = candidates.findIndex(
+				candidate =>
+					!this.#isCredentialBlocked(provider, providerKey, candidate.selection.index, blockScope) &&
+					candidate.selection.index === sessionPreferredIndex,
+			);
+			if (sessionPreferredCandidate > 0) {
+				const preferred = candidates[sessionPreferredCandidate]!;
+				const planEligibility = getOpenAICodexPlanEligibility(preferred.usage, planRequirement);
+				if (planEligibility === true || (!enforcePlanRequirement && planEligibility !== false)) {
+					candidates.splice(sessionPreferredCandidate, 1);
+					candidates.unshift(preferred);
+				}
+			}
+		}
+
 		const passes: Array<{ allowBlocked: boolean; enforcePlanRequirement: boolean }> = [
 			{ allowBlocked: false, enforcePlanRequirement },
 			{ allowBlocked: true, enforcePlanRequirement },
