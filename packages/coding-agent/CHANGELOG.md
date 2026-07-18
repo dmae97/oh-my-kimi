@@ -15,6 +15,7 @@
 - Fixed `launch start` waiting for a finite PTY command to exit when the broker's PID-file handoff was unavailable; PTY startup now reports the spawned PID directly and returns an authoritative running or exited snapshot promptly ([#5996](https://github.com/can1357/oh-my-pi/issues/5996)).
 - Fixed queued user steering aborting side-effecting `hub start` calls after the broker request may already have been written; only passive hub waits and followed logs are now interruptible ([#5995](https://github.com/can1357/oh-my-pi/issues/5995)).
 - Fixed JavaScript/TypeScript debugging by launching vscode-js-debug over TCP, handling recursive `startDebugging` child sessions, synchronizing breakpoints across the session tree, and terminating every child connection ([#5984](https://github.com/can1357/oh-my-pi/issues/5984)).
+- Fixed rich ask options showing preview content only for the highlighted choice; every option now renders its preview inline, with pageable long content and accurate configured paging and cancel hints ([#5988](https://github.com/can1357/oh-my-pi/pull/5988) by [@metaphorics](https://github.com/metaphorics)).
 
 ## [17.0.4] - 2026-07-18
 
