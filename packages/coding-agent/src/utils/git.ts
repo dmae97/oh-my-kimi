@@ -1481,19 +1481,54 @@ export async function detachGitDir(worktreeRoot: string, sourceCommonDir: string
 		})
 	).trim();
 	const sparsePatterns = await readOptionalText(sparsePatternPath);
+	// Status parity with the source: an explicit core.filemode (e.g. false on
+	// mounts ignoring the executable bit) must carry over, or the re-inited
+	// repo's platform default makes clean files read as mode-changed and delta
+	// capture would apply bogus chmod diffs back to the parent.
+	const fileMode = await config.get(worktreeRoot, "core.fileMode");
+	// A split index references sharedindex.* files beside the source index;
+	// restoring the raw index without them makes every git read fail. Carry the
+	// shared files (and the config) alongside the verbatim index bytes.
+	const splitIndex = await config.get(worktreeRoot, "core.splitIndex");
+	const sharedIndexFiles: Array<{ name: string; bytes: Uint8Array }> = [];
+	if (indexBytes) {
+		const indexDir = path.dirname(indexPath);
+		let entries: string[] = [];
+		try {
+			entries = await fs.promises.readdir(indexDir);
+		} catch {}
+		for (const name of entries) {
+			if (!name.startsWith("sharedindex.")) continue;
+			const bytes = await readOptionalBytes(path.join(indexDir, name));
+			if (bytes) sharedIndexFiles.push({ name, bytes });
+		}
+	}
+	// A shallow source deliberately lacks parents beyond its `shallow` boundary
+	// file; without it, history traversal over the borrowed objects treats the
+	// boundary commit's missing parent as corruption.
+	const shallowBoundary = await readOptionalText(path.join(parentCommon, "shallow"));
 
 	// A pointer `.git` file whose worktree-admin dir back-references this exact
 	// tree is the rcopy `git worktree add` registration. Remove that admin entry
 	// so the source repo's worktree list stops tracking the isolation. A pointer
 	// referencing the *source's* admin (a copied linked-worktree `.git`) is not
-	// ours to delete — only the local pointer file is discarded.
+	// ours to delete — only the local pointer file is discarded. Compare via
+	// realpath: git canonicalizes the back-reference (e.g. macOS `/var` →
+	// `/private/var`), so a lexical path comparison would miss the match and
+	// leave a stale registration in the source repo's worktree list.
 	let ownWorktreeAdmin: string | undefined;
 	if (entryStat.isFile()) {
 		const pointer = parseGitDirPointer((await readOptionalText(gitEntry)) ?? "");
 		if (pointer) {
 			const adminDir = path.resolve(path.dirname(gitEntry), pointer);
 			const backRef = (await readOptionalText(path.join(adminDir, "gitdir")))?.trim();
-			if (backRef && path.resolve(backRef) === path.resolve(gitEntry)) ownWorktreeAdmin = adminDir;
+			if (backRef) {
+				const [realBackRef, realGitEntry] = await Promise.all([
+					fs.promises.realpath(backRef).catch(() => path.resolve(backRef)),
+					fs.promises.realpath(gitEntry).catch(() => path.resolve(gitEntry)),
+				]);
+				if (realBackRef === realGitEntry) ownWorktreeAdmin = adminDir;
+			}
 		}
 	}
 
@@ -1546,6 +1581,11 @@ export async function detachGitDir(worktreeRoot: string, sourceCommonDir: string
 	// Carry the source identity so isolated commits have an author.
 	if (userName) await config.set(worktreeRoot, "user.name", userName);
 	if (userEmail) await config.set(worktreeRoot, "user.email", userEmail);
+	if (fileMode !== undefined) await config.set(worktreeRoot, "core.fileMode", fileMode);
+	if (splitIndex !== undefined) await config.set(worktreeRoot, "core.splitIndex", splitIndex);
+	// Preserve the shallow boundary so history traversal over the borrowed
+	// object DB stops at the boundary instead of failing on missing parents.
+	if (shallowBoundary !== null) await Bun.write(path.join(gitEntry, "shallow"), shallowBoundary);
 
 	// Restore sparse-checkout state before the index so skip-worktree entries
 	// keep resolving against the carried patterns.
@@ -1562,6 +1602,9 @@ export async function detachGitDir(worktreeRoot: string, sourceCommonDir: string
 	// — matches the source. Fall back to rebuilding from HEAD only when the
 	// source had no index (a bare-ish/never-staged checkout).
 	if (indexBytes) {
+		for (const shared of sharedIndexFiles) {
+			await Bun.write(path.join(gitEntry, shared.name), shared.bytes);
+		}
 		await Bun.write(path.join(gitEntry, "index"), indexBytes);
 	} else if (headSha) {
 		await readTree(worktreeRoot, headSha);

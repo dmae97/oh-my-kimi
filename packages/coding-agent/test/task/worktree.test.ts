@@ -710,6 +710,49 @@ describe("detachGitDir", () => {
 		expect(await runGit(iso, ["config", "core.sparseCheckout"])).toBe("true");
 	});
 
+	it("carries filemode, split-index, and shallow state into the detached repo", async () => {
+		// Origin with two commits so a depth-1 clone has a real shallow boundary.
+		const origin = await fs.mkdtemp(path.join(os.tmpdir(), "omp-detach-origin-"));
+		tempDirs.push(origin);
+		await runGit(origin, ["init", "-q", "-b", "main"]);
+		await runGit(origin, ["config", "user.email", "src@example.com"]);
+		await runGit(origin, ["config", "user.name", "Source User"]);
+		await fs.writeFile(path.join(origin, "one.txt"), "one\n");
+		await runGit(origin, ["add", "one.txt"]);
+		await runGit(origin, ["commit", "-q", "-m", "one"]);
+		await fs.writeFile(path.join(origin, "two.txt"), "two\n");
+		await runGit(origin, ["add", "two.txt"]);
+		await runGit(origin, ["commit", "-q", "-m", "two"]);
+
+		const clone = path.join(origin, "..", `${path.basename(origin)}-shallow`);
+		tempDirs.push(clone);
+		await runGit(origin, ["clone", "-q", "--depth", "1", `file://${origin}`, clone]);
+		await runGit(clone, ["config", "user.email", "src@example.com"]);
+		await runGit(clone, ["config", "user.name", "Source User"]);
+		await runGit(clone, ["config", "core.fileMode", "false"]);
+		await runGit(clone, ["config", "core.splitIndex", "true"]);
+		const wt = path.join(origin, "..", `${path.basename(origin)}-shallow-wt`);
+		tempDirs.push(wt);
+		await runGit(clone, ["worktree", "add", "-q", wt, "-b", "feature/parent", "HEAD"]);
+		// Split the worktree's own index so it references a sharedindex.* file.
+		await runGit(wt, ["update-index", "--split-index"]);
+		const commonDir = path.resolve(
+			(await runGit(clone, ["rev-parse", "--path-format=absolute", "--git-common-dir"])).trim(),
+		);
+
+		const iso = await copyTree(wt);
+		expect(await git.detachGitDir(iso, commonDir)).toBe("detached");
+
+		// filemode parity: an explicit core.fileMode=false survives re-init.
+		expect(await runGit(iso, ["config", "core.fileMode"])).toBe("false");
+		// Split index: status works (sharedindex.* was carried) and stays clean.
+		expect(await runGit(iso, ["status", "--porcelain=v1"])).toBe("");
+		// Shallow boundary: history traversal stops cleanly instead of failing
+		// on the truncated parent, and the boundary file itself was carried.
+		expect(await Bun.file(path.join(iso, ".git", "shallow")).exists()).toBe(true);
+		expect((await runGit(iso, ["rev-list", "HEAD"])).split("\n")).toHaveLength(1);
+	});
+
 	it("keeps ensureIsolation from mutating a linked-worktree parent (rcopy backend)", async () => {
 		const { wt, baseSha } = await makeLinkedWorktree();
 		vi.spyOn(natives, "isoResolve").mockReturnValue({
