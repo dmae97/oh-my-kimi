@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Kimi K3 models served through generic OpenAI-compatible routes exposing unsupported reasoning efforts instead of the mandatory `low`/`high`/`max` scale ([#5983](https://github.com/can1357/oh-my-pi/issues/5983)).
+
 ## [17.0.4] - 2026-07-18
 
 ### Changed
