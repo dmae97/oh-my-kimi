@@ -93,6 +93,9 @@
 ### Removed
 
 - Removed the unreliable Bing and Yahoo HTML-scraping web search providers
+### Fixed
+
+- Fixed the `/extensions` dashboard tab labeled "Agents (standard)" being confused with the `/agents` subagents feature — the `.agent`/`.agents` config-standard provider now presents as "Agent Dirs (.agent/.agents)" since it lists skills, rules, prompts, commands, and context/system files, never subagents ([#5821](https://github.com/can1357/oh-my-pi/issues/5821)).
 
 ## [17.0.2] - 2026-07-17
 
