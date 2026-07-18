@@ -31,6 +31,7 @@
 - Fixed `task` tool schemas emitting boolean subschemas that llama.cpp grammar generation cannot parse ([#5957](https://github.com/can1357/oh-my-pi/issues/5957)).
 - Fixed the transcript keeping finalized assistant blocks in the live compose walk after their rows entered native terminal scrollback, making each stream tick's `TranscriptContainer.render` depth-linear in session length. Fully committed finalized blocks are now compacted out of the local frame regardless of post-finalize version tracking; a later mutation no longer recommits on ordinary frames (no duplication) and rehydrates on the next destructive full replay (no loss). Compose cost for a live tail tick is now flat as depth grows (`bench/transcript-compose.bench.ts`: ratio(N5000/N500) 2.30 → 0.90) ([#5930](https://github.com/can1357/oh-my-pi/issues/5930)).
 - Fixed `/quit` and `/exit` hanging during interactive shutdown by making the mnemopi dispose path retain the current session and flush in-flight extractions without sleeping the bank; the `/memory enqueue` path and end-of-session backend enqueue still perform full cross-session consolidation. ([#3641](https://github.com/can1357/oh-my-pi/issues/3641))
+- Fixed `/exit` hanging on post-prompt work and stacking independent subsystem teardown delays by bounding the aborted-work drain, disposing independent session resources concurrently, and keeping long shutdown waits visible ([#5932](https://github.com/can1357/oh-my-pi/issues/5932)).
 
 ## [17.0.3] - 2026-07-17
 
