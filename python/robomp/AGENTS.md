@@ -52,7 +52,7 @@ Frontend (Vite + SolidJS, in `web/` — still a bun workspace):
 ```
 bun run robomp:web:dev            # vite dev server with proxy to :8080
 bun run robomp:web:build          # produce src/static/ bundle
-bun --cwd=python/robomp/web run typecheck   # tsc --noEmit
+bun --cwd=python/robomp/web run check:types   # tsc --noEmit
 ```
 
 In-container CLI (`robomp` console script → `robomp.cli:main`): no root aliases — invoke directly:
