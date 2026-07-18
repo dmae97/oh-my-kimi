@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed in-place multiplexer pane growth rewriting newly exposed committed rows as blank padding by rebasing the commit seam to the resized viewport tail ([#6011](https://github.com/can1357/oh-my-pi/issues/6011)).
+
 ## [17.0.3] - 2026-07-17
 
 ### Fixed

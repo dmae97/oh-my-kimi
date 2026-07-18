@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, describe, expect, test, vi } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/assistant-message";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
@@ -166,6 +166,7 @@ describe("streaming tool output never sprays duplicate scrollback banners", () =
 	afterEach(() => {
 		if (ORIGINAL_ROWS) Object.defineProperty(process.stdout, "rows", ORIGINAL_ROWS);
 		else Reflect.deleteProperty(process.stdout, "rows");
+		vi.restoreAllMocks();
 	});
 
 	test("bash: growing partial output under a live predecessor does not duplicate banners", async () => {
@@ -440,4 +441,50 @@ describe("streaming tool output never sprays duplicate scrollback banners", () =
 			await term.flush();
 		}
 	}, 30_000);
+	test("tmux height growth preserves finalized history above a live response", async () => {
+		const previousTmux = Bun.env.TMUX;
+		Bun.env.TMUX = "issue-6011";
+		const term = new VirtualTerminal(40, 10, 1_000);
+		const scheduler = makeDrainableScheduler();
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
+		const transcript = new TranscriptContainer();
+		transcript.addChild(new StaticBlock(Array.from({ length: 30 }, (_, index) => `history-${index}`)));
+		transcript.addChild(new LiveBarrier(Array.from({ length: 20 }, (_, index) => `live-${index}`)));
+		tui.addChild(transcript);
+		tui.addChild(new Footer(2));
+
+		try {
+			tui.start();
+			scheduler.flush();
+			await term.flush();
+			expect(term.getViewport().some(row => Bun.stripANSI(row).includes("history-"))).toBe(false);
+
+			const writes: string[] = [];
+			const write = term.write.bind(term);
+			vi.spyOn(term, "write").mockImplementation(data => {
+				writes.push(data);
+				write(data);
+			});
+
+			term.resize(80, 60);
+			scheduler.flush();
+			await term.flush();
+
+			let viewport = term.getViewport().map(row => Bun.stripANSI(row).trimEnd());
+			expect(viewport.some(row => row === "history-0")).toBe(true);
+			expect(viewport.some(row => row === "live-19")).toBe(true);
+
+			tui.requestRender();
+			scheduler.flush();
+			await term.flush();
+			viewport = term.getViewport().map(row => Bun.stripANSI(row).trimEnd());
+			expect(viewport.some(row => row === "history-0")).toBe(true);
+			expect(writes.join("")).not.toContain("\x1b[3J");
+		} finally {
+			tui.stop();
+			await term.flush();
+			if (previousTmux === undefined) delete Bun.env.TMUX;
+			else Bun.env.TMUX = previousTmux;
+		}
+	});
 });

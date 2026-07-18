@@ -3010,6 +3010,16 @@ export class TUI extends Container {
 			chunkTo = windowTop;
 			this.#committedRows = chunkTo;
 			this.#committedPrefix = rawFrame.slice(0, chunkTo);
+		} else if (geometryChanged && Math.max(0, frameLength - height) < this.#committedRows) {
+			// Pane growth/reflow can pull rows back out of mux scrollback and into
+			// the viewport. Rebase the commit seam to that exposed frame tail before
+			// the forced rewrite; flooring at the old seam would paint only the live
+			// suffix followed by blanks, then preserve that gap on every stream tick.
+			committedPrefixResliced = true;
+			windowTop = Math.max(0, frameLength - height);
+			chunkTo = windowTop;
+			this.#committedRows = windowTop;
+			this.#committedPrefix = rawFrame.slice(0, windowTop);
 		} else {
 			// Re-anchor to the frame tail, floored at the committed boundary: a
 			// shrink (or overlay close) pulls the window back down, but never
