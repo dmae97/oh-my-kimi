@@ -2399,4 +2399,88 @@ describe("AuthStorage claude oauth ranking", () => {
 		const apiKey = await authStorage.getApiKey("anthropic", "session-claude-single");
 		expect(apiKey).toBe("api-acct-solo");
 	});
+
+	test("re-ranks a session pinned to a now-worse account after >1h of Anthropic idle", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+		const storage = authStorage;
+
+		await storage.set("anthropic", [
+			{ type: "oauth", ...createCredential("acct-pinned", "pinned@example.com") },
+			{ type: "oauth", ...createCredential("acct-fresh", "fresh@example.com") },
+		]);
+
+		const base = Date.now();
+		let clockOffset = 0;
+		vi.spyOn(Date, "now").mockImplementation(() => base + clockOffset);
+
+		// t0: acct-pinned is healthy; acct-fresh's 5h window is hot (>=85%),
+		// so ranking picks acct-pinned and pins the session to it.
+		const setUsage = (pinnedPrimary: number, freshPrimary: number): void => {
+			usageByAccount.set(
+				"acct-pinned",
+				createClaudeUsageReport({
+					accountId: "acct-pinned",
+					primary: { usedFraction: pinnedPrimary, resetInMs: 4 * HOUR_MS },
+					secondary: { usedFraction: 0.5, resetInMs: 5 * 24 * HOUR_MS },
+				}),
+			);
+			usageByAccount.set(
+				"acct-fresh",
+				createClaudeUsageReport({
+					accountId: "acct-fresh",
+					primary: { usedFraction: freshPrimary, resetInMs: 4 * HOUR_MS },
+					secondary: { usedFraction: 0.5, resetInMs: 5 * 24 * HOUR_MS },
+				}),
+			);
+		};
+
+		setUsage(0.2, 0.9);
+		expect(await storage.getApiKey("anthropic", "claude-idle-gating")).toBe("api-acct-pinned");
+
+		// The tables turn: acct-pinned's 5h window is now hot, acct-fresh is cool.
+		setUsage(0.9, 0.2);
+
+		// Within 1h of the last resolve the conversation prefix is plausibly warm,
+		// so the pin must hold even though it is now the worse account.
+		clockOffset = 30 * 60 * 1000;
+		expect(await storage.getApiKey("anthropic", "claude-idle-gating")).toBe("api-acct-pinned");
+
+		// After >1h of Anthropic request inactivity the prompt cache has certainly
+		// expired, so ranking must run again and rotate to the clearly-better sibling.
+		clockOffset = 30 * 60 * 1000 + 2 * HOUR_MS;
+		expect(await storage.getApiKey("anthropic", "claude-idle-gating")).toBe("api-acct-fresh");
+	});
+
+	test("keeps the pinned account after idle when siblings rank equal (tie-break)", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+		const storage = authStorage;
+
+		await storage.set("anthropic", [
+			{ type: "oauth", ...createCredential("acct-a", "a@example.com") },
+			{ type: "oauth", ...createCredential("acct-b", "b@example.com") },
+		]);
+
+		const base = Date.now();
+		let clockOffset = 0;
+		vi.spyOn(Date, "now").mockImplementation(() => base + clockOffset);
+
+		for (const accountId of ["acct-a", "acct-b"]) {
+			usageByAccount.set(
+				accountId,
+				createClaudeUsageReport({
+					accountId,
+					primary: { usedFraction: 0.25, resetInMs: 4 * HOUR_MS },
+					secondary: { usedFraction: 0.25, resetInMs: 4 * 24 * HOUR_MS },
+				}),
+			);
+		}
+
+		const first = await storage.getApiKey("anthropic", "claude-idle-tie");
+		expect(first).toBeDefined();
+
+		// Past the warm window ranking runs again, but both accounts score equal,
+		// so the pin must win the tie rather than churn to the sibling.
+		clockOffset = HOUR_MS + 1;
+		expect(await storage.getApiKey("anthropic", "claude-idle-tie")).toBe(first);
+	});
 });
