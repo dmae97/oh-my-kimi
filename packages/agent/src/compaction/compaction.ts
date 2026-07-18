@@ -43,6 +43,7 @@ import {
 	V2_RETAINED_MESSAGE_TOKEN_BUDGET,
 } from "./compaction-v2-streaming";
 import type { CompactionEntry, SessionEntry } from "./entries";
+import { isEstimateCacheable, readEstimateCache, writeEstimateCache } from "./message-cache";
 import { type ConvertToLlm, createBranchSummaryMessage, createCustomMessage, defaultConvertToLlm } from "./messages";
 import {
 	buildOpenAiNativeHistory,
@@ -364,6 +365,21 @@ const IMAGE_TOKEN_ESTIMATE = 1200;
  * content) excludes them to avoid false triggers on thinking-heavy turns.
  */
 export function estimateTokens(message: AgentMessage, options?: { excludeEncryptedReasoning?: boolean }): number {
+	// Settled historical messages are counted once and reused until an owner
+	// (prune/shake/strip-images) invalidates them; streaming assistants bypass
+	// the cache entirely (see message-cache.ts settle-gate invariant).
+	const cacheable = isEstimateCacheable(message);
+	const excludeEncryptedReasoning = options?.excludeEncryptedReasoning === true;
+	if (cacheable) {
+		const cached = readEstimateCache(message, excludeEncryptedReasoning);
+		if (cached !== undefined) return cached;
+	}
+	const result = computeMessageTokens(message, options);
+	if (cacheable) writeEstimateCache(message, excludeEncryptedReasoning, result);
+	return result;
+}
+
+function computeMessageTokens(message: AgentMessage, options?: { excludeEncryptedReasoning?: boolean }): number {
 	const fragments: string[] = [];
 	let extra = 0;
 	if ((message as { role?: string }).role === "bashExecution") {

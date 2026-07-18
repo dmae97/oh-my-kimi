@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a per-message estimation cache (`estimateTokens`) keyed by message identity, so settled history is token-counted once and reused until an owner mutates it. Non-assistant roles cache unconditionally; assistants cache only when settled (real `usage` with a terminal, non-`aborted`/`error` `stopReason`) so streaming partials never freeze a mid-stream count. Dual option-split maps keep the default and `excludeEncryptedReasoning` (compaction-floor) estimates from colliding. Prune, shake, and cross-package convert caches invalidate through `invalidateMessageCache` / `registerMessageCacheInvalidator` at their mutation seams ([#5934](https://github.com/can1357/oh-my-pi/issues/5934)).
+
 ## [17.0.2] - 2026-07-17
 
 ### Fixed

@@ -15,6 +15,7 @@ import { countTokens } from "../tokenizer";
 import type { AgentMessage } from "../types";
 import { estimateTokens } from "./compaction";
 import type { CustomMessageEntry, SessionEntry, SessionMessageEntry } from "./entries";
+import { invalidateMessageCache } from "./message-cache";
 import {
 	collectToolCallsById,
 	isProtectedToolResult,
@@ -406,12 +407,18 @@ export function applyShakeRegion(region: ShakeRegion, replacement: string): void
 		const message = region.entry.message as ToolResultMessage;
 		message.content = [{ type: "text", text: replacement }];
 		message.prunedAt = Date.now();
+		invalidateMessageCache(message as AgentMessage);
 		return;
 	}
 	const slot = getBlockTextSlot(region.entry, region.blockIndex);
 	if (!slot) return;
 	const text = slot.read();
 	slot.write(text.slice(0, region.start) + replacement + text.slice(region.end));
+	// Message entries keep a stable `entry.message` identity across context
+	// rebuilds, so an in-place block rewrite must drop its cached estimate/convert.
+	// Custom-message entries are re-materialized into a fresh AgentMessage on every
+	// buildSessionContext, so they carry no stable cached identity to invalidate.
+	if (region.entry.type === "message") invalidateMessageCache(region.entry.message);
 }
 
 /**

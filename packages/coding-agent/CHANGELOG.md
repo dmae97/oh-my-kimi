@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Long sessions no longer re-run `convertToLlm` over settled history every turn. Conversion is memoized per message identity (plus the assistant `interruptedNext` neighbor flag): an exact re-convert of the same array reuses the outer `Message[]`, append-only growth reuses the converted prefix via slice-on-growth, and the prune/shake/strip-images/prewalk-scrub rewrite seams invalidate the affected message before the next pass. On the `llm-assembly` bench (N=5000) steady/append convert and repeat estimate are all >10x faster with robust MAD-noise well under 20% ([#5934](https://github.com/can1357/oh-my-pi/issues/5934)).
+
 ## [17.0.3] - 2026-07-17
 
 ### Changed

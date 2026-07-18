@@ -8,6 +8,7 @@ import {
 	replaceLlmImagesWithText,
 	SKILL_PROMPT_MESSAGE_TYPE,
 	type SkillPromptDetails,
+	stripImagesFromMessage,
 } from "./messages";
 
 function customMessage(customType: string, attribution: "agent" | "user"): CustomMessage<SkillPromptDetails> {
@@ -122,6 +123,96 @@ describe("convertToLlm", () => {
 			"text",
 			"thinking",
 		]);
+	});
+});
+
+function settledAssistant(text: string): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [{ type: "text", text }],
+		api: "anthropic-messages",
+		provider: "anthropic",
+		model: "claude-sonnet-4-5",
+		usage: {
+			input: 100,
+			output: 20,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 120,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "stop",
+		timestamp: 1,
+	};
+}
+
+function userMessage(text: string, timestamp: number): AgentMessage {
+	return { role: "user", content: text, attribution: "user", timestamp } as AgentMessage;
+}
+
+describe("convertToLlm caching", () => {
+	it("reuses the outer array on an exact repeat of the same history", () => {
+		const messages: AgentMessage[] = [userMessage("hello", 1), settledAssistant("hi")];
+		const first = convertToLlm(messages);
+		const second = convertToLlm(messages);
+		expect(second).toBe(first);
+	});
+
+	it("reuses the unchanged prefix output on append-only growth", () => {
+		const messages: AgentMessage[] = [userMessage("one", 1), settledAssistant("reply one")];
+		const first = convertToLlm(messages);
+		messages.push(userMessage("two", 2));
+		const grown = convertToLlm(messages);
+		// New outer array (no held-result aliasing), but the converted prefix is
+		// byte-identical and the appended turn is present.
+		expect(grown).not.toBe(first);
+		expect(grown.length).toBe(first.length + 1);
+		expect(grown.slice(0, first.length)).toEqual(first);
+		expect(grown[grown.length - 1]?.role).toBe("user");
+	});
+
+	it("recomputes the boundary assistant when a following interrupted-thinking marker appears on growth", () => {
+		const messages: AgentMessage[] = [
+			abortedAssistant([
+				{ type: "text", text: "partial answer" },
+				{ type: "thinking", thinking: "interrupted reasoning" },
+			]),
+		];
+		const before = convertToLlm(messages);
+		const beforeAssistant = before.find(entry => entry.role === "assistant");
+		expect(Array.isArray(beforeAssistant?.content) && beforeAssistant.content.map(b => b.type)).toEqual([
+			"text",
+			"thinking",
+		]);
+
+		// Append the continuity marker on the same array: the assistant is now the
+		// boundary message and its LLM view must drop the trailing thinking run.
+		messages.push(interruptedThinkingContinuity());
+		const after = convertToLlm(messages);
+		const afterAssistant = after.find(entry => entry.role === "assistant");
+		expect(Array.isArray(afterAssistant?.content) && afterAssistant.content.map(b => b.type)).toEqual(["text"]);
+	});
+
+	it("recomputes a message after strip-images invalidates its cache", () => {
+		const withImage: AgentMessage = {
+			role: "user",
+			content: [
+				{ type: "text", text: "look" },
+				{ type: "image", data: "aaaa", mimeType: "image/png" },
+			],
+			attribution: "user",
+			timestamp: 1,
+		};
+		const messages: AgentMessage[] = [withImage];
+		const before = convertToLlm(messages);
+		const beforeUser = before.find(entry => entry.role === "user");
+		expect(Array.isArray(beforeUser?.content) && beforeUser.content.some(b => b.type === "image")).toBe(true);
+
+		// Mutate in place through the owner seam, which must invalidate the cache.
+		stripImagesFromMessage(withImage);
+		const after = convertToLlm(messages);
+		const afterUser = after.find(entry => entry.role === "user");
+		expect(Array.isArray(afterUser?.content) && afterUser.content.some(b => b.type === "image")).toBe(false);
 	});
 });
 
