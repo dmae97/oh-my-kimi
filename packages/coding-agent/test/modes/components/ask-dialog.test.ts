@@ -7,6 +7,9 @@ import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/mode
 import { setKeybindings } from "@oh-my-pi/pi-tui";
 
 const DOWN = "\x1b[B";
+const UP = "\x1b[A";
+const PAGE_DOWN = "\x1b[6~";
+const PAGE_UP = "\x1b[5~";
 const ENTER = "\n";
 const CANCEL = "\x07";
 const SPACE = " ";
@@ -901,33 +904,33 @@ describe("AskDialogComponent", () => {
 	});
 
 	it("scrolls question rows when cursor moves below the viewport", () => {
-		// Use many options so the rendered list overflows a small body.
-		const options = Array.from({ length: 30 }, (_, i) => ({ label: `Option ${String(i + 1).padStart(2, "0")}` }));
-		const questions: ExtensionAskDialogQuestion[] = [{ id: "q1", question: "Pick one?", options }];
+		const originalRows = Object.getOwnPropertyDescriptor(process.stdout, "rows");
+		Object.defineProperty(process.stdout, "rows", { configurable: true, value: 24 });
+		try {
+			const options = Array.from({ length: 30 }, (_, i) => ({
+				label: `Option ${String(i + 1).padStart(2, "0")}`,
+			}));
+			const questions: ExtensionAskDialogQuestion[] = [{ id: "q1", question: "Pick one?", options }];
+			const component = new AskDialogComponent(questions, {
+				onSubmit: vi.fn(),
+				onCancel: vi.fn(),
+				onPrompt: vi.fn(),
+			});
+			const renderAt = (width: number): string => stripVTControlCharacters(component.render(width).join("\n"));
 
-		const component = new AskDialogComponent(questions, {
-			onSubmit: vi.fn(),
-			onCancel: vi.fn(),
-			onPrompt: vi.fn(),
-		});
+			const initial = renderAt(60);
+			expect(initial).toContain("Option 01");
+			expect(initial).not.toContain("Option 30");
+			expect(initial).toContain("↓ scroll");
 
-		// Render at a narrow width / small height to force overflow.
-		// The body height is derived from process.stdout.rows; we render at
-		// width 60 and inspect the visible content.
-		const renderAt = (width: number): string => stripVTControlCharacters(component.render(width).join("\n"));
-
-		// Initial render: first options visible, last options not.
-		const initial = renderAt(60);
-		expect(initial).toContain("Option 01");
-		expect(initial).not.toContain("Option 30");
-
-		// Move cursor down past the viewport boundary to trigger scrolling.
-		for (let i = 0; i < 28; i++) component.handleInput(DOWN);
-
-		const scrolled = renderAt(60);
-		// After scrolling, early options should be gone and later ones visible.
-		expect(scrolled).not.toContain("Option 01");
-		expect(scrolled).toContain("Option 29");
+			for (let i = 0; i < 28; i++) component.handleInput(DOWN);
+			const scrolled = renderAt(60);
+			expect(scrolled).not.toContain("Option 01");
+			expect(scrolled).toContain("Option 29");
+		} finally {
+			if (originalRows) Object.defineProperty(process.stdout, "rows", originalRows);
+			else Reflect.deleteProperty(process.stdout, "rows");
+		}
 	});
 
 	it("single-question multi-select: Enter toggles instead of submitting", () => {
@@ -989,12 +992,16 @@ describe("AskDialogComponent", () => {
 		expect(onSubmit.mock.calls[0][0].results[0].selectedOptions).toEqual([]);
 	});
 
-	it("shows the preview pane only while the highlighted option has a preview", () => {
+	it("renders every option's preview inline, not only the highlighted one", () => {
 		const questions: ExtensionAskDialogQuestion[] = [
 			{
 				id: "q1",
 				question: "Pick one?",
-				options: [{ label: "Plain" }, { label: "Rich", preview: "Preview body text" }],
+				options: [
+					{ label: "Alpha", preview: "PREVIEW-ALPHA" },
+					{ label: "Bravo", preview: "PREVIEW-BRAVO" },
+					{ label: "Charlie" },
+				],
 			},
 		];
 		const component = new AskDialogComponent(questions, {
@@ -1002,18 +1009,191 @@ describe("AskDialogComponent", () => {
 			onCancel: vi.fn(),
 			onPrompt: vi.fn(),
 		});
+		// Cursor defaults to option 0; both previews must be visible without navigating.
+		const out = stripVTControlCharacters(component.render(80).join("\n"));
+		expect(out).toContain("PREVIEW-ALPHA");
+		expect(out).toContain("PREVIEW-BRAVO");
+	});
 
-		// Cursor on "Plain": no pane, no placeholder text.
-		const withoutPreview = component.render(80);
-		expect(stripVTControlCharacters(withoutPreview.join("\n"))).not.toContain("Preview body text");
-		expect(stripVTControlCharacters(withoutPreview.join("\n"))).not.toContain("No preview");
+	it("refreshes cached preview styling after theme invalidation", async () => {
+		const createComponent = (): AskDialogComponent =>
+			new AskDialogComponent(
+				[{ id: "q1", question: "Pick one?", options: [{ label: "Alpha", preview: "CACHE-PREVIEW" }] }],
+				{ onSubmit: vi.fn(), onCancel: vi.fn(), onPrompt: vi.fn() },
+			);
+		const previewLine = (component: AskDialogComponent): string =>
+			component.render(80).find(line => line.includes("CACHE-PREVIEW")) ?? "";
+		const originalTheme = darkTheme;
+		if (!originalTheme) throw new Error("Failed to load dark theme");
+		const lightTheme = await getThemeByName("light");
+		if (!lightTheme) throw new Error("Failed to load light theme");
+		const cachedComponent = createComponent();
+		const before = previewLine(cachedComponent);
+		expect(stripVTControlCharacters(before)).toContain("│ CACHE-PREVIEW");
+		try {
+			setThemeInstance(lightTheme);
+			const stale = previewLine(cachedComponent);
+			const fresh = previewLine(createComponent());
+			expect(stripVTControlCharacters(stale)).toBe(stripVTControlCharacters(fresh));
+			expect(stale).not.toBe(fresh);
 
-		// Cursor on "Rich": the pane shows the preview content — at the same
-		// dialog height (toggling the pane never resizes the box).
-		component.handleInput(DOWN);
-		const withPreview = component.render(80);
-		expect(stripVTControlCharacters(withPreview.join("\n"))).toContain("Preview body text");
-		expect(withPreview.length).toBe(withoutPreview.length);
+			cachedComponent.invalidate();
+			expect(previewLine(cachedComponent)).toBe(fresh);
+		} finally {
+			setThemeInstance(originalTheme);
+			cachedComponent.invalidate();
+		}
+	});
+
+	it("preserves a preview line's final column across overflowing renders", () => {
+		const originalRows = Object.getOwnPropertyDescriptor(process.stdout, "rows");
+		Object.defineProperty(process.stdout, "rows", { configurable: true, value: 24 });
+		try {
+			const edgeLine = `${"X".repeat(67)}Ω`;
+			const filler = Array.from({ length: 30 }, (_, index) => `filler-${index}`).join("\n");
+			const component = new AskDialogComponent(
+				[
+					{
+						id: "q1",
+						question: "Inspect?",
+						options: [{ label: "Alpha", preview: `\`\`\`\n${edgeLine}\n${filler}\n\`\`\`` }],
+					},
+				],
+				{ onSubmit: vi.fn(), onCancel: vi.fn(), onPrompt: vi.fn() },
+			);
+
+			expect(render(component)).toContain("Ω");
+			expect(render(component)).toContain("Ω");
+		} finally {
+			if (originalRows) Object.defineProperty(process.stdout, "rows", originalRows);
+			else Reflect.deleteProperty(process.stdout, "rows");
+		}
+	});
+
+	it("keeps the cancel hint visible with tabs and a tall preview", () => {
+		const originalRows = Object.getOwnPropertyDescriptor(process.stdout, "rows");
+		Object.defineProperty(process.stdout, "rows", { configurable: true, value: 24 });
+		try {
+			const preview = `\`\`\`\n${Array.from({ length: 40 }, (_, index) => `line-${index}`).join("\n")}\n\`\`\``;
+			const component = new AskDialogComponent(
+				[
+					{ id: "q1", question: "Inspect?", options: [{ label: "Alpha", preview }], multi: true },
+					{ id: "q2", question: "Continue?", options: [{ label: "Bravo" }] },
+				],
+				{ onSubmit: vi.fn(), onCancel: vi.fn(), onPrompt: vi.fn() },
+			);
+			const out = render(component);
+
+			expect(out).toContain("PgUp/PgDn");
+			expect(out).toContain("Tab/←/→");
+			expect(out).not.toContain(" tabs");
+			expect(out).toContain("Esc cancel");
+			setKeybindings(
+				KeybindingsManager.inMemory({
+					"tui.select.cancel": "ctrl+g",
+					"tui.select.pageUp": "ctrl+u",
+					"tui.select.pageDown": "ctrl+d",
+				}),
+			);
+			const remapped = render(component);
+			expect(remapped).toContain("ctrl+u/ctrl+d");
+			expect(remapped).toContain("Esc cancel");
+		} finally {
+			if (originalRows) Object.defineProperty(process.stdout, "rows", originalRows);
+			else Reflect.deleteProperty(process.stdout, "rows");
+		}
+	});
+
+	it("pages through an inline preview taller than the question viewport", () => {
+		const originalRows = Object.getOwnPropertyDescriptor(process.stdout, "rows");
+		Object.defineProperty(process.stdout, "rows", { configurable: true, value: 24 });
+		try {
+			const previewLines = Array.from({ length: 80 }, (_, index) => {
+				if (index === 0) return "PREVIEW-FIRST";
+				if (index === 40) return "PREVIEW-MIDDLE";
+				if (index === 79) return "PREVIEW-LAST";
+				return `preview-line-${index}`;
+			});
+			const questions: ExtensionAskDialogQuestion[] = [
+				{
+					id: "q1",
+					question: "Inspect the preview?",
+					options: [{ label: "Plain" }, { label: "Alpha", preview: `\`\`\`\n${previewLines.join("\n")}\n\`\`\`` }],
+				},
+			];
+			const component = new AskDialogComponent(questions, {
+				onSubmit: vi.fn(),
+				onCancel: vi.fn(),
+				onPrompt: vi.fn(),
+			});
+
+			let out = render(component);
+			expect(out).toContain("PREVIEW-FIRST");
+			expect(out).not.toContain("PREVIEW-MIDDLE");
+			expect(out).not.toContain("PREVIEW-LAST");
+			expect(out).not.toContain("PgUp/PgDn");
+			expect(out).toContain("↓ scroll");
+			component.handleInput(DOWN);
+			for (let page = 0; page < 4; page++) component.handleInput(PAGE_DOWN);
+			out = render(component);
+			expect(out).toContain("PgUp/PgDn");
+			expect(out).toContain("PREVIEW-MIDDLE");
+			component.handleInput(DOWN);
+			out = render(component);
+			expect(out).toContain("Other (type your own)");
+			expect(out).not.toContain("PREVIEW-MIDDLE");
+			expect(out).not.toContain("PgUp/PgDn");
+			component.handleInput(UP);
+			out = render(component);
+			expect(out).toContain("PREVIEW-FIRST");
+			expect(out).toContain("PgUp/PgDn");
+			for (let page = 0; page < 10; page++) {
+				component.handleInput(PAGE_DOWN);
+				out = render(component);
+			}
+			expect(out).toContain("PREVIEW-LAST");
+			for (let page = 0; page < 10; page++) {
+				component.handleInput(PAGE_UP);
+				out = render(component);
+			}
+			expect(out).toContain("PREVIEW-FIRST");
+		} finally {
+			if (originalRows) Object.defineProperty(process.stdout, "rows", originalRows);
+			else Reflect.deleteProperty(process.stdout, "rows");
+		}
+	});
+
+	it("keeps a selected inline preview visible when its row fits the viewport", () => {
+		const originalRows = Object.getOwnPropertyDescriptor(process.stdout, "rows");
+		Object.defineProperty(process.stdout, "rows", { configurable: true, value: 24 });
+		try {
+			const options = [
+				...Array.from({ length: 8 }, (_, index) => ({ label: `Plain ${index}` })),
+				{ label: "Target", preview: "```\nPREVIEW-SHORT-FIRST\npreview-short-middle\nPREVIEW-SHORT-LAST\n```" },
+				...Array.from({ length: 8 }, (_, index) => ({ label: `After ${index}` })),
+			];
+			const component = new AskDialogComponent([{ id: "q1", question: "Pick one?", options }], {
+				onSubmit: vi.fn(),
+				onCancel: vi.fn(),
+				onPrompt: vi.fn(),
+			});
+
+			for (let index = 0; index < 8; index++) component.handleInput(DOWN);
+			let out = render(component);
+			expect(out).toContain("PREVIEW-SHORT-FIRST");
+			expect(out).toContain("PREVIEW-SHORT-LAST");
+			expect(out).not.toContain("PgUp/PgDn");
+			expect(out).toMatch(/[↓↑↕] scroll/);
+			component.handleInput(PAGE_DOWN);
+			out = render(component);
+			expect(out).toContain("PREVIEW-SHORT-FIRST");
+			expect(out).toContain("PREVIEW-SHORT-LAST");
+			expect(out).not.toContain("PgUp/PgDn");
+			expect(out).toMatch(/[↓↑↕] scroll/);
+		} finally {
+			if (originalRows) Object.defineProperty(process.stdout, "rows", originalRows);
+			else Reflect.deleteProperty(process.stdout, "rows");
+		}
 	});
 
 	it("does not repeat the tab chip in the question line", () => {

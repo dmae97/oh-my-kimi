@@ -4,7 +4,6 @@ import {
 	Markdown,
 	type MarkdownTheme,
 	matchesKey,
-	padding,
 	renderInlineMarkdown,
 	replaceTabs,
 	ScrollView,
@@ -13,7 +12,6 @@ import {
 	Text,
 	type TUI,
 	truncateToWidth,
-	visibleWidth,
 	wrapTextWithAnsi,
 } from "@oh-my-pi/pi-tui";
 import type {
@@ -23,8 +21,15 @@ import type {
 } from "../../extensibility/extensions";
 import { getTabBarTheme } from "../shared";
 import { getMarkdownTheme, highlightCode, theme } from "../theme/theme";
-import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../utils/keybinding-matchers";
+import {
+	matchesSelectCancel,
+	matchesSelectDown,
+	matchesSelectPageDown,
+	matchesSelectPageUp,
+	matchesSelectUp,
+} from "../utils/keybinding-matchers";
 import { CountdownTimer } from "./countdown-timer";
+import { editorKey } from "./keybinding-hints";
 import { bottomBorder, divider, row, topBorder } from "./overlay-box";
 import { handleTabSwitchKey } from "./selector-helpers";
 
@@ -38,9 +43,6 @@ const SUBMIT_OPTION = "Submit";
 const DIALOG_HEIGHT_RATIO = 0.7;
 const MIN_DIALOG_ROWS = 12;
 const MIN_BODY_ROWS = 5;
-const PREVIEW_MIN_WIDTH = 40;
-const SIDE_BY_SIDE_LIST_MIN_WIDTH = 30;
-const SIDE_BY_SIDE_GAP_WIDTH = 3;
 const MAX_HEADER_CHIP_WIDTH = 16;
 /** Maximum number of title lines shown in the prompt editor overlay, so a
  *  long or multi-line question cannot push the input row off-screen. Mirrors
@@ -90,6 +92,7 @@ interface QuestionState {
 	noteRowKey: string | undefined;
 	cursorIndex: number;
 	scrollOffset: number;
+	manualScroll: boolean;
 	timedOut: boolean;
 }
 
@@ -113,6 +116,8 @@ interface PreviewSegment {
 	text: string;
 	language: string | undefined;
 }
+
+type PreviewRenderCache = Map<string, Map<number, readonly string[]>>;
 
 function clamp(value: number, min: number, max: number): number {
 	return Math.max(min, Math.min(value, max));
@@ -211,6 +216,26 @@ function renderPreviewContent(preview: string, width: number): string[] {
 	return out;
 }
 
+function renderCachedPreview(cache: PreviewRenderCache, preview: string, width: number): readonly string[] {
+	let byWidth = cache.get(preview);
+	if (!byWidth) {
+		byWidth = new Map();
+		cache.set(preview, byWidth);
+	}
+	let rendered = byWidth.get(width);
+	if (!rendered) {
+		rendered = renderPreviewContent(preview, width).map(line => `      ${theme.fg("border", "│")} ${line}`);
+		byWidth.set(width, rendered);
+	}
+	return rendered;
+}
+
+function pageKeysLabel(): string {
+	const pageUp = editorKey("tui.select.pageUp");
+	const pageDown = editorKey("tui.select.pageDown");
+	return `${pageUp === "pageup" ? "PgUp" : pageUp}/${pageDown === "pagedown" ? "PgDn" : pageDown}`;
+}
+
 function normalizedInlineInput(input: string): string {
 	return replaceTabs(input).replace(/\s+/g, " ").trim();
 }
@@ -260,6 +285,7 @@ function renderRowLabel(
 	state: QuestionState,
 	selected: boolean,
 	mdTheme: MarkdownTheme,
+	previewCache: PreviewRenderCache,
 	width: number,
 ): string[] {
 	const isOption = rowItem.kind === "option";
@@ -283,6 +309,10 @@ function renderRowLabel(
 				lines.push(`      ${truncateToWidth(line, Math.max(1, width - 6), Ellipsis.Unicode)}`);
 			}
 		}
+		if (option?.preview?.trim()) {
+			const previewWidth = Math.max(1, width - 8);
+			lines.push(...renderCachedPreview(previewCache, option.preview, previewWidth));
+		}
 	}
 	if (isOther && state.customInput !== undefined) {
 		const preview = replaceTabs(state.customInput).replace(/\s+/g, " ").trim();
@@ -295,6 +325,8 @@ export class AskDialogComponent implements Component {
 	#states: QuestionState[];
 	#activeTabIndex = 0;
 	#submitScrollOffset = 0;
+	#bodyRows = MIN_BODY_ROWS;
+	#questionCanPage = false;
 	#remainingSeconds: number | undefined;
 	#countdown: CountdownTimer | undefined;
 	#promptActive = false;
@@ -302,6 +334,8 @@ export class AskDialogComponent implements Component {
 	#closed = false;
 	#tabBar: TabBar | undefined;
 	#stableHeight: { key: string; total: number } | undefined;
+	#previewCache: PreviewRenderCache = new Map();
+	#overflowLayouts = new WeakMap<ExtensionAskDialogQuestion, Set<string>>();
 
 	constructor(
 		private readonly questions: ExtensionAskDialogQuestion[],
@@ -318,6 +352,7 @@ export class AskDialogComponent implements Component {
 				noteRowKey: undefined,
 				cursorIndex: clamp(recommended ?? 0, 0, maxIndex),
 				scrollOffset: 0,
+				manualScroll: false,
 				timedOut: false,
 			};
 		});
@@ -335,6 +370,8 @@ export class AskDialogComponent implements Component {
 
 	invalidate(): void {
 		this.#stableHeight = undefined;
+		this.#previewCache.clear();
+		this.#overflowLayouts = new WeakMap();
 		this.#tabBar?.invalidate();
 	}
 
@@ -377,6 +414,7 @@ export class AskDialogComponent implements Component {
 		// (PRRT_kwDOQxs0bc6OFbDY).
 		const fixedRows = 1 + headerLines.length + 1 + 1 + 1 + 1;
 		const bodyRows = Math.max(MIN_BODY_ROWS, totalRows - fixedRows);
+		this.#bodyRows = bodyRows;
 		const bodyLines = this.#isSubmitTab()
 			? this.#renderSubmitBody(innerWidth, bodyRows)
 			: this.#renderQuestionBody(innerWidth, bodyRows);
@@ -419,22 +457,11 @@ export class AskDialogComponent implements Component {
 			const listRows = (listWidth: number): number => {
 				let total = 0;
 				for (const rowItem of rowItems) {
-					total += renderRowLabel(rowItem, question, state, false, mdTheme, listWidth).length;
+					total += renderRowLabel(rowItem, question, state, false, mdTheme, this.#previewCache, listWidth).length;
 				}
 				return total;
 			};
-			let body = listRows(width);
-			const previews = question.options.filter(option => option.preview?.trim());
-			const sideBySide = width >= SIDE_BY_SIDE_LIST_MIN_WIDTH + PREVIEW_MIN_WIDTH + SIDE_BY_SIDE_GAP_WIDTH;
-			if (previews.length > 0 && sideBySide) {
-				const previewWidth = Math.max(PREVIEW_MIN_WIDTH, Math.floor(width * 0.45));
-				const listWidth = Math.max(1, width - previewWidth - SIDE_BY_SIDE_GAP_WIDTH);
-				let pane = 0;
-				for (const option of previews) {
-					pane = Math.max(pane, renderPreviewContent(option.preview ?? "", Math.max(1, previewWidth - 2)).length);
-				}
-				body = Math.max(body, listRows(listWidth), pane);
-			}
+			const body = listRows(width);
 			needed = Math.max(needed, chrome + headerRows + Math.max(MIN_BODY_ROWS, body));
 		}
 		if (this.#hasSubmitTab()) {
@@ -499,13 +526,17 @@ export class AskDialogComponent implements Component {
 	}
 
 	#footerHintText(indicator: string): string {
-		const scroll = indicator ? ` ${indicator} scroll ·` : "";
 		if (this.#isSubmitTab()) {
+			const scroll = indicator ? ` ${indicator} scroll ·` : "";
 			return `Enter submit · ↑/↓ scroll ·${scroll} Esc cancel`;
 		}
 		const question = this.questions[this.#currentQuestionIndex()];
 		const action = question?.multi ? "Space/Enter toggle · n note" : "Enter select · n note";
-		const tabs = this.#hasSubmitTab() ? " · Tab/←/→ tabs" : "";
+		const tabs = this.#hasSubmitTab() ? " · Tab/←/→" : "";
+		if (this.#questionCanPage && indicator) {
+			return `${action} · ↑/↓${tabs} · Esc cancel · ${pageKeysLabel()} ${indicator}`;
+		}
+		const scroll = indicator ? ` ${indicator} scroll ·` : "";
 		return `${action} · ↑/↓ move${tabs} ·${scroll} Esc cancel`;
 	}
 
@@ -536,13 +567,27 @@ export class AskDialogComponent implements Component {
 		if (!active) return;
 		const { question, state } = active;
 		const rows = this.#questionRows(question);
+		if (matchesSelectPageUp(keyData)) {
+			state.scrollOffset = Math.max(0, state.scrollOffset - Math.max(1, this.#bodyRows - 1));
+			state.manualScroll = true;
+			this.#requestRender();
+			return;
+		}
+		if (matchesSelectPageDown(keyData)) {
+			state.scrollOffset += Math.max(1, this.#bodyRows - 1);
+			state.manualScroll = true;
+			this.#requestRender();
+			return;
+		}
 		if (matchesSelectUp(keyData)) {
 			state.cursorIndex = clamp(state.cursorIndex - 1, 0, Math.max(0, rows.length - 1));
+			state.manualScroll = false;
 			this.#requestRender();
 			return;
 		}
 		if (matchesSelectDown(keyData)) {
 			state.cursorIndex = clamp(state.cursorIndex + 1, 0, Math.max(0, rows.length - 1));
+			state.manualScroll = false;
 			this.#requestRender();
 			return;
 		}
@@ -672,33 +717,7 @@ export class AskDialogComponent implements Component {
 		const { question, state } = active;
 		const rowItems = this.#questionRows(question);
 		state.cursorIndex = clamp(state.cursorIndex, 0, Math.max(0, rowItems.length - 1));
-		const selectedRow = rowItems[state.cursorIndex];
-		const preview =
-			selectedRow?.kind === "option" ? question.options[selectedRow.optionIndex ?? -1]?.preview : undefined;
-		// The preview pane exists only while the highlighted option carries a
-		// preview; otherwise the list takes the full dialog width.
-		if (!preview?.trim()) return this.#renderQuestionList(question, state, rowItems, width, maxRows);
-		const sideBySide = width >= SIDE_BY_SIDE_LIST_MIN_WIDTH + PREVIEW_MIN_WIDTH + SIDE_BY_SIDE_GAP_WIDTH;
-		if (sideBySide) {
-			const previewWidth = Math.max(PREVIEW_MIN_WIDTH, Math.floor(width * 0.45));
-			const listWidth = Math.max(1, width - previewWidth - SIDE_BY_SIDE_GAP_WIDTH);
-			const list = this.#renderQuestionList(question, state, rowItems, listWidth, maxRows);
-			const previewLines = this.#renderPreviewPane(preview, previewWidth, maxRows);
-			const lines: string[] = [];
-			for (let index = 0; index < maxRows; index++) {
-				const left = truncateToWidth(list.lines[index] ?? "", listWidth, Ellipsis.Unicode);
-				const right = truncateToWidth(previewLines[index] ?? "", previewWidth, Ellipsis.Unicode);
-				const gap = padding(Math.max(1, listWidth - visibleWidth(left)) + 1);
-				lines.push(`${left}${gap}${theme.fg("border", "│")} ${right}`);
-			}
-			return { lines, scrollOffset: list.scrollOffset, indicator: list.indicator };
-		}
-		const previewLines = this.#renderPreviewPane(preview, width, Math.max(3, Math.min(8, Math.floor(maxRows * 0.4))));
-		const listRows = Math.max(3, maxRows - previewLines.length - 1);
-		const list = this.#renderQuestionList(question, state, rowItems, width, listRows);
-		const lines = [...list.lines, theme.fg("border", "─".repeat(Math.max(1, width))), ...previewLines];
-		while (lines.length < maxRows) lines.push("");
-		return { lines: lines.slice(0, maxRows), scrollOffset: list.scrollOffset, indicator: list.indicator };
+		return this.#renderQuestionList(question, state, rowItems, width, maxRows);
 	}
 
 	#renderQuestionList(
@@ -709,16 +728,51 @@ export class AskDialogComponent implements Component {
 		rows: number,
 	): RenderedList {
 		const mdTheme = getMarkdownTheme();
-		const allLines: string[] = [];
-		const lineStartByRow: number[] = [];
-		for (let index = 0; index < rowItems.length; index++) {
-			lineStartByRow.push(allLines.length);
-			const rowItem = rowItems[index];
-			if (!rowItem) continue;
-			allLines.push(...renderRowLabel(rowItem, question, state, index === state.cursorIndex, mdTheme, width));
+		const renderRows = (contentWidth: number): { allLines: string[]; lineStartByRow: number[] } => {
+			const allLines: string[] = [];
+			const lineStartByRow: number[] = [];
+			for (let index = 0; index < rowItems.length; index++) {
+				lineStartByRow.push(allLines.length);
+				const rowItem = rowItems[index];
+				if (!rowItem) continue;
+				allLines.push(
+					...renderRowLabel(
+						rowItem,
+						question,
+						state,
+						index === state.cursorIndex,
+						mdTheme,
+						this.#previewCache,
+						contentWidth,
+					),
+				);
+			}
+			return { allLines, lineStartByRow };
+		};
+		const layoutKey = `${width}:${rows}:${state.customInput === undefined ? 0 : 1}`;
+		let overflowLayouts = this.#overflowLayouts.get(question);
+		const knownOverflow = overflowLayouts?.has(layoutKey) ?? false;
+		let renderedRows = renderRows(knownOverflow && width > 1 ? width - 1 : width);
+		if (!knownOverflow && width > 1 && renderedRows.allLines.length > rows) {
+			if (!overflowLayouts) {
+				overflowLayouts = new Set();
+				this.#overflowLayouts.set(question, overflowLayouts);
+			}
+			overflowLayouts.add(layoutKey);
+			renderedRows = renderRows(width - 1);
 		}
+		const { allLines, lineStartByRow } = renderedRows;
 		const cursorStart = lineStartByRow[state.cursorIndex] ?? 0;
-		state.scrollOffset = this.#scrollOffsetForCursor(state.scrollOffset, cursorStart, rows, allLines.length);
+		const cursorEnd = lineStartByRow[state.cursorIndex + 1] ?? allLines.length;
+		this.#questionCanPage = cursorEnd - cursorStart > rows;
+		state.scrollOffset = this.#scrollOffsetForCursor(
+			state.scrollOffset,
+			cursorStart,
+			cursorEnd,
+			rows,
+			allLines.length,
+			state.manualScroll,
+		);
 		const scrollView = new ScrollView(allLines, {
 			height: rows,
 			scrollbar: "auto",
@@ -732,15 +786,6 @@ export class AskDialogComponent implements Component {
 			scrollOffset: state.scrollOffset,
 			indicator: this.#clipIndicator(state.scrollOffset, rows, allLines.length),
 		};
-	}
-
-	#renderPreviewPane(preview: string, width: number, maxRows: number): string[] {
-		const bodyWidth = Math.max(1, width - 2);
-		const content = renderPreviewContent(preview, bodyWidth);
-		if (content.length <= maxRows) return content;
-		const visibleCount = Math.max(1, maxRows - 1);
-		const hidden = content.length - visibleCount;
-		return [...content.slice(0, visibleCount), theme.fg("dim", `… ${hidden} more lines`)];
 	}
 
 	#renderSubmitBody(width: number, rows: number): RenderedList {
@@ -789,12 +834,25 @@ export class AskDialogComponent implements Component {
 		};
 	}
 
-	#scrollOffsetForCursor(currentOffset: number, cursorLine: number, rows: number, totalRows: number): number {
-		if (totalRows <= rows) return 0;
-		let nextOffset = clamp(currentOffset, 0, Math.max(0, totalRows - rows));
-		if (cursorLine < nextOffset) nextOffset = cursorLine;
-		if (cursorLine >= nextOffset + rows) nextOffset = cursorLine - rows + 1;
-		return clamp(nextOffset, 0, Math.max(0, totalRows - rows));
+	#scrollOffsetForCursor(
+		currentOffset: number,
+		cursorStart: number,
+		cursorEnd: number,
+		rows: number,
+		totalRows: number,
+		manualScroll: boolean,
+	): number {
+		const maxOffset = Math.max(0, totalRows - rows);
+		if (maxOffset === 0) return 0;
+		let nextOffset = clamp(currentOffset, 0, maxOffset);
+		const cursorRows = cursorEnd - cursorStart;
+		if (manualScroll && cursorRows > rows) {
+			if (cursorEnd <= nextOffset) nextOffset = cursorEnd - 1;
+			if (cursorStart >= nextOffset + rows) nextOffset = cursorStart - rows + 1;
+		} else if (cursorStart < nextOffset || cursorEnd > nextOffset + rows) {
+			nextOffset = cursorRows <= rows ? cursorEnd - rows : cursorStart;
+		}
+		return clamp(nextOffset, 0, maxOffset);
 	}
 
 	#clipIndicator(offset: number, rows: number, totalRows: number): string {
