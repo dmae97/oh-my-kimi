@@ -1313,10 +1313,7 @@ export function sanitizeSchemaForGrammar(schema: JsonObject): JsonObject {
 				next = arrayChanged ? arrayOutput : child;
 			} else if (Object.hasOwn(GRAMMAR_SCHEMA_VALUE_KEYS, key)) {
 				next = normalizeNode(child, true);
-			} else if (
-				(key === "additionalProperties" || key === "unevaluatedProperties") &&
-				typeof child !== "boolean"
-			) {
+			} else if ((key === "additionalProperties" || key === "unevaluatedProperties") && typeof child !== "boolean") {
 				// Boolean form is meaningful closed/open-object grammar semantics and
 				// stays intact; the object form is a genuine subschema whose interior
 				// may still hold bare booleans emitted by `toolWireSchema`.
