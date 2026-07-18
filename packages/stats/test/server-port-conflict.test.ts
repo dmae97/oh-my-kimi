@@ -6,15 +6,17 @@ import { startServer } from "../src/server";
 const holderProcesses: Array<Subprocess<"ignore", "pipe", "pipe">> = [];
 
 async function startBunHolder(responseExpr: string, options?: { statsOwned?: boolean }) {
+	// Bind the wildcard address: `startServer` binds the wildcard too, and on
+	// macOS SO_REUSEADDR lets a wildcard bind coexist with a 127.0.0.1-only
+	// listener, which would bypass the EADDRINUSE path this suite exercises.
 	const reservation = Bun.serve({
-		hostname: "127.0.0.1",
 		port: 0,
 		fetch: () => new Response("reserved"),
 	});
 	const port = reservation.port;
 	reservation.stop(true);
 
-	const source = `Bun.serve({ hostname: "127.0.0.1", port: ${port}, fetch: () => ${responseExpr} }); process.stdout.write("ready"); await Promise.withResolvers().promise;`;
+	const source = `Bun.serve({ port: ${port}, fetch: () => ${responseExpr} }); process.stdout.write("ready"); await Promise.withResolvers().promise;`;
 	const args = [process.execPath, "-e", source];
 	if (options?.statsOwned) args.push("omp-stats");
 	const child = Bun.spawn(args, {
@@ -47,7 +49,6 @@ afterEach(async () => {
 describe("startServer port conflicts", () => {
 	it("reuses a live stats dashboard identified by its header", async () => {
 		const existing = Bun.serve({
-			hostname: "127.0.0.1",
 			port: 0,
 			fetch: request =>
 				new URL(request.url).pathname === "/api/stats/models"
