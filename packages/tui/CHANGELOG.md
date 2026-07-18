@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Carried validated line widths through text, box, editor, and frame layout to avoid repeated Unicode width measurement. ([#5938](https://github.com/can1357/oh-my-pi/issues/5938))
+
 ## [17.0.3] - 2026-07-17
 
 ### Fixed
