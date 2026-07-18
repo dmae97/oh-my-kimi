@@ -10,6 +10,9 @@
 
 - Fixed Kimi K3 models served through generic OpenAI-compatible routes exposing unsupported reasoning efforts instead of the mandatory `low`/`high`/`max` scale ([#5983](https://github.com/can1357/oh-my-pi/issues/5983)).
 - Fixed the model cache (`models.db`) serializing provider-defined request headers written into a model's `headers` — any custom name can carry a credential (for example `Authorization`, `X-Goog-Api-Key`, or `X-Access-Token`), so a denylist cannot make plaintext persistence safe. `writeModelCache` now omits all model headers and records only the ids whose headers were removed. On read, schema v10 restores matching static-model headers from the caller's live source; dynamic-only models with omitted headers force an online refetch and are excluded from offline/failure fallbacks rather than returned unusable. Older header-bearing rows are invalidated and securely deleted so their values do not remain recoverable in SQLite free pages ([#5780](https://github.com/can1357/oh-my-pi/issues/5780)).
+- Fixed OpenAI Codex discovery to replace stale bundled models with the authenticated account catalog, preventing unsupported models from remaining selectable. ([#5364](https://github.com/can1357/oh-my-pi/issues/5364))
+- Fixed OpenAI Codex discovery ignoring the caller-supplied `fetch`, so it always hit the global network instead of the configured (proxy/extra-CA/test) fetch. ([#5364](https://github.com/can1357/oh-my-pi/issues/5364))
+- Fixed a loopback `litellm` proxy fronting a local llama.cpp/vLLM server aborting long prefills with `stream timed out while waiting for the first event` and retry-looping. `litellm` is excluded from `isLocalOpenAICompatBackend` to keep `replayReasoningContent` off proxies (which could 400 an unrelated cloud upstream), but that exclusion also stripped the 300s local stream-timeout floor, leaving the 100s default; a slow reprocess (llama.cpp `non-consecutive token position` KV thrash) then exceeded it. The timeout floor now applies to any loopback/RFC1918 backend, including proxies, while reasoning replay stays gated to first-party local providers. ([#4786](https://github.com/can1357/oh-my-pi/issues/4786))
 
 ## [17.0.4] - 2026-07-18
 
@@ -78,10 +81,6 @@
 - Fixed reasoning effort mapping for Z.ai GLM-5.2 on the Anthropic messages endpoint to correctly use the two-tier scale (high, max) and emit output_config.effort.
 - Fixed an issue where stale cached model limits would override updated static catalog limits after a catalog fingerprint mismatch.
 - Fixed Cursor discovery to correctly preserve GetUsableModels max-mode metadata for premium models and invalidate stale cache entries.
-### Fixed
-
-- Fixed OpenAI Codex discovery to replace stale bundled models with the authenticated account catalog, preventing unsupported models from remaining selectable. ([#5364](https://github.com/can1357/oh-my-pi/issues/5364))
-- Fixed OpenAI Codex discovery ignoring the caller-supplied `fetch`, so it always hit the global network instead of the configured (proxy/extra-CA/test) fetch. ([#5364](https://github.com/can1357/oh-my-pi/issues/5364))
 
 ## [16.4.3] - 2026-07-11
 
@@ -182,9 +181,6 @@
 - Fixed LiteLLM discovery stopping at `/model_group/info` when that endpoint omitted `supports_vision`; it now continues to `/model/info` and preserves `model_info.supports_vision=true` for vision-capable proxy models. ([#4747](https://github.com/can1357/oh-my-pi/issues/4747))
 - Fixed LiteLLM discovery to fall back to bundled catalog metadata when `models.dev` lacks a model reference, preserving reasoning and thinking support for models such as `glm-5.2`. ([#4695](https://github.com/can1357/oh-my-pi/issues/4695))
 - Detected Azure AI Inference / Foundry Anthropic routes as strict-tool-incompatible so resolved Anthropic compat disables strict tools before request construction ([#4679](https://github.com/can1357/oh-my-pi/issues/4679)).
-### Fixed
-
-- Fixed a loopback `litellm` proxy fronting a local llama.cpp/vLLM server aborting long prefills with `stream timed out while waiting for the first event` and retry-looping. `litellm` is excluded from `isLocalOpenAICompatBackend` to keep `replayReasoningContent` off proxies (which could 400 an unrelated cloud upstream), but that exclusion also stripped the 300s local stream-timeout floor, leaving the 100s default; a slow reprocess (llama.cpp `non-consecutive token position` KV thrash) then exceeded it. The timeout floor now applies to any loopback/RFC1918 backend, including proxies, while reasoning replay stays gated to first-party local providers. ([#4786](https://github.com/can1357/oh-my-pi/issues/4786))
 
 ## [16.3.11] - 2026-07-06
 
