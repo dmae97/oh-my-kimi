@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Reused a live stats dashboard on the requested port and reclaimed only confirmed stale omp stats listeners instead of failing with `EADDRINUSE` ([#5970](https://github.com/can1357/oh-my-pi/issues/5970)).
+
 ## [17.0.2] - 2026-07-17
 
 ### Fixed
