@@ -126,6 +126,9 @@
 ### Added
 
 - Added `PI_CONFIG_FILES`, a platform-delimited (`:` on Unix, `;` on Windows) environment path-list of settings overlays loaded before `--config` overlays, so wrapper scripts can inject settings without argv surgery ([#5685](https://github.com/can1357/oh-my-pi/issues/5685)).
+### Fixed
+
+- Fixed browser `tab.click`/`type`/`fill`/`waitFor*`/`scrollIntoView` crashing with the opaque minified `A.trim is not a function` when handed the `ElementHandle` from `tab.id(n)`/`tab.ref(...)` (or an un-awaited `Promise` of one); the selector funnels now reject non-strings with a `ToolError` naming the recovery (`(await tab.id(n)).click()` or a string selector), and `browser.md` clarifies that handles are called directly rather than passed as selectors ([#5776](https://github.com/can1357/oh-my-pi/issues/5776)).
 
 ## [17.0.1] - 2026-07-16
 

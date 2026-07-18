@@ -149,4 +149,17 @@ describe("browser selector guard", () => {
 	it("still rewrites legacy p- prefixes", () => {
 		expect(normalizeSelector("p-text/Continue")).toBe("text/Continue");
 	});
+
+	it("rejects non-string selectors (handle/number) instead of crashing on .startsWith", () => {
+		// Regression: passing the ElementHandle from tab.id()/tab.ref() reached
+		// `selector.startsWith(...)` and threw the opaque `A.trim is not a function`.
+		const handle = {
+			click: async () => {},
+			asElement() {
+				return this;
+			},
+		};
+		expect(() => normalizeSelector(handle as never)).toThrow(/must be a string; got an ElementHandle/);
+		expect(() => normalizeSelector(23 as never)).toThrow(/must be a string; got a number/);
+	});
 });

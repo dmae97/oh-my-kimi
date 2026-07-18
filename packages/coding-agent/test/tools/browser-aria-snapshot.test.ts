@@ -25,6 +25,22 @@ describe("parseAriaRefSelector", () => {
 		expect(parseAriaRefSelector("e5x")).toBeNull(); // eN must be the whole selector
 		expect(parseAriaRefSelector("section e5")).toBeNull(); // descendant CSS, not a ref
 	});
+
+	it("rejects non-string selectors (handle/Promise) with a recovery-naming ToolError", () => {
+		// Regression: tab.click(await tab.id(n)) / tab.click(tab.id(n)) used to reach
+		// `selector.trim()` and throw the opaque minified `A.trim is not a function`.
+		const handle = {
+			click: async () => {},
+			asElement() {
+				return this;
+			},
+		};
+		expect(() => parseAriaRefSelector(handle as never)).toThrow(/must be a string; got an ElementHandle/);
+		expect(() => parseAriaRefSelector(handle as never)).toThrow(/\(await tab\.id\(n\)\)\.click\(\)/);
+		const promise = Promise.resolve(handle);
+		expect(() => parseAriaRefSelector(promise as never)).toThrow(/got a Promise \(missing await\?\)/);
+		promise.catch(() => {});
+	});
 });
 
 describe("buildAriaSnapshotScript", () => {

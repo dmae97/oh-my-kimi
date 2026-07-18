@@ -24,6 +24,7 @@ import { formatScreenshot } from "../render-utils";
 import { ToolAbortError, ToolError, throwIfAborted } from "../tool-errors";
 import {
 	type AriaSnapshotOptions,
+	assertSelectorString,
 	captureAriaSnapshot,
 	parseAriaRefSelector,
 	resolveAriaRefHandle,
@@ -265,6 +266,7 @@ interface TabApi {
 }
 
 export function normalizeSelector(selector: string): string {
+	assertSelectorString(selector);
 	if (!selector) return selector;
 	if (
 		!SELECTOR_HANDLER_PREFIXES.some(prefix => selector.startsWith(prefix)) &&
