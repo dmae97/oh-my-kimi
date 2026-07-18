@@ -5,17 +5,12 @@
 ### Changed
 
 - Anthropic API-key requests to the canonical API now default to 1h prompt-cache retention (`cache_control: { ttl: "1h" }` plus the `extended-cache-ttl-2025-04-11` beta), matching the OAuth default. The previous 5m default cold-missed the entire prompt prefix whenever a session idled past 5 minutes — e.g. waiting on long-running background jobs. `PI_CACHE_RETENTION` now accepts `short` and `none` to override the default in either direction; endpoints without `compat.supportsLongCacheRetention` keep the 5m breakpoint.
+
 ### Fixed
 
 - Kept native Kimi Code K3 thinking enabled for named function selection by using generic required tool choice.
-### Fixed
-
 - Fixed `/login moonshot` validating China-platform API keys against the international host instead of honoring `MOONSHOT_BASE_URL` ([#5981](https://github.com/can1357/oh-my-pi/issues/5981)).
-### Fixed
-
 - Fixed Anthropic session credential stickiness suppressing usage-based re-ranking indefinitely: the session pin skipped ranking for up to 30 days (or process lifetime) even after the ≤1h prompt cache it protects was no longer guaranteed warm. The Anthropic skip is now gated on time since the session's last resolve (`ANTHROPIC_SESSION_STICKY_CACHE_WARM_MS`, 1h), while providers without a verified cache lifetime retain their existing stickiness. When ranking runs, the pinned account is only a tie-break rather than an absolute front-of-queue override, restoring proactive multi-account load balancing after long idle ([#5966](https://github.com/can1357/oh-my-pi/issues/5966)).
-### Fixed
-
 - Fixed clockless Anthropic usage windows outranking clocked sibling credentials by scoring their headroom over the full window duration ([#5960](https://github.com/can1357/oh-my-pi/issues/5960)).
 
 ## [17.0.4] - 2026-07-18

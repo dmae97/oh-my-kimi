@@ -1,12 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Fixed
 
 - Fixed `--model <role>` resolving a bare configured `modelRoles` key.
-
-### Fixed
-
 - Browser tool selectors now accept bare snapshot refs (`tab.click("e501")`, `@e501`) everywhere `aria-ref=e501` works — previously the tab-worker backend fell through to a CSS tag selector that could never match, burning the 2s zero-match watchdog with a misleading "matches no elements" hint. `tab.select`, `tab.uploadFile`, `tab.press({ selector })`, `tab.screenshot({ selector })`, and `tab.drag` now resolve refs too. Unknown/stale refs fail immediately with the "refresh refs" error.
 - `tab.select` no longer double-reports the previously selected option of a single `<select>`: the returned selection is read back after the full assignment pass instead of mid-loop.
 - Fixed transcript blocks being visibly duplicated during streaming (whole tool boxes and assistant paragraphs recommitted below their first copy on the terminal tape) by removing transcript committed-prefix compaction entirely. Dropping committed rows from the transcript's local frame shifted the frame under the engine's committed-prefix ledger, so the audit re-anchored and recommitted rows the tape already held. The transcript now always keeps its full local frame; committed finalized blocks still skip `render()` via the segment reuse bypass. Reverts the compaction half of [#5930](https://github.com/can1357/oh-my-pi/issues/5930)'s fix (compose keeps the render bypass; the local frame is no longer truncated).
@@ -19,14 +17,10 @@
 - Fixed queued user steering aborting side-effecting `hub start` calls after the broker request may already have been written; only passive hub waits and followed logs are now interruptible ([#5995](https://github.com/can1357/oh-my-pi/issues/5995)).
 - Fixed JavaScript/TypeScript debugging by launching vscode-js-debug over TCP, handling recursive `startDebugging` child sessions, synchronizing breakpoints across the session tree, and terminating every child connection ([#5984](https://github.com/can1357/oh-my-pi/issues/5984)).
 - Fixed rich ask options showing preview content only for the highlighted choice; every option now renders its preview inline, with pageable long content and accurate configured paging and cancel hints ([#5988](https://github.com/can1357/oh-my-pi/pull/5988) by [@metaphorics](https://github.com/metaphorics)).
-
-### Fixed
-
 - Fixed legacy pi extensions failing extension validation when importing `getPackageDir` or `getProjectDir` from `@earendil-works/pi-coding-agent` (aliased to the legacy shim). The shim only re-exported `getAgentDir`; the two missing path helpers now resolve — `getProjectDir` from `@oh-my-pi/pi-utils`, and `getPackageDir` as a string-valued wrapper over omp's canonical package-root helper that falls back to the executable's directory inside `bun --compile` binaries (where the canonical helper returns `undefined`), matching pi's string contract. Extensions like `@gotgenes/pi-permission-system` install and load, and `path.join(getPackageDir(), …)` no longer crashes in the shipped binary ([#5968](https://github.com/can1357/oh-my-pi/issues/5968)).
-
-### Fixed
-
 - Fixed headless print mode disposing the session before a final advisor review completed, which could drop the advisor transcript and usage ([#5942](https://github.com/can1357/oh-my-pi/pull/5942)).
+- Fixed capped zero-block assistant stops remaining in active/session history with the full failed-request usage, causing the next post-snapcompact `continue` to re-enter context maintenance at the same boundary; capped empty turns are now discarded and the failure names model switching or `/shake images` as recovery options ([#5959](https://github.com/can1357/oh-my-pi/issues/5959)).
+- Long sessions no longer re-run `convertToLlm` over settled history every turn. Conversion is memoized per message identity (plus the assistant `interruptedNext` neighbor flag): an exact re-convert of the same array reuses the outer `Message[]`, append-only growth reuses the converted prefix via slice-on-growth, and the prune/shake/strip-images/prewalk-scrub rewrite seams invalidate the affected message before the next pass. On the `llm-assembly` bench (N=5000) steady/append convert and repeat estimate are all >10x faster with robust MAD-noise well under 20% ([#5934](https://github.com/can1357/oh-my-pi/issues/5934)).
 
 ## [17.0.4] - 2026-07-18
 
@@ -37,11 +31,6 @@
 - Fixed `task` tool schemas emitting boolean subschemas that llama.cpp grammar generation cannot parse ([#5957](https://github.com/can1357/oh-my-pi/issues/5957)).
 - Fixed the transcript keeping finalized assistant blocks in the live compose walk after their rows entered native terminal scrollback, making each stream tick's `TranscriptContainer.render` depth-linear in session length. Fully committed finalized blocks are now compacted out of the local frame regardless of post-finalize version tracking; a later mutation no longer recommits on ordinary frames (no duplication) and rehydrates on the next destructive full replay (no loss). Compose cost for a live tail tick is now flat as depth grows (`bench/transcript-compose.bench.ts`: ratio(N5000/N500) 2.30 → 0.90) ([#5930](https://github.com/can1357/oh-my-pi/issues/5930)).
 - Fixed `/quit` and `/exit` hanging during interactive shutdown by making the mnemopi dispose path retain the current session and flush in-flight extractions without sleeping the bank; the `/memory enqueue` path and end-of-session backend enqueue still perform full cross-session consolidation. ([#3641](https://github.com/can1357/oh-my-pi/issues/3641))
-- Fixed capped zero-block assistant stops remaining in active/session history with the full failed-request usage, causing the next post-snapcompact `continue` to re-enter context maintenance at the same boundary; capped empty turns are now discarded and the failure names model switching or `/shake images` as recovery options ([#5959](https://github.com/can1357/oh-my-pi/issues/5959)).
-
-### Fixed
-
-- Long sessions no longer re-run `convertToLlm` over settled history every turn. Conversion is memoized per message identity (plus the assistant `interruptedNext` neighbor flag): an exact re-convert of the same array reuses the outer `Message[]`, append-only growth reuses the converted prefix via slice-on-growth, and the prune/shake/strip-images/prewalk-scrub rewrite seams invalidate the affected message before the next pass. On the `llm-assembly` bench (N=5000) steady/append convert and repeat estimate are all >10x faster with robust MAD-noise well under 20% ([#5934](https://github.com/can1357/oh-my-pi/issues/5934)).
 
 ## [17.0.3] - 2026-07-17
 
