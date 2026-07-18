@@ -1,9 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-### Fixed
-
-- Retry one transient OpenAI Responses stream truncation before replay-unsafe output, preventing recoverable transport truncations from surfacing as failed turns ([#5908](https://github.com/can1357/oh-my-pi/issues/5908)).
 
 ### Changed
 
@@ -11,10 +8,13 @@
 
 ### Fixed
 
+- Retry one transient OpenAI Responses stream truncation before replay-unsafe output, preventing recoverable transport truncations from surfacing as failed turns ([#5908](https://github.com/can1357/oh-my-pi/issues/5908)).
 - Kept native Kimi Code K3 thinking enabled for named function selection by using generic required tool choice.
 - Fixed `/login moonshot` validating China-platform API keys against the international host instead of honoring `MOONSHOT_BASE_URL` ([#5981](https://github.com/can1357/oh-my-pi/issues/5981)).
 - Fixed Anthropic session credential stickiness suppressing usage-based re-ranking indefinitely: the session pin skipped ranking for up to 30 days (or process lifetime) even after the ≤1h prompt cache it protects was no longer guaranteed warm. The Anthropic skip is now gated on time since the session's last resolve (`ANTHROPIC_SESSION_STICKY_CACHE_WARM_MS`, 1h), while providers without a verified cache lifetime retain their existing stickiness. When ranking runs, the pinned account is only a tie-break rather than an absolute front-of-queue override, restoring proactive multi-account load balancing after long idle ([#5966](https://github.com/can1357/oh-my-pi/issues/5966)).
 - Fixed clockless Anthropic usage windows outranking clocked sibling credentials by scoring their headroom over the full window duration ([#5960](https://github.com/can1357/oh-my-pi/issues/5960)).
+- Fixed local grammar-constrained OpenAI-compatible backends (llama.cpp, LM Studio, vLLM) rejecting every tool request with `400 "Unable to generate parser for this template ... Unrecognized schema: true"`. The `task` tool's open `outputSchema` field normalizes to a bare boolean `true` subschema (issue #1179), which llama.cpp's JSON-schema→GBNF converter cannot compile. The chat-completions encoder now widens bare boolean subschemas into a value-accepting primitive union (and preserves closed-object `additionalProperties: false`) for these backends via the new `grammar` tool-schema flavor ([#5914](https://github.com/can1357/oh-my-pi/issues/5914)).
+- Fixed custom OAuth Anthropic-compatible endpoints with explicit header overrides still receiving generated Claude Code fingerprint headers instead. ([#5888](https://github.com/can1357/oh-my-pi/issues/5888))
 
 ## [17.0.4] - 2026-07-18
 
@@ -23,10 +23,6 @@
 - Fixed Kimi Code usage reports dropping the 5h window reset time (`omp usage` showed no "resets in …" for the 5h limit): the API returns `resetTime` on the limit `detail`, not on `window`, so the parsed row-level reset is now carried onto the window when the window itself has none.
 - Made Kimi device-id persistence best-effort: a missing or unwritable `~/.omp/agent` directory no longer throws during Kimi header construction, which silently nulled every `kimi-code` usage probe on fresh installs.
 - Coerced boolean tool-schema subschemas to MFJS object forms for native Moonshot/Kimi endpoints, preventing the task tool's `outputSchema` field from causing HTTP 400 responses ([#5952](https://github.com/can1357/oh-my-pi/issues/5952)).
-
-### Fixed
-
-- Fixed local grammar-constrained OpenAI-compatible backends (llama.cpp, LM Studio, vLLM) rejecting every tool request with `400 "Unable to generate parser for this template ... Unrecognized schema: true"`. The `task` tool's open `outputSchema` field normalizes to a bare boolean `true` subschema (issue #1179), which llama.cpp's JSON-schema→GBNF converter cannot compile. The chat-completions encoder now widens bare boolean subschemas into a value-accepting primitive union (and preserves closed-object `additionalProperties: false`) for these backends via the new `grammar` tool-schema flavor ([#5914](https://github.com/can1357/oh-my-pi/issues/5914)).
 
 ## [17.0.3] - 2026-07-17
 
@@ -38,10 +34,6 @@
 - Fixed Kimi Code K3 requests to send native named efforts (`low`, `high`, `max`) and use adaptive effort rather than generic token budgets on explicit Anthropic transport overrides ([#5893](https://github.com/can1357/oh-my-pi/issues/5893)).
 - Automatically invalidate and rotate OAuth credentials when an "invalidated oauth token" error occurs
 - Fixed Anthropic usage reports treating the organization response header as the account identity, which caused the 5h/7d status-line segment to disappear for OAuth credentials without stored organization metadata. ([#5698](https://github.com/can1357/oh-my-pi/issues/5698))
-
-### Fixed
-
-- Fixed custom OAuth Anthropic-compatible endpoints with explicit header overrides still receiving generated Claude Code fingerprint headers instead. ([#5888](https://github.com/can1357/oh-my-pi/issues/5888))
 
 ## [17.0.2] - 2026-07-17
 
