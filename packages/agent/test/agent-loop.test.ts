@@ -1691,8 +1691,8 @@ describe("agentLoop with AgentMessage", () => {
 		}
 	});
 
-	it("does not abort a non-interruptible tool mid-wait; steering still drains at the boundary", async () => {
-		const toolSchema = type({});
+	it("does not abort a tool when its interruptibility resolver rejects the call", async () => {
+		const toolSchema = type({ op: "'start' | 'wait'" });
 		let steerReady = false;
 		let drained = false;
 		let observedAbort = false;
@@ -1701,8 +1701,9 @@ describe("agentLoop with AgentMessage", () => {
 		const tool: AgentTool<typeof toolSchema, Record<string, never>> = {
 			name: "wait",
 			label: "Wait",
-			description: "Blocks on its own window (no interruptible flag)",
+			description: "Blocks on its own window (mimics a side-effecting start)",
 			parameters: toolSchema,
+			interruptible: params => params.op === "wait",
 			async execute(_toolCallId, _params, signal) {
 				steerReady = true;
 				const { promise, resolve } = Promise.withResolvers<void>();
@@ -1731,7 +1732,7 @@ describe("agentLoop with AgentMessage", () => {
 		const context: AgentContext = { systemPrompt: [""], messages: [], tools: [tool] };
 		const mock = createMockModel({
 			responses: [
-				{ content: [{ type: "toolCall", id: "tool-1", name: "wait", arguments: {} }] },
+				{ content: [{ type: "toolCall", id: "tool-1", name: "wait", arguments: { op: "start" } }] },
 				{ content: ["done"] },
 			],
 		});

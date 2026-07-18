@@ -601,7 +601,7 @@ describe("IRC", () => {
 			expect(text).toContain("Peer messaging is unavailable");
 		});
 
-		it("the tool is marked interruptible", () => {
+		it("only marks passive wait operations interruptible", () => {
 			const session: ToolSession = {
 				cwd: "/tmp",
 				hasUI: false,
@@ -612,7 +612,12 @@ describe("IRC", () => {
 				getAgentId: () => "0-Main",
 			};
 			const tool = new HubTool(session);
-			expect(tool.interruptible).toBe(true);
+			if (typeof tool.interruptible !== "function") throw new Error("Hub interruptibility must resolve per call");
+			expect(tool.interruptible({ op: "wait" })).toBe(true);
+			expect(tool.interruptible({ op: "logs", follow: true })).toBe(true);
+			expect(tool.interruptible({ op: "logs" })).toBe(false);
+			expect(tool.interruptible({ op: "start" })).toBe(false);
+			expect(tool.interruptible({ op: "send", await: true })).toBe(false);
 		});
 
 		it("op=list includes parked peers, unread counts, and parent ids", async () => {
