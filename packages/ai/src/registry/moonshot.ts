@@ -1,6 +1,12 @@
+import { $env } from "@oh-my-pi/pi-utils";
 import { createApiKeyLogin } from "./api-key-login";
 import type { OAuthLoginCallbacks } from "./oauth/types";
 import type { ProviderDefinition } from "./types";
+
+function resolveMoonshotModelsUrl(): string {
+	const baseUrl = $env.MOONSHOT_BASE_URL?.trim() || "https://api.moonshot.ai/v1";
+	return `${baseUrl.replace(/\/+$/, "")}/models`;
+}
 
 export const loginMoonshot = createApiKeyLogin({
 	providerLabel: "Moonshot",
@@ -11,7 +17,7 @@ export const loginMoonshot = createApiKeyLogin({
 	validation: {
 		kind: "models-endpoint",
 		provider: "moonshot",
-		modelsUrl: "https://api.moonshot.ai/v1/models",
+		modelsUrl: resolveMoonshotModelsUrl,
 	},
 });
 

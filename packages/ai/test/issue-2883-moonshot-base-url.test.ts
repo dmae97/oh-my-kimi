@@ -1,5 +1,7 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, vi } from "bun:test";
 import { resolveOpenAIRequestSetup } from "@oh-my-pi/pi-ai/providers/openai-shared";
+import { loginMoonshot } from "@oh-my-pi/pi-ai/registry/moonshot";
+import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 
 const ORIGINAL_MOONSHOT_BASE_URL = Bun.env.MOONSHOT_BASE_URL;
 
@@ -40,6 +42,23 @@ describe("Moonshot China base URL override (issue #2883)", () => {
 			messages: [],
 		});
 		expect(setup.baseUrl).toBe("https://api.moonshot.ai/v1");
+	});
+
+	test("validates login against the configured Moonshot endpoint", async () => {
+		Bun.env.MOONSHOT_BASE_URL = "https://api.moonshot.cn/v1/";
+		const fetchMock: FetchImpl = vi.fn(async (input: string | URL | Request) => {
+			const url = typeof input === "string" ? input : input.toString();
+			expect(url).toBe("https://api.moonshot.cn/v1/models");
+			return new Response(JSON.stringify({ object: "list", data: [] }), { status: 200 });
+		});
+
+		const apiKey = await loginMoonshot({
+			onPrompt: async () => " sk-china-key ",
+			fetch: fetchMock,
+		});
+
+		expect(apiKey).toBe("sk-china-key");
+		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
 	test("does not redirect other openai-completions providers", () => {

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `/login moonshot` validating China-platform API keys against the international host instead of honoring `MOONSHOT_BASE_URL` ([#5981](https://github.com/can1357/oh-my-pi/issues/5981)).
+
 ## [17.0.4] - 2026-07-18
 
 ### Fixed
