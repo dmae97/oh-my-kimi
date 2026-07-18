@@ -675,6 +675,38 @@ describe("TUI inline-image budget", () => {
 		}
 	});
 
+	it("deletes every tracked Kitty image during live cleanup", async () => {
+		const term = new VirtualTerminal(40, 12);
+		const writes: string[] = [];
+		const realWrite = term.write.bind(term);
+		vi.spyOn(term, "write").mockImplementation((data: string) => {
+			writes.push(data);
+			realWrite(data);
+		});
+
+		const tui = new TUI(term);
+		const firstId = tui.imageBudget.acquireId("first");
+		const secondId = tui.imageBudget.acquireId("second");
+		tui.addChild(makeImage(tui.imageBudget, "first"));
+		tui.addChild(makeImage(tui.imageBudget, "second"));
+
+		try {
+			tui.start();
+			await settle(term);
+			writes.length = 0;
+
+			tui.clearInlineImages();
+
+			const output = writes.join("");
+			expect(output).toContain(encodeKittyDeleteImage(firstId));
+			expect(output).toContain(encodeKittyDeleteImage(secondId));
+			expect(tui.imageBudget.shouldTransmit(firstId)).toBe(true);
+			expect([...tui.imageBudget.takeAllTransmittedIds()]).toEqual([]);
+		} finally {
+			tui.stop();
+		}
+	});
+
 	it("transmits image data only once; a later full redraw re-emits just the placement", async () => {
 		const term = new VirtualTerminal(40, 12);
 		const writes: string[] = [];

@@ -119,6 +119,7 @@
 ### Fixed
 
 - Isolated the CLIProxyAPI auth-broker import tests from ambient broker configuration so fixture credentials cannot be uploaded to a live broker ([#5782](https://github.com/can1357/oh-my-pi/issues/5782)).
+- Fixed disabling **Show Inline Images** leaving previously rendered Kitty graphics over the Ghostty/tmux transcript. The runtime toggle now updates tool and assistant image owners, deletes tracked terminal graphics before replay, and retains hidden read images so they can return when re-enabled.
 
 ## [17.0.1] - 2026-07-16
 

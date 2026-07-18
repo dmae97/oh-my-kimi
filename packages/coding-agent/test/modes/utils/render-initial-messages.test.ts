@@ -16,6 +16,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Usage } from "@oh-my-pi/pi-ai";
 import { kStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { AssistantMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/assistant-message";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
@@ -127,16 +128,18 @@ function transcriptWith(messages: AgentMessage[]): SessionContext {
 
 function countImageComponents(component: Component): number {
 	const own = component instanceof Image ? 1 : 0;
-	const children = (component as { children?: unknown }).children;
-	if (!Array.isArray(children)) return own;
-	return own + children.reduce((count, child) => count + countImageComponents(child as Component), 0);
+	if (!("children" in component) || !Array.isArray(component.children)) return own;
+	return own + component.children.reduce((count, child) => count + countImageComponents(child), 0);
 }
 
 function hasImageComponent(component: Component): boolean {
 	return countImageComponents(component) > 0;
 }
 
-function makeRenderCtx(transcript: SessionContext): { ctx: InteractiveModeContext; chatContainer: Container } {
+function makeRenderCtx(
+	transcript: SessionContext,
+	showImages = true,
+): { ctx: InteractiveModeContext; chatContainer: Container } {
 	const chatContainer = new Container();
 	let helpers: UiHelpers;
 	const ctx = {
@@ -152,7 +155,7 @@ function makeRenderCtx(transcript: SessionContext): { ctx: InteractiveModeContex
 		resetTranscript: () => chatContainer.clear(),
 		// Rebuild paths honor terminal.showImages since the native-image work;
 		// keep it on so the image-replay contracts below stay meaningful.
-		settings: { get: (key: string) => key === "terminal.showImages" },
+		settings: { get: (key: string) => key === "terminal.showImages" && showImages },
 		toolOutputExpanded: false,
 		hideThinkingBlock: false,
 		focusedAgentId: undefined,
@@ -270,6 +273,33 @@ describe("UiHelpers.renderInitialMessages — image replay", () => {
 
 		expect(hasImageComponent(chatContainer)).toBe(true);
 		expect(Bun.stripANSI(chatContainer.render(100).join("\n"))).toContain("display image 1: 1x1");
+	});
+
+	it("preserves hidden read images so enabling them later can replay the image", async () => {
+		await Settings.init({ inMemory: true, overrides: { "terminal.showImages": false } });
+		setTerminalImageProtocol(ImageProtocol.Sixel);
+		const transcript = transcriptWith([
+			assistantToolCall("read-hidden", "read", { path: "hidden.png" }),
+			{
+				role: "toolResult",
+				toolCallId: "read-hidden",
+				toolName: "read",
+				content: [{ type: "text", text: "Read image: hidden.png" }, pngImage],
+				isError: false,
+				timestamp: 2,
+			},
+		]);
+		const { ctx, chatContainer } = makeRenderCtx(transcript, false);
+
+		new UiHelpers(ctx).renderInitialMessages();
+
+		expect(hasImageComponent(chatContainer)).toBe(false);
+		const assistant = chatContainer.children.find(
+			(child): child is AssistantMessageComponent => child instanceof AssistantMessageComponent,
+		);
+		expect(assistant).toBeDefined();
+		assistant?.setImagesVisible(true);
+		expect(hasImageComponent(chatContainer)).toBe(true);
 	});
 
 	it("replays reopened session image blocks through the cold-start rebuild path", async () => {
