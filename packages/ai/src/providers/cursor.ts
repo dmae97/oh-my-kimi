@@ -2868,7 +2868,7 @@ function buildGrpcRequest(
 		conversationId: state.conversationId,
 	});
 
-	options?.onPayload?.(runRequest);
+	options?.onPayload?.(runRequest, model);
 
 	// Tools are sent later via requestContext (exec handshake)
 

@@ -671,7 +671,7 @@ const streamOpenAICompletionsOnce = (
 				}
 				activeReasoningEffortFallbackKey = reasoningEffortFallbackKey;
 				activeRequestParams = params;
-				options?.onPayload?.(params);
+				options?.onPayload?.(params, model);
 				rawRequestDump = {
 					provider: model.provider,
 					api: output.api,
