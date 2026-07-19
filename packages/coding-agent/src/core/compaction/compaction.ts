@@ -8,6 +8,7 @@
 import type { AgentMessage, StreamFn, ThinkingLevel } from "omk-agent-core";
 import type { AssistantMessage, Context, Model, SimpleStreamOptions, Usage } from "omk-ai";
 import { completeSimple } from "omk-ai";
+import { computeReservedTokenBudget } from "../context-budget-reserved-tokens.ts";
 import {
 	convertToLlm,
 	createBranchSummaryMessage,
@@ -114,9 +115,15 @@ export interface CompactionResult<T = unknown> {
 export interface CompactionSettings {
 	enabled: boolean;
 	reserveTokens: number;
+	reservedOutputTokens?: number;
+	reservedToolResultTokens?: number;
+	safetyMarginTokens?: number;
+	imageReserveTokens?: number;
 	keepRecentTokens: number;
 	/** Maximum fraction of the context window to use before compaction. Default: 0.9. */
 	maxUsageRatio?: number;
+	rearmRatio?: number;
+	emergencyRatio?: number;
 }
 
 export const DEFAULT_COMPACTION_MAX_USAGE_RATIO = 0.9;
@@ -252,8 +259,18 @@ export function getCompactionHeadroomThreshold(
 			? configuredMaxUsageRatio
 			: DEFAULT_COMPACTION_MAX_USAGE_RATIO;
 	const maxUsageRatioTokens = Math.max(1, Math.floor(windowTokens * maxUsageRatio));
+	const reservedBudget = computeReservedTokenBudget({
+		modelContextWindow: windowTokens,
+		systemPromptTokens: 0,
+		reservedOutputTokens: settings.reservedOutputTokens ?? reserveTokens,
+		reservedToolResultTokens: settings.reservedToolResultTokens ?? 0,
+		safetyMarginTokens: settings.safetyMarginTokens ?? 0,
+		imageReserveTokens: settings.imageReserveTokens ?? 0,
+	});
 	const reserveBoundaryTokens =
-		reserveTokens >= windowTokens ? maxUsageRatioTokens : Math.max(1, windowTokens - reserveTokens);
+		reservedBudget.overflow || reservedBudget.effectiveBudget === 0
+			? maxUsageRatioTokens
+			: Math.max(1, reservedBudget.effectiveBudget);
 	const triggerTokens = Math.min(maxUsageRatioTokens, reserveBoundaryTokens);
 
 	return {

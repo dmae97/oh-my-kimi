@@ -1,17 +1,17 @@
 {
 	"name": "open-multi-agent-kit",
-	"version": "0.90.8",
+	"version": "0.90.9",
 	"lockfileVersion": 3,
 	"requires": true,
 	"packages": {
 		"": {
 			"name": "open-multi-agent-kit",
-			"version": "0.90.8",
+			"version": "0.90.9",
 			"license": "MIT",
 			"dependencies": {
-				"omk-agent-core": "^0.90.8",
-				"omk-ai": "^0.90.8",
-				"omk-tui": "^0.90.8",
+				"omk-agent-core": "^0.90.9",
+				"omk-ai": "^0.90.9",
+				"omk-tui": "^0.90.9",
 				"@silvia-odwyer/photon-node": "0.3.4",
 				"chalk": "5.6.2",
 				"cross-spawn": "7.0.6",
@@ -1423,11 +1423,11 @@
 			}
 		},
 		"node_modules/omk-agent-core": {
-			"version": "0.90.8",
-			"resolved": "https://registry.npmjs.org/omk-agent-core/-/omk-agent-core-0.90.8.tgz",
+			"version": "0.90.9",
+			"resolved": "https://registry.npmjs.org/omk-agent-core/-/omk-agent-core-0.90.9.tgz",
 			"license": "MIT",
 			"dependencies": {
-				"omk-ai": "^0.90.8",
+				"omk-ai": "^0.90.9",
 				"ignore": "7.0.5",
 				"typebox": "1.1.38",
 				"yaml": "2.9.0"
@@ -1437,8 +1437,8 @@
 			}
 		},
 		"node_modules/omk-ai": {
-			"version": "0.90.8",
-			"resolved": "https://registry.npmjs.org/omk-ai/-/omk-ai-0.90.8.tgz",
+			"version": "0.90.9",
+			"resolved": "https://registry.npmjs.org/omk-ai/-/omk-ai-0.90.9.tgz",
 			"license": "MIT",
 			"dependencies": {
 				"@anthropic-ai/sdk": "0.91.1",
@@ -1460,8 +1460,8 @@
 			}
 		},
 		"node_modules/omk-tui": {
-			"version": "0.90.8",
-			"resolved": "https://registry.npmjs.org/omk-tui/-/omk-tui-0.90.8.tgz",
+			"version": "0.90.9",
+			"resolved": "https://registry.npmjs.org/omk-tui/-/omk-tui-0.90.9.tgz",
 			"license": "MIT",
 			"dependencies": {
 				"get-east-asian-width": "1.6.0",

@@ -1,3 +1,7 @@
+import {
+	type ContextCacheInvalidationSnapshot,
+	createContextCacheInvalidationSnapshot,
+} from "./context-budget-v2-cache-invalidation.ts";
 import type {
 	ContextBudgetCacheLayerV2,
 	ContextBudgetCacheProviderV2,
@@ -19,9 +23,29 @@ export class MemoryContextBudgetCacheProviderV2 implements ContextBudgetCachePro
 	private readonly negatives = new Map<string, ContextBudgetNegativeCacheEntryV2>();
 	private readonly plans = new Map<string, ContextBudgetPlanCacheEntryV2>();
 	private readonly layer: ContextBudgetCacheLayerV2;
+	private invalidationSnapshot: ContextCacheInvalidationSnapshot | undefined;
 
 	constructor(layer: ContextBudgetCacheLayerV2) {
 		this.layer = layer;
+	}
+
+	getInvalidationSnapshot(): ContextCacheInvalidationSnapshot | undefined {
+		return this.invalidationSnapshot;
+	}
+
+	setInvalidationSnapshot(snapshot: ContextCacheInvalidationSnapshot): void {
+		this.invalidationSnapshot = createContextCacheInvalidationSnapshot({
+			forkId: snapshot.forkId,
+			worktreeFingerprint: snapshot.worktreeFingerprint,
+			activeModelId: snapshot.activeModelId,
+			compactionModelId: snapshot.compactionModelId,
+			globalEpoch: snapshot.globalEpoch,
+			transcriptRepair: snapshot.counters.transcriptRepair,
+			toolResultDisposition: snapshot.counters.toolResultDisposition,
+			evidenceReceipt: snapshot.counters.evidenceReceipt,
+			userSteering: snapshot.counters.userSteering,
+			settings: snapshot.counters.settings,
+		});
 	}
 
 	readRepresentation(key: string): ContextBudgetRepresentationCacheReadV2 | undefined {

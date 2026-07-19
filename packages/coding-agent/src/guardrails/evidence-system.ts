@@ -1,16 +1,41 @@
 // allow: SIZE_OK - evidence ledger guardrails: tamper-evident replay chain + fail-closed parsing.
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type {
+	EvidenceCommandDescriptor,
 	EvidenceItem,
+	EvidenceReceiptMode,
 	EvidenceStatus,
 	MergeGateResult,
 	MergeGateStatus,
 	ReplayEvent,
 	ReplayLedger,
+	ReplayLedgerHead,
 	TaskContract,
+	VerifiedReplayLedgerSnapshot,
+	WorkspaceScope,
 } from "../types/evidence.ts";
+import { redactCommandDescriptor } from "./command-redaction.ts";
+import {
+	type CommandHmacBinder,
+	latestRelevantWorkspaceMutationSeq,
+	parseVerifiedLedgerSnapshot,
+	replayPayloadMatches,
+	verifyCommandAttestation,
+	verifyWorkspaceBinding,
+} from "./evidence-attestation.ts";
+
+export { latestRelevantWorkspaceMutationSeq } from "./evidence-attestation.ts";
+
+import {
+	computeEvidenceCommandSha256,
+	constantTimeSha256Equal,
+	evidenceReceiptReplayPayload,
+	parseSha256Hex,
+	validateEvidenceReceipt,
+} from "./evidence-receipt.ts";
+import { ReplayLedgerStore, replayLedgerHeadsEqual } from "./replay-ledger-store.ts";
 
 function sha256(input: string): string {
 	return createHash("sha256").update(input).digest("hex");
@@ -160,6 +185,11 @@ function parseEvidenceItem(raw: unknown, index: number): EvidenceItem {
 	if (typeof status !== "string" || !EVIDENCE_STATUSES.has(status)) {
 		throw new Error(`TaskContract evidence[${index}] has invalid status ${String(status)}`);
 	}
+	const receiptSchemaVersion = item.receiptSchemaVersion;
+	if (receiptSchemaVersion !== undefined && receiptSchemaVersion !== 3) {
+		throw new Error(`TaskContract evidence[${index}].receiptSchemaVersion must be 3 when present`);
+	}
+	const receiptCommandSha256 = optionalStringField(item.receiptCommandSha256, "receiptCommandSha256", index);
 	return {
 		claim,
 		category: category as EvidenceItem["category"],
@@ -168,6 +198,12 @@ function parseEvidenceItem(raw: unknown, index: number): EvidenceItem {
 		artifactPath: optionalStringField(item.artifactPath, "artifactPath", index),
 		verificationCommand: optionalStringField(item.verificationCommand, "verificationCommand", index),
 		hash: optionalStringField(item.hash, "hash", index),
+		receiptId: optionalStringField(item.receiptId, "receiptId", index),
+		receiptSchemaVersion,
+		...(receiptCommandSha256 !== undefined
+			? { receiptCommandSha256: parseSha256Hex(receiptCommandSha256, "receiptCommandSha256") }
+			: {}),
+		receiptLaneId: optionalStringField(item.receiptLaneId, "receiptLaneId", index),
 		gapReason: optionalStringField(item.gapReason, "gapReason", index),
 	};
 }
@@ -231,110 +267,122 @@ function parseReplayEventLine(line: string, lineNumber: number): ReplayEvent {
 	};
 }
 
-export class ReplayLedgerManager {
-	private ledger: ReplayLedger;
-	private nextSeq: number;
-
-	constructor(goalId: string, ledgerPath: string) {
-		ensureDir(ledgerPath);
-		this.ledger = {
-			goalId,
-			events: [],
-			ledgerPath,
-			lastPersistedSeq: 0,
-		};
-		this.nextSeq = 1;
-		if (existsSync(ledgerPath)) {
-			this.load();
+function parseReplayLedgerBytes(bytes: Buffer, goalId: string): ReplayEvent[] {
+	const lines = bytes
+		.toString("utf8")
+		.split("\n")
+		.filter((line) => line.trim().length > 0);
+	const events: ReplayEvent[] = [];
+	let prevHash = GENESIS_HASH;
+	for (let index = 0; index < lines.length; index++) {
+		const event = parseReplayEventLine(lines[index], index + 1);
+		if (event.goalId !== goalId) throw new Error(`Replay ledger goal mismatch at line ${index + 1}`);
+		if (event.seq !== index + 1) {
+			throw new Error(`Replay ledger corrupted at line ${index + 1}: expected seq ${index + 1}, got ${event.seq}`);
 		}
+		if (event.prevHash !== prevHash) throw new Error(`Replay ledger chain broken at line ${index + 1}`);
+		if (sha256(JSON.stringify(event.payload)) !== event.payloadHash) {
+			throw new Error(`Replay ledger payload tampered at line ${index + 1} (seq ${event.seq})`);
+		}
+		if (computeEventHash(event) !== event.eventHash) {
+			throw new Error(`Replay ledger event hash mismatch at line ${index + 1} (seq ${event.seq})`);
+		}
+		prevHash = event.eventHash;
+		events.push(event);
+	}
+	return events;
+}
+
+export class ReplayLedgerManager {
+	private readonly goalId: string;
+	private readonly ledgerPath: string;
+	private readonly store: ReplayLedgerStore;
+	private events: ReplayEvent[] = [];
+	private committedHead: ReplayLedgerHead;
+
+	constructor(goalId: string, ledgerPath: string, expectedHead?: ReplayLedgerHead) {
+		this.goalId = goalId;
+		this.ledgerPath = ledgerPath;
+		this.committedHead = { fileIdentity: null, size: 0, lastSeq: 0, lastHash: GENESIS_HASH };
+		this.store = new ReplayLedgerStore(ledgerPath, (bytes) => {
+			const events = parseReplayLedgerBytes(bytes, goalId);
+			const last = events.at(-1);
+			return { lastSeq: last?.seq ?? 0, lastHash: last?.eventHash ?? GENESIS_HASH };
+		});
+		this.refresh(expectedHead);
 	}
 
-	append(event: Omit<ReplayEvent, "seq" | "timestamp" | "payloadHash" | "prevHash" | "eventHash">): ReplayEvent {
-		const payloadStr = JSON.stringify(event.payload);
-		const previous = this.ledger.events[this.ledger.events.length - 1];
+	private refresh(expectedHead?: ReplayLedgerHead): void {
+		const snapshot = this.store.load(expectedHead);
+		this.events = parseReplayLedgerBytes(snapshot.bytes, this.goalId);
+		this.committedHead = snapshot.head;
+	}
+
+	append(
+		event: Omit<ReplayEvent, "seq" | "timestamp" | "payloadHash" | "prevHash" | "eventHash">,
+		expectedHead: ReplayLedgerHead = this.committedHead,
+	): ReplayEvent {
+		if (event.goalId !== this.goalId) throw new Error("Replay event goalId does not match the ledger");
+		if (!replayLedgerHeadsEqual(expectedHead, this.committedHead)) {
+			throw new Error("Replay manager expected-head CAS is stale");
+		}
+		const payloadHash = sha256(JSON.stringify(event.payload));
 		const chained: Omit<ReplayEvent, "eventHash"> = {
 			...event,
-			seq: this.nextSeq++,
+			seq: expectedHead.lastSeq + 1,
 			timestamp: new Date().toISOString(),
-			payloadHash: sha256(payloadStr),
-			prevHash: previous ? previous.eventHash : GENESIS_HASH,
+			payloadHash,
+			prevHash: expectedHead.lastHash,
 		};
 		const fullEvent: ReplayEvent = { ...chained, eventHash: computeEventHash(chained) };
-		this.ledger.events.push(fullEvent);
-		return fullEvent;
+		this.committedHead = this.store.append(
+			Buffer.from(`${JSON.stringify(fullEvent)}\n`, "utf8"),
+			fullEvent.seq,
+			fullEvent.eventHash,
+			expectedHead,
+		);
+		this.events.push(fullEvent);
+		return structuredClone(fullEvent);
 	}
 
-	persist(): void {
-		if (this.ledger.events.length === 0) return;
-		const last = this.ledger.events[this.ledger.events.length - 1];
-		if (last.seq <= this.ledger.lastPersistedSeq) return;
-
-		const newEvents = this.ledger.events.filter((e) => e.seq > this.ledger.lastPersistedSeq);
-		const lines = `${newEvents.map((e) => JSON.stringify(e)).join("\n")}\n`;
-		appendFileSync(this.ledger.ledgerPath, lines, "utf-8");
-		this.ledger.lastPersistedSeq = last.seq;
+	/** Compatibility no-op that still verifies the caller's expected committed head. */
+	persist(expectedHead: ReplayLedgerHead = this.committedHead): void {
+		this.getVerifiedSnapshot(expectedHead);
 	}
 
-	/**
-	 * Load and verify the persisted ledger. Fails closed: any schema violation,
-	 * sequence gap, payload-hash mismatch, or broken event-hash chain throws, so
-	 * a tampered ledger (edited, deleted, inserted, or reordered lines) is never
-	 * loaded silently.
-	 */
-	load(): void {
-		if (!existsSync(this.ledger.ledgerPath)) return;
-		const content = readFileSync(this.ledger.ledgerPath, "utf-8");
-		const lines = content.split("\n").filter((line) => line.trim().length > 0);
-		const events: ReplayEvent[] = [];
-		let prevHash = GENESIS_HASH;
-		for (let index = 0; index < lines.length; index++) {
-			const event = parseReplayEventLine(lines[index], index + 1);
-			if (event.seq !== index + 1) {
-				throw new Error(
-					`Replay ledger corrupted at line ${index + 1}: expected seq ${index + 1}, got ${event.seq}`,
-				);
-			}
-			if (event.prevHash !== prevHash) {
-				throw new Error(
-					`Replay ledger chain broken at line ${index + 1}: an event was inserted, deleted, or reordered`,
-				);
-			}
-			if (sha256(JSON.stringify(event.payload)) !== event.payloadHash) {
-				throw new Error(`Replay ledger payload tampered at line ${index + 1} (seq ${event.seq})`);
-			}
-			if (computeEventHash(event) !== event.eventHash) {
-				throw new Error(`Replay ledger event hash mismatch at line ${index + 1} (seq ${event.seq})`);
-			}
-			prevHash = event.eventHash;
-			events.push(event);
-		}
-		this.ledger.events = events;
-		this.ledger.lastPersistedSeq = events.length > 0 ? events[events.length - 1].seq : 0;
-		this.nextSeq = this.ledger.lastPersistedSeq + 1;
+	load(expectedHead: ReplayLedgerHead = this.committedHead): void {
+		this.refresh(expectedHead);
+	}
+
+	getCommittedHead(): ReplayLedgerHead {
+		return structuredClone(this.committedHead);
+	}
+
+	getVerifiedSnapshot(expectedHead: ReplayLedgerHead = this.committedHead): VerifiedReplayLedgerSnapshot {
+		this.refresh(expectedHead);
+		return structuredClone({ events: this.events, head: this.committedHead });
 	}
 
 	getEvents(): ReadonlyArray<ReplayEvent> {
-		return structuredClone(this.ledger.events);
+		return structuredClone(this.events);
 	}
 
 	getLedger(): Readonly<ReplayLedger> {
-		return structuredClone(this.ledger);
+		return structuredClone({
+			goalId: this.goalId,
+			events: this.events,
+			ledgerPath: this.ledgerPath,
+			lastPersistedSeq: this.committedHead.lastSeq,
+		});
 	}
 
 	replay<T>(handler: (event: ReplayEvent) => T | undefined): T[] {
-		const results: T[] = [];
-		for (const event of this.ledger.events) {
-			const result = handler(event);
-			if (result !== undefined) {
-				results.push(result);
-			}
-		}
-		return results;
+		return this.events.map(handler).filter((result): result is T => result !== undefined);
 	}
 
 	exportToFile(path: string): void {
 		ensureDir(path);
-		writeFileSync(path, JSON.stringify(this.ledger.events, null, 2), "utf-8");
+		writeFileSync(path, JSON.stringify(this.events, null, 2), "utf8");
 	}
 }
 
@@ -345,10 +393,207 @@ export class ReplayLedgerManager {
 export interface EvidenceGateOptions {
 	/** Minimum number of satisfied evidence items required. */
 	minEvidenceCount?: number;
-	/** Require at least one artifact with a SHA-256 hash. */
+	/** Require at least one artifact with a SHA-256 hash in explicit legacy mode. */
 	requireHash?: boolean;
-	/** Require at least one verification command. */
+	/** Require at least one verification command in explicit legacy mode. */
 	requireVerificationCommand?: boolean;
+	/** Receipt policy. Defaults to prefer; legacy must be selected explicitly. */
+	receiptMode?: EvidenceReceiptMode;
+	/** Resolve a serialized or decoded receipt by ID. The gate validates the returned value. */
+	resolveReceipt?: (receiptId: string) => unknown;
+	/** Strict source: one expected-head, file-identity, suffix, and chain-verified snapshot. */
+	resolveVerifiedLedgerSnapshot?: () => VerifiedReplayLedgerSnapshot;
+	/** Prefer-mode migration source; strict mode requires resolveVerifiedLedgerSnapshot. */
+	resolveLedgerEvent?: (seq: number) => ReplayEvent | undefined;
+	/** Recapture the receipt's workspace scope (same kind and scope) for freshness comparison. */
+	captureWorkspaceFingerprint?: (scope: WorkspaceScope) => unknown;
+	/**
+	 * Optional freshness source: the latest replay-ledger sequence of a workspace mutation
+	 * relevant to the given scope, or null/undefined when none is known. When configured,
+	 * the receipt's verified ledger seq must strictly exceed this value; a throwing or
+	 * out-of-contract source is a hard block (positive safe integers only).
+	 */
+	resolveLatestWorkspaceMutationSeq?: (scope: WorkspaceScope) => number | null | undefined;
+	/** Ephemeral trust anchor used to verify the original command's keyed attestation. */
+	commandAttestationBinder?: Pick<CommandHmacBinder, "verify">;
+	/** Resolve the original command inside the same trust boundary as the binder. */
+	resolveAttestedCommand?: (receiptId: string) => EvidenceCommandDescriptor | undefined;
+}
+
+interface ReceiptCheckIssue {
+	readonly message: string;
+	readonly hard: boolean;
+}
+
+function receiptCheckIssue(message: string, hard: boolean): ReceiptCheckIssue {
+	return { message, hard };
+}
+
+function receiptIssue(
+	item: EvidenceItem,
+	contract: TaskContract,
+	options: EvidenceGateOptions,
+): ReceiptCheckIssue | undefined {
+	if (!item.receiptId) {
+		return receiptCheckIssue(`Execution receipt is missing for evidence "${item.claim}".`, false);
+	}
+	const strict = options.receiptMode === "strict";
+	if (item.receiptSchemaVersion !== 3 && (item.receiptSchemaVersion !== undefined || strict)) {
+		return receiptCheckIssue(`Execution receipt schema metadata is invalid for evidence "${item.claim}".`, true);
+	}
+	if (!options.resolveReceipt) {
+		return receiptCheckIssue(`Execution receipt resolver is missing for evidence "${item.claim}".`, false);
+	}
+
+	let rawReceipt: unknown;
+	try {
+		rawReceipt = options.resolveReceipt(item.receiptId);
+	} catch {
+		return receiptCheckIssue(`Execution receipt resolver failed for evidence "${item.claim}".`, true);
+	}
+	if (rawReceipt === undefined) {
+		return receiptCheckIssue(`Execution receipt is missing for evidence "${item.claim}".`, false);
+	}
+
+	try {
+		const receipt = validateEvidenceReceipt(rawReceipt);
+		if (receipt.core.receiptId !== item.receiptId) {
+			return receiptCheckIssue(`Execution receipt ID does not match evidence "${item.claim}".`, true);
+		}
+		if (receipt.core.goalId !== contract.goalId) {
+			return receiptCheckIssue(`Execution receipt goal does not match evidence "${item.claim}".`, true);
+		}
+		if (receipt.core.claim !== item.claim) {
+			return receiptCheckIssue(`Execution receipt claim does not match evidence "${item.claim}".`, true);
+		}
+		if (receipt.core.status !== "passed" || receipt.core.exitCode !== 0) {
+			return receiptCheckIssue(
+				`Execution receipt for evidence "${item.claim}" did not pass with exit code 0.`,
+				true,
+			);
+		}
+
+		if (item.receiptCommandSha256 === undefined) {
+			return receiptCheckIssue(`Execution receipt command binding is missing for evidence "${item.claim}".`, false);
+		}
+		const receiptCommandSha256 = computeEvidenceCommandSha256(receipt.core.command);
+		if (!constantTimeSha256Equal(item.receiptCommandSha256, receiptCommandSha256)) {
+			return receiptCheckIssue(`Execution receipt command does not match evidence "${item.claim}".`, true);
+		}
+		const attestationIssue = verifyCommandAttestation({
+			receiptId: receipt.core.receiptId,
+			binding: receipt.core.commandBinding,
+			persistedCommand: receipt.core.command,
+			persistedSummary: receipt.core.commandRedaction,
+			binder: options.commandAttestationBinder,
+			resolveCommand: options.resolveAttestedCommand,
+			redact: redactCommandDescriptor,
+		});
+		if (attestationIssue !== undefined) {
+			return receiptCheckIssue(
+				`Execution receipt command attestation ${attestationIssue.detail} for evidence "${item.claim}".`,
+				attestationIssue.hard,
+			);
+		}
+
+		if (receipt.core.laneId !== undefined && item.receiptLaneId === undefined) {
+			return receiptCheckIssue(`Execution receipt lane binding is missing for evidence "${item.claim}".`, false);
+		}
+		if (item.receiptLaneId !== receipt.core.laneId) {
+			return receiptCheckIssue(`Execution receipt lane does not match evidence "${item.claim}".`, true);
+		}
+
+		const workspaceIssue = verifyWorkspaceBinding(receipt.core.workspaceAfter, options.captureWorkspaceFingerprint);
+		if (workspaceIssue !== undefined) {
+			return receiptCheckIssue(
+				`Execution receipt ${workspaceIssue.detail} for evidence "${item.claim}".`,
+				workspaceIssue.hard,
+			);
+		}
+
+		let snapshot: VerifiedReplayLedgerSnapshot | undefined;
+		if (options.resolveVerifiedLedgerSnapshot !== undefined) {
+			try {
+				snapshot = parseVerifiedLedgerSnapshot(
+					options.resolveVerifiedLedgerSnapshot(),
+					contract.goalId,
+					parseReplayLedgerBytes,
+				);
+			} catch {
+				return receiptCheckIssue(
+					`Execution receipt verified ledger snapshot failed for evidence "${item.claim}".`,
+					true,
+				);
+			}
+		} else if (strict) {
+			return receiptCheckIssue(
+				`Execution receipt verified ledger snapshot is missing for evidence "${item.claim}".`,
+				false,
+			);
+		}
+		let latestMutationSeq =
+			snapshot === undefined
+				? null
+				: latestRelevantWorkspaceMutationSeq(snapshot.events, receipt.core.workspaceAfter.scope);
+		if (snapshot === undefined && options.resolveLatestWorkspaceMutationSeq !== undefined) {
+			let resolved: unknown;
+			try {
+				resolved = options.resolveLatestWorkspaceMutationSeq(receipt.core.workspaceAfter.scope);
+			} catch {
+				return receiptCheckIssue(
+					`Execution receipt workspace-mutation freshness source failed for evidence "${item.claim}".`,
+					true,
+				);
+			}
+			if (resolved !== null && resolved !== undefined) {
+				if (!Number.isSafeInteger(resolved) || (resolved as number) <= 0) {
+					return receiptCheckIssue(
+						`Execution receipt workspace-mutation freshness source is malformed for evidence "${item.claim}".`,
+						true,
+					);
+				}
+				latestMutationSeq = resolved as number;
+			}
+		}
+
+		const binding = receipt.envelope.ledgerBinding;
+		if (!binding) {
+			return receiptCheckIssue(
+				`Execution receipt ledger binding is missing for evidence "${item.claim}".`,
+				latestMutationSeq !== null,
+			);
+		}
+		const event = snapshot
+			? snapshot.events.find((candidate) => candidate.seq === binding.seq)
+			: options.resolveLedgerEvent?.(binding.seq);
+		if (!event && snapshot === undefined && !options.resolveLedgerEvent) {
+			return receiptCheckIssue(
+				`Execution receipt ledger resolver is missing for evidence "${item.claim}".`,
+				latestMutationSeq !== null,
+			);
+		}
+		const replayPayload = evidenceReceiptReplayPayload(receipt);
+		if (
+			!event ||
+			event.seq !== binding.seq ||
+			event.type !== "evidence_receipt" ||
+			event.goalId !== contract.goalId ||
+			event.laneId !== receipt.core.laneId ||
+			!constantTimeSha256Equal(event.eventHash, binding.eventHash) ||
+			!replayPayloadMatches(event.payload, replayPayload.receiptId, replayPayload.coreSha256)
+		) {
+			return receiptCheckIssue(`Execution receipt ledger binding does not match evidence "${item.claim}".`, true);
+		}
+		if (latestMutationSeq !== null && event.seq <= latestMutationSeq) {
+			return receiptCheckIssue(
+				`Execution receipt is stale: workspace mutation seq ${latestMutationSeq} does not precede receipt ledger seq ${event.seq} for evidence "${item.claim}".`,
+				true,
+			);
+		}
+	} catch {
+		return receiptCheckIssue(`Execution receipt is invalid for evidence "${item.claim}".`, true);
+	}
+	return undefined;
 }
 
 export class EvidenceGate {
@@ -359,6 +604,7 @@ export class EvidenceGate {
 			minEvidenceCount: 1,
 			requireHash: true,
 			requireVerificationCommand: true,
+			receiptMode: "prefer",
 			...options,
 		};
 	}
@@ -368,51 +614,54 @@ export class EvidenceGate {
 		const satisfied = evidence.filter((e) => e.status === "satisfied");
 		const failed = evidence.filter((e) => e.status === "failed");
 		const pending = evidence.filter((e) => e.status === "pending" || e.status === "gathering");
-
+		const mode = this.options.receiptMode ?? "prefer";
 		const checks: string[] = [];
+		let hardReceiptFailure = false;
 
-		// Check 1: minimum evidence count
 		if (satisfied.length < (this.options.minEvidenceCount ?? 1)) {
 			checks.push(`Only ${satisfied.length}/${this.options.minEvidenceCount} required evidence items satisfied.`);
 		}
-
-		// Check 2: no failed evidence
 		if (failed.length > 0) {
 			checks.push(`${failed.length} evidence item(s) failed.`);
 		}
 
-		// Check 3: require hash
-		if (this.options.requireHash) {
-			const hashed = satisfied.filter((e) => e.hash && e.hash.length > 0);
-			if (hashed.length === 0) {
-				checks.push("No satisfied evidence has a SHA-256 hash.");
+		if (mode === "legacy") {
+			if (this.options.requireHash) {
+				const hashed = satisfied.filter((e) => e.hash && e.hash.length > 0);
+				if (hashed.length === 0) checks.push("No satisfied evidence has a SHA-256 hash.");
+			}
+			if (this.options.requireVerificationCommand) {
+				const withCommand = satisfied.filter((e) => e.verificationCommand && e.verificationCommand.length > 0);
+				if (withCommand.length === 0) checks.push("No satisfied evidence has a verification command.");
+			}
+		} else {
+			const unsatisfied = evidence.filter((item) => item.status !== "satisfied");
+			if (unsatisfied.length > 0) {
+				checks.push(`${unsatisfied.length} required evidence item(s) are not satisfied.`);
+			}
+			for (const item of satisfied) {
+				const issue = receiptIssue(item, contract, this.options);
+				if (issue) {
+					checks.push(issue.message);
+					hardReceiptFailure ||= issue.hard;
+				}
 			}
 		}
 
-		// Check 4: require verification command
-		if (this.options.requireVerificationCommand) {
-			const withCommand = satisfied.filter((e) => e.verificationCommand && e.verificationCommand.length > 0);
-			if (withCommand.length === 0) {
-				checks.push("No satisfied evidence has a verification command.");
-			}
-		}
-
-		// Check 5: contract verdict
-		if (contract.verdict === "fail") {
-			checks.push("Task contract verdict is 'fail'.");
+		if (contract.verdict === "fail" || (mode !== "legacy" && contract.verdict !== "pass")) {
+			checks.push(`Task contract verdict is '${contract.verdict}'.`);
 		}
 
 		let status: MergeGateStatus;
 		let reason: string;
 		let suggestion: string | undefined;
-
 		if (checks.length === 0) {
 			status = "open";
 			reason = `Evidence gate passed: ${satisfied.length}/${evidence.length} evidence items satisfied.`;
 		} else {
-			// If there are pending items and no hard failures, it's conditional; otherwise blocked
-			const hasHardFailure = failed.length > 0 || contract.verdict === "fail";
-			status = pending.length > 0 && !hasHardFailure ? "conditional" : "blocked";
+			const contractFailure = mode === "legacy" ? contract.verdict === "fail" : contract.verdict !== "pass";
+			const hasHardFailure = failed.length > 0 || contractFailure || hardReceiptFailure || mode === "strict";
+			status = hasHardFailure ? "blocked" : mode === "prefer" || pending.length > 0 ? "conditional" : "blocked";
 			reason = checks.join("; ");
 			suggestion = `Gather remaining evidence (${pending.length} pending) and re-run verification.`;
 		}

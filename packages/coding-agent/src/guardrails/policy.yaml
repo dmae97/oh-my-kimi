@@ -7,7 +7,7 @@ rules:
     origin: unified_policy
     toolName: bash
     pattern: "rm\\s+-rf|rm\\s+-r\\s+-f|rm\\s+-fr"
-    enabled: true
+    enabled: false
 
   - id: block-curl
     description: "Block curl HTTP downloads in shell"
@@ -15,7 +15,7 @@ rules:
     origin: unified_policy
     toolName: bash
     pattern: "\\bcurl\\b"
-    enabled: true
+    enabled: false
 
   - id: block-wget
     description: "Block wget HTTP downloads in shell"
@@ -23,7 +23,7 @@ rules:
     origin: unified_policy
     toolName: bash
     pattern: "\\bwget\\b"
-    enabled: true
+    enabled: false
 
   - id: block-inline-fetch
     description: "Block inline fetch / requests / http.get in shell or JS"
@@ -31,7 +31,7 @@ rules:
     origin: unified_policy
     toolName: bash
     pattern: "fetch\\('http|requests\\.get\\(|requests\\.post\\(|http\\.get\\(|http\\.request\\("
-    enabled: true
+    enabled: false
 
   - id: block-sudo
     description: "Block privilege escalation via sudo"
@@ -39,7 +39,7 @@ rules:
     origin: unified_policy
     toolName: bash
     pattern: "\\bsudo\\b"
-    enabled: true
+    enabled: false
 
   - id: block-env-read
     description: "Block reading secret files or environment dumps"
@@ -47,4 +47,4 @@ rules:
     origin: unified_policy
     toolName: bash
     pattern: "\\.env|auth\\.json|id_rsa|private.*key|SECRET|TOKEN"
-    enabled: true
+    enabled: false

@@ -9,6 +9,7 @@ import type { AgentSessionRuntime } from "../src/core/agent-session-runtime.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { ModelRegistry } from "../src/core/model-registry.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
+import { classifySessionTermination, type SessionTermination } from "../src/core/session-termination.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import { runRpcMode } from "../src/modes/rpc/rpc-mode.ts";
 import { createTestResourceLoader } from "./utilities.ts";
@@ -50,7 +51,7 @@ class MockAssistantStream extends EventStream<AssistantMessageEvent, AssistantMe
 	}
 }
 
-function createAssistantMessage(text: string): AssistantMessage {
+function createAssistantMessage(text: string, errorMessage?: string): AssistantMessage {
 	return {
 		role: "assistant",
 		content: [{ type: "text", text }],
@@ -65,7 +66,8 @@ function createAssistantMessage(text: string): AssistantMessage {
 			totalTokens: 0,
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		},
-		stopReason: "stop",
+		stopReason: errorMessage ? "error" : "stop",
+		...(errorMessage ? { errorMessage } : {}),
 		timestamp: Date.now(),
 	};
 }
@@ -89,7 +91,15 @@ function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function createRuntimeHost(options: { withAuth: boolean; responseDelayMs: number; model?: Model<any> }): {
+interface TestRpcOptions {
+	withAuth: boolean;
+	responseDelayMs: number;
+	model?: Model<any>;
+	assistantErrorMessage?: string;
+	startupTermination?: SessionTermination;
+}
+
+function createRuntimeHost(options: TestRpcOptions): {
 	runtimeHost: AgentSessionRuntime;
 	cleanup: () => Promise<void>;
 } {
@@ -113,7 +123,12 @@ function createRuntimeHost(options: { withAuth: boolean; responseDelayMs: number
 			queueMicrotask(() => {
 				stream.push({ type: "start", partial: createAssistantMessage("") });
 				setTimeout(() => {
-					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("done") });
+					const message = createAssistantMessage("done", options.assistantErrorMessage);
+					if (options.assistantErrorMessage) {
+						stream.push({ type: "error", reason: "error", error: message });
+					} else {
+						stream.push({ type: "done", reason: "stop", message });
+					}
 				}, options.responseDelayMs);
 			});
 			return stream;
@@ -136,6 +151,10 @@ function createRuntimeHost(options: { withAuth: boolean; responseDelayMs: number
 		modelRegistry,
 		resourceLoader: createTestResourceLoader(),
 	});
+
+	if (options.startupTermination) {
+		Reflect.set(session, "_lastTermination", options.startupTermination);
+	}
 
 	const runtimeHost = {
 		session,
@@ -164,7 +183,7 @@ function createRuntimeHost(options: { withAuth: boolean; responseDelayMs: number
 	};
 }
 
-async function startRpcMode(options: { withAuth: boolean; responseDelayMs: number; model?: Model<any> }): Promise<{
+async function startRpcMode(options: TestRpcOptions): Promise<{
 	lineHandler: (line: string) => void;
 	cleanup: () => Promise<void>;
 }> {
@@ -184,7 +203,7 @@ describe("RPC prompt response semantics", () => {
 		rpcIo.lineHandler = undefined;
 	});
 
-	it("emits one failure response when prompt preflight rejects", async () => {
+	it("Given provider_auth, When prompt preflight rejects, Then RPC error and event output expose the typed termination", async () => {
 		const { lineHandler, cleanup } = await startRpcMode({
 			withAuth: false,
 			responseDelayMs: 0,
@@ -206,6 +225,7 @@ describe("RPC prompt response semantics", () => {
 			lineHandler(JSON.stringify({ id: "b1", type: "prompt", message: "Hello" }));
 
 			await vi.waitFor(() => {
+				const records = parseOutputLines(rpcIo.outputLines);
 				const responses = getPromptResponses(rpcIo.outputLines, "b1");
 				expect(responses).toHaveLength(1);
 				expect(responses[0]).toMatchObject({
@@ -213,10 +233,19 @@ describe("RPC prompt response semantics", () => {
 					type: "response",
 					command: "prompt",
 					success: false,
-					error: expect.stringContaining(
-						"No API key found for fake-provider.\n\nUse /login to log into a provider via OAuth or API key. See:",
-					),
+					error: expect.stringContaining("kind=provider_auth"),
+					termination: {
+						kind: "provider_auth",
+						causeCode: "provider.auth",
+						message: expect.stringContaining("No API key found for fake-provider"),
+					},
 				});
+				expect(records).toContainEqual(
+					expect.objectContaining({
+						type: "session_termination",
+						termination: expect.objectContaining({ kind: "provider_auth" }),
+					}),
+				);
 			});
 		} finally {
 			await cleanup();
@@ -274,6 +303,108 @@ describe("RPC prompt response semantics", () => {
 				});
 			});
 
+			await sleep(150);
+		} finally {
+			await cleanup();
+		}
+	});
+
+	it("Given an inferred process_crash, When get_state runs, Then RPC state exposes the typed startup termination", async () => {
+		const termination = classifySessionTermination({
+			sessionId: "session-1",
+			runId: "run-crash",
+			timestamp: "2026-07-17T00:00:00.000Z",
+			source: "inferred_on_resume",
+			message: "The previous process exited unexpectedly.",
+			cause: { area: "process", code: "crash" },
+			sideEffects: "possible",
+		});
+		const { lineHandler, cleanup } = await startRpcMode({
+			withAuth: true,
+			responseDelayMs: 0,
+			startupTermination: termination,
+		});
+
+		try {
+			lineHandler(JSON.stringify({ id: "state-crash", type: "get_state" }));
+
+			await vi.waitFor(() => {
+				const response = parseOutputLines(rpcIo.outputLines).find((record) => record.id === "state-crash");
+				expect(response).toMatchObject({
+					type: "response",
+					command: "get_state",
+					success: true,
+					data: { lastTermination: termination },
+				});
+			});
+		} finally {
+			await cleanup();
+		}
+	});
+
+	it("Given tool_timeout, When a run ends, Then RPC event output exposes its typed diagnostic", async () => {
+		const { lineHandler, cleanup } = await startRpcMode({
+			withAuth: true,
+			responseDelayMs: 0,
+			assistantErrorMessage: "Tool bash timed out.",
+		});
+
+		try {
+			lineHandler(JSON.stringify({ id: "tool-timeout", type: "prompt", message: "Run the tool" }));
+
+			await vi.waitFor(() => {
+				expect(parseOutputLines(rpcIo.outputLines)).toContainEqual(
+					expect.objectContaining({
+						type: "session_termination",
+						termination: expect.objectContaining({
+							kind: "tool_timeout",
+							causeCode: "tool.timeout",
+							message: "Tool bash timed out.",
+						}),
+					}),
+				);
+			});
+		} finally {
+			await cleanup();
+		}
+	});
+
+	it("Given an unclassified prompt failure, When RPC responds, Then it uses the new internal termination instead of stale state", async () => {
+		const stale = classifySessionTermination({
+			sessionId: "session-1",
+			runId: "run-stale",
+			timestamp: "2026-07-17T00:00:00.000Z",
+			source: "observed",
+			message: "Old authentication failure.",
+			cause: { area: "provider", code: "auth" },
+			sideEffects: "none",
+		});
+		const { lineHandler, cleanup } = await startRpcMode({
+			withAuth: true,
+			responseDelayMs: 100,
+			startupTermination: stale,
+		});
+
+		try {
+			lineHandler(JSON.stringify({ id: "internal-start", type: "prompt", message: "Start" }));
+			await vi.waitFor(() => expect(getPromptResponses(rpcIo.outputLines, "internal-start")).toHaveLength(1));
+			lineHandler(JSON.stringify({ id: "internal-fail", type: "prompt", message: "Do not queue" }));
+
+			await vi.waitFor(() => {
+				const responses = getPromptResponses(rpcIo.outputLines, "internal-fail");
+				expect(responses).toHaveLength(1);
+				expect(responses[0]).toMatchObject({
+					success: false,
+					error: expect.stringContaining("kind=internal_error"),
+					termination: expect.objectContaining({
+						kind: "internal_error",
+						causeCode: "internal.unclassified",
+					}),
+				});
+				expect(responses[0]).not.toMatchObject({
+					termination: expect.objectContaining({ runId: "run-stale" }),
+				});
+			});
 			await sleep(150);
 		} finally {
 			await cleanup();

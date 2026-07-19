@@ -339,7 +339,13 @@ OMK loads `AGENTS.md` (or `CLAUDE.md`) at startup from:
 - Parent directories (walking up from cwd)
 - Current directory
 
-Use for project instructions (`AGENTS.md`/`CLAUDE.md`), conventions, common commands. All matching files are concatenated.
+Override context files are also discovered in the same locations:
+- `AGENTS.override.md`
+- `AGENTS.GODMODE.md`
+- `GODMODE.md`
+- `ENI.override.md`
+
+These override files are loaded in addition to `AGENTS.md`/`CLAUDE.md` and are concatenated with them. Use them for project-specific rules, conventions, and common commands that must coexist with or extend base instructions.
 
 Disable context file loading with `--no-context-files` (or `-nc`).
 

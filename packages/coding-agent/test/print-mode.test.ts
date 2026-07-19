@@ -1,7 +1,14 @@
 import type { AssistantMessage, ImageContent } from "omk-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SessionShutdownEvent } from "../src/index.ts";
+import { classifySessionTermination, type SessionShutdownEvent } from "../src/index.ts";
 import { runPrintMode } from "../src/modes/print-mode.ts";
+
+const printIo = vi.hoisted(() => ({ output: [] as string[] }));
+
+vi.mock("../src/core/output-guard.js", () => ({
+	flushRawStdout: vi.fn(async () => {}),
+	writeRawStdout: (text: string) => printIo.output.push(text),
+}));
 
 type EmitEvent = SessionShutdownEvent;
 
@@ -19,6 +26,8 @@ type FakeSession = {
 	subscribe: ReturnType<typeof vi.fn>;
 	prompt: ReturnType<typeof vi.fn>;
 	reload: ReturnType<typeof vi.fn>;
+	lastTermination?: ReturnType<typeof classifySessionTermination>;
+	recordProcessSignal: ReturnType<typeof vi.fn>;
 };
 
 type FakeRuntimeHost = {
@@ -55,7 +64,10 @@ function createAssistantMessage(options?: {
 	};
 }
 
-function createRuntimeHost(assistantMessage: AssistantMessage): FakeRuntimeHost {
+function createRuntimeHost(
+	assistantMessage: AssistantMessage,
+	lastTermination?: ReturnType<typeof classifySessionTermination>,
+): FakeRuntimeHost {
 	const extensionRunner: FakeExtensionRunner = {
 		hasHandlers: (eventType: string) => eventType === "session_shutdown",
 		emit: vi.fn(async () => {}),
@@ -72,6 +84,8 @@ function createRuntimeHost(assistantMessage: AssistantMessage): FakeRuntimeHost 
 		subscribe: vi.fn(() => () => {}),
 		prompt: vi.fn(async () => {}),
 		reload: vi.fn(async () => {}),
+		lastTermination,
+		recordProcessSignal: vi.fn(),
 	};
 
 	return {
@@ -87,6 +101,7 @@ function createRuntimeHost(assistantMessage: AssistantMessage): FakeRuntimeHost 
 }
 
 afterEach(() => {
+	printIo.output = [];
 	vi.restoreAllMocks();
 });
 
@@ -121,6 +136,110 @@ describe("runPrintMode", () => {
 		expect(session.prompt).toHaveBeenCalledWith("hello");
 		expect(session.extensionRunner.emit).toHaveBeenCalledTimes(1);
 		expect(session.extensionRunner.emit).toHaveBeenCalledWith({ type: "session_shutdown", reason: "quit" });
+	});
+
+	it("Given provider_auth, When text print fails, Then it renders the typed termination instead of the generic error", async () => {
+		const termination = classifySessionTermination({
+			sessionId: "session-1",
+			runId: "run-auth",
+			timestamp: "2026-07-17T00:00:00.000Z",
+			source: "observed",
+			message: "Authentication expired.",
+			cause: { area: "provider", code: "auth" },
+			sideEffects: "none",
+			provider: "openai",
+			model: "gpt-test",
+		});
+		const runtimeHost = createRuntimeHost(
+			createAssistantMessage({ stopReason: "error", errorMessage: "generic failure" }),
+			termination,
+		);
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		const exitCode = await runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], {
+			mode: "text",
+		});
+
+		expect(exitCode).toBe(1);
+		expect(errorSpy).toHaveBeenCalledTimes(1);
+		expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("message=Authentication expired."));
+		expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("kind=provider_auth"));
+		expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("provider/model=openai/gpt-test"));
+		expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("generic failure"));
+	});
+
+	it("Given a stale prior termination, When a new prompt rejects, Then text print does not reuse the stale error", async () => {
+		const stale = classifySessionTermination({
+			sessionId: "session-1",
+			runId: "run-stale",
+			timestamp: "2026-07-17T00:00:00.000Z",
+			source: "observed",
+			message: "Old authentication failure.",
+			cause: { area: "provider", code: "auth" },
+			sideEffects: "none",
+		});
+		const runtimeHost = createRuntimeHost(createAssistantMessage({ text: "prior response" }), stale);
+		runtimeHost.session.prompt.mockRejectedValueOnce(new Error("current prompt failure"));
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		const exitCode = await runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], {
+			mode: "text",
+			initialMessage: "new prompt",
+		});
+
+		expect(exitCode).toBe(1);
+		expect(errorSpy).toHaveBeenCalledWith("current prompt failure");
+		expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("run-stale"));
+	});
+
+	it.each([
+		{ label: "tool_timeout", cause: { area: "tool", code: "timeout" } as const, kind: "tool_timeout" },
+		{
+			label: "generic internal error fallback",
+			cause: { area: "internal", code: "unclassified" } as const,
+			kind: "internal_error",
+		},
+	])("Given $label, When text print fails, Then it renders the current typed termination", async ({ cause, kind }) => {
+		const termination = classifySessionTermination({
+			sessionId: "session-1",
+			runId: `run-${kind}`,
+			timestamp: "2026-07-17T00:00:00.000Z",
+			source: "observed",
+			message: `Diagnostic for ${kind}.`,
+			cause,
+			sideEffects: "possible",
+		});
+		const runtimeHost = createRuntimeHost(
+			createAssistantMessage({ stopReason: "error", errorMessage: "generic failure" }),
+			termination,
+		);
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		await runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], { mode: "text" });
+
+		expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(`kind=${kind}`));
+		expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(`message=Diagnostic for ${kind}.`));
+		expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("generic failure"));
+	});
+
+	it("Given an inferred process_crash, When JSON print starts, Then it emits the typed startup termination", async () => {
+		const termination = classifySessionTermination({
+			sessionId: "session-1",
+			runId: "run-crash",
+			timestamp: "2026-07-17T00:00:00.000Z",
+			source: "inferred_on_resume",
+			message: "The previous process exited without a terminal record.",
+			cause: { area: "process", code: "crash" },
+			sideEffects: "possible",
+		});
+		const runtimeHost = createRuntimeHost(createAssistantMessage({ text: "prior response" }), termination);
+
+		await runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], { mode: "json" });
+
+		expect(printIo.output.map((line) => JSON.parse(line))).toContainEqual({
+			type: "session_termination",
+			termination,
+		});
 	});
 
 	it("emits session_shutdown and returns non-zero on assistant error", async () => {

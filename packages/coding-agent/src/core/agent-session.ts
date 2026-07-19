@@ -13,10 +13,20 @@
  * Modes use this class and add their own I/O layer on top.
  */
 
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
-import type { Agent, AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "omk-agent-core";
-import type { Api, AssistantMessage, ImageContent, Message, Model, TextContent } from "omk-ai";
+import { isDeepStrictEqual } from "node:util";
+import {
+	type Agent,
+	type AgentEvent,
+	type AgentMessage,
+	type AgentState,
+	type AgentTool,
+	repairTranscriptIntegrity,
+	type ThinkingLevel,
+} from "omk-agent-core";
+import type { Api, AssistantMessage, ImageContent, Message, Model, TextContent, ToolResultMessage } from "omk-ai";
 import {
 	clampThinkingLevel,
 	cleanupSessionResources,
@@ -26,14 +36,29 @@ import {
 	resetApiProviders,
 	streamSimple,
 } from "omk-ai";
+import type { ReplayLedgerManager } from "../guardrails/evidence-system.ts";
 import { theme } from "../modes/interactive/theme/theme.ts";
+import type { ReplayEventType } from "../types/evidence.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { resolvePath } from "../utils/paths.ts";
+import { sanitizeBinaryOutput } from "../utils/shell.ts";
 import { sleep } from "../utils/sleep.ts";
+import {
+	applyCategoryTimeoutDefaults,
+	resolveAgentToolSettings,
+	resolveToolTimeoutCategory,
+} from "./agent-tool-settings.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
 import { parseBangInvocation } from "./bang-skill-invocation.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 import { classifyShellCommand } from "./command-safety.ts";
+import { type CompactionSettings, getCompactionHeadroomThreshold } from "./compaction/compaction.ts";
+import {
+	type CompactionHysteresisState,
+	createCompactionHysteresisConfig,
+	createCompactionHysteresisState,
+	stepCompactionHysteresis,
+} from "./compaction/hysteresis.ts";
 import {
 	type CompactionResult,
 	calculateContextTokens,
@@ -44,9 +69,32 @@ import {
 	generateBranchSummary,
 	prepareCompaction,
 	resolveCompactionModel,
-	shouldCompact,
 } from "./compaction/index.ts";
 import { compactionEmitWillRetry } from "./compaction/resume-policy.ts";
+import {
+	type CompactionBarrierResult,
+	type CompactionEnvelope,
+	type CompactionPreservedProvenanceInput,
+	type CompactionSourceIdentity,
+	type CompactionTransaction,
+	createCompactionEnvelope,
+	createCompactionSourceIdentity,
+	createCompactionTransaction,
+	decideCompactionCommit,
+	evaluateCompactionBarrier,
+	validateCompactionEnvelope,
+} from "./compaction/transaction.ts";
+import {
+	estimateToolResultReserve,
+	type ToolResultClass,
+	type ToolResultReserveRequest,
+} from "./context-budget-reserved-tokens.ts";
+import {
+	applyContextCacheInvalidation,
+	type ContextCacheInvalidationEvent,
+	type ContextCacheInvalidationSnapshot,
+	createContextCacheInvalidationSnapshot,
+} from "./context-budget-v2-cache-invalidation.ts";
 import { createMemoryContextBudgetCacheProviderV2 } from "./context-budget-v2-cache-provider.ts";
 import type { ContextBudgetCacheProviderV2 } from "./context-budget-v2-types.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
@@ -98,16 +146,27 @@ import {
 	type RouterBiasSnapshot,
 } from "./reasoning-router-bias.ts";
 import { classifyTaskV4, resolveThinkingLevelV4WithUncertainty, type TaskClassV4 } from "./reasoning-router-v4.ts";
+import { redactSensitiveText } from "./redaction.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
 import {
 	appendRouterFeedbackRecord,
 	type RouterFeedbackLenBucket,
 	type RouterFeedbackRecord,
 } from "./router-feedback-collector.ts";
+import type { RunJournalAuditDetails, RunJournalAuditEvent, RunJournalRecord } from "./run-journal.ts";
+import { type RunJournalQuarantineReport, RunJournalStore } from "./run-journal-store.ts";
 import { detectSandboxBackend } from "./sandbox/backend.ts";
 import type { SandboxBackendStatus } from "./sandbox/policy.ts";
-import type { BranchSummaryEntry, CompactionEntry, SessionManager } from "./session-manager.ts";
+import type { SessionIntegrityReport } from "./session-integrity.ts";
+import { inspectSessionIntegrity } from "./session-integrity.ts";
+import type { BranchSummaryEntry, CompactionEntry, SessionEntry, SessionManager } from "./session-manager.ts";
 import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.ts";
+import {
+	classifySessionTermination,
+	type SessionProcessSignal,
+	type SessionTermination,
+	type SessionTerminationCause,
+} from "./session-termination.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
@@ -175,7 +234,21 @@ export type AgentSessionEvent =
 			errorMessage?: string;
 	  }
 	| { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
-	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string };
+	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
+	| { type: "session_termination"; termination: SessionTermination }
+	| {
+			/**
+			 * A late-settling potentially-writing tool may have mutated the
+			 * workspace after its terminal result was committed. Evidence
+			 * freshness consumers must treat affected scopes as stale
+			 * (empty `paths` means the whole workspace root).
+			 */
+			type: "workspace_mutation";
+			source: "tool_late_settlement";
+			toolCallId: string;
+			toolName: string;
+			payload: { root: string; paths: readonly string[] };
+	  };
 
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
@@ -218,6 +291,20 @@ export interface AgentSessionConfig {
 	extensionRunnerRef?: { current?: ExtensionRunner };
 	/** Session start event metadata emitted when extensions bind to this runtime. */
 	sessionStartEvent?: SessionStartEvent;
+	/** Transcript repair applied by the SDK while opening/resuming this session (ALG001-A). */
+	transcriptRepair?: SessionTranscriptRepair;
+	/** Optional shared replay ledger used by evidence receipts and runtime mutation audits. */
+	replayLedger?: ReplayLedgerManager;
+	/** Goal binding for replay events. Defaults to the ledger's own goal id. */
+	replayGoalId?: string;
+	/** Optional lane binding for replay events. */
+	replayLaneId?: string;
+}
+
+/** Summary of a missing-only transcript auto-repair applied on session open/resume. */
+export interface SessionTranscriptRepair {
+	readonly insertedToolCallIds: readonly string[];
+	readonly reason: "resume";
 }
 
 export interface ExtensionBindings {
@@ -298,6 +385,45 @@ interface ToolDefinitionEntry {
 	sourceInfo: SourceInfo;
 }
 
+interface CapturedCompactionState {
+	readonly report: SessionIntegrityReport;
+	readonly branchEntries: readonly SessionEntry[];
+	readonly revision: CompactionTransaction["baseRevision"];
+	readonly source: CompactionSourceIdentity;
+}
+
+interface BegunCompaction {
+	readonly capture: CapturedCompactionState;
+	readonly transaction: CompactionTransaction;
+}
+
+interface CommittedCompaction {
+	readonly entry: CompactionEntry;
+	readonly envelope: CompactionEnvelope;
+}
+
+const PENDING_TOOL_RESULT_TOKENS = {
+	text: 1024,
+	image: 4096,
+	"large-output": 16_384,
+} as const satisfies Record<ToolResultClass, number>;
+
+const TEXT_RESULT_TOOLS = new Set(["edit", "find", "grep", "ls", "read", "write"]);
+const IMAGE_PATH_PATTERN = /\.(?:avif|gif|jpe?g|png|webp)$/iu;
+
+function pendingToolResultClass(name: string, args: unknown): ToolResultClass {
+	if (
+		name === "read" &&
+		typeof args === "object" &&
+		args !== null &&
+		typeof Reflect.get(args, "path") === "string" &&
+		IMAGE_PATH_PATTERN.test(Reflect.get(args, "path"))
+	) {
+		return "image";
+	}
+	return TEXT_RESULT_TOOLS.has(name) ? "text" : "large-output";
+}
+
 // ============================================================================
 // Constants
 // ============================================================================
@@ -329,6 +455,110 @@ function buildSandboxDeniedBashResult(reason: string): BashResult {
 		cancelled: false,
 		truncated: false,
 	};
+}
+function snapshotContractError(reason: string): Error {
+	return new Error(`Finalized message replacement must be a plain serializable snapshot: ${reason}`);
+}
+
+/**
+ * Clone a finalized message replacement into the JSON-compatible snapshot
+ * persisted by SessionManager. Undefined remains allowed as ordinary optional
+ * message data: JSON omits object properties with undefined values and writes
+ * undefined array elements as null.
+ */
+function clonePlainSnapshot(
+	value: unknown,
+	ancestors = new WeakSet<object>(),
+	copies = new WeakMap<object, unknown>(),
+): unknown {
+	if (value === null) return value;
+
+	switch (typeof value) {
+		case "string":
+		case "boolean":
+		case "undefined":
+			return value;
+		case "number":
+			if (!Number.isFinite(value)) {
+				throw snapshotContractError("non-finite number values are not allowed");
+			}
+			return value;
+		case "bigint":
+			throw snapshotContractError("bigint values are not allowed");
+		case "function":
+		case "symbol":
+			throw snapshotContractError(`${typeof value} values are not allowed`);
+		case "object":
+			break;
+		default:
+			throw snapshotContractError(`${typeof value} values are not allowed`);
+	}
+
+	if (ancestors.has(value)) {
+		throw snapshotContractError("cyclic values are not allowed");
+	}
+	if (copies.has(value)) {
+		return copies.get(value);
+	}
+	ancestors.add(value);
+
+	try {
+		if (Array.isArray(value)) {
+			const copy: unknown[] = new Array(value.length);
+			copies.set(value, copy);
+			for (const key of Reflect.ownKeys(value)) {
+				if (key === "length") continue;
+				if (typeof key !== "string" || !/^(0|[1-9]\d*)$/.test(key) || Number(key) >= value.length) {
+					throw snapshotContractError("arrays may only contain indexed values");
+				}
+				const descriptor = Object.getOwnPropertyDescriptor(value, key);
+				if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+					throw snapshotContractError("accessor or non-enumerable properties are not allowed");
+				}
+				copy[Number(key)] = clonePlainSnapshot(descriptor.value, ancestors, copies);
+			}
+			return copy;
+		}
+
+		const prototype = Object.getPrototypeOf(value);
+		if (prototype !== Object.prototype && prototype !== null) {
+			throw snapshotContractError("non-plain objects are not allowed");
+		}
+
+		const copy = Object.create(prototype) as Record<string, unknown>;
+		copies.set(value, copy);
+		for (const key of Reflect.ownKeys(value)) {
+			if (typeof key !== "string") {
+				throw snapshotContractError("symbol-keyed properties are not allowed");
+			}
+			const descriptor = Object.getOwnPropertyDescriptor(value, key);
+			if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+				throw snapshotContractError("accessor or non-enumerable properties are not allowed");
+			}
+			Object.defineProperty(copy, key, {
+				value: clonePlainSnapshot(descriptor.value, ancestors, copies),
+				enumerable: true,
+				configurable: true,
+				writable: true,
+			});
+		}
+		return copy;
+	} finally {
+		ancestors.delete(value);
+	}
+}
+
+function freezeSnapshot<T>(value: T, seen = new WeakSet<object>()): T {
+	if (value === null || typeof value !== "object" || seen.has(value)) return value;
+	seen.add(value);
+	for (const child of Object.values(value as Record<string, unknown>)) {
+		freezeSnapshot(child, seen);
+	}
+	return Object.freeze(value);
+}
+
+function createImmutableMessageSnapshot(message: AgentMessage): AgentMessage {
+	return freezeSnapshot(clonePlainSnapshot(message) as AgentMessage);
 }
 
 // ============================================================================
@@ -369,6 +599,7 @@ export class AgentSession {
 	// Event subscription state
 	private _unsubscribeAgent?: () => void;
 	private _eventListeners: AgentSessionEventListener[] = [];
+	private _messageEndReplacements = new WeakMap<Extract<AgentEvent, { type: "message_end" }>, AgentMessage>();
 
 	/** Tracks pending steering messages for UI display. Removed when delivered. */
 	private _steeringMessages: string[] = [];
@@ -381,6 +612,8 @@ export class AgentSession {
 	private _compactionAbortController: AbortController | undefined = undefined;
 	private _autoCompactionAbortController: AbortController | undefined = undefined;
 	private _overflowRecoveryAttempted = false;
+	private _thresholdCompactionEmergency = false;
+	private _compactionHysteresisState: CompactionHysteresisState = createCompactionHysteresisState();
 
 	// Branch summarization state
 	private _branchSummaryAbortController: AbortController | undefined = undefined;
@@ -418,10 +651,27 @@ export class AgentSession {
 	private _extensionErrorListener?: ExtensionErrorListener;
 	private _extensionErrorUnsubscriber?: () => void;
 
+	// Required durable run/audit chain, persisted next to the session file.
+	private readonly _runJournalStore: RunJournalStore;
+	private _activeRunId: string | null = null;
+	private _pendingRuntimeTerminationCause: SessionTerminationCause | undefined;
+	private _activeRunToolTermination:
+		| { toolCallId: string; toolName: string; timeoutMs?: number; executionStarted: boolean }
+		| undefined;
+	private _lastTermination: SessionTermination | undefined;
+	private _userAbortRequested = false;
+	private readonly _replayLedger: ReplayLedgerManager | undefined;
+	private readonly _replayGoalId: string | undefined;
+	private readonly _replayLaneId: string | undefined;
+	private _transcriptRepair: SessionTranscriptRepair | undefined;
+	private _sessionRiskLevel: "normal" | "elevated" = "normal";
+	private _workspaceMutationCount = 0;
+
 	// Model registry for API key resolution
 	private _modelRegistry: ModelRegistry;
 	/** Lazy, in-memory only; never shared across sessions or persisted. */
 	private _contextBudgetCacheProvider: ContextBudgetCacheProviderV2 | undefined;
+	private _contextCacheInvalidationSnapshot: ContextCacheInvalidationSnapshot;
 
 	// Tool registry for extension getTools/setTools
 	private _toolRegistry: Map<string, AgentTool> = new Map();
@@ -442,6 +692,13 @@ export class AgentSession {
 		this._customTools = config.customTools ?? [];
 		this._cwd = config.cwd;
 		this._modelRegistry = config.modelRegistry;
+		const initialModelId = this._contextCacheModelId(this.agent.state.model);
+		this._contextCacheInvalidationSnapshot = createContextCacheInvalidationSnapshot({
+			forkId: this.sessionManager.getSessionId(),
+			worktreeFingerprint: this._contextCacheWorktreeFingerprint(),
+			activeModelId: initialModelId,
+			compactionModelId: initialModelId,
+		});
 		this._extensionRunnerRef = config.extensionRunnerRef;
 		this._initialActiveToolNames = config.initialActiveToolNames;
 		this._allowedToolNames = config.allowedToolNames ? new Set(config.allowedToolNames) : undefined;
@@ -450,11 +707,36 @@ export class AgentSession {
 		this._loadoutAccessPolicy = config.loadoutAccessPolicy;
 		this._configuredBashSandboxPreflight = config.bashSandboxPreflight;
 		this._sessionStartEvent = config.sessionStartEvent ?? { type: "session_start", reason: "startup" };
+		this._transcriptRepair = config.transcriptRepair;
+		this._replayLedger = config.replayLedger;
+		this._replayGoalId = config.replayGoalId ?? config.replayLedger?.getLedger().goalId;
+		this._replayLaneId = config.replayLaneId;
+		if (this._replayLedger && this._replayGoalId !== this._replayLedger.getLedger().goalId) {
+			throw new Error("AgentSession replayGoalId does not match the replay ledger goal id");
+		}
+		const sessionFile = this.sessionManager.getSessionFile();
+		this._runJournalStore = RunJournalStore.open({
+			...(sessionFile ? { journalPath: `${sessionFile}.runjournal` } : {}),
+			sessionId: this.sessionManager.getSessionId(),
+		});
+		const startupTerminal = this._runJournalStore.records.at(-1);
+		if (startupTerminal?.event === "run_recovered") {
+			this._lastTermination = startupTerminal.termination;
+		}
 
 		// Always subscribe to agent events for internal handling
 		// (session persistence, extensions, auto-compaction, retry logic)
 		this._unsubscribeAgent = this.agent.subscribe(this._handleAgentEvent);
 		this._installAgentToolHooks();
+
+		// Durable transcript-repair audit for a repair applied on open/resume.
+		if (this._transcriptRepair) {
+			this._invalidateContextBudgetCache({ type: "transcriptRepair" });
+			this._appendRunJournalAudit("transcript_repaired", {
+				insertedToolCallIds: [...this._transcriptRepair.insertedToolCallIds],
+				reason: this._transcriptRepair.reason,
+			});
+		}
 
 		this._buildRuntime({
 			activeToolNames: this._initialActiveToolNames,
@@ -465,6 +747,360 @@ export class AgentSession {
 	/** Model registry for API key resolution and model discovery */
 	get modelRegistry(): ModelRegistry {
 		return this._modelRegistry;
+	}
+
+	/** Transcript repair applied while this session was opened/resumed, if any. */
+	get transcriptRepair(): SessionTranscriptRepair | undefined {
+		return this._transcriptRepair;
+	}
+
+	/** Durable lifecycle and audit records appended by this session's run journal. */
+	get runJournalRecords(): readonly RunJournalRecord[] {
+		return this._runJournalStore.records;
+	}
+
+	/** Most recently observed or inferred termination for this session. */
+	get lastTermination(): SessionTermination | undefined {
+		return this._lastTermination;
+	}
+
+	/** Exact trailing journal fragment quarantine performed during startup, if any. */
+	get runJournalQuarantineReport(): RunJournalQuarantineReport | null {
+		return this._runJournalStore.quarantineReport;
+	}
+
+	/** Elevated once a late-settling potentially-writing tool may have mutated the workspace. */
+	get sessionRiskLevel(): "normal" | "elevated" {
+		return this._sessionRiskLevel;
+	}
+
+	/** Monotonic count of workspace mutation/invalidation signals emitted by this session. */
+	get workspaceMutationCount(): number {
+		return this._workspaceMutationCount;
+	}
+
+	get contextCacheInvalidationSnapshot(): ContextCacheInvalidationSnapshot {
+		return this._contextCacheInvalidationSnapshot;
+	}
+
+	private _contextCacheModelId(model: Model<any> | undefined): string {
+		return model
+			? `model-${createHash("sha256").update(`${model.provider}\0${model.id}`, "utf8").digest("hex")}`
+			: "unknown";
+	}
+
+	private _contextCacheWorktreeFingerprint(): string {
+		return createHash("sha256").update(`${this._cwd}\0${this._workspaceMutationCount}`, "utf8").digest("hex");
+	}
+
+	private _invalidateContextBudgetCache(event: ContextCacheInvalidationEvent): void {
+		const result = applyContextCacheInvalidation(this._contextCacheInvalidationSnapshot, event);
+		this._contextCacheInvalidationSnapshot = result.snapshot;
+		if (result.status === "overflow") {
+			this._contextBudgetCacheProvider = undefined;
+			return;
+		}
+		this._contextBudgetCacheProvider?.setInvalidationSnapshot?.(result.snapshot);
+	}
+
+	private _recordEvidenceReceiptInvalidation(customType: string): void {
+		if (customType === "evidence_receipt" || customType === "evidence-receipt") {
+			this._invalidateContextBudgetCache({ type: "evidenceReceipt" });
+		}
+	}
+
+	private _sessionRevision(): number {
+		return this.sessionManager.getEntries().length;
+	}
+
+	private _appendReplayEvent(type: ReplayEventType, payload: unknown): void {
+		if (!this._replayLedger || !this._replayGoalId) return;
+		this._replayLedger.append({
+			type,
+			goalId: this._replayGoalId,
+			...(this._replayLaneId ? { laneId: this._replayLaneId } : {}),
+			payload,
+		});
+		this._replayLedger.persist();
+	}
+
+	/** Append one required durable audit record. Persistence failures propagate. */
+	private _appendRunJournalAudit(event: RunJournalAuditEvent, details: RunJournalAuditDetails): void {
+		this._runJournalStore.audit({
+			event,
+			details,
+			sessionRevision: this._sessionRevision(),
+			timestamp: new Date().toISOString(),
+		});
+		this._appendReplayEvent(event, details);
+	}
+
+	private _terminationMessage(value: string | undefined, fallback: string): string {
+		const redacted = redactSensitiveText(value?.trim() || fallback)
+			.replace(/\0/g, "")
+			.slice(0, 512);
+		return redacted || fallback;
+	}
+
+	private _providerFailureCause(message: AssistantMessage): SessionTerminationCause {
+		const text = message.errorMessage ?? "";
+		if (isContextOverflow(message, this.model?.contextWindow ?? 0)) {
+			return { area: "provider", code: "context_overflow" };
+		}
+		if (/auth|unauthori[sz]ed|forbidden|invalid.?api.?key|no api key|401|403|\/login/i.test(text)) {
+			return { area: "provider", code: "auth" };
+		}
+		if (/rate.?limit|too many requests|429|quota|available balance|billing/i.test(text)) {
+			return { area: "provider", code: "rate_limit" };
+		}
+		if (/tool.+timed? out|tool.+timeout/i.test(text)) return { area: "tool", code: "timeout" };
+		if (/tool/i.test(text)) return { area: "tool", code: "fatal" };
+		if (/network|fetch failed|connection|socket|websocket|timed? out|timeout|dns|econn/i.test(text)) {
+			return { area: "provider", code: "network" };
+		}
+		return { area: "provider", code: "protocol" };
+	}
+
+	private _classifyPreflightCause(message: string): SessionTerminationCause {
+		if (!this.model || /no model|model selected|model is required/i.test(message)) {
+			return { area: "configuration", code: "invalid" };
+		}
+		if (/auth|api key|unauthori[sz]ed|forbidden|401|403|\/login/i.test(message)) {
+			return { area: "provider", code: "auth" };
+		}
+		if (/context.+overflow|context window|too many tokens/i.test(message)) {
+			return { area: "provider", code: "context_overflow" };
+		}
+		if (/duplicate.?result/i.test(message)) return { area: "transcript", code: "duplicate_result" };
+		if (/orphan.?result/i.test(message)) return { area: "transcript", code: "orphan_result" };
+		if (/duplicate.?call/i.test(message)) return { area: "transcript", code: "duplicate_call_id" };
+		if (/transcript|missing.?result/i.test(message)) return { area: "transcript", code: "missing_result" };
+		if (/compaction/i.test(message)) return { area: "compaction", code: "failed" };
+		if (/fsync/i.test(message)) return { area: "persistence", code: "fsync_failed" };
+		if (/lock/i.test(message)) return { area: "persistence", code: "lock_failed" };
+		if (/append|persist|write/i.test(message)) return { area: "persistence", code: "append_failed" };
+		if (/tool/i.test(message)) return { area: "tool", code: "fatal" };
+		return { area: "internal", code: "unclassified" };
+	}
+
+	private _classifyRunTermination(
+		runId: string,
+		event: Extract<AgentEvent, { type: "agent_end" }>,
+	): SessionTermination {
+		const timestamp = new Date().toISOString();
+		const assistant = [...event.messages]
+			.reverse()
+			.find((message): message is AssistantMessage => message.role === "assistant");
+		let cause: SessionTerminationCause;
+		let message: string;
+		let sideEffects: "none" | "possible" = this._sessionRiskLevel === "elevated" ? "possible" : "none";
+		let toolCallId: string | undefined;
+		let toolName: string | undefined;
+
+		if (this._activeRunToolTermination) {
+			cause = { area: "tool", code: "timeout" };
+			message = `Tool ${this._activeRunToolTermination.toolName} timed out.`;
+			toolCallId = this._activeRunToolTermination.toolCallId;
+			toolName = this._activeRunToolTermination.toolName;
+			sideEffects = this._activeRunToolTermination.executionStarted ? "possible" : sideEffects;
+		} else if (!assistant) {
+			cause = { area: "internal", code: "unclassified" };
+			message = "Agent run ended without an assistant result.";
+		} else if (assistant.stopReason === "aborted") {
+			cause = this._userAbortRequested ? { area: "user", code: "abort" } : { area: "provider", code: "abort" };
+			message = this._terminationMessage(
+				assistant.errorMessage,
+				this._userAbortRequested ? "The user aborted the run." : "The provider aborted the run.",
+			);
+		} else if (assistant.stopReason === "error") {
+			cause = this._providerFailureCause(assistant);
+			message = this._terminationMessage(assistant.errorMessage, "The provider request failed.");
+		} else {
+			cause = { area: "completed" };
+			message = "Run completed.";
+		}
+
+		return classifySessionTermination({
+			sessionId: this.sessionId,
+			runId,
+			timestamp,
+			source: "observed",
+			message,
+			cause,
+			sideEffects,
+			...(assistant?.provider
+				? { provider: assistant.provider }
+				: this.model
+					? { provider: this.model.provider }
+					: {}),
+			...(assistant?.model ? { model: assistant.model } : this.model ? { model: this.model.id } : {}),
+			...(toolCallId ? { toolCallId } : {}),
+			...(toolName ? { toolName } : {}),
+		});
+	}
+
+	private _publishTermination(termination: SessionTermination): void {
+		this._lastTermination = termination;
+		this._emit({ type: "session_termination", termination });
+	}
+
+	private _runtimeFailureCause(error: unknown): SessionTerminationCause {
+		if (this._pendingRuntimeTerminationCause) return this._pendingRuntimeTerminationCause;
+		const code =
+			typeof error === "object" && error !== null && "code" in error ? Reflect.get(error, "code") : undefined;
+		if (
+			typeof code === "string" &&
+			new Set(["EACCES", "EDQUOT", "EFBIG", "EIO", "EISDIR", "EMFILE", "ENFILE", "ENOSPC", "EPERM", "EROFS"]).has(
+				code,
+			)
+		) {
+			return { area: "persistence", code: "append_failed" };
+		}
+		const message = error instanceof Error ? error.message : String(error);
+		if (/compaction.+stale|session changed during compaction/i.test(message)) {
+			return { area: "compaction", code: "stale" };
+		}
+		if (/compaction/i.test(message)) return { area: "compaction", code: "failed" };
+		return { area: "internal", code: "unclassified" };
+	}
+
+	private _publishRuntimeFailure(error: unknown): void {
+		const cause = this._runtimeFailureCause(error);
+		const runId = this._activeRunId ?? `runtime-${randomUUID()}`;
+		const timestamp = new Date().toISOString();
+		const message =
+			cause.area === "persistence"
+				? "A required runtime persistence operation failed."
+				: cause.area === "compaction"
+					? "Runtime compaction failed."
+					: "The AgentSession runtime failed before completing the run.";
+		let termination = classifySessionTermination({
+			sessionId: this.sessionId,
+			runId,
+			timestamp,
+			source: "observed",
+			message,
+			cause,
+			sideEffects: this._activeRunId === null ? "none" : "possible",
+			...(this.model ? { provider: this.model.provider, model: this.model.id } : {}),
+		});
+		if (this._activeRunId !== null && this._runJournalStore.openRunId === this._activeRunId) {
+			try {
+				this._runJournalStore.finish({
+					termination,
+					sessionRevision: this._sessionRevision(),
+					timestamp,
+				});
+			} catch {
+				termination = classifySessionTermination({
+					sessionId: this.sessionId,
+					runId,
+					timestamp,
+					source: "observed",
+					message: "The run journal could not persist the runtime termination.",
+					cause: { area: "persistence", code: "append_failed" },
+					sideEffects: "possible",
+					...(this.model ? { provider: this.model.provider, model: this.model.id } : {}),
+				});
+			}
+		}
+		this._activeRunId = null;
+		this._activeRunToolTermination = undefined;
+		this._pendingRuntimeTerminationCause = undefined;
+		this._userAbortRequested = false;
+		this._publishTermination(termination);
+	}
+
+	private _handleRunLifecycleEvent(event: AgentEvent): void {
+		if (event.type === "agent_start") {
+			if (this._activeRunId !== null) throw new Error("run journal already has an active AgentSession run");
+			const runId = randomUUID();
+			this._activeRunId = runId;
+			this._activeRunToolTermination = undefined;
+			this._pendingRuntimeTerminationCause = undefined;
+			this._userAbortRequested = false;
+			try {
+				this._runJournalStore.start({
+					runId,
+					sessionRevision: this._sessionRevision(),
+					timestamp: new Date().toISOString(),
+				});
+			} catch (error) {
+				this._pendingRuntimeTerminationCause = { area: "persistence", code: "append_failed" };
+				throw error;
+			}
+			return;
+		}
+		if (event.type !== "agent_end") return;
+		if (this._activeRunId === null) throw new Error("run journal received agent_end without run_started");
+		const termination = this._classifyRunTermination(this._activeRunId, event);
+		try {
+			this._runJournalStore.finish({
+				termination,
+				sessionRevision: this._sessionRevision(),
+				timestamp: termination.timestamp,
+			});
+		} catch (error) {
+			this._pendingRuntimeTerminationCause = { area: "persistence", code: "append_failed" };
+			throw error;
+		}
+		this._activeRunId = null;
+		this._activeRunToolTermination = undefined;
+		this._pendingRuntimeTerminationCause = undefined;
+		this._userAbortRequested = false;
+		this._publishTermination(termination);
+	}
+
+	/**
+	 * Handle tool timeout / late-settlement audit signals (ALG004-A/B). A late
+	 * settlement of a potentially-writing tool raises session risk and emits a
+	 * workspace mutation/invalidation signal for evidence freshness consumers.
+	 */
+	private _handleToolAuditEvent(event: AgentEvent): void {
+		if (event.type === "tool_execution_end") {
+			this._invalidateContextBudgetCache({ type: "toolResultDisposition" });
+			const envelope = (event.result as { details?: { omk?: Record<string, unknown> } } | undefined)?.details?.omk;
+			if (envelope && envelope.schema === "tool-result/v2" && envelope.disposition === "timeout") {
+				const timeout = {
+					toolCallId: event.toolCallId,
+					toolName: event.toolName,
+					...(typeof envelope.timeoutMs === "number" ? { timeoutMs: envelope.timeoutMs } : {}),
+					executionStarted: envelope.executionStarted === true,
+				};
+				this._activeRunToolTermination = timeout;
+				this._appendRunJournalAudit("tool_timeout", timeout);
+			}
+			return;
+		}
+		if (event.type !== "tool_execution_late_settlement") {
+			return;
+		}
+		// Fail closed: anything not classified as a read-category tool may write.
+		const potentiallyWriting = resolveToolTimeoutCategory(event.toolName) !== "read";
+		this._appendRunJournalAudit("tool_late_settlement", {
+			toolCallId: event.toolCallId,
+			toolName: event.toolName,
+			disposition: event.disposition,
+			outcome: event.outcome,
+			...(potentiallyWriting ? { sessionRisk: "elevated" as const } : {}),
+		});
+		if (potentiallyWriting) {
+			this._sessionRiskLevel = "elevated";
+			this._workspaceMutationCount += 1;
+			this._invalidateContextBudgetCache({
+				type: "worktreeFingerprint",
+				value: this._contextCacheWorktreeFingerprint(),
+			});
+			const payload = { root: this._cwd, paths: [] as readonly string[] };
+			this._appendReplayEvent("workspace_mutation", payload);
+			this._emit({
+				type: "workspace_mutation",
+				source: "tool_late_settlement",
+				toolCallId: event.toolCallId,
+				toolName: event.toolName,
+				payload,
+			});
+		}
 	}
 
 	private _getBashSandboxPreflight(override?: BashSandboxPreflight): BashSandboxPreflight | undefined {
@@ -599,6 +1235,9 @@ export class AgentSession {
 
 	/** Internal handler for agent events - shared by subscribe and reconnect */
 	private _handleAgentEvent = async (event: AgentEvent): Promise<void> => {
+		// Required run lifecycle persistence executes before extension/user listeners.
+		this._handleRunLifecycleEvent(event);
+
 		// When a user message starts, check if it's from either queue and remove it BEFORE emitting
 		// This ensures the UI sees the updated queue state
 		if (event.type === "message_start" && event.message.role === "user") {
@@ -621,38 +1260,51 @@ export class AgentSession {
 			}
 		}
 
+		// Durable tool timeout / late-settlement audits (ALG004-A/B).
+		this._handleToolAuditEvent(event);
+
 		// Emit to extensions first
 		await this._emitExtensionEvent(event);
+		const replacement = event.type === "message_end" ? this._messageEndReplacements.get(event) : undefined;
+		if (event.type === "message_end") {
+			this._messageEndReplacements.delete(event);
+		}
+		const finalizedEvent: AgentEvent =
+			replacement === undefined ? event : (Object.freeze({ ...event, message: replacement }) as AgentEvent);
 
 		// Notify all listeners
-		this._emit(event.type === "agent_end" ? { ...event, willRetry: this._willRetryAfterAgentEnd(event) } : event);
+		this._emit(
+			finalizedEvent.type === "agent_end"
+				? { ...finalizedEvent, willRetry: this._willRetryAfterAgentEnd(finalizedEvent) }
+				: finalizedEvent,
+		);
 
 		// Handle session persistence
-		if (event.type === "message_end") {
+		if (finalizedEvent.type === "message_end") {
 			// Check if this is a custom message from extensions
-			if (event.message.role === "custom") {
+			if (finalizedEvent.message.role === "custom") {
 				// Persist as CustomMessageEntry
 				this.sessionManager.appendCustomMessageEntry(
-					event.message.customType,
-					event.message.content,
-					event.message.display,
-					event.message.details,
+					finalizedEvent.message.customType,
+					finalizedEvent.message.content,
+					finalizedEvent.message.display,
+					finalizedEvent.message.details,
 				);
 			} else if (
-				event.message.role === "user" ||
-				event.message.role === "assistant" ||
-				event.message.role === "toolResult"
+				finalizedEvent.message.role === "user" ||
+				finalizedEvent.message.role === "assistant" ||
+				finalizedEvent.message.role === "toolResult"
 			) {
 				// Regular LLM message - persist as SessionMessageEntry
-				this.sessionManager.appendMessage(event.message);
+				this.sessionManager.appendMessage(finalizedEvent.message);
 			}
 			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
 			// Track assistant message for auto-compaction (checked on agent_end)
-			if (event.message.role === "assistant") {
-				this._lastAssistantMessage = event.message;
+			if (finalizedEvent.message.role === "assistant") {
+				this._lastAssistantMessage = finalizedEvent.message;
 
-				const assistantMsg = event.message as AssistantMessage;
+				const assistantMsg = finalizedEvent.message as AssistantMessage;
 				if (assistantMsg.stopReason !== "error") {
 					this._overflowRecoveryAttempted = false;
 				}
@@ -707,20 +1359,22 @@ export class AgentSession {
 		return undefined;
 	}
 
-	private _replaceMessageInPlace(target: AgentMessage, replacement: AgentMessage): void {
-		// Agent-core stores the finalized message object in its state before emitting message_end.
-		// SessionManager persistence happens later in _handleAgentEvent() with event.message.
-		// Mutating this object in place keeps agent state, later turn/agent events, listeners,
-		// and the eventual SessionManager.appendMessage(event.message) persistence in sync.
-		if (target === replacement) {
-			return;
+	private _replaceFinalizedMessage(target: AgentMessage, replacement: AgentMessage): AgentMessage {
+		const messages = this.agent.state.messages;
+		const matchingIndexes = messages.flatMap((message, index) => (isDeepStrictEqual(message, target) ? [index] : []));
+		if (matchingIndexes.length !== 1) {
+			throw new Error(
+				matchingIndexes.length === 0
+					? "Finalized message was not found in agent state"
+					: "Finalized message is ambiguous in agent state",
+			);
 		}
 
-		const targetRecord = target as unknown as Record<string, unknown>;
-		for (const key of Object.keys(targetRecord)) {
-			delete targetRecord[key];
-		}
-		Object.assign(targetRecord, replacement);
+		const finalizedReplacement = createImmutableMessageSnapshot(replacement);
+		const nextMessages = messages.slice();
+		nextMessages[matchingIndexes[0]!] = finalizedReplacement;
+		this.agent.state.messages = nextMessages;
+		return finalizedReplacement;
 	}
 
 	/** Emit extension events based on agent events */
@@ -766,7 +1420,8 @@ export class AgentSession {
 			};
 			const replacement = await this._extensionRunner.emitMessageEnd(extensionEvent);
 			if (replacement) {
-				this._replaceMessageInPlace(event.message, replacement);
+				const finalizedReplacement = this._replaceFinalizedMessage(event.message, replacement);
+				this._messageEndReplacements.set(event, finalizedReplacement);
 			}
 		} else if (event.type === "tool_execution_start") {
 			const extensionEvent: ToolExecutionStartEvent = {
@@ -950,10 +1605,28 @@ export class AgentSession {
 			}
 		}
 		this.agent.state.tools = tools;
+		this._applyToolTimeoutCategoryDefaults(validToolNames);
 
 		// Rebuild base system prompt with new tool set
 		this._baseSystemPrompt = this._rebuildSystemPrompt(validToolNames);
 		this.agent.state.systemPrompt = this._baseSystemPrompt;
+	}
+
+	/**
+	 * Recompute the Agent's per-name timeout map for the active tool set:
+	 * explicit user/settings entries always win; active tools without an entry
+	 * receive their §6.3 category default (ALG004-C); uncategorized tools fall
+	 * through to the global `toolTimeoutMs`.
+	 */
+	private _applyToolTimeoutCategoryDefaults(activeToolNames: readonly string[]): void {
+		try {
+			const resolved = resolveAgentToolSettings(this.settingsManager);
+			this.agent.toolTimeouts = applyCategoryTimeoutDefaults(activeToolNames, resolved.toolTimeouts);
+		} catch {
+			// Invalid settings fail closed at session creation; keep current
+			// explicit entries and still fill category defaults for active tools.
+			this.agent.toolTimeouts = applyCategoryTimeoutDefaults(activeToolNames, this.agent.toolTimeouts ?? {});
+		}
 	}
 
 	/** Whether compaction or branch summarization is currently running */
@@ -1114,6 +1787,7 @@ export class AgentSession {
 		}
 
 		const cacheProvider = this._contextBudgetCacheProvider ?? createMemoryContextBudgetCacheProviderV2("session");
+		cacheProvider.setInvalidationSnapshot?.(this._contextCacheInvalidationSnapshot);
 		this._contextBudgetCacheProvider = cacheProvider;
 
 		// Enforce floor
@@ -1201,6 +1875,9 @@ export class AgentSession {
 			while (await this._handlePostAgentRun()) {
 				await this.agent.continue();
 			}
+		} catch (error) {
+			this._publishRuntimeFailure(error);
+			throw error;
 		} finally {
 			this._flushPendingBashMessages();
 		}
@@ -1248,7 +1925,7 @@ export class AgentSession {
 	async prompt(text: string, options?: PromptOptions): Promise<void> {
 		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
 		const preflightResult = options?.preflightResult;
-		let currentText = text;
+		let currentText = redactSensitiveText(text);
 		let promptActiveSkillNames = [...(options?.activeSkillNames ?? [])];
 		let promptActiveSkillSource = options?.activeSkillSource;
 		let isBangSkillInvocation = false;
@@ -1307,6 +1984,7 @@ export class AgentSession {
 				expandedText = this._expandSkillCommand(expandedText);
 				expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
 			}
+			expandedText = redactSensitiveText(expandedText);
 
 			// If streaming, queue via steer() or followUp() based on option
 			if (this.isStreaming) {
@@ -1426,6 +2104,21 @@ export class AgentSession {
 			await this._checkProjectedCompaction(messages);
 		} catch (error) {
 			preflightResult?.(false);
+			const rawMessage = error instanceof Error ? error.message : String(error);
+			const cause = this._classifyPreflightCause(rawMessage);
+			const timestamp = new Date().toISOString();
+			this._publishTermination(
+				classifySessionTermination({
+					sessionId: this.sessionId,
+					runId: `preflight-${randomUUID()}`,
+					timestamp,
+					source: "observed",
+					message: this._terminationMessage(rawMessage, "Prompt preflight failed."),
+					cause,
+					sideEffects: "none",
+					...(this.model ? { provider: this.model.provider, model: this.model.id } : {}),
+				}),
+			);
 			throw error;
 		}
 
@@ -1506,16 +2199,18 @@ export class AgentSession {
 	 * @throws Error if text is an extension command
 	 */
 	async steer(text: string, images?: ImageContent[]): Promise<void> {
+		const sanitizedText = redactSensitiveText(text);
+
 		// Check for extension commands (cannot be queued)
-		if (text.startsWith("/")) {
-			this._throwIfExtensionCommand(text);
+		if (sanitizedText.startsWith("/")) {
+			this._throwIfExtensionCommand(sanitizedText);
 		}
 
 		// Expand skill commands and prompt templates
-		let expandedText = this._expandSkillCommand(text);
+		let expandedText = this._expandSkillCommand(sanitizedText);
 		expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
 
-		await this._queueSteer(expandedText, images);
+		await this._queueSteer(redactSensitiveText(expandedText), images);
 	}
 
 	/**
@@ -1526,22 +2221,25 @@ export class AgentSession {
 	 * @throws Error if text is an extension command
 	 */
 	async followUp(text: string, images?: ImageContent[]): Promise<void> {
+		const sanitizedText = redactSensitiveText(text);
+
 		// Check for extension commands (cannot be queued)
-		if (text.startsWith("/")) {
-			this._throwIfExtensionCommand(text);
+		if (sanitizedText.startsWith("/")) {
+			this._throwIfExtensionCommand(sanitizedText);
 		}
 
 		// Expand skill commands and prompt templates
-		let expandedText = this._expandSkillCommand(text);
+		let expandedText = this._expandSkillCommand(sanitizedText);
 		expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
 
-		await this._queueFollowUp(expandedText, images);
+		await this._queueFollowUp(redactSensitiveText(expandedText), images);
 	}
 
 	/**
 	 * Internal: Queue a steering message (already expanded, no extension command check).
 	 */
 	private async _queueSteer(text: string, images?: ImageContent[]): Promise<void> {
+		this._invalidateContextBudgetCache({ type: "userSteering" });
 		this._steeringMessages.push(text);
 		this._emitQueueUpdate();
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
@@ -1611,6 +2309,7 @@ export class AgentSession {
 			details: message.details,
 			timestamp: Date.now(),
 		} satisfies CustomMessage<T>;
+		this._recordEvidenceReceiptInvalidation(message.customType);
 		if (options?.deliverAs === "nextTurn") {
 			this._pendingNextTurnMessages.push(appMessage);
 		} else if (this.isStreaming) {
@@ -1712,9 +2411,36 @@ export class AgentSession {
 	 * Abort current operation and wait for agent to become idle.
 	 */
 	async abort(): Promise<void> {
+		this._userAbortRequested = this.isStreaming || this.isRetrying;
 		this.abortRetry();
 		this.agent.abort();
 		await this.agent.waitForIdle();
+	}
+
+	/** Record an observed process signal before a mode begins shutdown. */
+	recordProcessSignal(signal: SessionProcessSignal): SessionTermination {
+		const timestamp = new Date().toISOString();
+		const runId = this._activeRunId ?? `signal-${randomUUID()}`;
+		const termination = classifySessionTermination({
+			sessionId: this.sessionId,
+			runId,
+			timestamp,
+			source: "observed",
+			message: `Process received ${signal}.`,
+			cause: { area: "process", code: "signal", signal },
+			sideEffects: this._activeRunId === null ? "none" : "possible",
+			...(this.model ? { provider: this.model.provider, model: this.model.id } : {}),
+		});
+		if (this._activeRunId !== null) {
+			this._runJournalStore.finish({
+				termination,
+				sessionRevision: this._sessionRevision(),
+				timestamp,
+			});
+			this._activeRunId = null;
+		}
+		this._publishTermination(termination);
+		return termination;
 	}
 
 	// =========================================================================
@@ -1727,6 +2453,7 @@ export class AgentSession {
 		source: "set" | "cycle" | "restore",
 	): Promise<void> {
 		if (modelsAreEqual(previousModel, nextModel)) return;
+		this._invalidateContextBudgetCache({ type: "activeModelId", value: this._contextCacheModelId(nextModel) });
 		await this._extensionRunner.emit({
 			type: "model_select",
 			model: nextModel,
@@ -2109,17 +2836,371 @@ export class AgentSession {
 	// Compaction
 	// =========================================================================
 
+	private _captureCompactionState(): CapturedCompactionState {
+		return this.sessionManager.withCompactionCommitLock(() => this._captureCompactionStateLocked());
+	}
+
+	private _captureCompactionStateLocked(): CapturedCompactionState {
+		const sessionFile = this.sessionManager.getSessionFile();
+		const bytes =
+			sessionFile && existsSync(sessionFile)
+				? new Uint8Array(readFileSync(sessionFile))
+				: new TextEncoder().encode(
+						`${[this.sessionManager.getHeader(), ...this.sessionManager.getEntries()]
+							.filter((entry) => entry !== null)
+							.map((entry) => JSON.stringify(entry))
+							.join("\n")}\n`,
+					);
+		const report = inspectSessionIntegrity(bytes, { activeLeafId: this.sessionManager.getLeafId() });
+		const branchEntries = report.activeBranch;
+		let latestCompactionIndex = -1;
+		for (let index = branchEntries.length - 1; index >= 0; index -= 1) {
+			if (branchEntries[index]?.type === "compaction") {
+				latestCompactionIndex = index;
+				break;
+			}
+		}
+		const latestCompaction = branchEntries[latestCompactionIndex];
+		const firstKeptIndex =
+			latestCompaction?.type === "compaction"
+				? branchEntries.findIndex((entry) => entry.id === latestCompaction.firstKeptEntryId)
+				: -1;
+		const sourceEntries = branchEntries.slice(
+			latestCompactionIndex < 0 ? 0 : firstKeptIndex < 0 ? latestCompactionIndex : firstKeptIndex,
+		);
+		const firstEntry = sourceEntries[0];
+		const lastEntry = sourceEntries.at(-1);
+		if (!firstEntry || !lastEntry || report.activeLeafId === null) {
+			const barrier = evaluateCompactionBarrier(report, [...this.agent.state.pendingToolCalls]);
+			if (barrier.status !== "ready") throw this._barrierError(barrier);
+			throw new Error("Nothing to compact: the active session branch is empty");
+		}
+		const revision = this.sessionManager.getDurableHeadToken();
+		const source = createCompactionSourceIdentity({
+			sessionId: revision.sessionId,
+			entryIds: sourceEntries.map((entry) => entry.id),
+			firstEntryId: firstEntry.id,
+			lastEntryId: lastEntry.id,
+			sourceSha256: createHash("sha256")
+				.update(sourceEntries.map((entry) => JSON.stringify(entry)).join("\n"), "utf8")
+				.digest("hex"),
+			activeLeafId: report.activeLeafId,
+			messageCount: report.activeMessages.length,
+		});
+		return { report, branchEntries, revision, source };
+	}
+
+	private _captureCompactionProvenance(capture: CapturedCompactionState): CompactionPreservedProvenanceInput {
+		let latestIntent = "Continue the current session";
+		for (let index = capture.report.activeMessages.length - 1; index >= 0; index -= 1) {
+			const message = capture.report.activeMessages[index];
+			if (message?.role !== "user") continue;
+			const candidate = sanitizeBinaryOutput(redactSensitiveText(this._getUserMessageText(message)).trim()).slice(
+				0,
+				16_384,
+			);
+			if (candidate.length > 0) latestIntent = candidate;
+			break;
+		}
+		const modelHistory = capture.branchEntries
+			.flatMap((entry) => {
+				if (entry.type === "model_change") {
+					return [{ entryId: entry.id, provider: entry.provider, modelId: entry.modelId }];
+				}
+				if (entry.type === "message" && entry.message.role === "assistant") {
+					return [{ entryId: entry.id, provider: entry.message.provider, modelId: entry.message.model }];
+				}
+				return [];
+			})
+			.slice(-256);
+		const customEntryIds = (customType: string): string[] =>
+			capture.branchEntries
+				.filter((entry) => entry.type === "custom" && entry.customType === customType)
+				.map((entry) => entry.id);
+		return {
+			latestIntent,
+			openTasks: [],
+			laneIds: customEntryIds("lane"),
+			acceptancePredicateIds: customEntryIds("acceptance_predicate"),
+			evidenceReceiptIds: customEntryIds("evidence_receipt"),
+			blockerReasons: [],
+			repairEventIds: [
+				...customEntryIds("transcript_repaired"),
+				...customEntryIds("compaction_transcript_repaired"),
+			],
+			branch: null,
+			worktree: this._cwd,
+			modelHistory,
+			nextAction: latestIntent,
+		};
+	}
+
+	private _barrierError(barrier: CompactionBarrierResult): Error {
+		if (barrier.status === "defer") {
+			return new Error(`Compaction deferred until the transcript closes (${barrier.reason})`);
+		}
+		return new Error(
+			`Compaction failed closed on transcript integrity (${barrier.reason}). Run the session doctor before retrying.`,
+		);
+	}
+
+	private _evaluateCompactionBarrier(
+		capture: CapturedCompactionState,
+		includeMissingTailAsPending: boolean,
+		excludedPendingIds: ReadonlySet<string> = new Set(),
+	): CompactionBarrierResult {
+		const pending = new Set(
+			[...this.agent.state.pendingToolCalls].filter((toolCallId) => !excludedPendingIds.has(toolCallId)),
+		);
+		if (includeMissingTailAsPending) {
+			for (const issue of capture.report.transcript?.issues ?? []) {
+				if (issue.kind === "missing_result") pending.add(issue.toolCallId);
+			}
+		}
+		return evaluateCompactionBarrier(capture.report, [...pending]);
+	}
+
+	private _repairEmergencyCompactionTail(capture: CapturedCompactionState): {
+		readonly capture: CapturedCompactionState;
+		readonly repairedToolCallIds: ReadonlySet<string>;
+	} {
+		const barrier = this._evaluateCompactionBarrier(capture, true);
+		if (barrier.status !== "defer" || barrier.reason !== "missing_active_tail_results") {
+			if (barrier.status !== "ready") throw this._barrierError(barrier);
+			return { capture, repairedToolCallIds: new Set() };
+		}
+		const repairedMessages = repairTranscriptIntegrity(
+			[...capture.report.activeMessages],
+			"Tool result missing; synthesized to close an emergency compaction barrier",
+		);
+		const inserted = repairedMessages.slice(capture.report.activeMessages.length);
+		const repairedToolCallIds = new Set<string>();
+		for (const message of inserted) {
+			if (message.role !== "toolResult") {
+				throw new Error("Emergency compaction repair produced a non-tool result");
+			}
+			const toolResult: ToolResultMessage = message;
+			repairedToolCallIds.add(toolResult.toolCallId);
+			this.sessionManager.appendMessage(toolResult);
+		}
+		this.sessionManager.appendCustomEntry("compaction_transcript_repaired", {
+			insertedToolCallIds: [...repairedToolCallIds],
+			reason: "emergency_compaction",
+		});
+		this._invalidateContextBudgetCache({ type: "transcriptRepair" });
+		const closedCapture = this._captureCompactionState();
+		const closedBarrier = this._evaluateCompactionBarrier(closedCapture, false, repairedToolCallIds);
+		if (closedBarrier.status !== "ready") throw this._barrierError(closedBarrier);
+		this.agent.state.messages = this.sessionManager.buildSessionContext().messages;
+		return { capture: closedCapture, repairedToolCallIds };
+	}
+
+	private _priorCommittedCompactionSourceDigests(): string[] {
+		const digests: string[] = [];
+		for (const entry of this.sessionManager.getEntries()) {
+			if (entry.type !== "compaction" || typeof entry.details !== "object" || entry.details === null) continue;
+			if (!Object.hasOwn(entry.details, "compactionEnvelope")) continue;
+			const envelope = validateCompactionEnvelope(Reflect.get(entry.details, "compactionEnvelope"));
+			if (envelope.summary !== entry.summary) {
+				throw new Error(`Compaction entry ${entry.id} has invalid provenance. Run the session doctor.`);
+			}
+			digests.push(envelope.source.sourceSha256);
+		}
+		return digests;
+	}
+
+	private _beginCompactionTransaction(compactionModel: Model<Api>, emergency: boolean): BegunCompaction {
+		let capture = this._captureCompactionState();
+		if (emergency) {
+			capture = this._repairEmergencyCompactionTail(capture).capture;
+		} else {
+			const barrier = this._evaluateCompactionBarrier(capture, false);
+			if (barrier.status !== "ready") throw this._barrierError(barrier);
+		}
+		const transaction = createCompactionTransaction({
+			transactionId: randomUUID(),
+			baseRevision: capture.revision,
+			source: capture.source,
+			createdAt: new Date().toISOString(),
+			model: { provider: compactionModel.provider, id: compactionModel.id },
+			preserved: this._captureCompactionProvenance(capture),
+		});
+		if (this._priorCommittedCompactionSourceDigests().includes(transaction.source.sourceSha256)) {
+			throw new Error("This exact compaction source was already compacted");
+		}
+		return { capture, transaction };
+	}
+
+	private _detailsWithCompactionEnvelope(details: unknown, envelope: CompactionEnvelope): unknown {
+		if (typeof details === "object" && details !== null && !Array.isArray(details)) {
+			return { ...details, compactionEnvelope: envelope };
+		}
+		return {
+			compactionEnvelope: envelope,
+			...(details === undefined ? {} : { resultDetails: details }),
+		};
+	}
+
+	private _commitCompaction(
+		begun: BegunCompaction,
+		result: CompactionResult,
+		fromExtension: boolean,
+	): CommittedCompaction {
+		if (!begun.transaction.source.entryIds.includes(result.firstKeptEntryId)) {
+			throw new Error("Compaction first-kept entry is outside the captured source");
+		}
+		const committed = this.sessionManager.withCompactionCommitLock(() => {
+			const current = this._captureCompactionState();
+			const barrier = this._evaluateCompactionBarrier(current, false);
+			const decision = decideCompactionCommit({
+				transaction: begun.transaction,
+				currentRevision: current.revision,
+				currentSource: current.source,
+				barrier,
+				priorCommittedSourceDigests: this._priorCommittedCompactionSourceDigests(),
+			});
+			switch (decision.decision) {
+				case "duplicate":
+					throw new Error("This exact compaction source was already compacted");
+				case "stale":
+					throw new Error(
+						`Session changed during compaction (${decision.reason}); generated summary was discarded`,
+					);
+				case "defer":
+				case "fail_closed":
+					throw this._barrierError(barrier);
+				case "commit": {
+					const envelope = createCompactionEnvelope({
+						transaction: begun.transaction,
+						decision,
+						summary: result.summary,
+						summarySha256: createHash("sha256").update(result.summary, "utf8").digest("hex"),
+					});
+					const entryId = this.sessionManager.appendCompaction(
+						result.summary,
+						result.firstKeptEntryId,
+						result.tokensBefore,
+						this._detailsWithCompactionEnvelope(result.details, envelope),
+						fromExtension,
+					);
+					const entry = this.sessionManager.getEntry(entryId);
+					if (!entry || entry.type !== "compaction") {
+						throw new Error("Compaction commit did not produce a compaction entry");
+					}
+					return { entry, envelope };
+				}
+			}
+		});
+		this._recordCompactionCommitForHysteresis();
+		return committed;
+	}
+
+	private _pendingToolResultReserve(settings: CompactionSettings): number {
+		const pendingIds = this.agent.state.pendingToolCalls;
+		const calls = new Map<string, { readonly name: string; readonly args: unknown }>();
+		const streaming = this.agent.state.streamingMessage;
+		const messages = streaming ? [...this.agent.state.messages, streaming] : this.agent.state.messages;
+		for (const message of messages) {
+			if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+			for (const part of message.content) {
+				if (part.type === "toolCall" && pendingIds.has(part.id)) {
+					calls.set(part.id, { name: part.name, args: part.arguments });
+				}
+			}
+		}
+		const counts: Record<ToolResultClass, number> = { text: 0, image: 0, "large-output": 0 };
+		for (const id of pendingIds) {
+			const call = calls.get(id);
+			const resultClass = call ? pendingToolResultClass(call.name, call.args) : "large-output";
+			counts[resultClass] += 1;
+		}
+		const requests: ToolResultReserveRequest[] = [];
+		for (const resultClass of ["text", "image", "large-output"] as const) {
+			if (counts[resultClass] > 0) {
+				requests.push({
+					class: resultClass,
+					count: counts[resultClass],
+					tokensPerResult: PENDING_TOOL_RESULT_TOKENS[resultClass],
+				});
+			}
+		}
+		const configured = settings.reservedToolResultTokens ?? 0;
+		requests.push({ class: "large-output", count: 1, tokensPerResult: configured });
+		return estimateToolResultReserve(requests);
+	}
+
+	private _compactionHysteresisConfig(contextWindow: number, settings: CompactionSettings) {
+		const threshold = getCompactionHeadroomThreshold(contextWindow, {
+			...settings,
+			reservedToolResultTokens: this._pendingToolResultReserve(settings),
+		});
+		if (!threshold) return undefined;
+		const triggerRatio = Math.min(
+			1,
+			Math.max(1 / Math.floor(contextWindow), threshold.triggerTokens / contextWindow),
+		);
+		const configuredRearm = settings.rearmRatio ?? triggerRatio * 0.75;
+		const rearmRatio = Math.min(configuredRearm, triggerRatio * 0.999);
+		const emergencyRatio = Math.max(triggerRatio, settings.emergencyRatio ?? 0.98);
+		return createCompactionHysteresisConfig({ rearmRatio, triggerRatio, emergencyRatio });
+	}
+
+	private _runtimeCompactionDecision(
+		contextTokens: number,
+		contextWindow: number,
+		settings: CompactionSettings,
+	): { readonly compact: boolean; readonly emergency: boolean } {
+		if (!Number.isFinite(contextTokens) || contextTokens < 0) return { compact: false, emergency: false };
+		const config = this._compactionHysteresisConfig(contextWindow, settings);
+		if (!config) return { compact: false, emergency: false };
+		const result = stepCompactionHysteresis({
+			config,
+			state: this._compactionHysteresisState,
+			ratio: Math.min(1, contextTokens / contextWindow),
+		});
+		this._compactionHysteresisState = result.nextState;
+		return { compact: result.action === "compact", emergency: result.reason === "emergency_threshold_reached" };
+	}
+
+	private async _runThresholdCompaction(emergency: boolean): Promise<boolean> {
+		this._thresholdCompactionEmergency = emergency;
+		try {
+			return await this._runAutoCompaction("threshold", false);
+		} finally {
+			this._thresholdCompactionEmergency = false;
+		}
+	}
+
+	private _recordCompactionCommitForHysteresis(): void {
+		const contextWindow = this.model?.contextWindow ?? 0;
+		const config = this._compactionHysteresisConfig(contextWindow, this.settingsManager.getCompactionSettings());
+		if (!config) return;
+		this._compactionHysteresisState = stepCompactionHysteresis({
+			config,
+			state: this._compactionHysteresisState,
+			ratio: 0,
+			outcome: "commit",
+		}).nextState;
+	}
+
 	private _resolveCompactionModel(sessionModel: Model<Api>): Model<Api> {
 		const configuredModel = this.settingsManager.getCompactionModel();
 		const availableModels = this._modelRegistry.getAvailable();
+		let model: Model<Api>;
 		if (configuredModel) {
-			const model = findExactModelReferenceMatch(configuredModel, availableModels);
-			if (!model) {
+			const configured = findExactModelReferenceMatch(configuredModel, availableModels);
+			if (!configured) {
 				throw new Error(`Configured compaction model "${configuredModel}" is unavailable or unauthenticated.`);
 			}
-			return model;
+			model = configured;
+		} else {
+			model = resolveCompactionModel(sessionModel, availableModels);
 		}
-		return resolveCompactionModel(sessionModel, availableModels);
+		this._invalidateContextBudgetCache({
+			type: "compactionModelId",
+			value: this._contextCacheModelId(model),
+		});
+		return model;
 	}
 
 	/**
@@ -2132,6 +3213,7 @@ export class AgentSession {
 		await this.abort();
 		this._compactionAbortController = new AbortController();
 		this._emit({ type: "compaction_start", reason: "manual" });
+		let committedCompaction = false;
 
 		try {
 			if (!this.model) {
@@ -2141,8 +3223,9 @@ export class AgentSession {
 			const compactionModel = this._resolveCompactionModel(this.model);
 			const { apiKey, headers } = await this._getCompactionRequestAuth(compactionModel);
 
-			const pathEntries = this.sessionManager.getBranch();
 			const settings = this.settingsManager.getCompactionSettings();
+			const begun = this._beginCompactionTransaction(compactionModel, false);
+			const pathEntries = [...begun.capture.branchEntries];
 
 			const preparation = prepareCompaction(pathEntries, settings);
 			if (!preparation) {
@@ -2209,30 +3292,23 @@ export class AgentSession {
 				throw new Error("Compaction cancelled");
 			}
 
-			this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension);
-			const newEntries = this.sessionManager.getEntries();
-			const sessionContext = this.sessionManager.buildSessionContext();
-			this.agent.state.messages = sessionContext.messages;
-
-			// Get the saved compaction entry for the extension event
-			const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary) as
-				| CompactionEntry
-				| undefined;
-
-			if (this._extensionRunner && savedCompactionEntry) {
-				await this._extensionRunner.emit({
-					type: "session_compact",
-					compactionEntry: savedCompactionEntry,
-					fromExtension,
-				});
-			}
-
-			const compactionResult = {
+			const compactionResult: CompactionResult = {
 				summary,
 				firstKeptEntryId,
 				tokensBefore,
 				details,
 			};
+			const committed = this._commitCompaction(begun, compactionResult, fromExtension);
+			committedCompaction = true;
+			this.agent.state.messages = this.sessionManager.buildSessionContext().messages;
+
+			if (this._extensionRunner) {
+				await this._extensionRunner.emit({
+					type: "session_compact",
+					compactionEntry: committed.entry,
+					fromExtension,
+				});
+			}
 			this._emit({
 				type: "compaction_end",
 				reason: "manual",
@@ -2244,6 +3320,20 @@ export class AgentSession {
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			const aborted = message === "Compaction cancelled" || (error instanceof Error && error.name === "AbortError");
+			const stale = /stale|session changed during compaction|already compacted/i.test(message);
+			const timestamp = new Date().toISOString();
+			this._publishTermination(
+				classifySessionTermination({
+					sessionId: this.sessionId,
+					runId: `compaction-${randomUUID()}`,
+					timestamp,
+					source: "observed",
+					message: this._terminationMessage(message, "Manual compaction failed."),
+					cause: { area: "compaction", code: aborted ? "aborted" : stale ? "stale" : "failed" },
+					sideEffects: committedCompaction ? "confirmed" : "none",
+					...(this.model ? { provider: this.model.provider, model: this.model.id } : {}),
+				}),
+			);
 			this._emit({
 				type: "compaction_end",
 				reason: "manual",
@@ -2294,8 +3384,9 @@ export class AgentSession {
 			}
 		}
 
-		if (shouldCompact(estimate.tokens, contextWindow, settings)) {
-			return await this._runAutoCompaction("threshold", false);
+		const decision = this._runtimeCompactionDecision(estimate.tokens, contextWindow, settings);
+		if (decision.compact) {
+			return await this._runThresholdCompaction(decision.emergency);
 		}
 		return false;
 	}
@@ -2385,8 +3476,9 @@ export class AgentSession {
 		} else {
 			contextTokens = calculateContextTokens(assistantMessage.usage);
 		}
-		if (shouldCompact(contextTokens, contextWindow, settings)) {
-			return await this._runAutoCompaction("threshold", false);
+		const decision = this._runtimeCompactionDecision(contextTokens, contextWindow, settings);
+		if (decision.compact) {
+			return await this._runThresholdCompaction(decision.emergency);
 		}
 		return false;
 	}
@@ -2394,7 +3486,11 @@ export class AgentSession {
 	/**
 	 * Internal: Run auto-compaction with events.
 	 */
-	private async _runAutoCompaction(reason: "overflow" | "threshold", willRetry: boolean): Promise<boolean> {
+	private async _runAutoCompaction(
+		reason: "overflow" | "threshold",
+		willRetry: boolean,
+		emergency = reason === "overflow" || this._thresholdCompactionEmergency,
+	): Promise<boolean> {
 		const settings = this.settingsManager.getCompactionSettings();
 
 		this._emit({ type: "compaction_start", reason });
@@ -2437,7 +3533,8 @@ export class AgentSession {
 				({ apiKey, headers } = await this._getCompactionRequestAuth(compactionModel));
 			}
 
-			const pathEntries = this.sessionManager.getBranch();
+			const begun = this._beginCompactionTransaction(compactionModel, emergency);
+			const pathEntries = [...begun.capture.branchEntries];
 
 			const preparation = prepareCompaction(pathEntries, settings);
 			if (!preparation) {
@@ -2520,30 +3617,22 @@ export class AgentSession {
 				return false;
 			}
 
-			this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension);
-			const newEntries = this.sessionManager.getEntries();
-			const sessionContext = this.sessionManager.buildSessionContext();
-			this.agent.state.messages = sessionContext.messages;
-
-			// Get the saved compaction entry for the extension event
-			const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary) as
-				| CompactionEntry
-				| undefined;
-
-			if (this._extensionRunner && savedCompactionEntry) {
-				await this._extensionRunner.emit({
-					type: "session_compact",
-					compactionEntry: savedCompactionEntry,
-					fromExtension,
-				});
-			}
-
 			const result: CompactionResult = {
 				summary,
 				firstKeptEntryId,
 				tokensBefore,
 				details,
 			};
+			const committed = this._commitCompaction(begun, result, fromExtension);
+			this.agent.state.messages = this.sessionManager.buildSessionContext().messages;
+
+			if (this._extensionRunner) {
+				await this._extensionRunner.emit({
+					type: "session_compact",
+					compactionEntry: committed.entry,
+					fromExtension,
+				});
+			}
 			const emitWillRetry = compactionEmitWillRetry(willRetry, this.agent.hasQueuedMessages());
 			this._emit({ type: "compaction_end", reason, result, aborted: false, willRetry: emitWillRetry });
 
@@ -2740,6 +3829,7 @@ export class AgentSession {
 				},
 				appendEntry: (customType, data) => {
 					this.sessionManager.appendCustomEntry(customType, data);
+					this._recordEvidenceReceiptInvalidation(customType);
 				},
 				setSessionName: (name) => {
 					this.setSessionName(name);
@@ -3002,6 +4092,7 @@ export class AgentSession {
 		const previousFlagValues = this._extensionRunner.getFlagValues();
 		await emitSessionShutdownEvent(this._extensionRunner, { type: "session_shutdown", reason: "reload" });
 		await this.settingsManager.reload();
+		this._invalidateContextBudgetCache({ type: "settings" });
 		resetApiProviders();
 		await this._resourceLoader.reload();
 		this._buildRuntime({

@@ -93,6 +93,25 @@ function loadContextFileFromDir(dir: string): ContextFile | null {
 	return null;
 }
 
+function loadOverrideFilesFromDir(dir: string): ContextFile[] {
+	const candidates = ["AGENTS.override.md", "AGENTS.GODMODE.md", "GODMODE.md", "ENI.override.md"];
+	const results: ContextFile[] = [];
+	for (const filename of candidates) {
+		const filePath = join(dir, filename);
+		if (existsSync(filePath)) {
+			try {
+				results.push({
+					path: filePath,
+					content: readFileSync(filePath, "utf-8"),
+				});
+			} catch (error) {
+				console.error(chalk.yellow(`Warning: Could not read ${filePath}: ${error}`));
+			}
+		}
+	}
+	return results;
+}
+
 function isGlobalContextFile(file: ContextFile, agentDir: string): boolean {
 	const resolvedAgentDir = resolvePath(agentDir);
 	const normalizedPath = resolve(file.path);
@@ -113,6 +132,14 @@ export function loadProjectContextFiles(options: { cwd: string; agentDir: string
 		seenPaths.add(globalContext.path);
 	}
 
+	const globalOverrides = loadOverrideFilesFromDir(resolvedAgentDir);
+	for (const override of globalOverrides) {
+		if (!seenPaths.has(override.path)) {
+			contextFiles.push({ ...override, isGlobal: true });
+			seenPaths.add(override.path);
+		}
+	}
+
 	const ancestorContextFiles: ContextFile[] = [];
 
 	let currentDir = resolvedCwd;
@@ -126,6 +153,17 @@ export function loadProjectContextFiles(options: { cwd: string; agentDir: string
 				isGlobal: isGlobalContextFile(contextFile, resolvedAgentDir),
 			});
 			seenPaths.add(contextFile.path);
+		}
+
+		const dirOverrides = loadOverrideFilesFromDir(currentDir);
+		for (const override of dirOverrides) {
+			if (!seenPaths.has(override.path)) {
+				ancestorContextFiles.unshift({
+					...override,
+					isGlobal: isGlobalContextFile(override, resolvedAgentDir),
+				});
+				seenPaths.add(override.path);
+			}
 		}
 
 		if (currentDir === root) break;

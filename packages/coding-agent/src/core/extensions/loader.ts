@@ -9,6 +9,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti/static";
 import * as _bundledOmkAgentCore from "omk-agent-core";
+import * as _bundledOmkAgentCoreNode from "omk-agent-core/node";
 import * as _bundledOmkAi from "omk-ai";
 import * as _bundledOmkAiOauth from "omk-ai/oauth";
 import type { KeyId } from "omk-tui";
@@ -49,6 +50,7 @@ const VIRTUAL_MODULES: Record<string, unknown> = {
 	"@sinclair/typebox/compile": _bundledTypeboxCompile,
 	"@sinclair/typebox/value": _bundledTypeboxValue,
 	"omk-agent-core": _bundledOmkAgentCore,
+	"omk-agent-core/node": _bundledOmkAgentCoreNode,
 	"omk-tui": _bundledOmkTui,
 	"omk-ai": _bundledOmkAi,
 	"omk-ai/oauth": _bundledOmkAiOauth,
@@ -57,12 +59,76 @@ const VIRTUAL_MODULES: Record<string, unknown> = {
 
 const require = createRequire(import.meta.url);
 
+let _aliases: Record<string, string> | null = null;
+
+type PackageJsonResolver = (id: string) => string;
+type ExistsSync = (path: string) => boolean;
+
+function findPackageJsonPath(
+	specifier: string,
+	startDir: string,
+	resolvePackageJson: PackageJsonResolver = require.resolve,
+	existsSync: ExistsSync = fs.existsSync,
+): string {
+	try {
+		return resolvePackageJson(`${specifier}/package.json`);
+	} catch {
+		let current = startDir;
+		while (true) {
+			const candidate = path.join(current, "node_modules", ...specifier.split("/"), "package.json");
+			if (existsSync(candidate)) {
+				return candidate;
+			}
+			const parent = path.dirname(current);
+			if (parent === current) {
+				throw new Error(
+					`Unable to resolve package.json for ${specifier}. Install ${specifier} or run OMK from a workspace containing its built package.`,
+				);
+			}
+			current = parent;
+		}
+	}
+}
+
+function resolveWorkspaceOrPackageFile(
+	workspaceRelativePath: string,
+	specifier: string,
+	packageRelativePath: string,
+	packagesRoot: string,
+	resolvePackageJson: PackageJsonResolver,
+	existsSync: ExistsSync,
+	startDir: string,
+): string {
+	const workspacePath = path.join(packagesRoot, workspaceRelativePath);
+	if (existsSync(workspacePath)) {
+		return workspacePath;
+	}
+	const packageJsonPath = findPackageJsonPath(specifier, startDir, resolvePackageJson, existsSync);
+	return path.join(path.dirname(packageJsonPath), packageRelativePath);
+}
+
+/** Internal test seam for omk-agent-core/node resolution branches. */
+export function resolveOmkAgentCoreNodeEntryForTests(options: {
+	packagesRoot: string;
+	startDir: string;
+	resolvePackageJson: PackageJsonResolver;
+	existsSync: ExistsSync;
+}): string {
+	return resolveWorkspaceOrPackageFile(
+		"agent/dist/node.js",
+		"omk-agent-core",
+		"dist/node.js",
+		options.packagesRoot,
+		options.resolvePackageJson,
+		options.existsSync,
+		options.startDir,
+	);
+}
+
 /**
  * Get aliases for jiti (used in Node.js/development mode).
  * In Bun binary mode, virtualModules is used instead.
  */
-let _aliases: Record<string, string> | null = null;
-
 function getAliases(): Record<string, string> {
 	if (_aliases) return _aliases;
 
@@ -74,49 +140,57 @@ function getAliases(): Record<string, string> {
 	const typeboxValueEntry = require.resolve("typebox/value");
 
 	const packagesRoot = path.resolve(__dirname, "../../../../");
-	const findPackageJsonPath = (specifier: string): string => {
-		try {
-			return require.resolve(`${specifier}/package.json`);
-		} catch {
-			let current = __dirname;
-			while (true) {
-				const candidate = path.join(current, "node_modules", ...specifier.split("/"), "package.json");
-				if (fs.existsSync(candidate)) {
-					return candidate;
-				}
-				const parent = path.dirname(current);
-				if (parent === current) {
-					throw new Error(`Unable to resolve package.json for ${specifier}`);
-				}
-				current = parent;
-			}
-		}
-	};
-	const resolvePackageFile = (specifier: string, packageRelativePath: string): string => {
-		const packageJsonPath = findPackageJsonPath(specifier);
-		return path.join(path.dirname(packageJsonPath), packageRelativePath);
-	};
-	const resolveWorkspaceOrPackageFile = (
-		workspaceRelativePath: string,
-		specifier: string,
-		packageRelativePath: string,
-	): string => {
-		const workspacePath = path.join(packagesRoot, workspaceRelativePath);
-		if (fs.existsSync(workspacePath)) {
-			return workspacePath;
-		}
-		return resolvePackageFile(specifier, packageRelativePath);
-	};
-
 	const omkCodingAgentEntry = packageIndex;
-	const omkAgentCoreEntry = resolveWorkspaceOrPackageFile("agent/dist/index.js", "omk-agent-core", "dist/index.js");
-	const omkTuiEntry = resolveWorkspaceOrPackageFile("tui/dist/index.js", "omk-tui", "dist/index.js");
-	const omkAiEntry = resolveWorkspaceOrPackageFile("ai/dist/index.js", "omk-ai", "dist/index.js");
-	const omkAiOauthEntry = resolveWorkspaceOrPackageFile("ai/dist/oauth.js", "omk-ai", "dist/oauth.js");
+	const omkAgentCoreEntry = resolveWorkspaceOrPackageFile(
+		"agent/dist/index.js",
+		"omk-agent-core",
+		"dist/index.js",
+		packagesRoot,
+		require.resolve,
+		fs.existsSync,
+		__dirname,
+	);
+	const omkAgentCoreNodeEntry = resolveWorkspaceOrPackageFile(
+		"agent/dist/node.js",
+		"omk-agent-core",
+		"dist/node.js",
+		packagesRoot,
+		require.resolve,
+		fs.existsSync,
+		__dirname,
+	);
+	const omkTuiEntry = resolveWorkspaceOrPackageFile(
+		"tui/dist/index.js",
+		"omk-tui",
+		"dist/index.js",
+		packagesRoot,
+		require.resolve,
+		fs.existsSync,
+		__dirname,
+	);
+	const omkAiEntry = resolveWorkspaceOrPackageFile(
+		"ai/dist/index.js",
+		"omk-ai",
+		"dist/index.js",
+		packagesRoot,
+		require.resolve,
+		fs.existsSync,
+		__dirname,
+	);
+	const omkAiOauthEntry = resolveWorkspaceOrPackageFile(
+		"ai/dist/oauth.js",
+		"omk-ai",
+		"dist/oauth.js",
+		packagesRoot,
+		require.resolve,
+		fs.existsSync,
+		__dirname,
+	);
 
 	_aliases = {
 		"open-multi-agent-kit": omkCodingAgentEntry,
 		"omk-agent-core": omkAgentCoreEntry,
+		"omk-agent-core/node": omkAgentCoreNodeEntry,
 		"omk-tui": omkTuiEntry,
 		"omk-ai": omkAiEntry,
 		"omk-ai/oauth": omkAiOauthEntry,
@@ -376,18 +450,22 @@ function createExtensionAPI(
 	return api;
 }
 
-async function loadExtensionModule(extensionPath: string) {
+async function loadExtensionModule(extensionPath: string, binaryMode = isBunBinary) {
 	const jiti = createJiti(import.meta.url, {
 		moduleCache: false,
 		// In Bun binary: use virtualModules for bundled packages (no filesystem resolution)
 		// Also disable tryNative so jiti handles ALL imports (not just the entry point)
 		// In Node.js/dev: use aliases to resolve to node_modules paths
-		...(isBunBinary ? { virtualModules: VIRTUAL_MODULES, tryNative: false } : { alias: getAliases() }),
+		...(binaryMode ? { virtualModules: VIRTUAL_MODULES, tryNative: false } : { alias: getAliases() }),
 	});
 
 	const module = await jiti.import(extensionPath, { default: true });
 	const factory = module as ExtensionFactory;
 	return typeof factory !== "function" ? undefined : factory;
+}
+/** Internal test seam for loading extensions through Bun binary virtual modules. */
+export async function loadExtensionModuleWithVirtualModulesForTests(extensionPath: string) {
+	return loadExtensionModule(extensionPath, true);
 }
 
 /**

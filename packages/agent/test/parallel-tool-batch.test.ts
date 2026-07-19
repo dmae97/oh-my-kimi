@@ -37,6 +37,28 @@ describe("pathsOverlap", () => {
 	it("treats case-aliased segments as overlapping", () => {
 		expect(pathsOverlap("/a/B.ts", "/a/b.ts")).toBe(true);
 	});
+
+	it("treats the lexical root as overlapping itself and every descendant", () => {
+		expect(pathsOverlap("/", "/")).toBe(true);
+		expect(pathsOverlap("/", "/proj/a.ts")).toBe(true);
+		expect(pathsOverlap("/proj/a.ts", "/")).toBe(true);
+	});
+
+	it("preserves Windows drive roots while collapsing aliases", () => {
+		expect(pathsOverlap("C:\\..\\foo", "C:\\foo")).toBe(true);
+		expect(pathsOverlap("C:\\", "C:\\")).toBe(true);
+		expect(pathsOverlap("C:\\", "C:\\foo")).toBe(true);
+		expect(pathsOverlap("C:\\foo", "C:\\")).toBe(true);
+		expect(pathsOverlap("C:\\foo", "D:\\foo")).toBe(false);
+	});
+
+	it("treats a Windows root-relative path as its possible drive-absolute alias", () => {
+		expect(pathsOverlap("\\foo", "C:\\foo")).toBe(true);
+	});
+
+	it("fails closed for a UNC share-root traversal alias", () => {
+		expect(pathsOverlap("\\\\server\\share\\..\\foo", "\\\\server\\share\\foo")).toBe(true);
+	});
 });
 
 describe("partitionToolBatchWaves", () => {
@@ -80,6 +102,18 @@ describe("partitionToolBatchWaves", () => {
 					{ name: "edit", arguments: { path: "src/config.ts" } },
 				],
 				{ cwd },
+			),
+		).toEqual([[0], [1]]);
+	});
+
+	it("detects Windows drive-root traversal aliases across a v1 wave", () => {
+		expect(
+			partitionToolBatchWaves(
+				[
+					{ name: "write", arguments: { path: "C:\\..\\foo" } },
+					{ name: "edit", arguments: { path: "C:\\foo" } },
+				],
+				{ cwd: "C:\\proj" },
 			),
 		).toEqual([[0], [1]]);
 	});

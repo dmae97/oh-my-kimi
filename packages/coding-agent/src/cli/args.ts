@@ -229,6 +229,9 @@ ${chalk.bold("Commands:")}
   ${APP_NAME} list                      List installed extensions from settings
   ${APP_NAME} config                    Open TUI to enable/disable package resources
   ${APP_NAME} quota                     Manage CodexBar quota connector and summaries
+  ${APP_NAME} provider doctor <id>      Diagnose a provider as sanitized JSON (--probe-model adds an
+                                 opt-in Level-2 generative probe that may incur provider costs)
+  ${APP_NAME} session doctor            Inspect or safely repair one session (--session, --repair, --dry-run)
   ${APP_NAME} <command> --help          Show help for install/remove/uninstall/update/list
 
 ${chalk.bold("Options:")}
@@ -370,6 +373,7 @@ ${chalk.bold("Environment Variables:")}
   ${ENV_AGENT_DIR.padEnd(32)} - Config directory (default: ~/${CONFIG_DIR_NAME}/agent)
   ${ENV_SESSION_DIR.padEnd(32)} - Session storage directory (overridden by --session-dir)
   OMK_PACKAGE_DIR                  - Override package directory (for Nix/Guix store paths)
+  OMK_TOOL_SCHEDULER               - Tool scheduler override: dag-v2 or waves-v1 rollback
   OMK_OFFLINE                      - Disable startup network operations when set to 1/true/yes
   OMK_TELEMETRY                    - Override install telemetry when set to 1/true/yes or 0/false/no
   OMK_SHARE_VIEWER_URL             - Base URL for /share command (default: https://omk.dev/session/)

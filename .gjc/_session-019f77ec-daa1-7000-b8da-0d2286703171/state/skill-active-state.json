@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "active": true,
+  "skill": "ralplan",
+  "phase": "critic",
+  "updated_at": "2026-07-19T01:22:22.883Z",
+  "session_id": "019f77ec-daa1-7000-b8da-0d2286703171",
+  "active_skills": [
+    {
+      "skill": "ralplan",
+      "phase": "critic",
+      "active": true,
+      "activated_at": "2026-07-19T01:22:22.883Z",
+      "updated_at": "2026-07-19T01:22:22.883Z",
+      "session_id": "019f77ec-daa1-7000-b8da-0d2286703171",
+      "hud": {
+        "version": 1,
+        "summary": "persisted critic stage 4",
+        "chips": [
+          {
+            "label": "stage",
+            "value": "critic",
+            "priority": 10
+          },
+          {
+            "label": "iter",
+            "value": "1",
+            "priority": 30
+          },
+          {
+            "label": "stages",
+            "value": "C",
+            "priority": 35
+          }
+        ],
+        "updated_at": "2026-07-19T01:22:22.880Z"
+      },
+      "source_state_revision": 1,
+      "state_revision": 1
+    }
+  ],
+  "active_subskills": [],
+  "source_state_revision": 1,
+  "state_revision": 1
+}

@@ -4,8 +4,10 @@ import { type AutocompleteProvider, CombinedAutocompleteProvider } from "omk-tui
 import { beforeAll, describe, expect, test, vi } from "vitest";
 import { type Component, Container, type Focusable, TUI } from "../../tui/src/tui.ts";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
+import type { AgentSessionEvent } from "../src/core/agent-session.ts";
 import type { ResourceDiagnostic } from "../src/core/diagnostics.ts";
 import type { AutocompleteProviderFactory } from "../src/core/extensions/types.ts";
+import { classifySessionTermination } from "../src/core/session-termination.ts";
 import type { SourceInfo } from "../src/core/source-info.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
@@ -69,6 +71,132 @@ type ExtensionFixture = {
 	path: string;
 	sourceInfo?: SourceInfo;
 };
+
+describe("InteractiveMode termination rendering", () => {
+	beforeAll(() => {
+		initTheme("dark");
+	});
+
+	test("Given an inferred process_crash, When current session state is rendered, Then the typed termination is visible", () => {
+		const termination = classifySessionTermination({
+			sessionId: "session-1",
+			runId: "run-crash",
+			timestamp: "2026-07-17T00:00:00.000Z",
+			source: "inferred_on_resume",
+			message: "The previous process crashed.",
+			cause: { area: "process", code: "crash" },
+			sideEffects: "possible",
+		});
+		const fakeThis = {
+			lastRenderedTermination: undefined,
+			showError: vi.fn(),
+		};
+		const showSessionTermination = Reflect.get(InteractiveMode.prototype, "showSessionTermination") as (
+			this: typeof fakeThis,
+			value: typeof termination,
+		) => void;
+
+		showSessionTermination.call(fakeThis, termination);
+
+		expect(fakeThis.showError).toHaveBeenCalledWith(expect.stringContaining("message=The previous process crashed."));
+		expect(fakeThis.showError).toHaveBeenCalledWith(expect.stringContaining("kind=process_crash"));
+	});
+
+	test("Given tool_timeout, When its session event is handled, Then interactive mode routes the typed termination", async () => {
+		const termination = classifySessionTermination({
+			sessionId: "session-1",
+			runId: "run-tool",
+			timestamp: "2026-07-17T00:00:00.000Z",
+			source: "observed",
+			message: "Tool bash timed out.",
+			cause: { area: "tool", code: "timeout" },
+			sideEffects: "possible",
+			toolCallId: "tool-1",
+			toolName: "bash",
+		});
+		const fakeThis = {
+			isInitialized: true,
+			footer: { invalidate: vi.fn() },
+			showSessionTermination: vi.fn(),
+			showError: vi.fn(),
+		};
+		const handleEvent = Reflect.get(InteractiveMode.prototype, "handleEvent") as (
+			this: typeof fakeThis,
+			event: { type: "session_termination"; termination: typeof termination },
+		) => Promise<void>;
+
+		await handleEvent.call(fakeThis, { type: "session_termination", termination });
+
+		expect(fakeThis.showSessionTermination).toHaveBeenCalledWith(termination);
+		expect(fakeThis.showError).not.toHaveBeenCalled();
+	});
+
+	test("Given a generic internal termination, When a prompt rejects, Then it replaces the generic error without reusing stale state", () => {
+		const stale = classifySessionTermination({
+			sessionId: "session-1",
+			runId: "run-stale",
+			timestamp: "2026-07-17T00:00:00.000Z",
+			source: "observed",
+			message: "Old authentication failure.",
+			cause: { area: "provider", code: "auth" },
+			sideEffects: "none",
+		});
+		const current = classifySessionTermination({
+			sessionId: "session-1",
+			runId: "run-internal",
+			timestamp: "2026-07-17T00:00:01.000Z",
+			source: "observed",
+			message: "Prompt preflight failed.",
+			cause: { area: "internal", code: "unclassified" },
+			sideEffects: "none",
+		});
+		const fakeThis = {
+			session: { lastTermination: current },
+			lastRenderedTermination: undefined,
+			showError: vi.fn(),
+			showSessionTermination(value: typeof current) {
+				const method = Reflect.get(InteractiveMode.prototype, "showSessionTermination") as (
+					this: typeof fakeThis,
+					termination: typeof current,
+				) => void;
+				method.call(this, value);
+			},
+		};
+		const showPromptError = Reflect.get(InteractiveMode.prototype, "showPromptError") as (
+			this: typeof fakeThis,
+			error: unknown,
+			previousTermination: typeof stale,
+		) => void;
+
+		showPromptError.call(fakeThis, new Error("generic failure"), stale);
+
+		expect(fakeThis.showError).toHaveBeenCalledTimes(1);
+		expect(fakeThis.showError).toHaveBeenCalledWith(expect.stringContaining("kind=internal_error"));
+		expect(fakeThis.showError).not.toHaveBeenCalledWith(expect.stringContaining("generic failure"));
+		expect(fakeThis.showError).not.toHaveBeenCalledWith(expect.stringContaining("run-stale"));
+	});
+
+	test("Given a completed run, When its termination is rendered, Then interactive mode stays quiet", () => {
+		const termination = classifySessionTermination({
+			sessionId: "session-1",
+			runId: "run-complete",
+			timestamp: "2026-07-17T00:00:00.000Z",
+			source: "observed",
+			message: "Run completed.",
+			cause: { area: "completed" },
+			sideEffects: "none",
+		});
+		const fakeThis = { lastRenderedTermination: undefined, showError: vi.fn() };
+		const showSessionTermination = Reflect.get(InteractiveMode.prototype, "showSessionTermination") as (
+			this: typeof fakeThis,
+			value: typeof termination,
+		) => void;
+
+		showSessionTermination.call(fakeThis, termination);
+
+		expect(fakeThis.showError).not.toHaveBeenCalled();
+	});
+});
 
 describe("InteractiveMode.showStatus", () => {
 	beforeAll(() => {
@@ -1167,5 +1295,46 @@ describe("InteractiveMode.showLoadedResources", () => {
 		expect(output).toContain("user /tmp/legacy/SKILL.md (skipped)");
 		expect(output).toContain("reason: higher-precedence skill source");
 		expect(output).toContain("action: Rename one skill or remove the lower-precedence duplicate.");
+	});
+});
+
+describe("InteractiveMode.handleEvent message_end", () => {
+	test("clones a frozen assistant message so errorMessage can be assigned on abort", async () => {
+		const frozenMessage = Object.freeze({
+			role: "assistant",
+			stopReason: "aborted",
+			content: [],
+			errorMessage: undefined,
+		}) as unknown as import("omk-agent-core").AgentMessage;
+
+		const streamingComponent = { updateContent: vi.fn() };
+		const pendingTool = { updateResult: vi.fn() };
+		const fakeThis = {
+			isInitialized: true,
+			streamingComponent,
+			streamingMessage: undefined,
+			session: { retryAttempt: 2 },
+			ui: { requestRender: vi.fn() },
+			pendingTools: new Map([["tool-1", pendingTool]]),
+			footer: { invalidate: vi.fn() },
+		};
+
+		const handleEvent = Reflect.get(InteractiveMode.prototype, "handleEvent") as (
+			this: typeof fakeThis,
+			event: AgentSessionEvent,
+		) => Promise<void>;
+
+		await handleEvent.call(fakeThis, {
+			type: "message_end",
+			message: frozenMessage,
+		} as AgentSessionEvent);
+
+		expect(streamingComponent.updateContent).toHaveBeenCalledTimes(1);
+		const updatedMessage = streamingComponent.updateContent.mock.calls[0]?.[0] as { errorMessage: string };
+		expect(updatedMessage).toHaveProperty("errorMessage", "Aborted after 2 retry attempts");
+		expect(pendingTool.updateResult).toHaveBeenCalledWith({
+			content: [{ type: "text", text: "Aborted after 2 retry attempts" }],
+			isError: true,
+		});
 	});
 });

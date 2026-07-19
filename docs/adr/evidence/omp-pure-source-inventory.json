@@ -1,0 +1,228 @@
+{
+  "schemaVersion": 1,
+  "status": "TERMINATED",
+  "decision": "The exact OMP pin does not expose a complete all-three pure closure that can run in the mandatory Node >=22.19 lane without Bun, native, filesystem, process, network, session, TUI, or edit authority. Migration terminates before ancestry/source/product integration.",
+  "pin": "9fd6e97113f5ed3a847e66d346970efdf8afcad9",
+  "pinTree": "df1f9a55e2e65cb0f5d29287ab1393bb0abd026a",
+  "mergeBase": "15d5120b6a5dc757355b99d20d8d1885143d0865",
+  "topologyEvidence": "docs/adr/evidence/omp-topology-report.json",
+  "probeEvidence": "docs/adr/evidence/omp-pure-probes.json",
+  "evidenceHashes": {
+    "topologySha256": "806aa07ae1f13276d11b30cbabb4a5873e6a4e75dde076040a2d246bf1d68f4d",
+    "probeSha256": "ef2fdcf288b084537fa1994e5cd19faa154eca8c866b570962cac2e9e942c507"
+  },
+  "sourceRoots": {
+    "topology": "/tmp/omk-omp-feasibility",
+    "probes": "/tmp/omk-omp-feasibility/vendor/oh-my-pi"
+  },
+  "agentReceipts": {
+    "readClosure": "agent://36-AuditOmpReadClosure",
+    "searchClosure": "agent://37-AuditOmpSearchClosure",
+    "hashlineApplyAudit": "agent://41-AuditOmpHashlineApply",
+    "note": "Receipts are supplementary; the durable reports and source identities below are independently reviewable evidence."
+  },
+  "minimumOperations": [
+    {
+      "id": "read",
+      "status": "TERMINATED",
+      "path": "packages/coding-agent/src/tools/read.ts",
+      "blob": "21cf268940b60208093ee8151ff53ed7c1f9cd41",
+      "publicApi": {
+        "schema": "ReadToolInput (type-only) = { path: string }; private readSchema is { path: string }",
+        "details": "ReadToolDetails = { kind?: \"file\" | \"url\"; truncation?: TruncationResult; isDirectory?: boolean; resolvedPath?: string; suffixResolution?: { from: string; to: string }; url?: string; finalUrl?: string; contentType?: string; method?: string; notes?: string[]; meta?: OutputMeta; displayContent?: { text: string; startLine: number; lineNumbers?: Array<number | null> }; summary?: { lines: number; elidedSpans: number; elidedLines: number }; conflictCount?: number; displayReadTargets?: string[] }",
+        "class": "ReadTool(session: ToolSession)",
+        "constructor": "constructor(private readonly session: ToolSession)",
+        "execute": "execute(_toolCallId: string, params: ReadParams, signal?: AbortSignal, _onUpdate?: AgentToolUpdateCallback<ReadToolDetails>, _toolContext?: AgentToolContext): Promise<AgentToolResult<ReadToolDetails>>",
+        "renderArgs": "ReadRenderArgs { path?: unknown; file_path?: unknown; offset?: number; limit?: number; raw?: boolean } (private)",
+        "renderer": [
+          "renderCall(args: ReadRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component",
+          "renderResult(result: { content: Array<{ type: string; text?: string }>; details?: ReadToolDetails; isError?: boolean }, options: RenderResultOptions, uiTheme: Theme, args?: ReadRenderArgs): Component",
+          "mergeCallAndResult: true"
+        ]
+      },
+      "privateCandidates": [
+        {"path":"packages/coding-agent/src/tools/read.ts","blob":"21cf268940b60208093ee8151ff53ed7c1f9cd41","signature":"parseSel(sel: string | undefined): ParsedSelector","schema":"private ParsedSelector; no public callable schema","authority":"private fragment in mixed-authority read.ts; incomplete selector parsing, extraction prohibited"},
+        {"path":"packages/coding-agent/src/tools/read.ts","blob":"21cf268940b60208093ee8151ff53ed7c1f9cd41","signature":"selToOffsetLimit(parsed: ParsedSelector): { offset?: number; limit?: number }","schema":"private ParsedSelector; no public callable schema","authority":"private fragment in mixed-authority read.ts; incomplete pagination conversion, extraction prohibited"},
+        {"path":"packages/coding-agent/src/tools/read.ts","blob":"21cf268940b60208093ee8151ff53ed7c1f9cd41","signature":"prependLineNumbers(text: string, startNum: number): string","schema":"private helper; no public callable schema","authority":"private formatter in mixed-authority read.ts; incomplete presentation, extraction prohibited"},
+        {"path":"packages/coding-agent/src/tools/read.ts","blob":"21cf268940b60208093ee8151ff53ed7c1f9cd41","signature":"formatTextWithMode(text: string, startNum: number, shouldAddHashLines: boolean, shouldAddLineNumbers: boolean): string","schema":"private helper; no public callable schema","authority":"private formatter in mixed-authority read.ts; hashline formatting lacks source binding, extraction prohibited"},
+        {"path":"packages/coding-agent/src/tools/read.ts","blob":"21cf268940b60208093ee8151ff53ed7c1f9cd41","signature":"formatLineEntryWithMode(entry: LineEntry, shouldAddHashLines: boolean, shouldAddLineNumbers: boolean): string","schema":"private LineEntry; no public callable schema","authority":"private formatter in mixed-authority read.ts; incomplete presentation, extraction prohibited"},
+        {"path":"packages/coding-agent/src/tools/read.ts","blob":"21cf268940b60208093ee8151ff53ed7c1f9cd41","signature":"formatLineEntriesWithMode(entries: readonly LineEntry[], shouldAddHashLines: boolean, shouldAddLineNumbers: boolean): string","schema":"private LineEntry; no public callable schema","authority":"private formatter in mixed-authority read.ts; incomplete presentation, extraction prohibited"},
+        {"path":"packages/coding-agent/src/tools/read.ts","blob":"21cf268940b60208093ee8151ff53ed7c1f9cd41","signature":"formatSingleLine(line: number, text: string, shouldAddHashLines: boolean, shouldAddLineNumbers: boolean): string","schema":"private helper; no public callable schema","authority":"private formatter in mixed-authority read.ts; incomplete presentation, extraction prohibited"},
+        {"path":"packages/coding-agent/src/tools/read.ts","blob":"21cf268940b60208093ee8151ff53ed7c1f9cd41","signature":"formatMergedBraceLine(startLine: number, endLine: number, headText: string, tailText: string, shouldAddHashLines: boolean, shouldAddLineNumbers: boolean): { model: string; display: string }","schema":"private helper; no public callable schema","authority":"private formatter in mixed-authority read.ts; incomplete presentation, extraction prohibited"},
+        {"path":"packages/coding-agent/src/tools/read.ts","blob":"21cf268940b60208093ee8151ff53ed7c1f9cd41","signature":"formatSummaryElisionFooter(readPath: string, elidedRanges: ReadonlyArray<ElidedRange>, elidedLines: number): string","schema":"private ElidedRange; no public callable schema","authority":"private formatter in mixed-authority read.ts; incomplete presentation, extraction prohibited"}
+      ],
+      "readClosureFiles": [
+        {"path":"packages/coding-agent/src/tools/path-utils.ts","blob":"2d74bf553c65abdec5033b80410b70d8f56c2c41","staticImports":["node:fs","node:os","node:path","node:url","@oh-my-pi/pi-utils","../internal-urls","./tool-errors"],"dynamicImports":[],"topLevelInitialization":["selector regexes","INTERNAL_SCHEMES_WITH_SELECTORS","OPAQUE_RESOURCE_SCHEMES = new Set([\"mcp\"])","TOP_LEVEL_INTERNAL_URL_PREFIXES"],"authority":"filesystem/process/network/session: fs probes, process.platform, InternalUrlRouter, and Bun-backed scope resolution; partial selector helpers are not a complete read seam"},
+        {"path":"packages/coding-agent/src/utils/file-display-mode.ts","blob":"894fb982ce8287451881f46f3f65c1f3db421ffc","staticImports":["./edit-mode"],"dynamicImports":[],"topLevelInitialization":[],"authority":"session/edit: resolveFileDisplayMode requires FileDisplayModeSession settings/tool availability and resolveEditMode; not session-free presentation"},
+        {"path":"packages/coding-agent/src/utils/block-context.ts","blob":"5b450cf971ad9e67ec4ae09af8dbf0d870ff586c","staticImports":["@oh-my-pi/pi-natives","@oh-my-pi/pi-utils"],"dynamicImports":[],"topLevelInitialization":["OPEN_TO_CLOSE","CLOSE_TO_OPEN"],"authority":"native: enclosingBlockBoundaries plus logger; native parse/fallback module is not an authority-free read seam"},
+        {"path":"packages/coding-agent/src/session/streaming-output.ts","blob":"72d4860291005f7eb4be200a1a0d905889ead74c","staticImports":["@oh-my-pi/pi-utils","../tools/render-utils","../utils/sixel"],"dynamicImports":[],"topLevelInitialization":["DEFAULT_MAX_LINES","DEFAULT_MAX_BYTES","DEFAULT_MAX_COLUMN","artifact/truncation constants"],"authority":"Bun/process/TUI closure: OutputSink uses Bun.file(...).writer and imports render-utils; truncation helpers are partial output handling, not read planning/presentation"}
+      ],
+      "candidateSchemaNote": "Verified negative: no complete public read seam exists. Private candidates have no public callable schema, and no pure fixture can be invoked without forbidden extraction or reimplementation; this is verified missing-seam evidence, not missing testing.",
+      "directRuntimeClosure": ["bun:sqlite", "node:fs/promises", "node:os", "node:path", "@oh-my-pi/pi-natives", "@oh-my-pi/pi-tui", "file-snapshot-store", "notebook", "internal URL routing", "URL fetch", "session/streaming-output", "TUI/output modules", "archive/sqlite/document/image readers"],
+      "closureCategories": ["filesystem", "Bun", "native", "network", "session/registry", "TUI", "edit/snapshot", "process/ambient support"],
+      "topLevelInitialization": ["REMOTE_MOUNT_PREFIX = getRemoteDir() + path.sep"],
+      "dynamicImports": [],
+      "dynamicEscapeProducesPureSeam": false,
+      "authorityMatrix": {
+        "bun": "present: bun:sqlite import and Bun.file/Bun.hash/Bun.write uses",
+        "filesystem": "present: node:fs/promises and file open/readdir/stat/rm/mkdir",
+        "process": "present in inspected path-utils support through process.platform",
+        "network": "present: URL fetch execution",
+        "browser": "not established; non-dispositive",
+        "session": "present: ToolSession constructor/settings and registries",
+        "tui": "present: renderer returns TUI Components",
+        "edit": "present: snapshot/notebook state",
+        "native": "present: pi-natives glob/summarizeCode"
+      },
+      "catalogPatchLicense": {"packageLicense": "MIT", "directClosureImportsCatalogs": false, "rootPatchesTouchClosure": false},
+      "deterministicFixtureProbe": "No qualifying deterministic pure probe exists because no public immutable-input planner/presenter seam exists.",
+      "emptyRegistryViable": false,
+      "reason": "The only runtime exports are an effectful session tool and a TUI renderer. Private helpers are incomplete or require prohibited extraction; importing the module itself carries forbidden authority."
+    },
+    {
+      "id": "search",
+      "status": "TERMINATED",
+      "path": "packages/coding-agent/src/tools/grep.ts",
+      "blob": "e28756a14f8ed8be14b02414c00f83ba88729f43",
+      "publicApi": {
+        "schema": "GrepToolInput (type-only) = { pattern: string; path?: string; case?: boolean; gitignore?: boolean; skip?: number | null }; private searchSchema supplies it",
+        "details": "GrepToolDetails = { truncation?: TruncationResult; fileLimitReached?: number; perFileLimitReached?: number; linesTruncated?: boolean; meta?: OutputMeta; scopePath?: string; matchCount?: number; fileCount?: number; files?: string[]; fileMatches?: Array<{ path: string; count: number }>; truncated?: boolean; error?: string; displayContent?: string; searchPath?: string; cwd?: string; missingPaths?: string[] }",
+        "constants": ["DEFAULT_FILE_LIMIT = 20", "MULTI_FILE_PER_FILE_MATCHES = 20", "SINGLE_FILE_MATCHES = 200"],
+        "class": "GrepTool(session: ToolSession)",
+        "constructor": "constructor(private readonly session: ToolSession)",
+        "execute": "execute(_toolCallId: string, params: SearchParams, signal?: AbortSignal, _onUpdate?: AgentToolUpdateCallback<GrepToolDetails>, _toolContext?: AgentToolContext): Promise<AgentToolResult<GrepToolDetails>>",
+        "renderArgs": "GrepRenderArgs { pattern: string; path?: string | string[]; paths?: string | string[]; case?: boolean; gitignore?: boolean; skip?: number } (private)",
+        "renderer": [
+          "renderCall(args: GrepRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component",
+          "renderResult(result: { content: Array<{ type: string; text?: string }>; details?: GrepToolDetails; isError?: boolean }, options: RenderResultOptions, uiTheme: Theme, args?: GrepRenderArgs): Component"
+        ]
+      },
+      "pureLeafExports": [
+        {"path":"packages/coding-agent/src/tools/path-utils.ts","blob":"2d74bf553c65abdec5033b80410b70d8f56c2c41","signatures":["toPathList(input: string | string[] | undefined): string[]","hasGlobPathChars(filePath: string): boolean","parseLineRanges(sel: string): [LineRange, ...LineRange[]] | null","selectorLineRanges(sel: string | undefined): [LineRange, ...LineRange[]] | undefined","isLineInRanges(lineNumber: number, ranges: readonly LineRange[]): boolean","splitPathAndSel(rawPath: string): { path: string; sel?: string }","splitInternalUrlSel(rawPath: string): { path: string; sel?: string }","pathTargetsSsh(path: string): boolean"],"schema":"exported lexical fragments only","authority":"module closure is authority-bearing; fragments do not form complete search normalization/presentation"},
+        {"path":"packages/coding-agent/src/tools/match-line-format.ts","blob":"9510b0aad643cb6fa1514de1b278b5fd9f668dd5","signatures":["formatMatchLine(lineNumber: number, line: string, isMatch: boolean, options: { useHashLines: boolean }): string"],"schema":"exported one-line formatter","authority":"pure deterministic leaf but does not bind source tags or provide complete presentation"},
+        {"path":"packages/coding-agent/src/tools/grouped-file-output.ts","blob":"988c423366f50cfa5293bde73aa4c6de6235f041","signatures":["formatGroupedFiles(files: string[], renderFile: (filePath: string) => GroupedFileSection): GroupedFilesOutput","classifyGroupedLines(lines: readonly string[], headerBase: string | undefined, fileScope: string | undefined = headerBase): GroupedLineContext[]","groupLineIndicesByBlank(rawLines: readonly string[]): number[][]"],"schema":"exported grouped-output fragments","authority":"deterministic grouping fragments, not request normalization or raw-match presentation"}
+      ],
+      "privateCandidates": [
+        {"path":"packages/coding-agent/src/tools/grep.ts","blob":"e28756a14f8ed8be14b02414c00f83ba88729f43","signature":"parsePathSpecs(rawEntries: readonly string[], cwd: string): Promise<GrepPathSpec[]>","schema":"private GrepPathSpec[]; no public callable schema","authority":"private fs/router-dependent scope parsing"},
+        {"path":"packages/coding-agent/src/tools/grep.ts","blob":"e28756a14f8ed8be14b02414c00f83ba88729f43","signature":"normalizeSearchLine(line: string): string","schema":"private string normalizer; no public callable schema","authority":"private normalization fragment"},
+        {"path":"packages/coding-agent/src/tools/grep.ts","blob":"e28756a14f8ed8be14b02414c00f83ba88729f43","signature":"splitSearchLines(content: string): string[]","schema":"private string[] result; no public callable schema","authority":"private splitting fragment"},
+        {"path":"packages/coding-agent/src/tools/grep.ts","blob":"e28756a14f8ed8be14b02414c00f83ba88729f43","signature":"indexSearchLines(content: string): IndexedContentLines","schema":"private IndexedContentLines { lines: string[]; starts: number[] }; no public callable schema","authority":"private indexing fragment"},
+        {"path":"packages/coding-agent/src/tools/grep.ts","blob":"e28756a14f8ed8be14b02414c00f83ba88729f43","signature":"jsMatchedLineIndexes(content: string, lines: readonly string[], pattern: string, ignoreCase: boolean, multiline: boolean): number[]","schema":"private number[] result; no public callable schema","authority":"private matching fragment"},
+        {"path":"packages/coding-agent/src/tools/grep.ts","blob":"e28756a14f8ed8be14b02414c00f83ba88729f43","signature":"buildVirtualMatches(resource: VirtualSearchResource, lines: readonly string[], matchedIndexes: readonly number[], contextBefore: number, contextAfter: number, maxCount: number): GrepMatch[]","schema":"private VirtualSearchResource to GrepMatch[] transformation; no public callable schema","authority":"private match shaping fragment"},
+        {"path":"packages/coding-agent/src/tools/grep.ts","blob":"e28756a14f8ed8be14b02414c00f83ba88729f43","signature":"mergeGrepResults(left: GrepResult, right: GrepResult, maxCount: number): GrepResult","schema":"private GrepResult merge; no public callable schema","authority":"private result merge fragment"},
+        {"path":"packages/coding-agent/src/tools/grep.ts","blob":"e28756a14f8ed8be14b02414c00f83ba88729f43","signature":"renderMatchesForFile(relativePath: string): { model: string[]; display: string[] }","schema":"nested private model/display arrays; no public callable schema","authority":"nested private execute helper; session/snapshot source binding"},
+        {"path":"packages/coding-agent/src/tools/grep.ts","blob":"e28756a14f8ed8be14b02414c00f83ba88729f43","signature":"renderSearchDisplayLines(lines: readonly string[], headerBase: string | undefined, fileScope: string | undefined, uiTheme: Theme): RenderedSearchLine[]","schema":"private RenderedSearchLine { raw: string; styled: string }[]; no public callable schema","authority":"private TUI helper"}
+      ],
+      "searchClosureFiles": [
+        {"path":"packages/coding-agent/src/tools/path-utils.ts","blob":"2d74bf553c65abdec5033b80410b70d8f56c2c41","staticImports":["node:fs","node:os","node:path","node:url","@oh-my-pi/pi-utils","../internal-urls","./tool-errors"],"dynamicImports":[],"topLevelInitialization":["selector regexes","INTERNAL_SCHEMES_WITH_SELECTORS","OPAQUE_RESOURCE_SCHEMES = new Set([\"mcp\"])","TOP_LEVEL_INTERNAL_URL_PREFIXES"],"authority":"filesystem/process/network/session/Bun: fs probes, process.platform, InternalUrlRouter, external materialization, and Bun.file stat in scope resolution"},
+        {"path":"packages/coding-agent/src/tools/grouped-file-output.ts","blob":"988c423366f50cfa5293bde73aa4c6de6235f041","staticImports":["node:path","@oh-my-pi/pi-utils"],"dynamicImports":[],"topLevelInitialization":["GROUPED_HEADER_RE","HEADER_SUFFIX_RE","HEADER_HASH_TAG_RE"],"authority":"path/tree formatting only; deterministic fragments are incomplete search presentation"},
+        {"path":"packages/coding-agent/src/tools/match-line-format.ts","blob":"9510b0aad643cb6fa1514de1b278b5fd9f668dd5","staticImports":[],"dynamicImports":[],"topLevelInitialization":[],"authority":"authority-free one-line formatter, but no source tag lifecycle or complete search seam"},
+        {"path":"packages/coding-agent/src/tools/render-utils.ts","blob":"9a6e857afc41bfb51d7ba224ac4ae47ca3552b32","staticImports":["node:os","node:path","@oh-my-pi/pi-tui","@oh-my-pi/pi-utils","../config/keybindings","../config/settings","../tui/utils","../utils/image-resize"],"dynamicImports":[],"topLevelInitialization":["PREVIEW_LIMITS and renderer constants"],"authority":"process/settings/TUI: reads process.stdout.rows and imports settings/TUI renderer dependencies; not a pure-source module closure"}
+      ],
+      "candidateSchemaNote": "Verified negative: no complete public seam accepts immutable query/scope plus OMK-supplied matches. Private candidates have no public callable schema; exported leaves are fragments, so no pure fixture can be invoked without prohibited reimplementation. This is verified missing-seam evidence, not missing testing.",
+      "topLevelInitialization": ["text asset import attribute and runtime module imports", "render-utils reads process.stdout in its closure"],
+      "dynamicImports": [],
+      "dynamicEscapeProducesPureSeam": false,
+      "authorityMatrix": {
+        "bun": "present: Bun.file(...).stat in scope resolution",
+        "filesystem": "present: node:fs/promises and archive/temp/stat operations",
+        "process": "present: process.platform and process.stdout support",
+        "network": "present: materializeReadUrlToFile and internal/SSH routing",
+        "browser": "not established; non-dispositive",
+        "session": "present: ToolSession, settings, snapshots, seen-line store",
+        "tui": "present: Text/theme/component renderer",
+        "edit": "present: snapshot and seen-line mutation",
+        "native": "present: pi-natives grep"
+      },
+      "catalogPatchLicense": {"packageLicense": "MIT", "directClosureImportsCatalogs": false, "rootPatchesTouchClosure": false},
+      "deterministicFixtureProbe": "Exported leaves are deterministic only as fragments; no complete immutable query/scope plus OMK-supplied-matches seam exists.",
+      "emptyRegistryViable": false,
+      "reason": "GrepTool performs authority acquisition and native search; the renderer is TUI-only; private request/result planning cannot be composed without prohibited reimplementation or extraction."
+    },
+    {
+      "id": "hashline-apply",
+      "status": "TERMINATED",
+      "operation": "Parse an untrusted patch string to proposed edits and expectedLineHashes[] without a read or mutation.",
+      "directSubpathClosure": {
+        "entry": "packages/hashline/src/input.ts",
+        "modules": [
+          {"path":"packages/hashline/src/input.ts","blob":"e2b3f9455e5164346f7331fdbfb66ee1e3aa9db3","staticImports":["node:path","apply.ts","block.ts","format.ts","parser.ts","tokenizer.ts","types.ts"],"dynamicImports":[],"topLevelInitialization":["const TOKENIZER = new Tokenizer()"],"authority":"lexical path handling and pure parsing behavior; no I/O"},
+          {"path":"packages/hashline/src/parser.ts","blob":"27ba9951d9ba17630a7d2f9536aa52d6f013fd0e","staticImports":["format.ts","messages.ts","prefixes.ts","tokenizer.ts","types.ts"],"dynamicImports":[],"topLevelInitialization":["BARE_LITERAL_VALUE_RE and deterministic parser constants"],"authority":"pure token-to-edit parser"},
+          {"path":"packages/hashline/src/tokenizer.ts","blob":"ee3c6d947d92ac188370950cce654ec52e3289f9","staticImports":["format.ts","messages.ts","types.ts"],"dynamicImports":[],"topLevelInitialization":["deterministic grammar regexes and constants"],"authority":"pure tokenizer"},
+          {"path":"packages/hashline/src/apply.ts","blob":"eff2175e91122bed6aaff17e9dbad31a66ca64ee","staticImports":["messages.ts","tokenizer.ts","types.ts"],"dynamicImports":[],"topLevelInitialization":["STRUCTURAL_CLOSER_RE and deterministic regexes"],"authority":"pure in-memory apply; cloneCursor is imported from tokenizer.ts"},
+          {"path":"packages/hashline/src/block.ts","blob":"f81f6aecfcb522d6491a3c3a25b0b9b4295a2f37","staticImports":["apply.ts","messages.ts","types.ts"],"dynamicImports":[],"topLevelInitialization":[],"authority":"pure transform over caller-supplied resolver/text; no I/O"},
+          {"path":"packages/hashline/src/messages.ts","blob":"458585143a96d46ea99c61f48485d9f55b87e4bf","staticImports":["format.ts"],"dynamicImports":[],"topLevelInitialization":["MISMATCH_CONTEXT and deterministic message constants"],"authority":"pure message formatting"},
+          {"path":"packages/hashline/src/prefixes.ts","blob":"1199b02d0d5464364889507c53c888f1cc1fbf1c","staticImports":["format.ts"],"dynamicImports":[],"topLevelInitialization":["deterministic prefix/header regexes"],"authority":"pure prefix parsing"},
+          {"path":"packages/hashline/src/format.ts","blob":"ff782ac689f8dea6f657dd139742bafb2962b0c2","staticImports":["types.ts"],"dynamicImports":[],"topLevelInitialization":["format constants and regex fragments"],"authority":"static closure defect: computeFileHash calls Bun.hash.xxHash32"},
+          {"path":"packages/hashline/src/types.ts","blob":"72d7e66fea065d966200f2f4d561d94b04325177","staticImports":[],"dynamicImports":[],"topLevelInitialization":[],"authority":"type-only data contract"}
+        ],
+        "dynamicImports": [],
+        "topLevelIo": false
+      },
+      "publicApi": {
+        "input": ["containsRecognizableHashlineOperations(input: string): boolean", "Patch.parse(input: string, options: SplitOptions = {}): Patch", "Patch.parseSingle(input: string, options: SplitOptions = {}): PatchSection", "PatchSection.parse(): { edits: Edit[]; fileOp?: FileOp; warnings: readonly string[] }", "PatchSection.applyTo(text: string, blockResolver?: BlockResolver): ApplyResult"],
+        "parser": ["parsePatch(diff: string): { edits: Edit[]; fileOp?: FileOp; warnings: string[] }", "parsePatchStreaming(diff: string): { edits: Edit[]; fileOp?: FileOp; warnings: string[] }"],
+        "apply": "applyEdits(text: string, edits: readonly Edit[]): ApplyResult",
+        "patcher": {
+          "constructor": "constructor(options: PatcherOptions)",
+          "options": "PatcherOptions { fs: Filesystem; snapshots: SnapshotStore; blockResolver?: BlockResolver; enforceSeenLines?: boolean }",
+          "prepared": "PreparedSection(section: PatchSection, canonicalPath: string, exists: boolean, rawContent: string, bom: string, lineEnding: LineEnding, normalized: string, applyResult: ApplyResult, parseWarnings: readonly string[], fileOp: FileOp | undefined); get isNoop(): boolean",
+          "sectionResult": "PatchSectionResult { path: string; canonicalPath: string; op: \"create\" | \"update\" | \"delete\" | \"noop\"; before: string; after: string; persisted: string; written: string; fileHash: string; header: string; firstChangedLine?: number; warnings: string[]; moveDest?: string; blockResolutions?: BlockResolution[] }",
+          "applyResult": "PatcherApplyResult { sections: PatchSectionResult[] }",
+          "methods": ["apply(patch: Patch): Promise<PatcherApplyResult>", "preflight(patch: Patch): Promise<void>", "prepare(section: PatchSection): Promise<PreparedSection>", "commit(prepared: PreparedSection): Promise<PatchSectionResult>"]
+        }
+      },
+      "outputShapes": {"anchor": "Anchor { line: number }", "edits": "insert/delete/block edit variants contain line-number anchors and no expectedLineHashes[]", "section": "{ path, fileHash?: string, diff }", "expectedLineHashes": "Absent: no Edit variant or Anchor contains expectedLineHashes[]."},
+      "boundaryClassification": {"applyEdits": "in-memory transform of caller-supplied text", "PatchSection.applyTo": "in-memory transform of caller-supplied text; does not validate section tag", "Patcher": "filesystem/snapshot mutation authority: prepare/preflight read and validate; commit writes/deletes/moves and records snapshots", "directSubpath": "narrower than root but retains static format.ts closure", "rootBarrel": "broad: index.ts re-exports fs, patcher, recovery, snapshots, stream, and application surfaces"},
+      "authorityMatrix": {"filesystem": "none in parsing behavior", "process": "none in parsing behavior", "network": "none in parsing behavior", "browser": "none in parsing behavior", "session": "none in parsing behavior", "tui": "none in parsing behavior", "native": "none in parsing behavior", "edit": "none in parsing behavior; Patcher separately has mutation authority", "nodePath": "node:path is lexical and uses caller-supplied cwd", "bun": "present in static closure: format.ts contains Bun.hash.xxHash32"},
+      "dynamicImports": [],
+      "dynamicEscapeProducesPureSeam": false,
+      "emptyRegistryViable": true,
+      "catalogPatchLicense": {"packageLicense": "MIT", "directParseClosureImportsCatalogs": false, "rootPatchesTouchDirectParseClosure": false, "bunEngine": ">=1.3.14"},
+      "deterministicFixtureProbe": "Durable probe report records deterministic Bun source parsing and a tree-shaken Node bundle parse, while raw Node v22.22.3 direct import fails on extensionless TypeScript imports. The bundle is evidence only, not an approved source-bound closure.",
+      "reason": "Parsing is registry-free but produces only line-number edits and optional section-level fileHash, not expectedLineHashes[]. Raw Node cannot import the source unchanged, and static format.ts contains Bun authority."
+    }
+  ],
+  "hashlinePackageInventory": [
+    {"path":"packages/hashline/CHANGELOG.md","blob":"508c815f74d156d032505d59d81c8ef922123fa4"},
+    {"path":"packages/hashline/README.md","blob":"934030f6d6dab597e16e2cac4146be0dcc0f9a09"},
+    {"path":"packages/hashline/bench/recovery-session-chain.ts","blob":"fb205afa46afc272d1c40f4d4e018be696a12cd1"},
+    {"path":"packages/hashline/package.json","blob":"7c420409bf52dcf2ae7a34eb93c52a86ef81dbd6"},
+    {"path":"packages/hashline/src/apply.ts","blob":"eff2175e91122bed6aaff17e9dbad31a66ca64ee"},
+    {"path":"packages/hashline/src/block.ts","blob":"f81f6aecfcb522d6491a3c3a25b0b9b4295a2f37"},
+    {"path":"packages/hashline/src/diff-preview.ts","blob":"34d1a29b2473cdf82d03b1ffc04f6962ded6029b"},
+    {"path":"packages/hashline/src/format.ts","blob":"ff782ac689f8dea6f657dd139742bafb2962b0c2"},
+    {"path":"packages/hashline/src/fs.ts","blob":"bca93496a61ddc95ae5440770da97251615fdc9d"},
+    {"path":"packages/hashline/src/grammar.lark","blob":"41c7a2a32f28957235717f0db0f1df26ad07f919"},
+    {"path":"packages/hashline/src/index.ts","blob":"b7e61b17ac9acdc4970e66a74587856bd5f77270"},
+    {"path":"packages/hashline/src/input.ts","blob":"e2b3f9455e5164346f7331fdbfb66ee1e3aa9db3"},
+    {"path":"packages/hashline/src/messages.ts","blob":"458585143a96d46ea99c61f48485d9f55b87e4bf"},
+    {"path":"packages/hashline/src/mismatch.ts","blob":"c1e171ac7affa009d0c6a114e8fd7f6ca1c70ff9"},
+    {"path":"packages/hashline/src/normalize.ts","blob":"dce6e933f1e64d2cc6debc6f33e6693e309c7bdd"},
+    {"path":"packages/hashline/src/parser.ts","blob":"27ba9951d9ba17630a7d2f9536aa52d6f013fd0e"},
+    {"path":"packages/hashline/src/patcher.ts","blob":"3b49e63a94695fab97e00c9488000f33291d9d55"},
+    {"path":"packages/hashline/src/prefixes.ts","blob":"1199b02d0d5464364889507c53c888f1cc1fbf1c"},
+    {"path":"packages/hashline/src/prompt.md","blob":"65540168924c1a56eafe127a8ed23bed0e546bdb"},
+    {"path":"packages/hashline/src/recovery.ts","blob":"eb48cee9e8811136f3df3f129fe2c5eebba7db88"},
+    {"path":"packages/hashline/src/snapshots.ts","blob":"874433b2b370678f62b13c54bf818f0d3c798b83"},
+    {"path":"packages/hashline/src/stream.ts","blob":"337c1df51c5313cafc35022d151fe43dfe9e9076"},
+    {"path":"packages/hashline/src/tokenizer.ts","blob":"ee3c6d947d92ac188370950cce654ec52e3289f9"},
+    {"path":"packages/hashline/src/types.ts","blob":"72d7e66fea065d966200f2f4d561d94b04325177"},
+    {"path":"packages/hashline/test/block.test.ts","blob":"2526198b722d897c8ed45c3744abbf9d3789eefa"},
+    {"path":"packages/hashline/test/boundary-repair.test.ts","blob":"6c53e9a06876bcbfc8f08dd2c6dc589074955145"},
+    {"path":"packages/hashline/test/core-contracts.test.ts","blob":"2d44ae747478ee8b72a54bffd6eb84df99bff5f0"},
+    {"path":"packages/hashline/test/diff-preview.test.ts","blob":"2cdc399f4d942522ddd92064beb86b2d63b0c620"},
+    {"path":"packages/hashline/test/file-ops.test.ts","blob":"174ee211b0659d9438f975ec52efd408554fe7ef"},
+    {"path":"packages/hashline/test/format-v2.test.ts","blob":"b19afb0ded27232347771b2119971e0ea2d85928"},
+    {"path":"packages/hashline/test/landing-shift.test.ts","blob":"1b41ddc0949c2415775cbefe2cedd6db69b25bd8"},
+    {"path":"packages/hashline/test/leniency.test.ts","blob":"70af46634814d2148d6a9585670c08e99176dc55"},
+    {"path":"packages/hashline/test/patcher.test.ts","blob":"8cc2c4b0614797bc424363077dce4025b24fe360"},
+    {"path":"packages/hashline/test/recovery-session-chain.test.ts","blob":"1fbbb85e990ef42b18f6308ccdd1906c2148a628"},
+    {"path":"packages/hashline/test/snapshots.test.ts","blob":"58ba324e8b4b012fb334647a26c5f11b6ecfcbc3"},
+    {"path":"packages/hashline/tsconfig.json","blob":"08130e07cd31b2ff31eafd8833ac5b33431feff0"},
+    {"path":"packages/hashline/tsconfig.publish.json","blob":"61f5ee4c6ccc98a8d0aea5143f40aaea185b73bf"}
+  ],
+  "topology": {"fullClone": true, "privateRef": "refs/omp/pins/9fd6e97113f5ed3a847e66d346970efdf8afcad9", "tagsFetched": false, "pushUrl": "DISABLED", "prefix": "vendor/oh-my-pi", "prefixTree": "df1f9a55e2e65cb0f5d29287ab1393bb0abd026a", "prefixEqualsPinTree": true, "oldPin": "546dce76384eec112125505740acf5515fa03daf", "oldToCurrentUpdateRehearsed": true, "ownerCheckoutMutated": false, "secondUpdateRehearsed": true, "idempotentRematerialization": true, "publicationMutations": false},
+  "closurePolicy": {"noFilesystem": true, "noProcess": true, "noNetwork": true, "noBrowser": true, "noSession": true, "noTui": true, "noEditAuthority": true, "noBun": true, "noNative": true, "noHandReimplementation": true, "noPolyfill": true, "noPartialBridge": true, "noWorkaround": true, "mechanicalExtractionApproved": false},
+  "board": {"verdict": "TERMINATED", "reason": "All three minimum operations must pass; read and search have no exported pure seam, and hashline-apply does not provide expectedLineHashes[] in an approved unchanged Node source closure.", "effect": "Do not add OMP ancestry refs, vendor source, omp-bridge, compatibility firewall, product integration, or publication to the owner checkout."}
+}

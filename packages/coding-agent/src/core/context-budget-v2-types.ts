@@ -8,6 +8,7 @@ import type {
 	HeadroomQualityPolicyV2,
 } from "./context-budget-headroom.ts";
 import type { TokenCounterAdapter } from "./context-budget-token-counter.ts";
+import type { ContextCacheInvalidationSnapshot } from "./context-budget-v2-cache-invalidation.ts";
 
 export const CONTEXT_BUDGET_POLICY_VERSION_V2 = "context-budget-v2";
 
@@ -71,6 +72,7 @@ export interface PromptContextBudgetInputV2 {
 	readonly safetyProfileHash?: string;
 	readonly cacheNowEpochMs?: number;
 	readonly cacheTtlMs?: number;
+	readonly cacheInvalidationSnapshot?: ContextCacheInvalidationSnapshot;
 }
 
 export interface SelectedRepresentationV2 {
@@ -196,6 +198,8 @@ export interface ContextBudgetPlanCacheReadV2 {
 }
 
 export interface ContextBudgetCacheProviderV2 {
+	getInvalidationSnapshot?(): ContextCacheInvalidationSnapshot | undefined;
+	setInvalidationSnapshot?(snapshot: ContextCacheInvalidationSnapshot): void;
 	readRepresentation(key: string): ContextBudgetRepresentationCacheReadV2 | undefined;
 	writeRepresentation(input: { readonly key: string; readonly entry: ContextBudgetRepresentationCacheEntryV2 }): void;
 	readNegativeRepresentation(key: string): ContextBudgetNegativeCacheEntryV2 | undefined;

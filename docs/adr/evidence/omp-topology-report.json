@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "kind": "git-topology-test-report",
+  "repository": "https://github.com/can1357/oh-my-pi.git",
+  "pin": "9fd6e97113f5ed3a847e66d346970efdf8afcad9",
+  "pinTree": "df1f9a55e2e65cb0f5d29287ab1393bb0abd026a",
+  "expectedAndObservedMergeBase": "15d5120b6a5dc757355b99d20d8d1885143d0865",
+  "clone": "/tmp/omk-omp-feasibility",
+  "fullHistory": true,
+  "tagsFetched": false,
+  "privatePinRef": "refs/omp/pins/9fd6e97113f5ed3a847e66d346970efdf8afcad9",
+  "fetchUrl": "https://github.com/can1357/oh-my-pi.git",
+  "pushUrl": "DISABLED",
+  "prefix": "vendor/oh-my-pi",
+  "prefixTree": "df1f9a55e2e65cb0f5d29287ab1393bb0abd026a",
+  "prefixEqualsPinTree": true,
+  "unsupportedTreeEntries": 0,
+  "oldPin": "546dce76384eec112125505740acf5515fa03daf",
+  "rehearsal": {
+    "oldAncestryMarker": true,
+    "oldPrefixMaterialized": true,
+    "currentAncestryMarker": true,
+    "currentPrefixReplacedExactly": true,
+    "secondCurrentRematerializationIdempotent": true,
+    "worktreeClean": true
+  },
+  "ownerCheckoutMutated": false,
+  "publicationMutations": false,
+  "reconstruction": {
+    "sourceRoot": "/tmp/omk-omp-feasibility",
+    "assertions": [
+      "git rev-parse PIN^{tree} equals pinTree",
+      "git merge-base OMK_HEAD PIN equals expectedAndObservedMergeBase",
+      "git rev-parse HEAD:vendor/oh-my-pi equals pinTree",
+      "remote.omp-upstream.pushurl equals DISABLED",
+      "refs/omp/tags is empty",
+      "second rematerialization leaves status porcelain empty"
+    ]
+  }
+}

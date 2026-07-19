@@ -9,6 +9,7 @@
 import type { AssistantMessage, ImageContent } from "omk-ai";
 import type { AgentSessionRuntime } from "../core/agent-session-runtime.ts";
 import { flushRawStdout, writeRawStdout } from "../core/output-guard.ts";
+import { formatSessionTermination, type SessionTermination } from "../core/session-termination.ts";
 import { killTrackedDetachedChildren } from "../utils/shell.ts";
 
 /**
@@ -35,7 +36,29 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 	let session = runtimeHost.session;
 	let unsubscribe: (() => void) | undefined;
 	let disposed = false;
+	let promptStarted = false;
+	let latestTermination: SessionTermination | undefined;
+	let renderedTermination: SessionTermination | undefined;
 	const signalCleanupHandlers: Array<() => void> = [];
+
+	const renderTermination = (termination: SessionTermination): void => {
+		if (termination.kind === "completed" || renderedTermination === termination) return;
+		renderedTermination = termination;
+		if (mode === "json") {
+			writeRawStdout(`${JSON.stringify({ type: "session_termination", termination })}\n`);
+		} else {
+			console.error(formatSessionTermination(termination));
+		}
+	};
+
+	const renderFailure = (fallback: string): void => {
+		const termination = latestTermination ?? (!promptStarted ? session.lastTermination : undefined);
+		if (termination && termination.kind !== "completed") {
+			renderTermination(termination);
+			return;
+		}
+		console.error(fallback);
+	};
 
 	const disposeRuntime = async (): Promise<void> => {
 		if (disposed) return;
@@ -45,13 +68,14 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 	};
 
 	const registerSignalHandlers = (): void => {
-		const signals: NodeJS.Signals[] = ["SIGTERM"];
+		const signals: Array<"SIGTERM" | "SIGHUP"> = ["SIGTERM"];
 		if (process.platform !== "win32") {
 			signals.push("SIGHUP");
 		}
 
 		for (const signal of signals) {
 			const handler = () => {
+				session.recordProcessSignal(signal);
 				killTrackedDetachedChildren();
 				void disposeRuntime().finally(() => {
 					process.exit(signal === "SIGHUP" ? 129 : 143);
@@ -70,6 +94,8 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 
 	const rebindSession = async (): Promise<void> => {
 		session = runtimeHost.session;
+		promptStarted = false;
+		latestTermination = undefined;
 		await session.bindExtensions({
 			mode: mode === "json" ? "json" : "print",
 			commandContextActions: {
@@ -102,10 +128,23 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 
 		unsubscribe?.();
 		unsubscribe = session.subscribe((event) => {
+			if (event.type === "session_termination") {
+				latestTermination = event.termination;
+				if (mode === "text") {
+					renderTermination(event.termination);
+				} else {
+					renderedTermination = event.termination;
+				}
+			}
 			if (mode === "json") {
 				writeRawStdout(`${JSON.stringify(event)}\n`);
 			}
 		});
+
+		const startupTermination = session.lastTermination;
+		if (startupTermination?.kind === "process_crash" && startupTermination.source === "inferred_on_resume") {
+			renderTermination(startupTermination);
+		}
 	};
 
 	try {
@@ -119,10 +158,12 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 		await rebindSession();
 
 		if (initialMessage) {
+			promptStarted = true;
 			await session.prompt(initialMessage, { images: initialImages });
 		}
 
 		for (const message of messages) {
+			promptStarted = true;
 			await session.prompt(message);
 		}
 
@@ -133,7 +174,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 			if (lastMessage?.role === "assistant") {
 				const assistantMsg = lastMessage as AssistantMessage;
 				if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
-					console.error(assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`);
+					renderFailure(assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`);
 					exitCode = 1;
 				} else {
 					for (const content of assistantMsg.content) {
@@ -147,7 +188,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 
 		return exitCode;
 	} catch (error: unknown) {
-		console.error(error instanceof Error ? error.message : String(error));
+		renderFailure(error instanceof Error ? error.message : String(error));
 		return 1;
 	} finally {
 		for (const cleanup of signalCleanupHandlers) {

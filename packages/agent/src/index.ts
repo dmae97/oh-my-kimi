@@ -50,5 +50,48 @@ export {
 } from "./parallel-tool-batch.ts";
 // Proxy utilities
 export * from "./proxy.ts";
+// Deterministic resource-claim DAG scheduler (dag-v2)
+export {
+	applyConcurrencyCap,
+	assignDagLevels,
+	computePlanKey,
+	type DagSchedulePlan,
+	type ResolvedClaimEntry,
+	resolveBatchClaims,
+	type ScheduleDagLevelsOptions,
+	scheduleDagLevels,
+} from "./tool-dag-scheduler.ts";
+// Resource-claim model (dag-v2)
+export {
+	type ClaimableToolCall,
+	canonicalizeClaims,
+	claimsConflict,
+	compareClaims,
+	type ResolveToolClaimsOptions,
+	resolutionsConflict,
+	resolvePathClaimKey,
+	resolveToolClaims,
+	type ToolClaimResolution,
+	type ToolResourceAccess,
+	type ToolResourceClaim,
+} from "./tool-resource-claims.ts";
+// Per-call timeout / cancellation / late settlement (ALG-004)
+export {
+	createAbortedToolResult,
+	createTimeoutToolResult,
+	resolveToolExecutionPolicy,
+	resolveToolTimeoutMs,
+	type ToolDispositionEnvelope,
+	type ToolLateSettlement,
+} from "./tool-timeout.ts";
+export {
+	createSyntheticToolResult,
+	inspectTranscriptIntegrity,
+	repairTranscriptIntegrity,
+	TranscriptIntegrityError,
+	type TranscriptIntegrityIssue,
+	type TranscriptIntegrityIssueKind,
+	type TranscriptIntegrityReport,
+} from "./tool-transcript-integrity.ts";
 // Types
 export * from "./types.ts";

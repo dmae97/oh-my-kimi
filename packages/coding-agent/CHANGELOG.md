@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Masked API-key-like values in newly submitted user chat before extensions, models, event streams, and session persistence.
+
+## [0.90.9] - 2026-07-19
+
+### Added
+
+- Closed every emitted tool turn with one terminal result across normal, blocked, aborted, timed-out, failed, and resume paths; missing-result repair remains idempotent and duplicate/orphan results fail closed.
+- Added a deterministic resource-claim DAG scheduler that preserves source-order artifacts, keeps unknown, `bash`, and unclaimed extension tools exclusive, and retains `waves-v1` as the compatibility rollback path.
+- Added execution-bound evidence receipts that bind normalized local command outcomes, artifact/workspace fingerprints, redacted output digests, and replay-ledger state; the built-in CLI and `AgentSession` bash paths remain outside this optional evidence executor.
+- Made compaction transactional behind closed tool turns, revision compare-and-swap, and stale-summary discard.
+- Added typed termination, incomplete-run recovery, and `omk session doctor`, including dry-run repair for unambiguous recoverable state only.
+- Added provider-origin-aware `omk provider doctor` diagnostics with sanitized Level 0–2 probes for native, custom OpenAI-compatible, and local-proxy endpoints.
+
+### Local freeze
+
+- The `0.90.9` workspace snapshot is locally frozen and unpublished. Local build/check, keyless workspace tests, npm packs, isolated npm/Bun installs, and the Linux x64 Bun binary/archive passed; live-provider and other-OS coverage remain outside this freeze.
+- Publication, push, tag, dist-tag, and trusted-publisher mutations remain blocked pending authoritative WORM release infrastructure.
+
 ## [0.90.8] - 2026-07-13
 
 ### New Features

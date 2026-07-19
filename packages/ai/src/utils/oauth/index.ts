@@ -5,6 +5,9 @@
  * for OAuth-based providers:
  * - Anthropic (Claude Pro/Max)
  * - GitHub Copilot
+ * - OpenAI Codex (ChatGPT Plus/Pro)
+ * - Qwen (Qwen Code subscription)
+ * - Grok (xAI, via the local grok-oauth-proxy)
  */
 
 // Anthropic
@@ -18,6 +21,8 @@ export {
 	normalizeDomain,
 	refreshGitHubCopilotToken,
 } from "./github-copilot.ts";
+// Grok (xAI OAuth proxy)
+export { GROK_PROXY_PROVIDER_ID, grokProxyOAuthProvider, loginGrokProxy } from "./grok-proxy.ts";
 // OpenAI Codex (ChatGPT OAuth)
 export {
 	loginOpenAICodex,
@@ -27,6 +32,14 @@ export {
 	openaiCodexOAuthProvider,
 	refreshOpenAICodexToken,
 } from "./openai-codex.ts";
+// Qwen (Qwen Code subscription)
+export {
+	loginQwen,
+	normalizeQwenBaseUrl,
+	QWEN_OAUTH_PROVIDER_ID,
+	qwenOAuthProvider,
+	refreshQwenToken,
+} from "./qwen.ts";
 
 export * from "./types.ts";
 
@@ -36,13 +49,17 @@ export * from "./types.ts";
 
 import { anthropicOAuthProvider } from "./anthropic.ts";
 import { githubCopilotOAuthProvider } from "./github-copilot.ts";
+import { grokProxyOAuthProvider } from "./grok-proxy.ts";
 import { openaiCodexOAuthProvider } from "./openai-codex.ts";
+import { qwenOAuthProvider } from "./qwen.ts";
 import type { OAuthCredentials, OAuthProviderId, OAuthProviderInfo, OAuthProviderInterface } from "./types.ts";
 
 const BUILT_IN_OAUTH_PROVIDERS: OAuthProviderInterface[] = [
 	anthropicOAuthProvider,
 	githubCopilotOAuthProvider,
 	openaiCodexOAuthProvider,
+	qwenOAuthProvider,
+	grokProxyOAuthProvider,
 ];
 
 const oauthProviderRegistry = new Map<string, OAuthProviderInterface>(

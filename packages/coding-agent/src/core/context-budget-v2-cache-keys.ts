@@ -1,5 +1,9 @@
 import type { ContextRepresentationCandidateV2, ContextRepresentationKindV2 } from "./context-budget-headroom.ts";
 import { sha256Canonical, sha256Hex } from "./context-budget-v2-cache-hash.ts";
+import {
+	type ContextCacheInvalidationSnapshot,
+	serializeContextCacheSnapshot,
+} from "./context-budget-v2-cache-invalidation.ts";
 
 const DEFAULT_CACHE_NAMESPACE = "context-budget-v2";
 const DEFAULT_TOKENIZER_ID = "heuristic-v1";
@@ -27,6 +31,7 @@ export interface ContextBudgetCacheKeyBaseV2 {
 	readonly safetyProfileHash: string;
 	readonly compressorPolicyHash?: string;
 	readonly qualityPolicyHash?: string;
+	readonly invalidationSnapshotHash?: string;
 }
 
 export function createContextBudgetCacheKeyBaseV2(input: {
@@ -42,6 +47,7 @@ export function createContextBudgetCacheKeyBaseV2(input: {
 	readonly safetyProfileHash?: string;
 	readonly compressorPolicyHash?: string;
 	readonly qualityPolicyHash?: string;
+	readonly cacheInvalidationSnapshot?: ContextCacheInvalidationSnapshot;
 }): ContextBudgetCacheKeyBaseV2 {
 	const queryIntentHash = input.queryIntentHash ?? computeContextBudgetQueryIntentHashV2(input.query);
 	return {
@@ -56,6 +62,10 @@ export function createContextBudgetCacheKeyBaseV2(input: {
 		safetyProfileHash: input.safetyProfileHash ?? DEFAULT_SAFETY_PROFILE_HASH,
 		compressorPolicyHash: input.compressorPolicyHash ?? DEFAULT_MATERIALIZED_COMPRESSOR_POLICY_HASH_V2,
 		qualityPolicyHash: input.qualityPolicyHash ?? DEFAULT_MATERIALIZED_QUALITY_POLICY_HASH_V2,
+		invalidationSnapshotHash:
+			input.cacheInvalidationSnapshot === undefined
+				? "none"
+				: sha256Hex(serializeContextCacheSnapshot(input.cacheInvalidationSnapshot)),
 	};
 }
 
@@ -92,6 +102,7 @@ export function buildContextBudgetExactRepresentationCacheKeyV2(
 	return `context-representation-exact:${sha256Canonical({
 		budgetBucket: input.budgetBucket,
 		compressorId: input.compressorId ?? NO_COMPRESSOR_ID,
+		invalidationSnapshotHash: input.invalidationSnapshotHash ?? "none",
 		modelId: input.modelId,
 		namespace: input.namespace,
 		policyVersion: input.policyVersion,
@@ -117,6 +128,7 @@ export function buildContextBudgetMaterializedRepresentationCacheKeyV2(
 		budgetBucket: input.budgetBucket,
 		compressorId: input.compressorId ?? NO_COMPRESSOR_ID,
 		compressorPolicyHash: input.compressorPolicyHash ?? DEFAULT_MATERIALIZED_COMPRESSOR_POLICY_HASH_V2,
+		invalidationSnapshotHash: input.invalidationSnapshotHash ?? "none",
 		modelId: input.modelId,
 		namespace: input.namespace,
 		policyVersion: input.policyVersion,

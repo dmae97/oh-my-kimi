@@ -1,9 +1,19 @@
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { Agent, type AgentMessage, type ThinkingLevel } from "omk-agent-core";
-import { clampThinkingLevel, type Message, type Model, streamSimple } from "omk-ai";
+import {
+	Agent,
+	type AgentMessage,
+	inspectTranscriptIntegrity,
+	repairTranscriptIntegrity,
+	type ThinkingLevel,
+} from "omk-agent-core";
+import { createNodeResourceKeyResolver } from "omk-agent-core/node";
+import { clampThinkingLevel, type Message, type Model, streamSimple, type ToolResultMessage } from "omk-ai";
 import { getAgentDir } from "../config.ts";
+import { ReplayLedgerManager } from "../guardrails/evidence-system.ts";
 import { resolvePath } from "../utils/paths.ts";
-import { AgentSession } from "./agent-session.ts";
+import { AgentSession, type SessionTranscriptRepair } from "./agent-session.ts";
+import { resolveAgentToolSettings } from "./agent-tool-settings.ts";
 import { formatNoModelsAvailableMessage } from "./auth-guidance.ts";
 import { AuthStorage } from "./auth-storage.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
@@ -18,6 +28,7 @@ import { mergeProviderAttributionHeaders } from "./provider-attribution.ts";
 import type { ResourceLoader } from "./resource-loader.ts";
 import { DefaultResourceLoader } from "./resource-loader.ts";
 import { getDefaultSessionDir, SessionManager } from "./session-manager.ts";
+import { classifySessionTermination, SessionTerminationError } from "./session-termination.ts";
 import { SettingsManager } from "./settings-manager.ts";
 import { time } from "./timings.ts";
 import type { BashSandboxPreflight } from "./tools/bash.ts";
@@ -94,6 +105,12 @@ export interface CreateAgentSessionOptions {
 	loadoutAccessPolicy?: LoadoutAccessPolicy;
 	/** Trusted sandbox preflight used for built-in local bash execution. */
 	bashSandboxPreflight?: BashSandboxPreflight;
+	/** Optional replay ledger shared with VerifiedEvidenceExecutor freshness checks. */
+	replayLedger?: ReplayLedgerManager;
+	/** Goal binding for AgentSession replay events; defaults to replayLedger.goalId. */
+	replayGoalId?: string;
+	/** Optional lane binding for AgentSession replay events. */
+	replayLaneId?: string;
 }
 
 /** Result from createAgentSession */
@@ -140,6 +157,77 @@ export {
 
 function getDefaultAgentDir(): string {
 	return getAgentDir();
+}
+
+interface SessionTranscriptRecovery {
+	messages: AgentMessage[];
+	repair?: SessionTranscriptRepair;
+}
+
+/**
+ * ALG001-A: inspect the restored transcript on every live session open/resume.
+ *
+ * - A clean transcript passes through untouched.
+ * - Unambiguous missing-only tail results are auto-repaired: synthetic
+ *   terminal results (tool-result/v2 envelope) are persisted to the session
+ *   so the repair is durable and idempotent, together with a durable
+ *   `transcript_repaired` audit entry.
+ * - Any duplicate/orphan/duplicate-call/interleaved corruption marks the
+ *   session (`session_corrupt` entry, once) and fails closed.
+ */
+function recoverSessionTranscriptOnOpen(
+	sessionManager: SessionManager,
+	messages: AgentMessage[],
+): SessionTranscriptRecovery {
+	const report = inspectTranscriptIntegrity(messages);
+	if (report.ok) {
+		return { messages };
+	}
+
+	let repaired: AgentMessage[];
+	try {
+		repaired = repairTranscriptIntegrity(messages, "Tool result missing; synthesized during session resume recovery");
+	} catch {
+		const alreadyMarked = sessionManager
+			.getBranch()
+			.some((entry) => entry.type === "custom" && entry.customType === "session_corrupt");
+		if (!alreadyMarked) {
+			sessionManager.appendCustomEntry("session_corrupt", {
+				issues: report.issues.map((issue) => ({
+					kind: issue.kind,
+					toolCallId: issue.toolCallId,
+					...(issue.toolName === undefined ? {} : { toolName: issue.toolName }),
+				})),
+			});
+		}
+		const summary = report.issues.map((issue) => `${issue.kind}:${issue.toolCallId}`).join(", ");
+		const firstIssue = report.issues[0]?.kind ?? "missing_result";
+		const termination = classifySessionTermination({
+			sessionId: sessionManager.getSessionId(),
+			runId: `resume-${randomUUID()}`,
+			timestamp: new Date().toISOString(),
+			source: "inferred_on_resume",
+			message: "Session transcript has ambiguous tool-result corruption.",
+			cause: { area: "transcript", code: firstIssue },
+			sideEffects: "possible",
+		});
+		throw new SessionTerminationError(
+			`Cannot open session: corrupt tool transcript (${summary}). ` +
+				"The session has been marked corrupt; repair it explicitly before resuming.",
+			termination,
+		);
+	}
+
+	const inserted = repaired.slice(messages.length) as ToolResultMessage[];
+	if (inserted.length === 0) {
+		return { messages: repaired };
+	}
+	for (const message of inserted) {
+		sessionManager.appendMessage(message);
+	}
+	const insertedToolCallIds = inserted.map((message) => message.toolCallId);
+	sessionManager.appendCustomEntry("transcript_repaired", { insertedToolCallIds, reason: "resume" });
+	return { messages: repaired, repair: { insertedToolCallIds, reason: "resume" } };
 }
 
 function getDomainDispatchBaseToolNames(options: CreateAgentSessionOptions): string[] {
@@ -259,7 +347,19 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const modelRegistry = options.modelRegistry ?? ModelRegistry.create(authStorage, modelsPath);
 
 	const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
+	const agentToolSettings = resolveAgentToolSettings(settingsManager);
 	const sessionManager = options.sessionManager ?? SessionManager.create(cwd, getDefaultSessionDir(cwd, agentDir));
+	let replayLedger = options.replayLedger;
+	let replayGoalId = options.replayGoalId;
+	const sessionFile = sessionManager.getSessionFile();
+	if (!replayLedger && sessionManager.isPersisted() && sessionFile) {
+		replayGoalId ??=
+			sessionManager
+				.getSessionId()
+				.replace(/[^A-Za-z0-9._-]+/g, "-")
+				.replace(/^[._-]+|[._-]+$/g, "") || "session";
+		replayLedger = new ReplayLedgerManager(replayGoalId, `${sessionFile}.replay.jsonl`);
+	}
 
 	if (!resourceLoader) {
 		resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
@@ -267,8 +367,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		time("resourceLoader.reload");
 	}
 
-	// Check if session has existing data to restore
+	// Check if session has existing data to restore. Live open/resume always
+	// inspects the transcript and either auto-repairs missing-only tail results
+	// or fails closed on ambiguous corruption (ALG001-A).
 	const existingSession = sessionManager.buildSessionContext();
+	const transcriptRecovery = recoverSessionTranscriptOnOpen(sessionManager, existingSession.messages);
 	const hasExistingSession = existingSession.messages.length > 0;
 	const hasThinkingEntry = sessionManager.getBranch().some((entry) => entry.type === "thinking_level_change");
 
@@ -449,11 +552,20 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		transport: settingsManager.getTransport(),
 		thinkingBudgets: settingsManager.getThinkingBudgets(),
 		maxRetryDelayMs: settingsManager.getProviderRetrySettings().maxRetryDelayMs,
+		toolTimeoutMs: agentToolSettings.toolTimeoutMs,
+		toolTimeouts: agentToolSettings.toolTimeouts,
+		toolScheduler: agentToolSettings.toolScheduler,
+		maxToolConcurrency: agentToolSettings.maxToolConcurrency,
+		strictExtensionClaims: agentToolSettings.strictExtensionClaims,
+		cwd,
+		// §5.5 Node identity resolver: symlink/hardlink/drive/UNC path aliases
+		// conflict in the dag-v2 scheduler instead of racing (ALG002-A).
+		resourceKeyResolver: createNodeResourceKeyResolver(),
 	});
 
 	// Restore messages if session has existing data
 	if (hasExistingSession) {
-		agent.state.messages = existingSession.messages;
+		agent.state.messages = transcriptRecovery.messages;
 		if (!hasThinkingEntry) {
 			sessionManager.appendThinkingLevelChange(thinkingLevel);
 		}
@@ -481,6 +593,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		loadoutAccessPolicy: effectiveLoadoutAccessPolicy,
 		bashSandboxPreflight: options.bashSandboxPreflight,
 		sessionStartEvent: options.sessionStartEvent,
+		transcriptRepair: transcriptRecovery.repair,
+		replayLedger,
+		replayGoalId,
+		replayLaneId: options.replayLaneId,
 	});
 	const extensionsResult = resourceLoader.getExtensions();
 

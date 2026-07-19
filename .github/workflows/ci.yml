@@ -41,5 +41,17 @@ jobs:
       - name: Check
         run: npm run check
 
+      - name: Verify release consistency receipt
+        id: verify_receipt
+        run: node packages/coding-agent/dist/verify-ci.js
+
+      - name: Upload release consistency receipt
+        if: always() && steps.verify_receipt.outcome != 'skipped'
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-release-consistency
+          path: .omk/ci-evidence
+          if-no-files-found: error
+
       - name: Test
         run: npm test

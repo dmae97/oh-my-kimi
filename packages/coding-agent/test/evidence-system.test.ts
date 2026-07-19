@@ -1,5 +1,15 @@
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
-import { beforeEach, describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
+import { rmSync } from "node:fs";
+import { describe, expect, it } from "vitest";
+import { createCommandHmacBinder } from "../src/guardrails/evidence-attestation.ts";
+import {
+	type CreateEvidenceReceiptInput,
+	computeEvidenceCommandSha256,
+	createEvidenceReceipt,
+	evidenceReceiptReplayPayload,
+	parseSha256Hex,
+	withEvidenceReceiptEnvelope,
+} from "../src/guardrails/evidence-receipt.ts";
 import {
 	EvidenceGate,
 	FailClosedMergeGate,
@@ -7,7 +17,73 @@ import {
 	TaskContractBuilder,
 	VerifyReporterV2,
 } from "../src/guardrails/evidence-system.ts";
-import type { EvidenceItem, MergeGateResult, TaskContract } from "../src/types/evidence.ts";
+import { computeWorkspaceManifestSha256 } from "../src/guardrails/workspace-fingerprint.ts";
+import type {
+	ArtifactState,
+	EvidenceItem,
+	EvidenceReceiptStatus,
+	MergeGateResult,
+	TaskContract,
+	WorkspaceFingerprint,
+	WorkspaceScope,
+} from "../src/types/evidence.ts";
+
+function gateFingerprint(): WorkspaceFingerprint {
+	const scope: WorkspaceScope = { root: "/workspace", artifactPaths: ["dist/result.txt"] };
+	const contents = "verified";
+	const artifacts: ArtifactState[] = [
+		{
+			path: "dist/result.txt",
+			state: "file",
+			sha256: parseSha256Hex(createHash("sha256").update(contents).digest("hex")),
+			size: Buffer.byteLength(contents),
+		},
+	];
+	return {
+		kind: "artifact-set",
+		scope,
+		artifacts,
+		manifestSha256: computeWorkspaceManifestSha256(scope, artifacts),
+	};
+}
+
+const GATE_COMMAND = { kind: "argv" as const, executable: "git", argv: ["diff"] };
+const GATE_BINDER = createCommandHmacBinder();
+
+type GateReceiptOverrides = {
+	receiptId?: string;
+	goalId?: string;
+	claim?: string;
+	status?: EvidenceReceiptStatus;
+	exitCode?: number | null;
+};
+
+function gateReceipt(overrides: GateReceiptOverrides = {}) {
+	return createEvidenceReceipt({
+		receiptId: "receipt-1",
+		goalId: "g",
+		claim: "File changed",
+		command: GATE_COMMAND,
+		commandRedaction: { policyId: "omk-command-redaction-v1", placeholders: [] },
+		commandBinding: GATE_BINDER.bind(GATE_COMMAND),
+		cwd: "/workspace",
+		timeoutMs: 30_000,
+		startedAt: "2026-07-17T00:00:00.000Z",
+		finishedAt: "2026-07-17T00:00:01.000Z",
+		durationMs: 1_000,
+		status: "passed",
+		exitCode: 0,
+		workspaceBefore: gateFingerprint(),
+		workspaceAfter: gateFingerprint(),
+		alreadyRedactedOutput: {
+			redactionPolicyId: "test-redaction-v1",
+			stdout: Buffer.from("ok\n"),
+			stderr: Buffer.from(""),
+		},
+		executor: "internal",
+		...overrides,
+	} as CreateEvidenceReceiptInput);
+}
 
 describe("TaskContractBuilder", () => {
 	it("builds a basic contract", () => {
@@ -52,6 +128,36 @@ describe("TaskContractBuilder", () => {
 		expect(parsed.completionClaim).toBe(original.completionClaim);
 	});
 
+	it("preserves receipt metadata when parsing contract JSON", () => {
+		const contract: TaskContract = {
+			goalId: "g",
+			completionClaim: "c",
+			requiredEvidence: [
+				{
+					claim: "receipt-backed",
+					category: "feature",
+					timestamp: "",
+					status: "satisfied",
+					receiptId: "receipt-1",
+					receiptSchemaVersion: 3,
+					receiptCommandSha256: parseSha256Hex("0".repeat(64)),
+					receiptLaneId: "lane-1",
+				},
+			],
+			finalRisk: "",
+			verdict: "pass",
+			createdAt: "",
+			updatedAt: "",
+		};
+
+		expect(TaskContractBuilder.fromJSON(TaskContractBuilder.toJSON(contract)).requiredEvidence[0]).toMatchObject({
+			receiptId: "receipt-1",
+			receiptSchemaVersion: 3,
+			receiptCommandSha256: "0".repeat(64),
+			receiptLaneId: "lane-1",
+		});
+	});
+
 	it("fails closed on malformed contract JSON", () => {
 		expect(() => TaskContractBuilder.fromJSON("[]")).toThrow(/object/);
 		expect(() => TaskContractBuilder.fromJSON(JSON.stringify({ goalId: "g" }))).toThrow(/mistyped/);
@@ -84,103 +190,6 @@ describe("TaskContractBuilder", () => {
 	});
 });
 
-describe("ReplayLedgerManager", () => {
-	const tmpPath = "/tmp/omk-test-ledger.jsonl";
-	const tmpPathReplay = "/tmp/omk-test-ledger-replay.jsonl";
-	beforeEach(() => {
-		try {
-			rmSync(tmpPath);
-		} catch {
-			/* ignore */
-		}
-		try {
-			rmSync(tmpPathReplay);
-		} catch {
-			/* ignore */
-		}
-	});
-
-	it("appends and persists events", () => {
-		const ledger = new ReplayLedgerManager("goal-ledger", tmpPath);
-		ledger.append({
-			type: "session_start",
-			goalId: "goal-ledger",
-			payload: { message: "hello" },
-		});
-		ledger.append({
-			type: "tool_call",
-			goalId: "goal-ledger",
-			laneId: "lane-1",
-			payload: { tool: "read_file" },
-		});
-		ledger.persist();
-
-		expect(ledger.getEvents()).toHaveLength(2);
-		expect(ledger.getEvents()[0].seq).toBe(1);
-		expect(ledger.getEvents()[1].seq).toBe(2);
-		expect(ledger.getEvents()[1].payloadHash).toBeDefined();
-
-		// Reload and verify
-		const ledger2 = new ReplayLedgerManager("goal-ledger", tmpPath);
-		expect(ledger2.getEvents()).toHaveLength(2);
-	});
-
-	it("chains events with prevHash/eventHash and verifies the chain on reload", () => {
-		const ledger = new ReplayLedgerManager("goal-chain", tmpPath);
-		const first = ledger.append({ type: "session_start", goalId: "goal-chain", payload: { n: 1 } });
-		const second = ledger.append({ type: "message", goalId: "goal-chain", payload: { n: 2 } });
-		expect(first.prevHash).toBe("genesis");
-		expect(second.prevHash).toBe(first.eventHash);
-		ledger.persist();
-
-		const reloaded = new ReplayLedgerManager("goal-chain", tmpPath);
-		expect(reloaded.getEvents()).toHaveLength(2);
-		expect(reloaded.getEvents()[1].prevHash).toBe(first.eventHash);
-	});
-
-	it("fails closed when a persisted payload is tampered", () => {
-		const ledger = new ReplayLedgerManager("goal-tamper", tmpPath);
-		ledger.append({ type: "tool_call", goalId: "goal-tamper", payload: { tool: "read" } });
-		ledger.append({ type: "tool_call", goalId: "goal-tamper", payload: { tool: "write" } });
-		ledger.persist();
-
-		const lines = readFileSync(tmpPath, "utf-8").trim().split("\n");
-		const forged = JSON.parse(lines[1]) as { payload: unknown };
-		forged.payload = { tool: "rm -rf" };
-		lines[1] = JSON.stringify(forged);
-		writeFileSync(tmpPath, `${lines.join("\n")}\n`, "utf-8");
-
-		expect(() => new ReplayLedgerManager("goal-tamper", tmpPath)).toThrow(/tampered/);
-	});
-
-	it("fails closed when events are deleted or reordered", () => {
-		const ledger = new ReplayLedgerManager("goal-order", tmpPath);
-		ledger.append({ type: "tool_call", goalId: "goal-order", payload: { n: 1 } });
-		ledger.append({ type: "tool_call", goalId: "goal-order", payload: { n: 2 } });
-		ledger.append({ type: "tool_call", goalId: "goal-order", payload: { n: 3 } });
-		ledger.persist();
-		const lines = readFileSync(tmpPath, "utf-8").trim().split("\n");
-
-		writeFileSync(tmpPath, `${[lines[0], lines[2]].join("\n")}\n`, "utf-8");
-		expect(() => new ReplayLedgerManager("goal-order", tmpPath)).toThrow(/expected seq/);
-
-		writeFileSync(tmpPath, `${[lines[1], lines[0], lines[2]].join("\n")}\n`, "utf-8");
-		expect(() => new ReplayLedgerManager("goal-order", tmpPath)).toThrow(/expected seq|chain broken/);
-	});
-
-	it("replays events with handler", () => {
-		const ledger = new ReplayLedgerManager("goal-replay", tmpPathReplay);
-		ledger.append({ type: "tool_call", goalId: "goal-replay", payload: { tool: "A" } });
-		ledger.append({ type: "tool_call", goalId: "goal-replay", payload: { tool: "B" } });
-		ledger.append({ type: "message", goalId: "goal-replay", payload: { text: "hi" } });
-
-		const tools = ledger.replay((ev) =>
-			ev.type === "tool_call" ? (ev.payload as { tool: string }).tool : undefined,
-		);
-		expect(tools).toEqual(["A", "B"]);
-	});
-});
-
 describe("EvidenceGate", () => {
 	function makeContract(evidence: EvidenceItem[]): TaskContract {
 		return {
@@ -206,7 +215,7 @@ describe("EvidenceGate", () => {
 				timestamp: "",
 			},
 		]);
-		const gate = new EvidenceGate();
+		const gate = new EvidenceGate({ receiptMode: "legacy" });
 		const result = gate.check(contract);
 		expect(result.status).toBe("open");
 	});
@@ -236,7 +245,7 @@ describe("EvidenceGate", () => {
 				timestamp: "",
 			},
 		]);
-		const gate = new EvidenceGate();
+		const gate = new EvidenceGate({ receiptMode: "legacy" });
 		const result = gate.check(contract);
 		expect(result.status).toBe("blocked");
 		expect(result.reason).toContain("SHA-256 hash");
@@ -263,6 +272,112 @@ describe("EvidenceGate", () => {
 		const gate = new EvidenceGate({ minEvidenceCount: 2 });
 		const result = gate.check(contract);
 		expect(result.status).toBe("conditional");
+	});
+
+	function receiptBackedContract(): TaskContract {
+		return makeContract([
+			{
+				claim: "File changed",
+				category: "feature",
+				artifactPath: "dist/result.txt",
+				verificationCommand: "git diff",
+				hash: "legacy-hash",
+				status: "satisfied",
+				timestamp: "",
+				receiptId: "receipt-1",
+				receiptSchemaVersion: 3,
+			},
+		]);
+	}
+
+	it("blocks metadata-only evidence in strict mode", () => {
+		const contract = receiptBackedContract();
+		contract.requiredEvidence[0].receiptId = undefined;
+		const result = new EvidenceGate({ receiptMode: "strict" }).check(contract);
+		expect(result.status).toBe("blocked");
+		expect(result.reason).toContain("receipt");
+	});
+
+	it("requires receipt schema version 3 only for the strict receipt gate", () => {
+		const contract = receiptBackedContract();
+		delete contract.requiredEvidence[0].receiptSchemaVersion;
+
+		const strict = new EvidenceGate({ receiptMode: "strict" }).check(contract);
+		expect(strict.status).toBe("blocked");
+		expect(strict.reason).toContain("schema");
+		expect(new EvidenceGate({ receiptMode: "prefer" }).check(contract).status).toBe("conditional");
+		expect(new EvidenceGate({ receiptMode: "legacy" }).check(contract).status).toBe("open");
+	});
+
+	it("returns conditional for metadata-only evidence in prefer mode", () => {
+		const contract = receiptBackedContract();
+		contract.requiredEvidence[0].receiptId = undefined;
+		const result = new EvidenceGate({ receiptMode: "prefer" }).check(contract);
+		expect(result.status).toBe("conditional");
+		expect(result.reason).toContain("receipt");
+	});
+
+	it("allows legacy metadata only when legacy mode is explicit", () => {
+		const contract = receiptBackedContract();
+		contract.requiredEvidence[0].receiptId = undefined;
+		expect(new EvidenceGate({ receiptMode: "legacy" }).check(contract).status).toBe("open");
+		expect(new EvidenceGate().check(contract).status).toBe("conditional");
+	});
+
+	it("opens strict mode for a valid matching passed receipt", () => {
+		const path = "/tmp/omk-evidence-gate-system.jsonl";
+		for (const suffix of ["", ".head", ".lock"]) rmSync(`${path}${suffix}`, { recursive: true, force: true });
+		const initialReceipt = gateReceipt();
+		const ledger = new ReplayLedgerManager("g", path);
+		const event = ledger.append({
+			type: "evidence_receipt",
+			goalId: "g",
+			payload: evidenceReceiptReplayPayload(initialReceipt),
+		});
+		const receipt = withEvidenceReceiptEnvelope(initialReceipt, {
+			ledgerBinding: { seq: event.seq, eventHash: parseSha256Hex(event.eventHash) },
+		});
+		const contract = receiptBackedContract();
+		contract.requiredEvidence[0].receiptCommandSha256 = computeEvidenceCommandSha256(receipt.core.command);
+		const result = new EvidenceGate({
+			receiptMode: "strict",
+			resolveReceipt: () => receipt,
+			resolveVerifiedLedgerSnapshot: () => ledger.getVerifiedSnapshot(),
+			captureWorkspaceFingerprint: () => receipt.core.workspaceAfter,
+			commandAttestationBinder: GATE_BINDER,
+			resolveAttestedCommand: () => GATE_COMMAND,
+		}).check(contract);
+		expect(result.status).toBe("open");
+	});
+
+	it("blocks a failed non-zero receipt in strict mode", () => {
+		const receipt = gateReceipt({ status: "failed", exitCode: 1 });
+		const result = new EvidenceGate({ receiptMode: "strict", resolveReceipt: () => receipt }).check(
+			receiptBackedContract(),
+		);
+		expect(result.status).toBe("blocked");
+		expect(result.reason).toContain("pass with exit code 0");
+	});
+
+	it.each([
+		["goal mismatch", gateReceipt({ goalId: "other-goal" }), "goal"],
+		["claim mismatch", gateReceipt({ claim: "Other claim" }), "claim"],
+	])("blocks %s receipts in strict mode", (_name, receipt, expectedReason) => {
+		const result = new EvidenceGate({ receiptMode: "strict", resolveReceipt: () => receipt }).check(
+			receiptBackedContract(),
+		);
+		expect(result.status).toBe("blocked");
+		expect(result.reason).toContain(expectedReason);
+	});
+
+	it("blocks a tampered receipt in strict mode", () => {
+		const receipt = gateReceipt();
+		const tampered = { ...receipt, core: { ...receipt.core, claim: "tampered" } };
+		const result = new EvidenceGate({ receiptMode: "strict", resolveReceipt: () => tampered }).check(
+			receiptBackedContract(),
+		);
+		expect(result.status).toBe("blocked");
+		expect(result.reason).toContain("invalid");
 	});
 });
 
@@ -291,7 +406,7 @@ describe("FailClosedMergeGate", () => {
 				timestamp: "",
 			},
 		]);
-		const mergeGate = new FailClosedMergeGate();
+		const mergeGate = new FailClosedMergeGate([new EvidenceGate({ receiptMode: "legacy" })]);
 		const result = mergeGate.check(contract);
 		expect(result.status).toBe("open");
 	});
@@ -323,7 +438,7 @@ describe("FailClosedMergeGate", () => {
 				timestamp: "",
 			},
 		]);
-		(contract as any).verdict = "fail";
+		contract.verdict = "fail";
 		const mergeGate = new FailClosedMergeGate();
 		const result = mergeGate.check(contract);
 		expect(result.status).toBe("blocked");

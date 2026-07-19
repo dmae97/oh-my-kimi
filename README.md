@@ -26,6 +26,35 @@
 
 ---
 
+## Installation
+
+```bash
+npm install -g open-multi-agent-kit --ignore-scripts
+```
+
+Then run it:
+
+```bash
+omk --version
+omk
+```
+
+Or without a global install:
+
+```bash
+npx --ignore-scripts open-multi-agent-kit
+```
+
+Library packages:
+
+```bash
+npm install omk-agent-core   # Agent runtime with tool calling and state management
+npm install omk-ai           # Unified multi-provider LLM API
+npm install omk-tui          # Terminal UI library with differential rendering
+```
+
+---
+
 # OMK Agent Harness Mono Repo
 
 This is the home of the omk agent harness project including our self extensible coding agent.
@@ -37,6 +66,7 @@ This is the home of the omk agent harness project including our self extensible 
 To learn more about omk:
 
 * [Project demos from Mario](https://www.threads.com/@been_yg?hl=ko)
+* [Browse all public Skills](SKILLS.md)
 * [Read the documentation](https://omk.dev/docs/latest), but you can also ask the agent to explain itself
 
 ## OMK//CONTROL TUI
@@ -45,7 +75,7 @@ To learn more about omk:
   <img src="readmeasset/omk_tui.png" alt="OMK//CONTROL terminal dashboard — live DAG lanes, provider routing, MCP health, evidence gates, and telemetry in Night City Ops Console style" width="100%" />
 </p>
 
-The OMK//CONTROL startup surface is the default operator view. The header reads `omk v<package.version> · OMK//CONTROL`, using the published `open-multi-agent-kit` package version as the single source of truth.
+The OMK//CONTROL startup surface is the default operator view. The header reads `omk v<package.version> · OMK//CONTROL`, using the installed workspace package version as its source of truth.
 
 The default dark TUI theme uses the `omk-control-grid-dark` Night City palette and keeps the control sidebar focused on route, evidence, loop, MCP, runtime, skills, and context budget state.
 
@@ -57,10 +87,10 @@ OMK is not another model shell. It is the control plane around the models you al
 
 ```bash
 # Global, pinned OMK package
-omk install npm:@your-org/omk-workflows@1.0.0
+omk install npm:open-multi-agent-kit@0.90.9
 
 # Project-local, pinned Git package
-omk install -l git:github.com/your-org/omk-workflows@v1.0.0
+omk install -l git:github.com/dmae97/open-multi-agent-kit@v0.90.9
 
 # Inspect and control the installed resources
 omk list
@@ -72,7 +102,7 @@ A skills-only package is an ordinary OMK package:
 
 ```json
 {
-  "name": "@your-org/omk-workflows",
+  "name": "omk-workflows",
   "keywords": ["omk-package"],
   "omk": {
     "skills": ["./skills"]
@@ -99,6 +129,13 @@ Use the minimum necessary skills per turn—usually one to three. A skill is loa
 - **Extensibility without a fork.** Ship skills, extensions, prompts, and themes as OMK packages instead of teaching every contributor a separate runtime.
 
 The proof standard is operational: evaluate OMK against your own task completion, verification coverage, setup time, and recovery behavior. We do not claim an unmeasured benchmark win over another harness.
+
+## Local freeze v0.90.9
+
+The workspace packages are locally frozen at `0.90.9`; this is not an npm or GitHub release. Local build/check, keyless tests, npm packs, isolated npm/Bun installs, and the Linux x64 Bun binary/archive passed; live-provider and other-OS coverage remain outside this freeze. Publication, push, tag, dist-tag, and trusted-publisher mutations remain blocked pending authoritative WORM release infrastructure.
+
+`dag-v2` is the local workspace default; validate it against your workload and preserve `waves-v1` (or set `OMK_TOOL_SCHEDULER=waves-v1`) as the process-local rollback. Run `omk session doctor --session <path|id> --repair --dry-run` before a repair, and use `omk provider doctor <provider-id> --level 0` to inspect provider configuration without a model probe. Package, CLI, config, session, RPC, and SDK compatibility are not newly certified by this freeze; validate existing integrations against the local workspace.
+Local-freeze notes live in [.github/RELEASE_NOTES_v0.90.9.md](.github/RELEASE_NOTES_v0.90.9.md).
 
 ## Release v0.90.8
 

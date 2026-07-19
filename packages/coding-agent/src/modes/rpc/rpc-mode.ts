@@ -25,6 +25,7 @@ import {
 	waitForRawStdoutBackpressure,
 	writeRawStdout,
 } from "../../core/output-guard.ts";
+import { formatSessionTermination, type SessionTermination } from "../../core/session-termination.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { type Theme, theme } from "../interactive/theme/theme.ts";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
@@ -71,8 +72,20 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		return { id, type: "response", command, success: true, data } as RpcResponse;
 	};
 
-	const error = (id: string | undefined, command: string, message: string): RpcResponse => {
-		return { id, type: "response", command, success: false, error: message };
+	const error = (
+		id: string | undefined,
+		command: string,
+		message: string,
+		termination?: SessionTermination,
+	): RpcResponse => {
+		return {
+			id,
+			type: "response",
+			command,
+			success: false,
+			error: termination ? formatSessionTermination(termination) : message,
+			...(termination ? { termination } : {}),
+		};
 	};
 
 	// Pending extension UI requests waiting for response
@@ -360,13 +373,14 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 	};
 
 	const registerSignalHandlers = (): void => {
-		const signals: NodeJS.Signals[] = ["SIGTERM"];
+		const signals: Array<"SIGTERM" | "SIGHUP"> = ["SIGTERM"];
 		if (process.platform !== "win32") {
 			signals.push("SIGHUP");
 		}
 
 		for (const signal of signals) {
 			const handler = () => {
+				session.recordProcessSignal(signal);
 				killTrackedDetachedChildren();
 				void shutdown(signal === "SIGHUP" ? 129 : 143, signal);
 			};
@@ -391,7 +405,9 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 				// Start prompt handling immediately, but emit the authoritative response only after
 				// prompt preflight succeeds. Queued and immediately handled prompts also count as success.
 				let preflightSucceeded = false;
-				void session
+				const promptSession = session;
+				const previousTermination = promptSession.lastTermination;
+				void promptSession
 					.prompt(command.message, {
 						images: command.images,
 						streamingBehavior: command.streamingBehavior,
@@ -405,7 +421,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 					})
 					.catch((e) => {
 						if (!preflightSucceeded) {
-							output(error(id, "prompt", e.message));
+							const termination =
+								promptSession.lastTermination !== previousTermination
+									? promptSession.lastTermination
+									: undefined;
+							output(error(id, "prompt", e instanceof Error ? e.message : String(e), termination));
 						}
 					});
 				return undefined;
@@ -453,6 +473,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 					autoCompactionEnabled: session.autoCompactionEnabled,
 					messageCount: session.messages.length,
 					pendingMessageCount: session.pendingMessageCount,
+					lastTermination: session.lastTermination,
 				};
 				return success(id, "get_state", state);
 			}
@@ -735,6 +756,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		}
 
 		const command = parsed as RpcCommand;
+		const commandSession = session;
+		const previousTermination = commandSession.lastTermination;
 		try {
 			const response = await handleCommand(command);
 			if (response) {
@@ -743,11 +766,14 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			}
 			await checkShutdownRequested();
 		} catch (commandError: unknown) {
+			const termination =
+				commandSession.lastTermination !== previousTermination ? commandSession.lastTermination : undefined;
 			output(
 				error(
 					command.id,
 					command.type,
 					commandError instanceof Error ? commandError.message : String(commandError),
+					termination,
 				),
 			);
 			await waitForRawStdoutBackpressure();

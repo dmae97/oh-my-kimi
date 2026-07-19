@@ -50,6 +50,7 @@ export function buildContextBudgetPlanCacheKeyV2(input: {
 			}))
 			.sort((a, b) => a.id.localeCompare(b.id)),
 		maxTokens: input.maxTokens,
+		invalidationSnapshotHash: input.keyBase.invalidationSnapshotHash ?? "none",
 		modelId: input.keyBase.modelId,
 		namespace: input.keyBase.namespace,
 		policyVersion: input.keyBase.policyVersion,

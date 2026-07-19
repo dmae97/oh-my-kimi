@@ -104,7 +104,12 @@ Tool execution mode is configurable:
 - `parallel` (default): preflight tool calls sequentially, execute allowed tools concurrently, emit `tool_execution_end` as soon as each tool is finalized, then emit toolResult messages and `turn_end.toolResults` in assistant source order
 - `sequential`: execute tool calls one by one, matching the historical behavior
 
-In parallel mode the batch is first partitioned into ordered waves (`partitionToolBatchWaves`): calls in the same wave run concurrently, and waves run one after another in source order. A fully safe batch is a single concurrent wave; bash, `clarify`, sequential-policy tools, unknown tools, and file tools with overlapping target paths become their own waves, so one conflicting call no longer serializes the independent rest of the batch. Tool completion events follow tool completion order, but persisted toolResult messages still follow assistant source order.
+In parallel mode the batch can be scheduled with one of two schedulers:
+
+- `waves-v1` (historical): partitions the batch into ordered waves using `partitionToolBatchWaves`. Calls in the same wave run concurrently, and waves run one after another in source order. A fully safe batch is a single concurrent wave; bash, `clarify`, sequential-policy tools, unknown tools, and file tools with overlapping target paths become their own waves, so one conflicting call no longer serializes the independent rest of the batch.
+- `dag-v2` (opt-in): builds a deterministic resource-claim DAG per call. Tools declare `resourceClaims` and an access mode (`read` or `write`); the scheduler runs independent calls in source-directed levels, keeps `bash`, unknown tools, and unclaimed extension tools exclusive, and still preserves source-order result artifacts. Set `toolScheduler: "dag-v2"` in `Agent` options to enable it. `OMK_TOOL_SCHEDULER=dag-v2` is also honored in the OMK CLI.
+
+Tool completion events follow tool completion order, but persisted toolResult messages still follow assistant source order.
 
 The mode can be set globally via `toolExecution` in the agent config, or per-tool via `executionMode` on `AgentTool`. If any tool call in a batch targets a tool with `executionMode: "sequential"`, the entire batch executes sequentially regardless of the global setting.
 
@@ -153,6 +158,7 @@ The last message in context must be `user` or `toolResult` (not `assistant`).
 | `tool_execution_start` | Tool begins |
 | `tool_execution_update` | Tool streams progress |
 | `tool_execution_end` | Tool completes |
+| `tool_execution_late_settlement` | Tool promise settled after a terminal result was already committed (audit only) |
 
 `Agent.subscribe()` listeners are awaited in registration order. `agent_end` means no more loop events will be emitted, but `await agent.waitForIdle()` and `await agent.prompt(...)` only settle after awaited `agent_end` listeners finish.
 
@@ -191,7 +197,44 @@ const agent = new Agent({
   getApiKey: async (provider) => refreshToken(),
 
   // Tool execution mode: "parallel" (default) or "sequential"
+  // Also "toolExecution: 'sequential'" forces waves/dag schedulers to run serially.
   toolExecution: "parallel",
+
+  // Tool scheduler: "waves-v1" (default) or "dag-v2" (resource-claim DAG)
+  toolScheduler: "waves-v1",
+
+  // Maximum concurrent tool calls in one DAG level when using "dag-v2".
+  // 0 removes the cap. Default in the OMK CLI is 4.
+  maxToolConcurrency: 4,
+
+  // Require extension tools to declare resource claims when using "dag-v2".
+  // When true, unclaimed extension tools are treated as exclusive.
+  strictExtensionClaims: false,
+
+  // Working directory used for claim resolution and local tool backends.
+  cwd: process.cwd(),
+
+  // Custom resource-key resolver for dag-v2. The default Node resolver uses
+  // cwd-relative paths and common OMK namespaces. Import it from
+  // `omk-agent-core/node` if you need to customize it.
+  // resourceKeyResolver: createNodeResourceKeyResolver({ cwd: process.cwd() }),
+
+  // Fallback tool timeout in milliseconds. 0 disables the fallback timer.
+  // Individual tools can also set timeoutMs; toolTimeouts[name] overrides this.
+  toolTimeoutMs: 0,
+
+  // Per-tool timeout overrides in milliseconds. 0 disables that tool's timer.
+  toolTimeouts: {
+    read: 30_000,
+    bash: 300_000,
+  },
+
+  // What to do when a tool promise settles after timeout/abort has already
+  // committed a synthetic result. "audit" (default) emits a
+  // tool_execution_late_settlement event; "ignore" silently drops it.
+  toolExecutionPolicy: {
+    lateSettlement: "audit",
+  },
 
   // Preflight each tool call after args are validated. Can block execution.
   beforeToolCall: async ({ toolCall, args, context }) => {
@@ -395,6 +438,17 @@ const readFileTool: AgentTool = {
   // "parallel" allows concurrent execution with other tool calls.
   // If omitted, the global toolExecution config applies.
   executionMode: "sequential",
+
+  // Resource claims for dag-v2 scheduling. Return "exclusive" to run alone,
+  // or a claim list. Omit to let the tool run exclusively (or as an unclaimed
+  // extension tool when strictExtensionClaims is false).
+  resourceClaims: (args, context) => [
+    { kind: "path", path: args.path, access: "read" },
+  ],
+
+  // Per-tool timeout in milliseconds. 0 disables the timer for this tool.
+  timeoutMs: 30_000,
+
   execute: async (toolCallId, params, signal, onUpdate) => {
     const content = await fs.readFile(params.path, "utf-8");
 
@@ -430,6 +484,48 @@ execute: async (toolCallId, params, signal, onUpdate) => {
 Thrown errors are caught by the agent and reported to the LLM as tool errors with `isError: true`.
 
 Return `terminate: true` from `execute()` or `afterToolCall` to hint that the agent should stop after the current tool batch. This only takes effect when every finalized tool result in the batch is terminating. The hint is runtime-only; emitted `toolResult` transcript messages remain standard LLM tool results.
+
+### Tool Timeouts and Late Settlement
+
+Every tool call is guarded by a timeout. The effective timeout for a call is resolved in order:
+
+1. `AgentTool.timeoutMs` (per tool)
+2. `AgentLoopConfig.toolTimeouts[name]` (per-name override)
+3. `AgentLoopConfig.toolTimeoutMs` (fallback)
+4. No timer when all of the above are `0` or unset
+
+When a timeout wins the race, the agent closes the tool call and commits a synthetic terminal result with a `timeout` disposition. The same happens for `abort` or blocked calls. The LLM still sees the tool result, but the terminal envelope records why the call ended.
+
+If the real tool promise settles after the terminal result has already been committed, the agent emits a `tool_execution_late_settlement` event (when `toolExecutionPolicy.lateSettlement` is `"audit"`, the default). The event is advisory: it does not change the transcript that the LLM sees.
+
+```typescript
+agent.subscribe((event) => {
+  if (event.type === "tool_execution_late_settlement") {
+    console.log("Late settlement:", event.toolCallId, event.toolName);
+  }
+});
+```
+
+### Tool Result Dispositions and Transcript Integrity
+
+Every terminal tool result carries a `details.omk` envelope with a `ToolCallDisposition`:
+
+- `completed` - Normal success
+- `failed` - Tool threw an error
+- `blocked` - `beforeToolCall` blocked execution
+- `aborted` - Caller aborted the run
+- `timeout` - Tool exceeded its timeout
+- `skipped` - Tool was skipped (e.g. duplicate call after transcript repair)
+
+The loop enforces transcript integrity on every continuation and provider request. It checks for:
+
+- Duplicate tool-call IDs
+- Orphan tool results (no matching call)
+- Duplicate results for the same call
+- Interleaved non-result messages between a call and its result
+- Missing results for finalized tool calls
+
+Unambiguous missing-only tail results are repaired by synthesizing skipped/error results. Corrupt or ambiguous transcripts fail closed with an error rather than fabricating an assistant message. This is why thrown errors should be real errors, not strings returned as content.
 
 ## Proxy Usage
 

@@ -1,0 +1,85 @@
+{
+  "version": 2,
+  "skill": "ultragoal",
+  "current_phase": "complete",
+  "active": false,
+  "handoff_from": "ralplan",
+  "handoff_at": "2026-07-19T01:42:19.629Z",
+  "updated_at": "2026-07-19T03:59:46.929Z",
+  "receipt": {
+    "version": 1,
+    "skill": "ultragoal",
+    "owner": "gjc-runtime",
+    "command": "gjc ultragoal (reconcile)",
+    "state_path": "/home/yu/omk/.gjc/state/sessions/019f777f-b863-7000-b641-4cf62afdaedb/skill-active-state.json",
+    "storage_path": "/home/yu/omk/.gjc/state/sessions/019f777f-b863-7000-b641-4cf62afdaedb/ultragoal-state.json",
+    "mutated_at": "2026-07-19T03:59:46.929Z",
+    "fresh_until": "2026-07-19T04:29:46.929Z",
+    "status": "fresh",
+    "mutation_id": "ultragoal:reconcile:2026-07-19T03:59:46.929Z",
+    "verb": "reconcile",
+    "from_phase": "complete",
+    "to_phase": "complete",
+    "forced": true,
+    "content_sha256": {
+      "algorithm": "sha256",
+      "value": "a92f21a338d402c34853f8010a35d4f7c0f33bd819eb9066a9ad7c97b877274c",
+      "covered_path": "/home/yu/omk/.gjc/_session-019f777f-b863-7000-b641-4cf62afdaedb/state/ultragoal-state.json",
+      "computed_at": "2026-07-19T03:59:46.932Z"
+    }
+  },
+  "session_id": "019f777f-b863-7000-b641-4cf62afdaedb",
+  "status": "complete",
+  "goals": [
+    {
+      "id": "G001",
+      "title": "Complete and locally freeze OMK v0.90.9",
+      "status": "complete"
+    },
+    {
+      "id": "G002",
+      "title": "Prove OMP topology and pure bridge feasibility",
+      "status": "complete"
+    },
+    {
+      "id": "G003",
+      "title": "Establish compatibility and persistence firewall",
+      "status": "superseded"
+    },
+    {
+      "id": "G004",
+      "title": "Integrate prefixed OMP and read-only intent bridge",
+      "status": "superseded"
+    },
+    {
+      "id": "G005",
+      "title": "Validate local stateful migration and rollback",
+      "status": "superseded"
+    }
+  ],
+  "counts": {
+    "pending": 0,
+    "active": 0,
+    "complete": 2,
+    "failed": 0,
+    "blocked": 0,
+    "review_blocked": 0,
+    "superseded": 3
+  },
+  "ledger_path": "/home/yu/omk/.gjc/_session-019f777f-b863-7000-b641-4cf62afdaedb/ultragoal/ledger.jsonl",
+  "brief_path": "/home/yu/omk/.gjc/_session-019f777f-b863-7000-b641-4cf62afdaedb/ultragoal/brief.md",
+  "goals_path": "/home/yu/omk/.gjc/_session-019f777f-b863-7000-b641-4cf62afdaedb/ultragoal/goals.json",
+  "gjc_objective": "Complete the durable ultragoal plan in .gjc/ultragoal/goals.json, including later accepted/appended stories, under the original brief constraints; use .gjc/ultragoal/ledger.jsonl as the audit trail.",
+  "nudge_budget": 10,
+  "nudge_count": 1,
+  "nudge_remaining": 9,
+  "nudge_goal_id": "G002",
+  "nudge_target_kind": "final_aggregate_receipt",
+  "latestLedgerEvent": {
+    "event": "goal_checkpointed",
+    "goalId": "G002",
+    "timestamp": "2026-07-19T03:59:46.916Z",
+    "evidence": "Exact OMP topology was proven only in a disposable full clone. Durable blob-bound read/search/hashline evidence terminates the conjunctive pure-source gate before owner refs, vendor source, bridge, product, or publication integration. Cleaner, architect, executor QA, and 29 leader checks are clean."
+  },
+  "state_revision": 24
+}

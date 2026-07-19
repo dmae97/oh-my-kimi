@@ -6,6 +6,7 @@ import {
 	type Model,
 } from "omk-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { CompactionEnvelope } from "../../src/core/compaction/transaction.ts";
 import { createHarness, type Harness } from "./harness.ts";
 
 type SessionWithCompactionInternals = {
@@ -490,5 +491,57 @@ describe("AgentSession compaction characterization", () => {
 
 		expect(belowThresholdSpy).not.toHaveBeenCalled();
 		expect(disabledSpy).not.toHaveBeenCalled();
+	});
+
+	it("sanitizes control characters in the latest user message when building compaction provenance", async () => {
+		const harness = await createHarness({
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_before_compact", async (event) => ({
+						compaction: {
+							summary: "summary with sanitized provenance",
+							firstKeptEntryId: event.preparation.firstKeptEntryId,
+							tokensBefore: event.preparation.tokensBefore,
+							details: {},
+						},
+					}));
+				},
+			],
+		});
+		harnesses.push(harness);
+
+		const now = Date.now();
+		harness.sessionManager.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: "before\x00\x07with\x1b[31mANSI\x1b[0m and NUL" }],
+			timestamp: now - 1000,
+		});
+		harness.sessionManager.appendMessage(
+			createAssistant(harness, {
+				stopReason: "stop",
+				totalTokens: 100,
+				timestamp: now - 500,
+			}),
+		);
+		harness.session.agent.state.messages = harness.sessionManager.buildSessionContext().messages;
+
+		const result = await harness.session.compact();
+
+		expect(result.summary).toBe("summary with sanitized provenance");
+		const compactionEntries = harness.sessionManager.getEntries().filter((entry) => entry.type === "compaction");
+		expect(compactionEntries).toHaveLength(1);
+		const envelope = (compactionEntries[0]?.details as { compactionEnvelope?: CompactionEnvelope } | undefined)
+			?.compactionEnvelope;
+		if (!envelope) throw new Error("expected compaction envelope");
+		expect(envelope.preserved.latestIntent).not.toContain("\x00");
+		expect(envelope.preserved.latestIntent).not.toContain("\x07");
+		expect(envelope.preserved.latestIntent).not.toContain("\x1b");
+		expect(envelope.preserved.latestIntent).toContain("before");
+		expect(envelope.preserved.latestIntent).toContain("with");
+		expect(envelope.preserved.latestIntent).toContain("ANSI");
+		expect(envelope.preserved.nextAction).not.toContain("\x00");
+		expect(envelope.preserved.nextAction).not.toContain("\x07");
+		expect(envelope.preserved.nextAction).not.toContain("\x1b");
+		expect(envelope.preserved.nextAction).toContain("before");
 	});
 });

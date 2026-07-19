@@ -1,19 +1,22 @@
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 
 const dependencySections = ["dependencies", "devDependencies", "optionalDependencies"];
 const exactVersionPattern = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const ignoredDirectories = new Set([".git", "dist", "node_modules"]);
-// OMK scratch/package-cache trees can contain third-party manifests that are evidence or install artifacts, not workspace packages.
+// These paths are relative to the scan root; do not blanket-ignore `.omk`.
 const ignoredDirectoryPaths = new Set([".omk/git", ".omk/goals", ".omk/npm"]);
+// The pre-existing third-party scratch tree is only the exact `~` child of the scan root.
+const rootScratchDirectory = "~";
 const internalWorkspaceDependencies = new Set(["omk-agent-core", "omk-ai", "omk-tui"]);
 const packageJsonFiles = [];
+const scanRoot = process.argv[2] ?? ".";
 
 function collectPackageJsonFiles(directory) {
 	for (const entry of readdirSync(directory, { withFileTypes: true })) {
 		if (entry.isDirectory()) {
 			const childDirectory = join(directory, entry.name);
-			if (!ignoredDirectories.has(entry.name) && !ignoredDirectoryPaths.has(childDirectory)) {
+			if (!isIgnoredDirectory(directory, entry.name, childDirectory)) {
 				collectPackageJsonFiles(childDirectory);
 			}
 			continue;
@@ -24,6 +27,14 @@ function collectPackageJsonFiles(directory) {
 		}
 	}
 }
+function isIgnoredDirectory(directory, name, childDirectory) {
+	return (
+		ignoredDirectories.has(name) ||
+		ignoredDirectoryPaths.has(relative(scanRoot, childDirectory)) ||
+		(directory === scanRoot && name === rootScratchDirectory)
+	);
+}
+
 
 function isInternalWorkspaceDependency(name) {
 	return internalWorkspaceDependencies.has(name);
@@ -43,7 +54,7 @@ function getVersionSpecifier(specifier) {
 
 const failures = [];
 
-collectPackageJsonFiles(".");
+collectPackageJsonFiles(scanRoot);
 
 for (const file of packageJsonFiles.sort()) {
 	const packageJson = JSON.parse(readFileSync(file, "utf8"));

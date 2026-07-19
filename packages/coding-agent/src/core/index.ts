@@ -10,6 +10,7 @@ export {
 	type ModelCycleResult,
 	type PromptOptions,
 	type SessionStats,
+	type SessionTranscriptRepair,
 } from "./agent-session.ts";
 export {
 	AgentSessionRuntime,
@@ -26,7 +27,37 @@ export {
 	createAgentSessionServices,
 } from "./agent-session-services.ts";
 export { type BashExecutorOptions, type BashResult, executeBashWithOperations } from "./bash-executor.ts";
-export type { CompactionResult } from "./compaction/index.ts";
+export {
+	type CompactionBarrierResult,
+	type CompactionCommitDecision,
+	type CompactionEnvelope,
+	type CompactionHysteresisConfig,
+	type CompactionHysteresisState,
+	type CompactionResult,
+	type CompactionTransaction,
+	createCompactionEnvelope,
+	createCompactionHysteresisConfig,
+	createCompactionHysteresisState,
+	createCompactionSourceIdentity,
+	createCompactionTransaction,
+	createSessionRevisionToken,
+	decideCompactionCommit,
+	evaluateCompactionBarrier,
+	stepCompactionHysteresis,
+	validateCompactionEnvelope,
+} from "./compaction/index.ts";
+export {
+	applyContextCacheInvalidation,
+	type ContextCacheInvalidationEvent,
+	type ContextCacheInvalidationSnapshot,
+	createContextCacheInvalidationSnapshot,
+	planPromptContextBudgetV2,
+} from "./context-budget-governor-v2.ts";
+export {
+	computeReservedTokenBudget,
+	estimateToolResultReserve,
+	ReservedTokenBudgetError,
+} from "./context-budget-reserved-tokens.ts";
 export { createEventBus, type EventBus, type EventBusController } from "./event-bus.ts";
 // Extensions system
 export {
@@ -74,4 +105,20 @@ export {
 	type TurnStartEvent,
 	type WorkingIndicatorOptions,
 } from "./extensions/index.ts";
+export {
+	appendRunJournalRecordDurably,
+	type OpenRunJournalStoreOptions,
+	type RunJournalQuarantineReport,
+	RunJournalStore,
+	RunJournalStoreCorruptionError,
+	writeQuarantineBytesDurably,
+} from "./run-journal-store.ts";
+export {
+	classifySessionTermination,
+	formatSessionTermination,
+	type SessionTermination,
+	type SessionTerminationCause,
+	SessionTerminationError,
+	type SessionTerminationKind,
+} from "./session-termination.ts";
 export { createSyntheticSourceInfo } from "./source-info.ts";

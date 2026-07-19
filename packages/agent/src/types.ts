@@ -36,6 +36,21 @@ export type StreamFn = (
 export type ToolExecutionMode = "sequential" | "parallel";
 
 /**
+ * Tool-call scheduler selection for a single assistant turn's tool batch.
+ *
+ * - `"waves-v1"` (default): the original contiguous-wave scheduler
+ *   (`partitionToolBatchWaves`). Established behavior and the rollback target.
+ * - `"dag-v2"`: the deterministic resource-claim DAG scheduler
+ *   (`scheduleDagLevels`). Active only when explicitly selected. It resolves
+ *   per-call resource claims and groups conflict-free calls into source-index
+ *   DAG levels so a conflicting call no longer head-of-line-blocks independent
+ *   later calls (e.g. `write x, write x, write y` schedules as `[[0, 2], [1]]`).
+ *   Final tool results are buffered globally and emitted in original source
+ *   order.
+ */
+export type ToolSchedulerKind = "waves-v1" | "dag-v2";
+
+/**
  * Controls how many queued user messages are injected when the agent loop reaches a queue drain point.
  *
  * - "all": drain and inject every queued message at that point.
@@ -253,19 +268,78 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 */
 	toolExecution?: ToolExecutionMode;
 
+	/**
+	 * Default per-tool execution timeout in milliseconds applied to every tool
+	 * call that does not resolve a more specific timeout.
+	 *
+	 * This is deliberately named to avoid colliding with the inherited
+	 * {@link SimpleStreamOptions.timeoutMs} (the provider request timeout).
+	 * Absent, non-finite, or non-positive values disable the tool timeout and
+	 * preserve the current unbounded execution behavior.
+	 */
+	toolTimeoutMs?: number;
+
+	/**
+	 * Per-tool-name execution timeouts in milliseconds. An entry here overrides
+	 * {@link toolTimeoutMs} for that tool name, and is itself overridden by a
+	 * per-tool {@link AgentTool.timeoutMs}. Absent, non-finite, or non-positive
+	 * entries disable the timeout for that name.
+	 */
+	toolTimeouts?: Record<string, number>;
+
+	/**
+	 * Tool-call scheduler. Defaults to `"waves-v1"` (the established
+	 * contiguous-wave scheduler). Set to `"dag-v2"` to opt into the
+	 * deterministic resource-claim DAG scheduler. The v1 path and its exports
+	 * are unchanged when this is unset or `"waves-v1"`.
+	 */
+	toolScheduler?: ToolSchedulerKind;
+
+	/**
+	 * dag-v2 only. Optional positive width cap. When set, each DAG level is
+	 * split into deterministic contiguous chunks of at most this many calls
+	 * (preserving source order) so a wide conflict-free level does not fan out
+	 * unbounded. Absent, non-finite, or non-positive values leave each level
+	 * whole. No effect on the default `"waves-v1"` scheduler.
+	 */
+	maxToolConcurrency?: number;
+
+	/**
+	 * dag-v2 only. When `false` (default), an extension/custom tool with
+	 * `executionMode: "parallel"` and no resource claims is treated as freely
+	 * parallel (compatibility). When `true`, such tools are treated as
+	 * exclusive (run alone). Unknown tools and bash are always exclusive
+	 * regardless of this flag. No effect on the default `"waves-v1"` scheduler.
+	 */
+	strictExtensionClaims?: boolean;
+
 	/** Working directory for path-scoped parallel tool batch checks (read/write/edit). */
 	cwd?: string;
+
+	/**
+	 * dag-v2 only. Optional platform identity resolver used to detect
+	 * symlink/hardlink/drive/UNC path aliases when scheduling resource claims.
+	 * Absent, the scheduler uses lexical canonicalization only (browser-safe).
+	 * Resolver failure isolates the call as exclusive (fail closed).
+	 */
+	resourceKeyResolver?: ResourceKeyResolver;
+
+	/**
+	 * Execution policy defaults for every tool call in this run. Only
+	 * `lateSettlement` is consumed today; it defaults to `"audit"`.
+	 */
+	toolExecutionPolicy?: Partial<ToolExecutionPolicy>;
 
 	/**
 	 * Called before a tool is executed, after arguments have been validated.
 	 *
 	 * Return `{ block: true }` to prevent execution. The loop emits an error tool result instead.
-	 * The hook receives the agent abort signal and is responsible for honoring it.
+	 * The runtime bounds the hook by the parent abort signal and ignores a late settlement.
 	 */
 	beforeToolCall?: (context: BeforeToolCallContext, signal?: AbortSignal) => Promise<BeforeToolCallResult | undefined>;
 
 	/**
-	 * Called after a tool finishes executing, before `tool_execution_end` and tool-result message events are emitted.
+	 * Called after execution but skipped for an immutable committed timeout/abort terminal.
 	 *
 	 * Return an `AfterToolCallResult` to override parts of the executed tool result:
 	 * - `content` replaces the full content array
@@ -274,7 +348,7 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * - `terminate` replaces the early-termination hint
 	 *
 	 * Any omitted fields keep their original values. No deep merge is performed.
-	 * The hook receives the agent abort signal and is responsible for honoring it.
+	 * The runtime bounds the hook by the parent abort signal and ignores a late settlement.
 	 */
 	afterToolCall?: (context: AfterToolCallContext, signal?: AbortSignal) => Promise<AfterToolCallResult | undefined>;
 }
@@ -360,6 +434,52 @@ export interface AgentToolResult<T> {
 /** Callback used by tools to stream partial execution updates. */
 export type AgentToolUpdateCallback<T = any> = (partialResult: AgentToolResult<T>) => void;
 
+/** Access mode used by a tool resource claim. */
+export type ResourceAccess = "read" | "write" | "exclusive";
+
+/** Access modes valid for path claims and built-in read/write resources. */
+export type ToolResourceAccess = Extract<ResourceAccess, "read" | "write">;
+
+/**
+ * A resource touched by one tool call.
+ *
+ * Path claims conflict on lexical parent/child overlap. Other claim kinds
+ * conflict when their keys are equal. `exclusive` access conflicts with every
+ * call, regardless of resource kind or key.
+ */
+export type ToolResourceClaim =
+	| {
+			kind: "path";
+			key: string;
+			access: ToolResourceAccess;
+			/** Canonical real-path identity (symlink-resolved), when a resolver is injected. */
+			realKey?: string;
+			/** `dev:ino` identity for an existing file, when a resolver is injected. */
+			inodeKey?: string;
+	  }
+	| {
+			kind: "session" | "terminal" | "network" | "global";
+			key: string;
+			access: ResourceAccess;
+	  };
+
+/**
+ * Resource contract returned by {@link AgentTool.resourceClaims}.
+ *
+ * Return `"exclusive"` when the call must run alone, or a non-empty claim
+ * list. The dag-v2 scheduler fails closed to exclusive when a resolver throws,
+ * rejects, or returns an empty or malformed claim list.
+ */
+export type ToolResourceClaims = readonly ToolResourceClaim[] | "exclusive";
+
+/** Context passed to {@link AgentTool.resourceClaims}. */
+export interface ToolResourceClaimsContext {
+	/** Working directory used by the scheduler for this call batch. */
+	cwd: string;
+	/** Provider-supplied id of the tool call being scheduled. */
+	toolCallId: string;
+}
+
 /** Tool definition used by the agent runtime. */
 export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any> extends Tool<TParameters> {
 	/** Human-readable label for UI display. */
@@ -384,7 +504,165 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	 * If omitted, the default execution mode applies.
 	 */
 	executionMode?: ToolExecutionMode;
+	/**
+	 * dag-v2 resource contract for this tool call.
+	 *
+	 * The resolver receives the raw call arguments and scheduler context before
+	 * execution starts. It may return synchronously or asynchronously. Throwing,
+	 * rejecting, returning malformed data, or returning no usable claim fails
+	 * closed to exclusive scheduling. This field has no effect on waves-v1.
+	 */
+	resourceClaims?: (
+		args: unknown,
+		context: ToolResourceClaimsContext,
+	) => ToolResourceClaims | Promise<ToolResourceClaims>;
+	/**
+	 * Optional per-call execution timeout in milliseconds.
+	 *
+	 * When positive, the tool's `execute` promise is raced against this timeout at
+	 * the shared execution chokepoint. If the timeout elapses first, the loop
+	 * commits an immediate terminal timeout result and aborts the tool's child
+	 * `AbortSignal`, so a tool that ignores the signal cannot stall the run.
+	 *
+	 * Precedence: this value overrides `AgentLoopConfig.toolTimeouts[name]`, which
+	 * overrides `AgentLoopConfig.toolTimeoutMs`. Absent, non-finite, or
+	 * non-positive values disable the timeout and preserve current behavior.
+	 */
+	timeoutMs?: number;
 }
+
+/**
+ * Terminal disposition of one tool call in a transcript (six-state model).
+ *
+ * - `completed`: the tool ran and returned a result.
+ * - `failed`: the tool ran and threw/rejected, or could not be prepared.
+ * - `blocked`: a policy hook prevented execution.
+ * - `aborted`: the run's abort terminated the call (started or unstarted).
+ * - `timeout`: the per-call timeout terminated the call.
+ * - `skipped`: the scheduler closed the call without ever starting it.
+ */
+export type ToolCallDisposition = "completed" | "failed" | "blocked" | "aborted" | "timeout" | "skipped";
+
+/** Schema tag for the {@link ToolResultEnvelope} attached to terminal tool results. */
+export const TOOL_RESULT_ENVELOPE_SCHEMA = "tool-result/v2" as const;
+
+/**
+ * Model-invisible disposition envelope stamped at `details.omk` on every
+ * terminal tool result. `synthetic` means the result artifact was fabricated
+ * by the runtime and does not represent the tool's returned details;
+ * `executionStarted` records whether `AgentTool.execute` actually began.
+ */
+export interface ToolResultEnvelope {
+	schema: typeof TOOL_RESULT_ENVELOPE_SCHEMA;
+	synthetic: boolean;
+	disposition: ToolCallDisposition;
+	reason?: string;
+	timeoutMs?: number;
+	executionStarted: boolean;
+}
+
+/** Input accepted by the executor-owned {@link createToolResultEnvelope} boundary. */
+export type ToolResultEnvelopeInput = Omit<ToolResultEnvelope, "schema">;
+
+/** Compatibility wrapper used when original tool details are not a plain object. */
+export interface WrappedToolResultDetails {
+	readonly originalDetails: unknown;
+	readonly omk: ToolResultEnvelope;
+}
+
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Validate both the v2 shape and disposition-specific executor invariants. */
+export function isToolResultEnvelope(value: unknown): value is ToolResultEnvelope {
+	if (
+		!isUnknownRecord(value) ||
+		value.schema !== TOOL_RESULT_ENVELOPE_SCHEMA ||
+		typeof value.synthetic !== "boolean" ||
+		typeof value.executionStarted !== "boolean" ||
+		(value.reason !== undefined && typeof value.reason !== "string") ||
+		(value.timeoutMs !== undefined &&
+			(typeof value.timeoutMs !== "number" || !Number.isFinite(value.timeoutMs) || value.timeoutMs <= 0))
+	) {
+		return false;
+	}
+
+	switch (value.disposition) {
+		case "completed":
+			return value.synthetic === false && value.executionStarted && value.timeoutMs === undefined;
+		case "failed":
+			return (value.executionStarted || value.synthetic) && value.timeoutMs === undefined;
+		case "blocked":
+		case "skipped":
+			return value.synthetic && !value.executionStarted && value.timeoutMs === undefined;
+		case "aborted":
+			return value.synthetic && value.timeoutMs === undefined;
+		case "timeout":
+			return value.synthetic && value.executionStarted && value.timeoutMs !== undefined;
+		default:
+			return false;
+	}
+}
+
+/**
+ * Construct and freeze a validated executor envelope. Invalid combinations
+ * throw at the executor boundary instead of being persisted into a transcript.
+ */
+export function createToolResultEnvelope(input: ToolResultEnvelopeInput): ToolResultEnvelope {
+	const envelope: ToolResultEnvelope = {
+		schema: TOOL_RESULT_ENVELOPE_SCHEMA,
+		synthetic: input.synthetic,
+		disposition: input.disposition,
+		...(input.reason === undefined ? {} : { reason: input.reason }),
+		...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
+		executionStarted: input.executionStarted,
+	};
+	if (!isToolResultEnvelope(envelope)) {
+		throw new TypeError(`Invalid ${TOOL_RESULT_ENVELOPE_SCHEMA} ${input.disposition} envelope`);
+	}
+	return Object.freeze(envelope);
+}
+
+/**
+ * Per-call execution policy (ALG-004 §6.2). `lateSettlement` controls whether
+ * a real tool promise settling after its terminal cause is surfaced as an
+ * audit-only event (`"audit"`, default) or silently dropped (`"ignore"`).
+ * Terminal results are immutable either way.
+ */
+export interface ToolExecutionPolicy {
+	timeoutMs?: number;
+	cancelSiblingsOnFatal?: boolean;
+	lateSettlement: "audit" | "ignore";
+}
+
+/** Committed disposition for a tool call terminated by timeout or parent abort. */
+export type ToolTimeoutDisposition = "timeout" | "aborted";
+
+/** Identity keys resolved for one raw path by a {@link ResourceKeyResolver}. */
+export interface ResolvedResourceKeys {
+	/** Canonical lexical key (slash-normalized, dot-collapsed, drive/UNC normalized). */
+	lexicalKey: string;
+	/** Canonical real path: nearest existing ancestor realpath + non-existing suffix. */
+	realKey?: string;
+	/** `dev:ino` identity for an existing file (symlink target/hardlink aware). */
+	inodeKey?: string;
+}
+
+/**
+ * Optional platform identity resolver injected into the dag-v2 scheduler
+ * (§5.5 stage 2). The shared agent package stays browser-safe; a Node
+ * implementation lives in `omk-agent-core/node`. The raw path reaches the
+ * resolver before cwd-relative lexical canonicalization so Node-only tilde and
+ * platform aliases remain visible. Returning `null`, throwing, rejecting, or
+ * returning malformed keys isolates the call as exclusive.
+ */
+export interface ResourceKeyResolver {
+	resolvePath(rawPath: string, cwd: string): Promise<ResolvedResourceKeys | null> | ResolvedResourceKeys | null;
+}
+
+/** How a tool's real promise eventually settled after its terminal cause won. */
+export type ToolLateSettlementOutcome = "resolved" | "rejected";
 
 /** Context snapshot passed into the low-level agent loop. */
 export interface AgentContext {
@@ -399,9 +677,9 @@ export interface AgentContext {
 /**
  * Events emitted by the Agent for UI updates.
  *
- * `agent_end` is the last event emitted for a run, but awaited `Agent.subscribe()`
- * listeners for that event are still part of run settlement. The agent becomes
- * idle only after those listeners finish.
+ * `agent_end` is the last event emitted for a run, and its subscribers remain
+ * part of run settlement. `tool_execution_update` delivery is observation-only:
+ * subscriber promises are detached and cannot delay timeout/abort terminality.
  */
 export type AgentEvent =
 	// Agent lifecycle
@@ -416,6 +694,16 @@ export type AgentEvent =
 	| { type: "message_update"; message: AgentMessage; assistantMessageEvent: AssistantMessageEvent }
 	| { type: "message_end"; message: AgentMessage }
 	// Tool execution lifecycle
-	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: any }
-	| { type: "tool_execution_update"; toolCallId: string; toolName: string; args: any; partialResult: any }
-	| { type: "tool_execution_end"; toolCallId: string; toolName: string; result: any; isError: boolean };
+	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: unknown }
+	| { type: "tool_execution_update"; toolCallId: string; toolName: string; args: unknown; partialResult: unknown }
+	| { type: "tool_execution_end"; toolCallId: string; toolName: string; result: unknown; isError: boolean }
+	// Audit-only: a tool's real promise settled *after* a timeout/abort terminal
+	// result was already committed. Carries disposition-safe metadata only (no late
+	// content/details/error). Never a second tool result or lifecycle end.
+	| {
+			type: "tool_execution_late_settlement";
+			toolCallId: string;
+			toolName: string;
+			disposition: ToolTimeoutDisposition;
+			outcome: ToolLateSettlementOutcome;
+	  };

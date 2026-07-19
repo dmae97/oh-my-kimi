@@ -1,0 +1,26 @@
+{
+  "run_id": "019f77cb-362c-7000-9b73-4eeef3158cf8",
+  "skill": "ralplan",
+  "active": true,
+  "current_phase": "critic",
+  "version": 2,
+  "updated_at": "2026-07-19T00:43:04.155Z",
+  "receipt": {
+    "version": 1,
+    "skill": "ralplan",
+    "owner": "gjc-runtime",
+    "command": "gjc ralplan persist-run-id",
+    "state_path": "/home/yu/omk/.gjc/state/sessions/019f77cb-362c-7000-9b73-4eeef3158cf8/skill-active-state.json",
+    "storage_path": "/home/yu/omk/.gjc/state/sessions/019f77cb-362c-7000-9b73-4eeef3158cf8/ralplan-state.json",
+    "mutated_at": "2026-07-19T00:43:04.156Z",
+    "fresh_until": "2026-07-19T01:13:04.156Z",
+    "status": "fresh",
+    "mutation_id": "ralplan:2026-07-19T00:43:04.156Z",
+    "content_sha256": {
+      "algorithm": "sha256",
+      "value": "96b550e80f267bd6b250e00a1cbfeb7b3b11de2597156358cc4616e9396b0fa0",
+      "covered_path": "/home/yu/omk/.gjc/_session-019f77cb-362c-7000-9b73-4eeef3158cf8/state/ralplan-state.json",
+      "computed_at": "2026-07-19T00:43:04.156Z"
+    }
+  }
+}

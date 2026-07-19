@@ -10,6 +10,7 @@ import type { ImageContent, Model } from "omk-ai";
 import type { SessionStats } from "../../core/agent-session.ts";
 import type { BashResult } from "../../core/bash-executor.ts";
 import type { CompactionResult } from "../../core/compaction/index.ts";
+import type { SessionTermination } from "../../core/session-termination.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 
 // ============================================================================
@@ -101,6 +102,7 @@ export interface RpcSessionState {
 	autoCompactionEnabled: boolean;
 	messageCount: number;
 	pendingMessageCount: number;
+	lastTermination?: SessionTermination;
 }
 
 // ============================================================================
@@ -203,7 +205,14 @@ export type RpcResponse =
 	  }
 
 	// Error response (any command can fail)
-	| { id?: string; type: "response"; command: string; success: false; error: string };
+	| {
+			id?: string;
+			type: "response";
+			command: string;
+			success: false;
+			error: string;
+			termination?: SessionTermination;
+	  };
 
 // ============================================================================
 // Extension UI Events (stdout)

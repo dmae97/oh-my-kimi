@@ -252,8 +252,14 @@ describe("AgentSession retry and event characterization", () => {
 			"message_update",
 			"message_end:assistant",
 			"turn_end",
+			"session_termination",
 			"agent_end",
 		]);
+		expect(harness.eventsOfType("session_termination")).toHaveLength(1);
+		expect(harness.eventsOfType("session_termination")[0]?.termination).toMatchObject({
+			kind: "completed",
+			causeCode: "session.completed",
+		});
 	});
 
 	it("emits the expected event order for a tool call turn", async () => {
@@ -297,12 +303,28 @@ describe("AgentSession retry and event characterization", () => {
 			"message_update",
 			"message_end:assistant",
 			"turn_end",
+			"session_termination",
 			"agent_end",
 		]);
+		expect(harness.eventsOfType("session_termination")).toHaveLength(1);
+		expect(harness.eventsOfType("session_termination")[0]?.termination).toMatchObject({
+			kind: "completed",
+			causeCode: "session.completed",
+		});
 	});
 
 	it("emits streaming deltas for text, thinking, and tool calls in message_update events", async () => {
-		const harness = await createHarness();
+		const echoTool: AgentTool = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo text back",
+			parameters: Type.Object({ text: Type.String() }),
+			execute: async (_toolCallId, params) => {
+				const text = typeof params === "object" && params !== null && "text" in params ? String(params.text) : "";
+				return { content: [{ type: "text", text: `echo:${text}` }], details: { text } };
+			},
+		};
+		const harness = await createHarness({ tools: [echoTool] });
 		harnesses.push(harness);
 		harness.setResponses([
 			fauxAssistantMessage(
@@ -311,9 +333,10 @@ describe("AgentSession retry and event characterization", () => {
 					stopReason: "toolUse",
 				},
 			),
+			fauxAssistantMessage("done"),
 		]);
 
-		await harness.session.prompt("hi").catch(() => {});
+		await harness.session.prompt("hi");
 
 		const updateTypes = harness.eventsOfType("message_update").map((event) => event.assistantMessageEvent.type);
 		expect(updateTypes).toContain("thinking_delta");

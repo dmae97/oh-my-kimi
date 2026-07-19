@@ -78,6 +78,7 @@ export function planPromptContextBudgetV2(input: PromptContextBudgetInputV2): Pr
 	const allocation = allocateTiers(available, tierPolicy, demand);
 	const cacheKeyBase = createContextBudgetCacheKeyBaseV2({
 		budgetBucket: input.cacheBudgetBucket ?? String(available),
+		cacheInvalidationSnapshot: input.cacheInvalidationSnapshot ?? input.cacheProvider?.getInvalidationSnapshot?.(),
 		modelId,
 		namespace: input.cacheNamespace,
 		policyVersion,

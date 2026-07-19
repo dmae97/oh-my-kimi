@@ -57,6 +57,9 @@ export interface CreateAgentSessionFromServicesOptions {
 	excludeTools?: CreateAgentSessionOptions["excludeTools"];
 	noTools?: CreateAgentSessionOptions["noTools"];
 	customTools?: ToolDefinition[];
+	replayLedger?: CreateAgentSessionOptions["replayLedger"];
+	replayGoalId?: CreateAgentSessionOptions["replayGoalId"];
+	replayLaneId?: CreateAgentSessionOptions["replayLaneId"];
 }
 
 /**
@@ -197,5 +200,8 @@ export async function createAgentSessionFromServices(
 		noTools: options.noTools,
 		customTools: options.customTools,
 		sessionStartEvent: options.sessionStartEvent,
+		replayLedger: options.replayLedger,
+		replayGoalId: options.replayGoalId,
+		replayLaneId: options.replayLaneId,
 	});
 }

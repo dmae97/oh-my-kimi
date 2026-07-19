@@ -83,6 +83,7 @@ import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "../../core/provider-display-nam
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
 import { type SessionContext, SessionManager } from "../../core/session-manager.ts";
+import { formatSessionTermination, type SessionTermination } from "../../core/session-termination.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
@@ -161,6 +162,41 @@ function disposeComponent(component: unknown): void {
 	) {
 		component.dispose();
 	}
+}
+type ToolExecutionContent = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
+
+type ToolExecutionResult = {
+	content: ToolExecutionContent[];
+	details?: unknown;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isToolExecutionContent(value: unknown): value is ToolExecutionContent {
+	if (!isRecord(value)) return false;
+	if (value.type === "text") return typeof value.text === "string";
+	return value.type === "image" && typeof value.data === "string" && typeof value.mimeType === "string";
+}
+
+function isToolExecutionResult(value: unknown): value is ToolExecutionResult {
+	return isRecord(value) && Array.isArray(value.content) && value.content.every(isToolExecutionContent);
+}
+
+function normalizeToolExecutionResult(result: unknown, isError: boolean): ToolExecutionResult & { isError: boolean } {
+	try {
+		if (isToolExecutionResult(result)) {
+			return { content: result.content, details: result.details, isError };
+		}
+	} catch {
+		// Treat inaccessible or malformed extension payloads as invalid results.
+	}
+
+	return {
+		content: [{ type: "text", text: "Tool returned an invalid result." }],
+		isError: true,
+	};
 }
 
 class ExpandableText extends Text implements Expandable {
@@ -334,6 +370,7 @@ export class InteractiveMode {
 	// Status line tracking (for mutating immediately-sequential status updates)
 	private lastStatusSpacer: Spacer | undefined = undefined;
 	private lastStatusText: Text | undefined = undefined;
+	private lastRenderedTermination: SessionTermination | undefined;
 
 	// Streaming message tracking
 	private streamingComponent: AssistantMessageComponent | undefined = undefined;
@@ -868,6 +905,9 @@ export class InteractiveMode {
 	 */
 	async run(): Promise<void> {
 		await this.init();
+		if (this.session.lastTermination) {
+			this.showSessionTermination(this.session.lastTermination);
+		}
 
 		// Start version check asynchronously
 		checkForNewOmkVersion(this.version).then((newRelease) => {
@@ -910,21 +950,21 @@ export class InteractiveMode {
 
 		// Process initial messages
 		if (initialMessage) {
+			const previousTermination = this.session.lastTermination;
 			try {
 				await this.session.prompt(initialMessage, { images: initialImages });
 			} catch (error: unknown) {
-				const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
-				this.showError(errorMessage);
+				this.showPromptError(error, previousTermination);
 			}
 		}
 
 		if (initialMessages) {
 			for (const message of initialMessages) {
+				const previousTermination = this.session.lastTermination;
 				try {
 					await this.session.prompt(message);
 				} catch (error: unknown) {
-					const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
-					this.showError(errorMessage);
+					this.showPromptError(error, previousTermination);
 				}
 			}
 		}
@@ -932,11 +972,11 @@ export class InteractiveMode {
 		// Main interactive loop
 		while (true) {
 			const userInput = await this.getUserInput();
+			const previousTermination = this.session.lastTermination;
 			try {
 				await this.session.prompt(userInput);
 			} catch (error: unknown) {
-				const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
-				this.showError(errorMessage);
+				this.showPromptError(error, previousTermination);
 			}
 		}
 	}
@@ -3028,7 +3068,7 @@ export class InteractiveMode {
 			case "message_end":
 				if (event.message.role === "user") break;
 				if (this.streamingComponent && event.message.role === "assistant") {
-					this.streamingMessage = event.message;
+					this.streamingMessage = { ...event.message };
 					let errorMessage: string | undefined;
 					if (this.streamingMessage.stopReason === "aborted") {
 						const retryAttempt = this.session.retryAttempt;
@@ -3091,7 +3131,7 @@ export class InteractiveMode {
 			case "tool_execution_update": {
 				const component = this.pendingTools.get(event.toolCallId);
 				if (component) {
-					component.updateResult({ ...event.partialResult, isError: false }, true);
+					component.updateResult(normalizeToolExecutionResult(event.partialResult, false), true);
 					this.ui.requestRender();
 				}
 				break;
@@ -3100,12 +3140,16 @@ export class InteractiveMode {
 			case "tool_execution_end": {
 				const component = this.pendingTools.get(event.toolCallId);
 				if (component) {
-					component.updateResult({ ...event.result, isError: event.isError });
+					component.updateResult(normalizeToolExecutionResult(event.result, event.isError));
 					this.pendingTools.delete(event.toolCallId);
 					this.ui.requestRender();
 				}
 				break;
 			}
+
+			case "session_termination":
+				this.showSessionTermination(event.termination);
+				break;
 
 			case "agent_end":
 				if (this.settingsManager.getShowTerminalProgress()) {
@@ -3263,6 +3307,21 @@ export class InteractiveMode {
 				? [{ type: "text", text: message.content }]
 				: message.content.filter((c: { type: string }) => c.type === "text");
 		return textBlocks.map((c) => (c as { text: string }).text).join("");
+	}
+
+	private showSessionTermination(termination: SessionTermination): void {
+		if (termination.kind === "completed" || this.lastRenderedTermination === termination) return;
+		this.lastRenderedTermination = termination;
+		this.showError(formatSessionTermination(termination));
+	}
+
+	private showPromptError(error: unknown, previousTermination: SessionTermination | undefined): void {
+		const termination = this.session.lastTermination;
+		if (termination && termination !== previousTermination) {
+			this.showSessionTermination(termination);
+			return;
+		}
+		this.showError(error instanceof Error ? error.message : "Unknown error occurred");
 	}
 
 	/**
@@ -3609,13 +3668,14 @@ export class InteractiveMode {
 	private registerSignalHandlers(): void {
 		this.unregisterSignalHandlers();
 
-		const signals: NodeJS.Signals[] = ["SIGTERM"];
+		const signals: Array<"SIGTERM" | "SIGHUP"> = ["SIGTERM"];
 		if (process.platform !== "win32") {
 			signals.push("SIGHUP");
 		}
 
 		for (const signal of signals) {
 			const handler = () => {
+				this.session.recordProcessSignal(signal);
 				// SIGHUP no longer hard-exits: graceful shutdown emits session_shutdown
 				// first, then attempts terminal restore. A genuinely dead terminal
 				// surfaces as an EIO on the restore writes, which the stdout/stderr

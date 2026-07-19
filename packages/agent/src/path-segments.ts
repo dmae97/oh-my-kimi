@@ -13,11 +13,11 @@ export function pathSegments(normalized: string): string[] {
 /** Join cwd and relative path using forward slashes only. */
 export function joinPathSegments(cwd: string, relative: string): string {
 	const base = normalizePathSlashes(cwd).replace(/\/+$/, "");
-	const rel = normalizePathSlashes(relative).replace(/^\/+/, "");
+	const rel = normalizePathSlashes(relative);
 	if (rel.length === 0) {
 		return base || "/";
 	}
-	if (rel.startsWith("/")) {
+	if (rel.startsWith("/") || /^[A-Za-z]:/.test(rel)) {
 		return rel;
 	}
 	return `${base}/${rel}`;
@@ -42,6 +42,61 @@ export function collapsePathSegments(segments: readonly string[]): string[] | nu
 }
 
 /**
+ * Canonicalize a path lexically while preserving a Windows drive root. Drive-
+ * relative forms such as `C:foo` and UNC forms are ambiguous without platform
+ * state and fail closed. Windows drive-root traversal clamps at the drive root,
+ * matching rooted path semantics; POSIX/rootless traversal keeps the existing
+ * fail-closed behavior.
+ */
+export function canonicalizeLexicalPath(raw: string): string | null {
+	const normalized = normalizePathSlashes(raw);
+	if (normalized.startsWith("//")) {
+		return null;
+	}
+	const driveAbsolute = /^([A-Za-z]:)\/+(.*)$/.exec(normalized);
+	if (driveAbsolute) {
+		const collapsed: string[] = [];
+		for (const segment of pathSegments(driveAbsolute[2])) {
+			if (segment === ".") continue;
+			if (segment === "..") {
+				collapsed.pop();
+				continue;
+			}
+			collapsed.push(segment);
+		}
+		return `${driveAbsolute[1]}/${collapsed.join("/")}`;
+	}
+	if (/^[A-Za-z]:/.test(normalized)) {
+		return null;
+	}
+
+	const rooted = normalized.startsWith("/");
+	const collapsed = collapsePathSegments(pathSegments(normalized));
+	if (collapsed === null) {
+		return null;
+	}
+	return rooted ? `/${collapsed.join("/")}` : collapsed.join("/");
+}
+
+interface CanonicalPathParts {
+	drive: string | null;
+	rooted: boolean;
+	segments: string[];
+}
+
+function canonicalPathParts(raw: string): CanonicalPathParts | null {
+	const canonical = canonicalizeLexicalPath(raw);
+	if (canonical === null) {
+		return null;
+	}
+	const driveAbsolute = /^([A-Za-z]:)\/(.*)$/.exec(canonical);
+	if (driveAbsolute) {
+		return { drive: driveAbsolute[1].toLowerCase(), rooted: true, segments: pathSegments(driveAbsolute[2]) };
+	}
+	return { drive: null, rooted: canonical.startsWith("/"), segments: pathSegments(canonical) };
+}
+
+/**
  * True when two normalized paths may refer to the same file or subtree.
  * Fail-closed: "."/".." are collapsed first, root-escaping paths always count
  * as overlapping, and segments compare case-insensitively so case-aliasing
@@ -50,17 +105,23 @@ export function collapsePathSegments(segments: readonly string[]): string[] | nu
  * sequential execution, so false positives are safe.
  */
 export function pathSegmentsOverlap(left: string, right: string): boolean {
-	const leftParts = collapsePathSegments(pathSegments(normalizePathSlashes(left)));
-	const rightParts = collapsePathSegments(pathSegments(normalizePathSlashes(right)));
-	if (leftParts === null || rightParts === null) {
+	const leftPath = canonicalPathParts(left);
+	const rightPath = canonicalPathParts(right);
+	if (leftPath === null || rightPath === null) {
 		return true;
 	}
-	if (leftParts.length === 0 || rightParts.length === 0) {
-		return leftParts.length === rightParts.length && leftParts.length > 0;
+	if (leftPath.drive !== null && rightPath.drive !== null && leftPath.drive !== rightPath.drive) {
+		return false;
 	}
-	const commonLen = Math.min(leftParts.length, rightParts.length);
+	if ((leftPath.drive !== null && !rightPath.rooted) || (rightPath.drive !== null && !leftPath.rooted)) {
+		return true;
+	}
+	if (leftPath.segments.length === 0 || rightPath.segments.length === 0) {
+		return true;
+	}
+	const commonLen = Math.min(leftPath.segments.length, rightPath.segments.length);
 	for (let i = 0; i < commonLen; i++) {
-		if (leftParts[i].toLowerCase() !== rightParts[i].toLowerCase()) {
+		if (leftPath.segments[i].toLowerCase() !== rightPath.segments[i].toLowerCase()) {
 			return false;
 		}
 	}

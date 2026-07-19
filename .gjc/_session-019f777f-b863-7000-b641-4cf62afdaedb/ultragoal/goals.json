@@ -1,0 +1,201 @@
+{
+  "version": 1,
+  "brief": "Approved plan: /home/yu/omk/.gjc/_session-019f777f-b863-7000-b641-4cf62afdaedb/plans/ralplan/019f777f-b863-7000-b641-4cf62afdaedb/pending-approval.md\n\nGlobal constraints: local-only execution until an authoritative WORM release store is separately selected and provisioned. Never publish npm, mutate GitHub releases/trusted-publisher settings/dist-tags, push, force-push, rewrite history, stash/reset/clean, or destroy current dirty/untracked user work. Preserve GitHub/npm/CLI/.omk/session/RPC/SDK identity. Use OMP pin 9fd6e97113f5ed3a847e66d346970efdf8afcad9 and shared-history/prefixed-source/intents-only authority model from the approved plan. ACP is deferred.\n\n@goal: Complete and locally freeze OMK v0.90.9\nInventory and preserve the current dirty hardening work, finish the required v0.90.9 ALG/REL/PRV behavior, resolve focused/full test failures at source, preserve exact public package/CLI/config/session/RPC/SDK contracts, and produce clean local build/check/test/pack/install/archive evidence without publishing or committing user work.\n\n@goal: Prove OMP topology and pure bridge feasibility\nIn an isolated full-history temporary clone, verify the shared merge base and exact OMP pin, private/no-tag/no-push ref model, deterministic prefixed materialization and second-update rehearsal. Inventory exact pure OMP read/search/hashline sources and dependency closure. Approve a complete no-fs/process/network/session/Bun/native pure closure or terminate migration before source integration.\n\n@goal: Establish compatibility and persistence firewall\nAdd deterministic v0.90.9 API/CLI/config/session/RPC/package/binary goldens and verification commands. Preserve field-specific settings precedence, legacy v1/v2 migrations, session v3 append-only authority and namespaced custom/sidecar behavior. Add architecture/import enforcement and experimental capability selector without OMP execution enabled.\n\n@goal: Integrate prefixed OMP and read-only intent bridge\nMaterialize the pinned OMP tree under the approved isolated prefix with provenance lock, add a private bundled pure bridge and OMK-owned dispatcher for read/search/hashline presentation, and dual-run deterministic local fixtures with zero authority bypass, duplicate effects, public type leakage, or Node/Bun package leakage.\n\n@goal: Validate local stateful migration and rollback\nIntegrate approved stateful capability slices only through OMK execution/CONTROL/evidence/resource/session authority, keep OMP native uniformly deferred unless all six targets pass, run local dual-run/fault/security/package/archive matrices, complete cleanup plus architecture and adversarial review, and document local rollback. Do not execute any external publication step.",
+  "gjcGoalMode": "aggregate",
+  "gjcObjective": "Complete the durable ultragoal plan in .gjc/ultragoal/goals.json, including later accepted/appended stories, under the original brief constraints; use .gjc/ultragoal/ledger.jsonl as the audit trail.",
+  "goals": [
+    {
+      "id": "G001",
+      "title": "Complete and locally freeze OMK v0.90.9",
+      "objective": "Inventory and preserve the current dirty hardening work, finish the required v0.90.9 ALG/REL/PRV behavior, resolve focused/full test failures at source, preserve exact public package/CLI/config/session/RPC/SDK contracts, and produce clean local build/check/test/pack/install/archive evidence without publishing or committing user work.",
+      "status": "complete",
+      "createdAt": "2026-07-19T01:42:52.604Z",
+      "updatedAt": "2026-07-19T02:54:18.751Z",
+      "pipelineMetadata": {
+        "schemaVersion": 1,
+        "goalId": "G001",
+        "source": "legacy_brief_only",
+        "eligible": false,
+        "dependsOn": [],
+        "independentOf": [],
+        "targets": {
+          "files": [],
+          "surfaces": []
+        },
+        "overlap": "none",
+        "invalidationReason": "missing_pipeline_metadata",
+        "metadataHash": "ee22f050202eddb1df159edbc575f74df1661c7cce97b7394afe3f786d576e94"
+      },
+      "startedAt": "2026-07-19T01:42:55.781Z",
+      "completedAt": "2026-07-19T02:54:18.751Z",
+      "evidence": "Local-only OMK v0.90.9 freeze verified: full keyless workspace suite and check pass; four packages packed/installed; Linux binary, three CLI forms, extension node subpath, RPC, dirty preservation, architect and QA gates all clean. Public publication remains blocked.",
+      "completionVerification": {
+        "schemaVersion": 1,
+        "receiptId": "97315c3b-28eb-46d4-8b33-8ea464cc71c7",
+        "verifiedAt": "2026-07-19T02:54:18.751Z",
+        "goalId": "G001",
+        "receiptKind": "per-goal",
+        "goalStatusBeforeCheckpoint": "active",
+        "gjcGoalMode": "aggregate",
+        "gjcObjective": "Complete the durable ultragoal plan in .gjc/ultragoal/goals.json, including later accepted/appended stories, under the original brief constraints; use .gjc/ultragoal/ledger.jsonl as the audit trail.",
+        "qualityGateHash": "6b279e1e6c91062e87fed94edc4c0d670de5eac48157fca26ee2323437a2800c",
+        "planGeneration": "cce6af3b219b0f9b34ffccaedabf94bdc75c54946e871b8e9f13afd0b7b11ab4",
+        "basis": {
+          "planHashBeforeCheckpoint": "b3a6616dad842649c2c629bc4cab220f915f51edd550e45c7c4a80877621cdff",
+          "latestRelevantLedgerEventIdBeforeCheckpoint": "624aaf7f-12b8-4df3-94f9-919ffcb72b94",
+          "goalUpdatedAtBeforeCheckpoint": "2026-07-19T02:54:18.751Z",
+          "relevantGoalIdsBeforeCheckpoint": [
+            "G001"
+          ],
+          "requiredGoalSetHashBeforeCheckpoint": "d13a68bb6f19ded6c18b67bff51e3440ce0cc4a3366e189f0207f62fa8b8f44e"
+        },
+        "checkpointLedgerEventId": "4c7a8cad-764f-42b5-8b53-9909cb2e018a"
+      }
+    },
+    {
+      "id": "G002",
+      "title": "Prove OMP topology and pure bridge feasibility",
+      "objective": "In an isolated full-history temporary clone, verify the shared merge base and exact OMP pin, private/no-tag/no-push ref model, deterministic prefixed materialization and second-update rehearsal. Inventory exact pure OMP read/search/hashline sources and dependency closure. Approve a complete no-fs/process/network/session/Bun/native pure closure or terminate migration before source integration.",
+      "status": "complete",
+      "createdAt": "2026-07-19T01:42:52.604Z",
+      "updatedAt": "2026-07-19T03:59:46.898Z",
+      "pipelineMetadata": {
+        "schemaVersion": 1,
+        "goalId": "G002",
+        "source": "legacy_brief_only",
+        "eligible": false,
+        "dependsOn": [],
+        "independentOf": [],
+        "targets": {
+          "files": [],
+          "surfaces": []
+        },
+        "overlap": "none",
+        "invalidationReason": "missing_pipeline_metadata",
+        "metadataHash": "32cfce45a81ac11de07e654988bfca107eb12bfd830f685045cb51db5efcc23f"
+      },
+      "startedAt": "2026-07-19T02:54:18.761Z",
+      "completedAt": "2026-07-19T03:59:46.898Z",
+      "evidence": "Exact OMP topology was proven only in a disposable full clone. Durable blob-bound read/search/hashline evidence terminates the conjunctive pure-source gate before owner refs, vendor source, bridge, product, or publication integration. Cleaner, architect, executor QA, and 29 leader checks are clean.",
+      "completionVerification": {
+        "schemaVersion": 1,
+        "receiptId": "8b78df33-a59d-4eb8-9ee7-e848f8ccae7a",
+        "verifiedAt": "2026-07-19T03:59:46.898Z",
+        "goalId": "G002",
+        "receiptKind": "final-aggregate",
+        "goalStatusBeforeCheckpoint": "complete",
+        "gjcGoalMode": "aggregate",
+        "gjcObjective": "Complete the durable ultragoal plan in .gjc/ultragoal/goals.json, including later accepted/appended stories, under the original brief constraints; use .gjc/ultragoal/ledger.jsonl as the audit trail.",
+        "qualityGateHash": "a9bd41fb1b046879e6ec491deb36ce573becbbb74606f652c713a59d216d3607",
+        "planGeneration": "5804776839e9aadd46ea974242f4a86243b4ffaf6e35f322822d386dd2ddfbe2",
+        "basis": {
+          "planHashBeforeCheckpoint": "df00b028977df6736e4e465b02b582807245c1ac2be4e67276f1cce3b668c5ac",
+          "latestRelevantLedgerEventIdBeforeCheckpoint": "f4afd1bf-5e35-40a3-a10b-c6008cd749e0",
+          "goalUpdatedAtBeforeCheckpoint": "2026-07-19T03:59:46.898Z",
+          "relevantGoalIdsBeforeCheckpoint": [
+            "G001",
+            "G002"
+          ],
+          "requiredGoalSetHashBeforeCheckpoint": "e1bbfc6547eeb91c79cd8d714467e759a7a397d1f80ed95ffa4a190b629aff94"
+        },
+        "checkpointLedgerEventId": "1b543930-4b13-4c14-b277-6b5a486e90a0"
+      }
+    },
+    {
+      "id": "G003",
+      "title": "Establish compatibility and persistence firewall",
+      "objective": "Add deterministic v0.90.9 API/CLI/config/session/RPC/package/binary goldens and verification commands. Preserve field-specific settings precedence, legacy v1/v2 migrations, session v3 append-only authority and namespaced custom/sidecar behavior. Add architecture/import enforcement and experimental capability selector without OMP execution enabled.",
+      "status": "superseded",
+      "createdAt": "2026-07-19T01:42:52.604Z",
+      "updatedAt": "2026-07-19T03:55:28.803Z",
+      "pipelineMetadata": {
+        "schemaVersion": 1,
+        "goalId": "G003",
+        "source": "legacy_brief_only",
+        "eligible": false,
+        "dependsOn": [],
+        "independentOf": [],
+        "targets": {
+          "files": [],
+          "surfaces": []
+        },
+        "overlap": "none",
+        "invalidationReason": "missing_pipeline_metadata",
+        "metadataHash": "03494e43474210b53a2e76f8e26bfe9cefa9b14ea4a61ea2ca8b677aabe2af5f"
+      },
+      "startedAt": "2026-07-19T03:55:09.976Z",
+      "evidence": "G002 durable TERMINATED receipt: all-three pure-source gate failed at exact OMP pin before persistence/product integration.",
+      "steering": {
+        "kind": "mark_blocked_superseded",
+        "evidence": "G002 durable TERMINATED receipt: all-three pure-source gate failed at exact OMP pin before persistence/product integration.",
+        "rationale": "The approved plan makes termination the required outcome; G003 is no longer required and no replacement sub-goal is valid.",
+        "noReplacementRequired": true
+      }
+    },
+    {
+      "id": "G004",
+      "title": "Integrate prefixed OMP and read-only intent bridge",
+      "objective": "Materialize the pinned OMP tree under the approved isolated prefix with provenance lock, add a private bundled pure bridge and OMK-owned dispatcher for read/search/hashline presentation, and dual-run deterministic local fixtures with zero authority bypass, duplicate effects, public type leakage, or Node/Bun package leakage.",
+      "status": "superseded",
+      "createdAt": "2026-07-19T01:42:52.604Z",
+      "updatedAt": "2026-07-19T03:56:04.347Z",
+      "pipelineMetadata": {
+        "schemaVersion": 1,
+        "goalId": "G004",
+        "source": "legacy_brief_only",
+        "eligible": false,
+        "dependsOn": [],
+        "independentOf": [],
+        "targets": {
+          "files": [],
+          "surfaces": []
+        },
+        "overlap": "none",
+        "invalidationReason": "missing_pipeline_metadata",
+        "metadataHash": "b0dbde7889e36d44f4fc6b78b7c4bb3f3dde659eed4ed6f6b9ae6a285ff53618"
+      },
+      "startedAt": "2026-07-19T03:55:49.874Z",
+      "evidence": "G002 durable TERMINATED receipt prohibits vendor/bridge integration at this pin.",
+      "steering": {
+        "kind": "mark_blocked_superseded",
+        "evidence": "G002 durable TERMINATED receipt prohibits vendor/bridge integration at this pin.",
+        "rationale": "G004 is invalidated by the approved all-three pure-source hard gate and requires no replacement.",
+        "noReplacementRequired": true
+      }
+    },
+    {
+      "id": "G005",
+      "title": "Validate local stateful migration and rollback",
+      "objective": "Integrate approved stateful capability slices only through OMK execution/CONTROL/evidence/resource/session authority, keep OMP native uniformly deferred unless all six targets pass, run local dual-run/fault/security/package/archive matrices, complete cleanup plus architecture and adversarial review, and document local rollback. Do not execute any external publication step.",
+      "status": "superseded",
+      "createdAt": "2026-07-19T01:42:52.604Z",
+      "updatedAt": "2026-07-19T03:56:25.781Z",
+      "pipelineMetadata": {
+        "schemaVersion": 1,
+        "goalId": "G005",
+        "source": "legacy_brief_only",
+        "eligible": false,
+        "dependsOn": [],
+        "independentOf": [],
+        "targets": {
+          "files": [],
+          "surfaces": []
+        },
+        "overlap": "none",
+        "invalidationReason": "missing_pipeline_metadata",
+        "metadataHash": "7e7c99822502629f9018f3b7564f332a205bb16db8e0fa1b90a4ec880363bafa"
+      },
+      "startedAt": "2026-07-19T03:56:08.875Z",
+      "evidence": "G002 durable TERMINATED receipt leaves no approved stateful OMP capability to integrate or validate.",
+      "steering": {
+        "kind": "mark_blocked_superseded",
+        "evidence": "G002 durable TERMINATED receipt leaves no approved stateful OMP capability to integrate or validate.",
+        "rationale": "G005 is invalidated by the approved pure-source termination gate and requires no replacement.",
+        "noReplacementRequired": true
+      }
+    }
+  ],
+  "createdAt": "2026-07-19T01:42:52.604Z",
+  "updatedAt": "2026-07-19T03:59:46.898Z",
+  "state_revision": 15
+}

@@ -29,10 +29,32 @@ Both use the same structured summary format and track file operations cumulative
 Auto-compaction triggers when:
 
 ```
-contextTokens > contextWindow - reserveTokens
+contextTokens > triggerTokens
 ```
 
-By default, `reserveTokens` is 16384 tokens (configurable in `~/.omk/agent/settings.json` or `<project-dir>/.omk/settings.json`). This leaves room for the LLM's response.
+where `triggerTokens` is the smaller of:
+
+- `floor(contextWindow × maxUsageRatio)` (default `maxUsageRatio` = 0.9)
+- `contextWindow - reservedBudget` (the effective reserve budget)
+
+The reserved budget is computed from:
+
+```
+reservedBudget = reservedOutputTokens + reservedToolResultTokens + safetyMarginTokens + imageReserveTokens + systemPromptTokens
+```
+
+If the reserved budget exceeds the context window, the reserve boundary is ignored and only the usage-ratio boundary applies. All numeric token reserves must be non-negative safe integers; ratios must be finite and in `(0, 1]`. Invalid values fail session creation instead of silently weakening the policy.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `reserveTokens` | `16384` | Legacy/default output reserve; used as `reservedOutputTokens` when that value is not set |
+| `reservedOutputTokens` | `reserveTokens` | Tokens reserved for the LLM response |
+| `reservedToolResultTokens` | `0` | Tokens reserved for pending tool results |
+| `safetyMarginTokens` | `0` | Extra safety margin added to the reserve |
+| `imageReserveTokens` | `0` | Tokens reserved for image content |
+| `maxUsageRatio` | `0.9` | Normal trigger ratio (fraction of context window) |
+| `rearmRatio` | `0.75 × maxUsageRatio` | Ratio below which a triggered compaction can rearm |
+| `emergencyRatio` | `0.98` | Emergency compaction ratio |
 
 You can also trigger manually with `/compact [instructions]`, where optional instructions focus the summary.
 
@@ -385,7 +407,12 @@ Configure compaction in `~/.omk/agent/settings.json` or `<project-dir>/.omk/sett
     "enabled": true,
     "model": "zai/glm-5.2",
     "reserveTokens": 16384,
-    "keepRecentTokens": 20000
+    "reservedToolResultTokens": 8192,
+    "safetyMarginTokens": 1024,
+    "keepRecentTokens": 20000,
+    "maxUsageRatio": 0.9,
+    "rearmRatio": 0.7,
+    "emergencyRatio": 0.98
   }
 }
 ```
@@ -394,7 +421,14 @@ Configure compaction in `~/.omk/agent/settings.json` or `<project-dir>/.omk/sett
 |---------|---------|-------------|
 | `enabled` | `true` | Enable auto-compaction |
 | `model` | session model | Authenticated canonical `provider/model` used only for compaction |
-| `reserveTokens` | `16384` | Tokens to reserve for LLM response |
+| `reserveTokens` | `16384` | Legacy/default output reserve |
+| `reservedOutputTokens` | `reserveTokens` | Optional output-only reserve |
+| `reservedToolResultTokens` | `0` | Reserve tokens for pending tool results |
+| `safetyMarginTokens` | `0` | Extra safety margin added to the reserve |
+| `imageReserveTokens` | `0` | Reserve tokens for image content |
 | `keepRecentTokens` | `20000` | Recent tokens to keep (not summarized) |
+| `maxUsageRatio` | `0.9` | Normal trigger ratio (fraction of context window) |
+| `rearmRatio` | `0.75 × maxUsageRatio` | Ratio below which a triggered compaction can rearm |
+| `emergencyRatio` | `0.98` | Emergency compaction ratio |
 
 Disable auto-compaction with `"enabled": false`. You can still compact manually with `/compact`.

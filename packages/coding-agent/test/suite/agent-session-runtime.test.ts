@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, parse } from "node:path";
+import type { AgentMessage } from "omk-agent-core";
 import { fauxAssistantMessage, registerFauxProvider } from "omk-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -25,6 +26,9 @@ type RecordedSessionEvent =
 	| SessionBeforeForkEvent
 	| SessionShutdownEvent
 	| SessionStartEvent;
+type AgentSessionWithFinalizedMessageReplacement = {
+	_replaceFinalizedMessage(target: AgentMessage, replacement: AgentMessage): AgentMessage;
+};
 
 describe("AgentSessionRuntime characterization", () => {
 	const cleanups: Array<() => Promise<void> | void> = [];
@@ -37,7 +41,7 @@ describe("AgentSessionRuntime characterization", () => {
 
 	async function createRuntimeForTest(
 		extensionFactory: ExtensionFactory,
-		options?: { cwd?: string; bootstrapModel?: boolean; bootstrapThinkingLevel?: boolean },
+		options?: { cwd?: string; bootstrapModel?: boolean },
 	) {
 		const tempDir =
 			options?.cwd ?? join(tmpdir(), `pi-runtime-suite-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -58,7 +62,6 @@ describe("AgentSessionRuntime characterization", () => {
 			agentDir: tempDir,
 			authStorage,
 			model: options?.bootstrapModel === false ? undefined : faux.getModel(),
-			thinkingLevel: options?.bootstrapThinkingLevel === false ? undefined : undefined,
 			resourceLoaderOptions: {
 				extensionFactories: [
 					(pi: ExtensionAPI) => {
@@ -96,7 +99,6 @@ describe("AgentSessionRuntime characterization", () => {
 					sessionManager,
 					sessionStartEvent,
 					model: runtimeOptions.model,
-					thinkingLevel: runtimeOptions.thinkingLevel,
 				})),
 				services,
 				diagnostics: services.diagnostics,
@@ -121,9 +123,14 @@ describe("AgentSessionRuntime characterization", () => {
 	}
 
 	it("persists message_end assistant replacements to the session manager", async () => {
+		let extensionAssistant: AgentMessage | undefined;
 		const { runtime } = await createRuntimeForTest((pi: ExtensionAPI) => {
 			pi.on("message_end", (event) => {
 				if (event.message.role !== "assistant") return;
+				expect(Object.isFrozen(event.message)).toBe(true);
+				expect(Object.isFrozen(event.message.usage)).toBe(true);
+				expect(Object.isFrozen(event.message.usage.cost)).toBe(true);
+				extensionAssistant = event.message;
 
 				return {
 					message: {
@@ -148,6 +155,10 @@ describe("AgentSessionRuntime characterization", () => {
 			throw new Error("missing assistant message");
 		}
 		expect(sessionAssistant.usage.cost.total).toBe(0.123);
+		expect(Object.isFrozen(sessionAssistant)).toBe(true);
+		expect(Object.isFrozen(sessionAssistant.usage)).toBe(true);
+		expect(Object.isFrozen(sessionAssistant.usage.cost)).toBe(true);
+		expect(extensionAssistant).not.toBe(sessionAssistant);
 
 		const persistedAssistant = runtime.session.sessionManager
 			.getEntries()
@@ -159,6 +170,113 @@ describe("AgentSessionRuntime characterization", () => {
 			throw new Error("missing persisted assistant message");
 		}
 		expect(persistedAssistant.usage.cost.total).toBe(0.123);
+		expect(persistedAssistant).toBe(sessionAssistant);
+		expect(Object.isFrozen(persistedAssistant)).toBe(true);
+	});
+	it("fails closed when a message_end snapshot has no unique state owner", async () => {
+		const { runtime } = await createRuntimeForTest(() => {});
+		await runtime.session.prompt("hello");
+
+		const assistant = runtime.session.messages.find((message) => message.role === "assistant");
+		expect(assistant?.role).toBe("assistant");
+		if (assistant?.role !== "assistant") {
+			throw new Error("missing assistant message");
+		}
+
+		const replacementSession = runtime.session as unknown as AgentSessionWithFinalizedMessageReplacement;
+		const duplicateMessages = [structuredClone(assistant), structuredClone(assistant)];
+		runtime.session.agent.state.messages = duplicateMessages;
+
+		expect(() => replacementSession._replaceFinalizedMessage(structuredClone(assistant), assistant)).toThrow(
+			"Finalized message is ambiguous in agent state",
+		);
+		expect(runtime.session.messages).toEqual(duplicateMessages);
+
+		expect(() =>
+			replacementSession._replaceFinalizedMessage(
+				{ ...structuredClone(assistant), model: `${assistant.model}-missing` },
+				assistant,
+			),
+		).toThrow("Finalized message was not found in agent state");
+		expect(runtime.session.messages).toEqual(duplicateMessages);
+	});
+	it("creates fail-closed immutable snapshots for finalized message replacements", async () => {
+		const { runtime } = await createRuntimeForTest(() => {});
+		await runtime.session.prompt("hello");
+
+		const assistant = runtime.session.messages.find((message) => message.role === "assistant");
+		expect(assistant?.role).toBe("assistant");
+		if (assistant?.role !== "assistant") {
+			throw new Error("missing assistant message");
+		}
+
+		const replacementSession = runtime.session as unknown as AgentSessionWithFinalizedMessageReplacement;
+		const replace = (snapshotData: unknown) =>
+			replacementSession._replaceFinalizedMessage(assistant, {
+				...structuredClone(assistant),
+				snapshotData,
+			} as AgentMessage);
+
+		const cyclic: { self?: unknown } = {};
+		cyclic.self = cyclic;
+		expect(() => replace(new Map([["key", "value"]]))).toThrow(
+			"Finalized message replacement must be a plain serializable snapshot: non-plain objects are not allowed",
+		);
+		expect(() => replace(new Set(["value"]))).toThrow(
+			"Finalized message replacement must be a plain serializable snapshot: non-plain objects are not allowed",
+		);
+		expect(() => replace(cyclic)).toThrow(
+			"Finalized message replacement must be a plain serializable snapshot: cyclic values are not allowed",
+		);
+		expect(() => replace(() => undefined)).toThrow(
+			"Finalized message replacement must be a plain serializable snapshot: function values are not allowed",
+		);
+		expect(() => replace(Symbol("value"))).toThrow(
+			"Finalized message replacement must be a plain serializable snapshot: symbol values are not allowed",
+		);
+		const messagesBeforeRejectedScalars = runtime.session.messages;
+		const entriesBeforeRejectedScalars = [...runtime.session.sessionManager.getEntries()];
+		for (const [value, reason] of [
+			[1n, "bigint values are not allowed"],
+			[Number.NaN, "non-finite number values are not allowed"],
+			[Number.POSITIVE_INFINITY, "non-finite number values are not allowed"],
+			[Number.NEGATIVE_INFINITY, "non-finite number values are not allowed"],
+		] as const) {
+			expect(() => replace(value)).toThrow(
+				`Finalized message replacement must be a plain serializable snapshot: ${reason}`,
+			);
+			expect(runtime.session.messages).toBe(messagesBeforeRejectedScalars);
+			expect(runtime.session.sessionManager.getEntries()).toEqual(entriesBeforeRejectedScalars);
+		}
+
+		const sourceData = {
+			omitted: undefined,
+			nested: {
+				values: [{ label: "original" }],
+				undefinedValues: [undefined],
+			},
+		};
+		const finalized = replace(sourceData) as AgentMessage & { snapshotData: typeof sourceData };
+		const snapshotData = finalized.snapshotData;
+
+		expect(finalized).not.toBe(assistant);
+		expect(snapshotData).not.toBe(sourceData);
+		expect(snapshotData.nested).not.toBe(sourceData.nested);
+		expect(snapshotData.nested.values).not.toBe(sourceData.nested.values);
+		expect(Object.isFrozen(finalized)).toBe(true);
+		expect(Object.isFrozen(snapshotData)).toBe(true);
+		expect(Object.isFrozen(snapshotData.nested)).toBe(true);
+		expect(Object.isFrozen(snapshotData.nested.values)).toBe(true);
+		expect(Object.isFrozen(snapshotData.nested.values[0])).toBe(true);
+		expect(JSON.stringify(snapshotData)).toBe(
+			'{"nested":{"values":[{"label":"original"}],"undefinedValues":[null]}}',
+		);
+
+		sourceData.nested.values[0].label = "changed";
+		expect(snapshotData.nested.values[0]?.label).toBe("original");
+		expect(() => {
+			snapshotData.nested.values[0]!.label = "mutated";
+		}).toThrow(TypeError);
 	});
 
 	it("emits session_before_switch and session_start for new and resume flows", async () => {
@@ -232,6 +350,7 @@ describe("AgentSessionRuntime characterization", () => {
 		events.length = 0;
 		const otherDir = join(tmpdir(), `pi-runtime-other-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(otherDir, { recursive: true });
+		cleanups.push(() => rmSync(otherDir, { recursive: true, force: true }));
 		const otherSession = SessionManager.create(otherDir);
 		otherSession.appendMessage({ role: "user", content: [{ type: "text", text: "other" }], timestamp: Date.now() });
 		const otherSessionFile = otherSession.getSessionFile();
@@ -452,6 +571,7 @@ describe("AgentSessionRuntime characterization", () => {
 		const secondDir = join(tmpdir(), `pi-runtime-cwd-b-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(firstDir, { recursive: true });
 		mkdirSync(secondDir, { recursive: true });
+		cleanups.push(() => rmSync(secondDir, { recursive: true, force: true }));
 		const { runtime, faux, tempDir } = await createRuntimeForTest(() => {}, { cwd: firstDir });
 		const otherAuthStorage = AuthStorage.inMemory();
 		otherAuthStorage.setRuntimeApiKey(faux.getModel().provider, "faux-key");
@@ -522,7 +642,6 @@ describe("AgentSessionRuntime characterization", () => {
 	it("restores model and thinking state from the destination session", async () => {
 		const { runtime, faux, tempDir } = await createRuntimeForTest(() => {}, {
 			bootstrapModel: false,
-			bootstrapThinkingLevel: false,
 		});
 		const otherDir = join(tempDir, "other");
 		mkdirSync(otherDir, { recursive: true });

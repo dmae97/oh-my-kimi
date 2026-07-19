@@ -126,6 +126,21 @@ Useful session commands:
 
 See [Sessions](sessions.md) and [Compaction](compaction.md) for details.
 
+### Session Doctor and Recovery
+
+```bash
+omk session doctor                              # inspect all stored sessions
+omk session doctor --session <path|id>          # inspect one session
+omk session doctor --session <path|id> --repair --dry-run
+omk session doctor --session <path|id> --repair
+```
+
+The doctor verifies the session's complete JSONL prefix, run journal, compaction envelopes/transactions, replay-evidence links, workspace, and provider/model binding. `--dry-run` plans repairs without writing. Repair mode rechecks file hashes under a lock before writing and only allows unambiguous missing tool results, exact trailing-fragment quarantine, unclosed-run crash recovery, and stale compaction abandonment. Duplicate/orphan tool results, duplicate IDs, broken hashes/chains, and changed preconditions are refused.
+
+Session and journal bytes after the final newline are copied byte-for-byte to a `.quarantine-*` file before the original is atomically rewritten to its valid complete prefix. Opening a session uses the same complete-prefix rule; `SessionManager.getQuarantineReport()` reports any startup quarantine.
+
+Each real agent run writes fsynced `run_started` and `run_finished` records to `<session>.runjournal`. An unclosed valid run is recorded as an inferred `process_crash` on the next startup. JSON/RPC emit `session_termination`; text and TUI errors include kind, provider/model, retryability, cause, run ID, and next action.
+
 ## Context Files
 
 OMK loads `AGENTS.md` or `CLAUDE.md` at startup from:
@@ -176,6 +191,28 @@ omk config                    # Enable/disable package resources
 These commands manage omk packages, not the omk CLI installation. To uninstall omk itself, see [Quickstart](quickstart.md#uninstall).
 
 See [OMK Packages](packages.md) for package sources and security notes.
+
+### Session Doctor
+
+```bash
+omk session doctor [--session <path|id>] [--repair [--dry-run]]
+```
+
+Exit codes: `0` healthy or successfully repaired, `1` issues found or dry-run repairs available, `2` refused/usage/CAS failure.
+
+### Provider Doctor
+
+```bash
+omk provider doctor <provider-id> [--level <0|1>] [--model <model-id>] [--timeout <ms>] [--probe-model <model-id>]
+```
+
+Diagnoses one provider and prints a single sanitized JSON document. Exit codes are stable: `0` ok, `1` diagnosis failed, `2` usage error. The legacy flag form `omk --doctor-provider <provider-id>` (with `--doctor-level`, `--doctor-model`, `--doctor-timeout`) remains an alias.
+
+- **Level 0** (default) — static checks only, no network: config resolution, URL/scheme/address policy, model↔provider relation, credential presence.
+- **Level 1** (`--level 1`) — adds non-generative, GET-only reachability probes (root + `/models`) with strict timeouts, no redirects, and DNS/address pinning. Results use the exact probe categories `ok | network | auth | unsupported-endpoint | server`: a root or `/models` 404 is neutral (`unsupported-endpoint`), 401/403 is an auth failure, and 5xx is a `server` failure.
+- **Level 2** — reachable only via the explicit `--probe-model <model-id>` opt-in: sends one minimal-token generative request (`max_tokens: 1`) to the completions endpoint. **This may incur provider costs**; the JSON result marks it with `"costWarning": true`. No tool-call probe is ever sent.
+
+Config sources, highest precedence first: `models.json`, `KIMI_BASE_URL`/`KIMI_MODEL_NAME` env, `~/.kimi/config.toml` root keys, then `[providers.<name>]` TOML tables with `type = "openai_legacy"` — the last are classified `custom-openai-compatible`, so native-only checks (login, native config) are skipped and endpoint reachability is checked instead. Credentials, URL userinfo/query/fragment, request bodies, and response bodies never appear in the output; malformed TOML is reported by line number only.
 
 ### Modes
 
@@ -308,6 +345,7 @@ omk --exclude-tools ask_question
 | `OMK_CODING_AGENT_DIR` | Override config directory; default is `~/.omk/agent` |
 | `OMK_CODING_AGENT_SESSION_DIR` | Override session storage directory; overridden by `--session-dir` |
 | `OMK_PACKAGE_DIR` | Override package directory, useful for Nix/Guix store paths |
+| `OMK_TOOL_SCHEDULER` | Override the tool scheduler with `dag-v2` or use `waves-v1` for process-local rollback |
 | `OMK_OFFLINE` | Disable startup network operations, including update checks, package update checks, and install/update telemetry |
 | `OMK_SKIP_VERSION_CHECK` | Skip the OMK version update check at startup. This prevents the `the OMK repository` latest-version request |
 | `OMK_TELEMETRY` | Override install/update telemetry and provider attribution headers: `1`/`true`/`yes` or `0`/`false`/`no`. This does not disable update checks |

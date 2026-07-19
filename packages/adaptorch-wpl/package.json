@@ -1,6 +1,6 @@
 {
 	"name": "omk-adaptorch-wpl",
-	"version": "0.90.8",
+	"version": "0.90.9",
 	"private": true,
 	"description": "Experimental, design-stage AdaptOrch-native Work Packet Loop (WPL). Not wired into the coding-agent CLI yet.",
 	"type": "module",

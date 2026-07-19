@@ -3,7 +3,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { discoverAndLoadExtensions } from "../src/core/extensions/loader.ts";
+import {
+	discoverAndLoadExtensions,
+	loadExtensionModuleWithVirtualModulesForTests,
+	resolveOmkAgentCoreNodeEntryForTests,
+} from "../src/core/extensions/loader.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -49,6 +53,62 @@ describe("extensions discovery", () => {
 		expect(result.errors).toHaveLength(0);
 		expect(result.extensions).toHaveLength(2);
 		expect(result.extensions.map((e) => path.basename(e.path))).toEqual(["bar.ts", "foo.ts"]);
+	});
+
+	it("loads omk-agent-core/node through Bun virtual modules", async () => {
+		const extensionPath = path.join(extensionsDir, "node-subpath.ts");
+		fs.writeFileSync(
+			extensionPath,
+			`
+				import { createNodeResourceKeyResolver } from "omk-agent-core/node";
+
+				const resolver = createNodeResourceKeyResolver();
+				if (typeof resolver.resolvePath !== "function") {
+					throw new Error("missing node resource resolver");
+				}
+
+				export default function(api) {
+					api.registerCommand("node-subpath", { handler: async () => {} });
+				}
+			`,
+		);
+
+		const factory = await loadExtensionModuleWithVirtualModulesForTests(extensionPath);
+
+		expect(factory).toBeTypeOf("function");
+	});
+
+	describe("omk-agent-core/node installed-package resolution", () => {
+		it("falls back to the installed package when the workspace build is absent", () => {
+			const packageJsonPath = path.join(tempDir, "node_modules", "omk-agent-core", "package.json");
+
+			const entry = resolveOmkAgentCoreNodeEntryForTests({
+				packagesRoot: tempDir,
+				startDir: tempDir,
+				resolvePackageJson: (specifier) => {
+					expect(specifier).toBe("omk-agent-core/package.json");
+					return packageJsonPath;
+				},
+				existsSync: () => false,
+			});
+
+			expect(entry).toBe(path.join(tempDir, "node_modules", "omk-agent-core", "dist", "node.js"));
+		});
+
+		it("fails with an actionable error when neither workspace nor package is available", () => {
+			expect(() =>
+				resolveOmkAgentCoreNodeEntryForTests({
+					packagesRoot: tempDir,
+					startDir: tempDir,
+					resolvePackageJson: () => {
+						throw new Error("not installed");
+					},
+					existsSync: () => false,
+				}),
+			).toThrow(
+				"Unable to resolve package.json for omk-agent-core. Install omk-agent-core or run OMK from a workspace containing its built package.",
+			);
+		});
 	});
 
 	it("discovers direct .js files in extensions/", async () => {

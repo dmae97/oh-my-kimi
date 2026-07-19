@@ -3,13 +3,17 @@ import { join } from "node:path";
 import ts from "typescript";
 
 const ignoredDirectories = new Set([".git", "coverage", "dist", "node_modules"]);
+// The pre-existing third-party scratch tree is only the exact `~` child of the scan root.
+const rootScratchDirectory = "~";
 const files = [];
+const scanRoot = process.argv[2] ?? ".";
 
 function collectTypescriptFiles(directory) {
 	for (const entry of readdirSync(directory, { withFileTypes: true })) {
 		if (entry.isDirectory()) {
-			if (!ignoredDirectories.has(entry.name)) {
-				collectTypescriptFiles(join(directory, entry.name));
+			const childDirectory = join(directory, entry.name);
+			if (!isIgnoredDirectory(directory, entry.name)) {
+				collectTypescriptFiles(childDirectory);
 			}
 			continue;
 		}
@@ -19,6 +23,10 @@ function collectTypescriptFiles(directory) {
 		}
 	}
 }
+function isIgnoredDirectory(directory, name) {
+	return ignoredDirectories.has(name) || (directory === scanRoot && name === rootScratchDirectory);
+}
+
 
 function isRelativeJavaScriptSpecifier(specifier) {
 	return /^\.\.?\//.test(specifier) && /\.js(?:[?#].*)?$/.test(specifier);
@@ -32,7 +40,7 @@ function getImportTypeSpecifier(node) {
 
 const failures = [];
 
-collectTypescriptFiles(".");
+collectTypescriptFiles(scanRoot);
 
 for (const file of files.sort()) {
 	const sourceText = readFileSync(file, "utf8");

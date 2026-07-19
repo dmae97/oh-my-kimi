@@ -8,7 +8,8 @@ import {
 	type ThinkingBudgets,
 	type Transport,
 } from "omk-ai";
-import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.ts";
+import { planFailureTermination, runAgentLoop, runAgentLoopContinue } from "./agent-loop.ts";
+import { createImmutableSnapshot } from "./tool-execution-boundary.ts";
 import type {
 	AfterToolCallContext,
 	AfterToolCallResult,
@@ -33,15 +34,6 @@ function defaultConvertToLlm(messages: AgentMessage[]): Message[] {
 		(message) => message.role === "user" || message.role === "assistant" || message.role === "toolResult",
 	);
 }
-
-const EMPTY_USAGE = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
 
 const DEFAULT_MODEL = {
 	id: "unknown",
@@ -113,6 +105,14 @@ export interface AgentOptions {
 	transport?: Transport;
 	maxRetryDelayMs?: number;
 	toolExecution?: ToolExecutionMode;
+	toolTimeoutMs?: AgentLoopConfig["toolTimeoutMs"];
+	toolTimeouts?: AgentLoopConfig["toolTimeouts"];
+	toolScheduler?: AgentLoopConfig["toolScheduler"];
+	maxToolConcurrency?: AgentLoopConfig["maxToolConcurrency"];
+	strictExtensionClaims?: AgentLoopConfig["strictExtensionClaims"];
+	cwd?: AgentLoopConfig["cwd"];
+	resourceKeyResolver?: AgentLoopConfig["resourceKeyResolver"];
+	toolExecutionPolicy?: AgentLoopConfig["toolExecutionPolicy"];
 }
 
 class PendingMessageQueue {
@@ -197,6 +197,22 @@ export class Agent {
 	public maxRetryDelayMs?: number;
 	/** Tool execution strategy for assistant messages that contain multiple tool calls. */
 	public toolExecution: ToolExecutionMode;
+	/** Default execution timeout for tools; provider request timeout remains separate. */
+	public toolTimeoutMs?: number;
+	/** Per-tool-name execution timeout overrides. */
+	public toolTimeouts?: Record<string, number>;
+	/** Deterministic tool scheduler selection. */
+	public toolScheduler: NonNullable<AgentLoopConfig["toolScheduler"]>;
+	/** Optional dag-v2 concurrency cap. */
+	public maxToolConcurrency?: number;
+	/** Require explicit resource claims for parallel extension tools. */
+	public strictExtensionClaims: boolean;
+	/** Working directory used to resolve path-scoped resource claims. */
+	public cwd?: string;
+	/** Optional dag-v2 platform identity resolver for path-claim aliases. */
+	public resourceKeyResolver?: AgentLoopConfig["resourceKeyResolver"];
+	/** Execution-policy defaults (late-settlement audit policy). */
+	public toolExecutionPolicy?: AgentLoopConfig["toolExecutionPolicy"];
 
 	constructor(options: AgentOptions = {}) {
 		this._state = createMutableAgentState(options.initialState);
@@ -216,17 +232,23 @@ export class Agent {
 		this.transport = options.transport ?? "auto";
 		this.maxRetryDelayMs = options.maxRetryDelayMs;
 		this.toolExecution = options.toolExecution ?? "parallel";
+		this.toolTimeoutMs = options.toolTimeoutMs;
+		this.toolTimeouts = options.toolTimeouts;
+		this.toolScheduler = options.toolScheduler ?? "waves-v1";
+		this.maxToolConcurrency = options.maxToolConcurrency;
+		this.strictExtensionClaims = options.strictExtensionClaims ?? false;
+		this.cwd = options.cwd;
+		this.resourceKeyResolver = options.resourceKeyResolver;
+		this.toolExecutionPolicy = options.toolExecutionPolicy;
 	}
 
 	/**
 	 * Subscribe to agent lifecycle events.
 	 *
-	 * Listener promises are awaited in subscription order and are included in
-	 * the current run's settlement. Listeners also receive the active abort
-	 * signal for the current run.
-	 *
-	 * `agent_end` is the final emitted event for a run, but the agent does not
-	 * become idle until all awaited listeners for that event have settled.
+	 * Listener promises are awaited in subscription order except for
+	 * observation-only `tool_execution_update` delivery, which is detached so a
+	 * listener cannot delay timeout/abort closure. Listeners receive the active
+	 * abort signal. `agent_end` remains awaited before the agent becomes idle.
 	 */
 	subscribe(listener: (event: AgentEvent, signal: AbortSignal) => Promise<void> | void): () => void {
 		this.listeners.add(listener);
@@ -449,6 +471,14 @@ export class Agent {
 			thinkingBudgets: this.thinkingBudgets,
 			maxRetryDelayMs: this.maxRetryDelayMs,
 			toolExecution: this.toolExecution,
+			toolTimeoutMs: this.toolTimeoutMs,
+			toolTimeouts: this.toolTimeouts,
+			toolScheduler: this.toolScheduler,
+			maxToolConcurrency: this.maxToolConcurrency,
+			strictExtensionClaims: this.strictExtensionClaims,
+			cwd: this.cwd,
+			resourceKeyResolver: this.resourceKeyResolver,
+			toolExecutionPolicy: this.toolExecutionPolicy,
 			beforeToolCall: this.beforeToolCall,
 			afterToolCall: this.afterToolCall,
 			prepareNextTurn: this.prepareNextTurn ? async () => await this.prepareNextTurn?.(this.signal) : undefined,
@@ -485,28 +515,33 @@ export class Agent {
 		try {
 			await executor(abortController.signal);
 		} catch (error) {
-			await this.handleRunFailure(error, abortController.signal.aborted);
+			const failure = error instanceof Error ? error : new Error(String(error));
+			await this.handleRunFailure(failure, abortController.signal.aborted);
 		} finally {
 			this.finishRun();
 		}
 	}
 
 	private async handleRunFailure(error: unknown, aborted: boolean): Promise<void> {
-		const failureMessage = {
-			role: "assistant",
-			content: [{ type: "text", text: "" }],
-			api: this._state.model.api,
-			provider: this._state.model.provider,
-			model: this._state.model.id,
-			usage: EMPTY_USAGE,
-			stopReason: aborted ? "aborted" : "error",
-			errorMessage: error instanceof Error ? error.message : String(error),
-			timestamp: Date.now(),
-		} satisfies AgentMessage;
-		await this.processEvents({ type: "message_start", message: failureMessage });
-		await this.processEvents({ type: "message_end", message: failureMessage });
-		await this.processEvents({ type: "turn_end", message: failureMessage, toolResults: [] });
-		await this.processEvents({ type: "agent_end", messages: [failureMessage] });
+		// Apply the same failure-termination contract as the low-level loop so the
+		// disposition of any unresolved tool calls matches transcript repair:
+		// an unambiguous open turn is closed with exactly one synthetic result per
+		// missing call before a single coherent failure assistant, and an ambiguous
+		// transcript fails closed without fabricating a turn over corruption.
+		const plan = planFailureTermination(this._state.messages, this._state.model, error, aborted);
+
+		for (const result of plan.closureResults) {
+			await this.processEvents({ type: "message_start", message: result });
+			await this.processEvents({ type: "message_end", message: result });
+		}
+
+		if (plan.failureMessage) {
+			await this.processEvents({ type: "message_start", message: plan.failureMessage });
+			await this.processEvents({ type: "message_end", message: plan.failureMessage });
+			await this.processEvents({ type: "turn_end", message: plan.failureMessage, toolResults: [] });
+		}
+
+		await this.processEvents({ type: "agent_end", messages: plan.messages });
 	}
 
 	private finishRun(): void {
@@ -517,14 +552,9 @@ export class Agent {
 		this.activeRun = undefined;
 	}
 
-	/**
-	 * Reduce internal state for a loop event, then await listeners.
-	 *
-	 * `agent_end` only means no further loop events will be emitted. The run is
-	 * considered idle later, after all awaited listeners for `agent_end` finish
-	 * and `finishRun()` clears runtime-owned state.
-	 */
-	private async processEvents(event: AgentEvent): Promise<void> {
+	/** Reduce state, detach update observation, and await all terminal listeners. */
+	private async processEvents(sourceEvent: AgentEvent): Promise<void> {
+		const event = createImmutableSnapshot(sourceEvent);
 		switch (event.type) {
 			case "message_start":
 				this._state.streamingMessage = event.message;
@@ -539,12 +569,9 @@ export class Agent {
 				this._state.messages.push(event.message);
 				break;
 
-			case "tool_execution_start": {
-				const pendingToolCalls = new Set(this._state.pendingToolCalls);
-				pendingToolCalls.add(event.toolCallId);
-				this._state.pendingToolCalls = pendingToolCalls;
+			case "tool_execution_start":
+				this._state.pendingToolCalls = new Set(this._state.pendingToolCalls).add(event.toolCallId);
 				break;
-			}
 
 			case "tool_execution_end": {
 				const pendingToolCalls = new Set(this._state.pendingToolCalls);
@@ -566,10 +593,26 @@ export class Agent {
 
 		const signal = this.activeRun?.abortController.signal;
 		if (!signal) {
+			// A tool's real promise may settle after the run already ended. The
+			// late-settlement event is audit-only by contract, so it is still
+			// delivered (with an inert signal) instead of being dropped; every
+			// other event outside an active run remains a hard invariant break.
+			if (event.type === "tool_execution_late_settlement") {
+				const inertSignal = new AbortController().signal;
+				for (const listener of this.listeners) await listener(createImmutableSnapshot(event), inertSignal);
+				return;
+			}
 			throw new Error("Agent listener invoked outside active run");
 		}
-		for (const listener of this.listeners) {
-			await listener(event, signal);
+		if (event.type === "tool_execution_update") {
+			for (const listener of this.listeners) {
+				const snapshot = createImmutableSnapshot(event);
+				void Promise.resolve()
+					.then(() => listener(snapshot, signal))
+					.catch(() => undefined);
+			}
+			return;
 		}
+		for (const listener of this.listeners) await listener(createImmutableSnapshot(event), signal);
 	}
 }

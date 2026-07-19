@@ -29,10 +29,20 @@ export {
 	computeContextBudgetQueryIntentHashV2,
 	computeContextBudgetRepresentationFingerprintV2,
 	computeContextBudgetTargetTokenBucketV2,
+	createContextBudgetCacheKeyBaseV2,
 	createMemoryContextBudgetCacheProviderV2,
 	DEFAULT_MATERIALIZED_COMPRESSOR_POLICY_HASH_V2,
 	DEFAULT_MATERIALIZED_QUALITY_POLICY_HASH_V2,
 } from "./context-budget-v2-cache.ts";
+export {
+	applyContextCacheInvalidation,
+	CONTEXT_CACHE_INVALIDATION_SCHEMA_VERSION,
+	type ContextCacheInvalidationEvent,
+	type ContextCacheInvalidationSnapshot,
+	createContextCacheInvalidationSnapshot,
+	serializeContextCacheSnapshot,
+	validateContextCacheInvalidationSnapshot,
+} from "./context-budget-v2-cache-invalidation.ts";
 export { computeCoverageGap } from "./context-budget-v2-coverage.ts";
 export { computePlanHash, contentHashOf } from "./context-budget-v2-plan-hash.ts";
 export { planPromptContextBudgetV2 } from "./context-budget-v2-planner.ts";

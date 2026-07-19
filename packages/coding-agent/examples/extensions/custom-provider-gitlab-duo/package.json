@@ -1,7 +1,7 @@
 {
 	"name": "omk-extension-custom-provider-gitlab-duo",
 	"private": true,
-	"version": "0.90.8",
+	"version": "0.90.9",
 	"type": "module",
 	"scripts": {
 		"clean": "echo 'nothing to clean'",

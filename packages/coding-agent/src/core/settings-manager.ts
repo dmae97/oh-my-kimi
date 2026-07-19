@@ -9,14 +9,29 @@ import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dis
 export interface CompactionSettings {
 	enabled?: boolean; // default: true
 	model?: string; // optional canonical provider/model ID used only for compaction
-	reserveTokens?: number; // default: 16384
+	reserveTokens?: number; // legacy/default output reserve: 16384
+	reservedOutputTokens?: number; // defaults to reserveTokens
+	reservedToolResultTokens?: number; // default: 0
+	safetyMarginTokens?: number; // default: 0
+	imageReserveTokens?: number; // default: 0
 	keepRecentTokens?: number; // default: 20000
-	maxUsageRatio?: number; // default: 0.9
+	maxUsageRatio?: number; // normal trigger ratio, default: 0.9
+	rearmRatio?: number; // defaults to 75% of the effective trigger ratio
+	emergencyRatio?: number; // default: 0.98
 }
 
 /** Global-only opt-in for prompt resource budgeting and its session-memory cache. */
 export interface ContextBudgetSettings {
 	enabled?: boolean; // default: false
+}
+
+export type ToolSchedulerSetting = "waves-v1" | "dag-v2";
+
+export interface AgentRuntimeSettings {
+	toolScheduler?: ToolSchedulerSetting; // default: "dag-v2" in coding-agent
+	maxToolConcurrency?: number; // default: 4; 0 disables the cap
+	toolTimeoutMs?: number; // default: 0 for tools without a per-name timeout
+	toolTimeouts?: Record<string, number>; // per-tool override; 0 disables that tool's timer
 }
 
 export interface BranchSummarySettings {
@@ -110,6 +125,7 @@ export interface Settings {
 	theme?: string;
 	compaction?: CompactionSettings;
 	contextBudget?: ContextBudgetSettings;
+	agent?: AgentRuntimeSettings;
 	branchSummary?: BranchSummarySettings;
 	retry?: RetrySettings;
 	hideThinkingBlock?: boolean;
@@ -708,6 +724,10 @@ export class SettingsManager {
 		return this.globalSettings.contextBudget?.enabled === true;
 	}
 
+	getAgentRuntimeSettings(): AgentRuntimeSettings {
+		return structuredClone(this.settings.agent ?? {});
+	}
+
 	setContextBudgetEnabled(enabled: boolean): void {
 		if (!this.globalSettings.contextBudget) {
 			this.globalSettings.contextBudget = {};
@@ -730,29 +750,67 @@ export class SettingsManager {
 		this.save();
 	}
 
+	private getCompactionTokenSetting(name: keyof CompactionSettings, fallback: number): number {
+		const value = this.settings.compaction?.[name] ?? fallback;
+		if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+			throw new Error(`Invalid compaction.${name} setting: ${String(value)}`);
+		}
+		return value;
+	}
+
 	getCompactionReserveTokens(): number {
-		return this.settings.compaction?.reserveTokens ?? 16384;
+		return this.getCompactionTokenSetting("reserveTokens", 16384);
 	}
 
 	getCompactionKeepRecentTokens(): number {
-		return this.settings.compaction?.keepRecentTokens ?? 20000;
+		return this.getCompactionTokenSetting("keepRecentTokens", 20000);
 	}
 
 	getCompactionMaxUsageRatio(): number {
-		return this.settings.compaction?.maxUsageRatio ?? 0.9;
+		const value = this.settings.compaction?.maxUsageRatio ?? 0.9;
+		if (typeof value !== "number" || !Number.isFinite(value) || value <= 0 || value > 1) {
+			throw new Error(`Invalid compaction.maxUsageRatio setting: ${String(value)}`);
+		}
+		return value;
 	}
 
 	getCompactionSettings(): {
 		enabled: boolean;
 		reserveTokens: number;
+		reservedOutputTokens: number;
+		reservedToolResultTokens: number;
+		safetyMarginTokens: number;
+		imageReserveTokens: number;
 		keepRecentTokens: number;
 		maxUsageRatio: number;
+		rearmRatio?: number;
+		emergencyRatio: number;
 	} {
+		const reserveTokens = this.getCompactionReserveTokens();
+		const maxUsageRatio = this.getCompactionMaxUsageRatio();
+		const rearmRatio = this.settings.compaction?.rearmRatio;
+		const emergencyRatio = this.settings.compaction?.emergencyRatio ?? 0.98;
+		if (
+			(rearmRatio !== undefined &&
+				(typeof rearmRatio !== "number" || !Number.isFinite(rearmRatio) || rearmRatio < 0 || rearmRatio >= 1)) ||
+			typeof emergencyRatio !== "number" ||
+			!Number.isFinite(emergencyRatio) ||
+			emergencyRatio <= 0 ||
+			emergencyRatio > 1
+		) {
+			throw new Error("Invalid compaction hysteresis ratio settings");
+		}
 		return {
 			enabled: this.getCompactionEnabled(),
-			reserveTokens: this.getCompactionReserveTokens(),
+			reserveTokens,
+			reservedOutputTokens: this.getCompactionTokenSetting("reservedOutputTokens", reserveTokens),
+			reservedToolResultTokens: this.getCompactionTokenSetting("reservedToolResultTokens", 0),
+			safetyMarginTokens: this.getCompactionTokenSetting("safetyMarginTokens", 0),
+			imageReserveTokens: this.getCompactionTokenSetting("imageReserveTokens", 0),
 			keepRecentTokens: this.getCompactionKeepRecentTokens(),
-			maxUsageRatio: this.getCompactionMaxUsageRatio(),
+			maxUsageRatio,
+			...(rearmRatio === undefined ? {} : { rearmRatio }),
+			emergencyRatio,
 		};
 	}
 

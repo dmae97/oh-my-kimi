@@ -73,15 +73,31 @@ Set `OMK_SKIP_VERSION_CHECK=1` to disable the OMK version update check. Use `--o
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `compaction.enabled` | boolean | `true` | Enable auto-compaction |
-| `compaction.reserveTokens` | number | `16384` | Tokens reserved for LLM response |
+| `compaction.model` | string | session model | Authenticated canonical `provider/model` used only for compaction |
+| `compaction.reserveTokens` | number | `16384` | Legacy/default output reserve (tokens reserved for the LLM response) |
+| `compaction.reservedOutputTokens` | number | `reserveTokens` | Optional override for output-only reserve |
+| `compaction.reservedToolResultTokens` | number | `0` | Reserve tokens for pending tool results |
+| `compaction.safetyMarginTokens` | number | `0` | Extra safety margin added to the reserve |
+| `compaction.imageReserveTokens` | number | `0` | Reserve tokens for image content |
 | `compaction.keepRecentTokens` | number | `20000` | Recent tokens to keep (not summarized) |
+| `compaction.maxUsageRatio` | number | `0.9` | Normal trigger ratio (fraction of context window) |
+| `compaction.rearmRatio` | number | `0.75 × maxUsageRatio` | Ratio below which a triggered compaction can rearm |
+| `compaction.emergencyRatio` | number | `0.98` | Emergency compaction ratio |
+
+All numeric token reserves must be non-negative safe integers. Ratios must be finite and in `(0, 1]`. Invalid values fail session creation instead of silently weakening the policy.
 
 ```json
 {
   "compaction": {
     "enabled": true,
+    "model": "zai/glm-5.2",
     "reserveTokens": 16384,
-    "keepRecentTokens": 20000
+    "reservedToolResultTokens": 8192,
+    "safetyMarginTokens": 1024,
+    "keepRecentTokens": 20000,
+    "maxUsageRatio": 0.9,
+    "rearmRatio": 0.7,
+    "emergencyRatio": 0.98
   }
 }
 ```
@@ -99,6 +115,38 @@ Set `OMK_SKIP_VERSION_CHECK=1` to disable the OMK version update check. Use `--o
 ```
 
 This setting is global-only: `.omk/settings.json` cannot enable or disable it. Use `OMK_CONTEXT_GOVERNOR=1` to force it on for one process or `OMK_CONTEXT_GOVERNOR=0` to force it off for a baseline run. The cache is never persisted or shared between sessions.
+
+### Agent Tool Execution
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `agent.toolScheduler` | string | `"dag-v2"` | Deterministic resource-claim scheduler. Use `"waves-v1"` for compatibility rollback |
+| `agent.maxToolConcurrency` | number | `4` | Maximum calls in one DAG level; `0` removes the cap |
+| `agent.toolTimeoutMs` | number | `0` | Fallback tool execution timeout in milliseconds; `0` disables the fallback timer |
+| `agent.toolTimeouts` | object | built-in defaults | Per-tool-name timeout overrides; `0` disables that tool's timer |
+
+Built-in defaults are 30 seconds for `read`, `grep`, `find`, and `ls`; 60 seconds for `edit` and `write`; and 300 seconds for `bash`. Explicit `agent.toolTimeouts` entries override these defaults. Extension/custom tools without a per-name value use `agent.toolTimeoutMs`. Timeout values must be integer milliseconds from `0` through `2147483647`.
+
+```json
+{
+  "agent": {
+    "toolScheduler": "dag-v2",
+    "maxToolConcurrency": 4,
+    "toolTimeoutMs": 0,
+    "toolTimeouts": {
+      "read": 30000,
+      "write": 60000,
+      "bash": 300000,
+      "my_mcp_tool": 120000,
+      "my_browser_tool": 180000
+    }
+  }
+}
+```
+
+`OMK_TOOL_SCHEDULER` overrides the file setting for one process. Set it to `waves-v1` for rollback or `dag-v2` to force the resource DAG. Invalid scheduler and timeout values fail session creation instead of silently weakening the policy.
+
+The DAG preserves source-order result artifacts. `bash`, unknown tools, and extension tools without explicit resource claims remain exclusive. Tool timeout is logical cancellation: OMK closes the tool call and signals cancellation, but arbitrary JavaScript or external side effects may continue if the tool ignores that signal.
 
 ### Branch Summary
 

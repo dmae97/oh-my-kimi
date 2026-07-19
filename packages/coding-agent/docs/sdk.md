@@ -87,6 +87,19 @@ interface AgentSession {
   sessionFile: string | undefined;
   sessionId: string;
 
+  // Lifecycle and termination
+  lastTermination: SessionTermination | undefined;
+  recordProcessSignal(signal: "SIGINT" | "SIGTERM" | "SIGHUP" | "SIGQUIT"): SessionTermination;
+
+  // Audit / repair
+  transcriptRepair: { insertedToolCallIds: string[]; reason: string } | undefined;
+  runJournalRecords: readonly unknown[];
+  runJournalQuarantineReport: RunJournalQuarantineReport | null;
+
+  // Workspace mutation signals (used by evidence freshness gating)
+  sessionRiskLevel: "normal" | "elevated";
+  workspaceMutationCount: number;
+
   // Model control
   setModel(model: Model): Promise<void>;
   setThinkingLevel(level: ThinkingLevel): void;
@@ -180,6 +193,24 @@ unsubscribe();
 session = runtime.session;
 unsubscribe = session.subscribe(() => {});
 ```
+
+### Run Termination and Replay Binding
+
+Every real AgentSession run emits a `session_termination` event and exposes the latest value as `session.lastTermination`. The typed record includes `kind`, `provider`, `model`, retry flags, `causeCode`, `nextAction`, and `runId`; persisted sessions also fsync lifecycle records to `<session>.runjournal`.
+
+To share evidence freshness ordering with runtime repairs and late tool settlements, pass the same optional replay ledger to the session and `VerifiedEvidenceExecutor`:
+
+```typescript
+const ledger = new ReplayLedgerManager(goalId, ledgerPath);
+const { session } = await createAgentSession({
+  replayLedger: ledger,
+  replayGoalId: goalId,
+  replayLaneId: laneId,
+});
+const executor = new VerifiedEvidenceExecutor({ store, ledger });
+```
+
+`transcript_repaired`, `tool_timeout`, `tool_late_settlement`, and `workspace_mutation` use that ledger. A receipt at or before a later relevant workspace mutation is blocked by `EvidenceGate`.
 
 ### Prompting and Message Queueing
 
@@ -315,7 +346,7 @@ session.subscribe((event) => {
       // event.toolResults: tool results from this turn
       break;
     
-    // Session events (queue, compaction, retry)
+    // Session events (queue, compaction, retry, termination, workspace mutation)
     case "queue_update":
       console.log(event.steering, event.followUp);
       break;
@@ -323,6 +354,12 @@ session.subscribe((event) => {
     case "compaction_end":
     case "auto_retry_start":
     case "auto_retry_end":
+      break;
+    case "session_termination":
+      // event.termination: latest session termination record
+      break;
+    case "workspace_mutation":
+      // Emitted when a late-settling potentially-writing tool may have mutated the workspace
       break;
   }
 });
@@ -1091,6 +1128,122 @@ RPC mode is preferred when:
 - You want process isolation
 - You're building a language-agnostic client
 
+## Evidence and Verification
+
+Execution-bound evidence is an optional, application-driven layer. It records a declared verification command and reported outcome between two artifact-set snapshots, then binds that record to a tamper-evident ledger. `VerifiedEvidenceExecutor` never executes the declared command. The opt-in `executeVerifiedBash()` adapter invokes caller-supplied `BashOperations`; `executeVerifiedLocalBash()` instead derives the shell identity and runner from OMK's built-in local backend. The default CLI and AgentSession bash paths remain unverified. The repository CI workflow is the sole built-in callsite: it runs the release-consistency verifier through the local adapter.
+
+### Recorded and invoked inputs
+
+| Input | SDK behavior |
+|-------|--------------|
+| `request.command` (`EvidenceCommandDescriptor`) | Validates, hashes, and records the structured descriptor; never executes it |
+| `request.executor` (`"bash-tool" \| "ci-runner" \| "mcp" \| "internal"`) | Records a label only |
+| `request.workspaceScope` (`WorkspaceScope`) | Captures the selected artifact set before and after the callback |
+| `request.execute` | Invokes your callback; your application owns its implementation and truthfulness |
+| `executeVerifiedBash()` | Passes the exact shell script to injected `BashOperations`; the caller supplies the matching shell identity and trusts the runner |
+| `executeVerifiedLocalBash()` | Resolves OMK's local shell identity, creates the matching local `BashOperations`, and delegates to `executeVerifiedBash()` |
+
+### Runner honesty is a trust boundary
+
+The SDK cannot prove that a callback or injected runner executed what it reported. A direct `VerifiedEvidenceExecutor` callback must execute the exact descriptor, normalize the disposition, and return already-redacted `Uint8Array` output.
+
+`executeVerifiedBash()` handles the mechanical shell adapter contract:
+
+- records a `kind: "shell"` descriptor using the same script passed to `BashOperations.exec()`,
+- maps exit, timeout, and abort states to receipt dispositions,
+- retains a rolling 128 KiB combined-output tail, applies OMK's high-confidence text redaction, then keeps the final 64 KiB, and
+- records the combined `BashOperations` stream as receipt `stdout`; receipt `stderr` is empty because that interface does not expose separate channels.
+
+The policy is best-effort masking, not DLP. A credential spanning the rolling-window cut may lose matching context, although receipts persist only the resulting digest and byte count. The runner, declared shell identity, environment, remote execution behavior, and any runner-owned spill files remain caller trust boundaries. The script is stored in the receipt after credential-shaped preflight, so keep secrets out of command strings.
+
+Injected runners must follow the built-in terminal protocol: return an integer exit code, throw `Error("aborted")` for abort, or throw an error whose message starts with `timeout:`. Other failures propagate without a receipt; `null` or non-integer exit codes fail closed with `VerifiedBashAdapterError`.
+
+`executeVerifiedLocalBash()` removes the caller-declared shell mismatch by resolving the descriptor shell and local backend from the same shell setting. It does not bind the inherited environment, prove runner honesty, or provide OS isolation.
+
+### First-party CI callsite
+
+`.github/workflows/ci.yml` invokes the compiled `dist/verify-ci.js` entry after the normal repository check. That entry runs only `node scripts/check-release-consistency.mjs` through `executeVerifiedLocalBash()` with `executor: "ci-runner"`, applies a strict `EvidenceGate`, writes receipts, ledger, and report under `.omk/ci-evidence`, and returns a non-zero process exit when the gate is blocked. CI uploads that directory as `verified-release-consistency`.
+
+This callsite does not wrap the full build, check, or test suite and does not enable receipts for interactive, RPC, or SDK-created AgentSession bash calls. Its workspace freshness scope is limited to the root and coding-agent package manifests.
+
+### Execution ordering
+
+`VerifiedEvidenceExecutor.execute(request)` runs, in order:
+
+1. before artifact-set snapshot (`workspaceBefore`)
+2. your callback (`await request.execute()`)
+3. after artifact-set snapshot (`workspaceAfter`)
+4. replay-ledger `append` + `persist()`
+5. envelope binding to the ledger event (`seq`, `eventHash`)
+6. no-overwrite store publish (hard-link; cannot replace an existing receipt)
+
+Ledger and receipt publication are fail-closed but not one filesystem transaction. A failure after `ledger.persist()` and before publication can leave a dangling ledger event; a failure after hard-link publication can leave a readable receipt even though `execute()` rejects. Reconcile the ledger and store before retrying an explicit receipt ID.
+
+### Freshness, ledger load, and store hardening
+
+- **Freshness** compares only the caller-selected artifact set (`WorkspaceScope.artifactPaths`). It issues no Git command and carries no Git fingerprint.
+- **Ledger**: `ReplayLedgerManager` verifies an existing ledger on construction (sequence order, prev-hash chain, payload hash, event hash) and **fails closed** on any violation.
+- **Store**: `EvidenceReceiptStore` uses an owner-only directory, symlink rejection, no-overwrite hard-link publication, and identity rechecks to detect observed path replacement. These checks assume same-UID path mutation is quiescent; they are **not** filesystem sandbox isolation.
+
+### Receipt policy
+
+`EvidenceGate` (default `receiptMode: "prefer"`) gates a `TaskContract` against its satisfied receipts. Pass `executor.createGateOptions()` so the gate resolves receipts, ledger events, and workspace fingerprints from the same store and ledger.
+
+| Mode | Soft missing data | Tamper-grade mismatch | Legacy `hash` / `command` |
+|------|-------------------|-----------------------|----------------------------|
+| `strict` | blocked | blocked | n/a |
+| `prefer` (default) | conditional | blocked | n/a |
+| `legacy` | receipt checks skipped | receipt checks skipped | checked by legacy options (enabled by default) |
+
+Soft missing data means no resolver was supplied or a resolver returned `undefined`. Resolver exceptions are hard failures in both `strict` and `prefer`. The resolver from `createGateOptions()` calls `EvidenceReceiptStore.read()`, so a claimed receipt ID that has no stored file throws and blocks the gate.
+
+Tamper-grade mismatches include: receipt ID, goal, or claim mismatch; schema version ≠ 3; status not `passed` or `exitCode` ≠ 0; command-SHA mismatch; lane mismatch; artifact-changed-after-verification; and ledger-binding mismatch.
+
+`createGateOptions()` returns three resolvers bound to the executor's own store and ledger: `resolveReceipt` (read a stored receipt), `resolveLedgerEvent` (find a chain event by `seq`), and `captureWorkspaceFingerprint` (snapshot the selected artifact set). The gate validates every returned value.
+
+### Integration example
+
+```typescript
+import {
+  EvidenceGate, EvidenceReceiptStore, executeVerifiedLocalBash,
+  ReplayLedgerManager, TaskContractBuilder, VerifiedEvidenceExecutor,
+  type WorkspaceScope,
+} from "open-multi-agent-kit";
+
+const goalId = "goal-123";
+const claim = "repository checks passed";
+const cwd = process.cwd();
+const workspaceScope: WorkspaceScope = { root: cwd, artifactPaths: ["packages/coding-agent/src/index.ts"] };
+
+const store = new EvidenceReceiptStore("/secure/receipts");
+const ledger = new ReplayLedgerManager(goalId, "/secure/ledger.jsonl");
+const executor = new VerifiedEvidenceExecutor({ store, ledger });
+
+const { evidenceMetadata } = await executeVerifiedLocalBash({
+  evidenceExecutor: executor,
+  goalId,
+  claim,
+  script: "npm run check",
+  cwd,
+  timeoutMs: 30_000,
+  workspaceScope,
+});
+
+const contract = new TaskContractBuilder(goalId)
+  .setClaim(claim)
+  .addRequiredEvidence({
+    claim, category: "feature",
+    receiptId: evidenceMetadata.receiptId, receiptSchemaVersion: 3,
+    receiptCommandSha256: evidenceMetadata.receiptCommandSha256,
+  })
+  .updateEvidenceStatus(claim, "satisfied")
+  .setVerdict("pass")
+  .build();
+
+const result = new EvidenceGate(executor.createGateOptions()).check(contract);
+// result.status: "open" | "conditional" | "blocked"
+```
+
 ## Exports
 
 The main entry point exports:
@@ -1098,7 +1251,9 @@ The main entry point exports:
 ```typescript
 // Factory
 createAgentSession
+createAgentSessionFromServices
 createAgentSessionRuntime
+createAgentSessionServices
 AgentSessionRuntime
 
 // Auth and Models
@@ -1122,16 +1277,98 @@ createCodingTools
 createReadOnlyTools
 createReadTool, createBashTool, createEditTool, createWriteTool
 createGrepTool, createFindTool, createLsTool
+createLocalBashOperations
+
+// Compaction (programmatic primitives)
+calculateContextTokens, compact, createCompactionEnvelope,
+createCompactionHysteresisConfig, createCompactionHysteresisState,
+createCompactionSourceIdentity, createCompactionTransaction,
+createSessionRevisionToken, decideCompactionCommit, estimateTokens,
+evaluateCompactionBarrier, findCutPoint, findTurnStartIndex,
+generateBranchSummary, generateSummary, getLastAssistantUsage,
+prepareBranchEntries, serializeConversation, shouldCompact, stepCompactionHysteresis,
+validateCompactionEnvelope
+
+// Context-budget v2 and reserved-token budget
+planPromptContextBudgetV2, applyContextCacheInvalidation,
+createMemoryContextBudgetCacheProviderV2, buildContextBudgetPlanCacheKeyV2,
+buildContextBudgetMaterializedRepresentationCacheKeyV2, createContextBudgetCacheKeyBaseV2,
+createContextCacheInvalidationSnapshot, serializeContextCacheSnapshot,
+CONTEXT_BUDGET_POLICY_VERSION_V2
+computeReservedTokenBudget, estimateToolResultReserve, ReservedTokenBudgetError
+
+// Run journal and session termination
+RunJournalStore, appendRunJournalRecordDurably, writeQuarantineBytesDurably,
+classifySessionTermination, formatSessionTermination, SessionTerminationError
+
+// Execution-bound evidence (optional, application-driven verification receipts)
+EvidenceReceiptStore
+ReplayLedgerManager
+EvidenceGate
+FailClosedMergeGate
+TaskContractBuilder
+VerifiedEvidenceExecutor
+VerifiedEvidenceExecutorError
+executeVerifiedBash
+executeVerifiedLocalBash
+VERIFIED_BASH_REDACTION_POLICY_ID
+VerifiedBashAdapterError
+redactCommandDescriptor
+createCommandHmacBinder
+EVIDENCE_COMMAND_REDACTION_POLICY_ID
+MAX_COMMAND_REDACTION_PLACEHOLDERS
+parseCommandHmacBinding
+parseCommandRedactionSummary
+CommandRedactionError
 
 // Types
 type CreateAgentSessionOptions
 type CreateAgentSessionResult
+type CreateAgentSessionRuntimeFactory
+type CreateAgentSessionRuntimeResult
+type CreateAgentSessionServicesOptions
 type ExtensionFactory
 type ExtensionAPI
 type ToolDefinition
 type Skill
 type PromptTemplate
 type Tool
+type CompactionEnvelope
+type CompactionTransaction
+type CompactionHysteresisConfig
+type CompactionHysteresisState
+type CompactionBarrierResult
+type CompactionCommitDecision
+type ContextBudgetCacheProviderV2
+type ContextCacheInvalidationEvent
+type ContextCacheInvalidationSnapshot
+type ReservedTokenBudgetInput
+type ReservedTokenBudgetResult
+type RunJournalQuarantineReport
+type SessionTermination
+type SessionTerminationCause
+type SessionTerminationKind
+type ToolSchedulerSetting
+type AgentRuntimeSettings
+type VerifiedBashExecutionRequest
+type VerifiedLocalBashExecutionRequest
+type EvidenceGateOptions
+type VerifiedEvidenceExecutionRequest
+type VerifiedEvidenceExecutionResult
+type VerifiedEvidenceExecutionOutcome
+type EvidenceReceiptMode
+type TaskContract
+type EvidenceCommandDescriptor
+type WorkspaceScope
+type CommandRedactionPlaceholder
+type CommandRedactionSummary
+type EvidenceReceipt
+type EvidenceReceiptLedgerBinding
+type ReplayEvent
+type ReplayEventType
+type WorkspaceMutationReplayPayload
+type Sha256Hex
+type ArtifactSetWorkspaceFingerprint
 ```
 
 For extension types, see [extensions.md](extensions.md) for the full API.

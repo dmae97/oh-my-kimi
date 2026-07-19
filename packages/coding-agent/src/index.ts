@@ -77,13 +77,27 @@ export {
 	type BranchPreparation,
 	type BranchSummaryResult,
 	type CollectEntriesResult,
+	type CompactionBarrierResult,
+	type CompactionCommitDecision,
+	type CompactionEnvelope,
+	type CompactionHysteresisConfig,
+	type CompactionHysteresisState,
 	type CompactionResult,
+	type CompactionTransaction,
 	type CutPointResult,
 	calculateContextTokens,
 	collectEntriesForBranchSummary,
 	compact,
+	createCompactionEnvelope,
+	createCompactionHysteresisConfig,
+	createCompactionHysteresisState,
+	createCompactionSourceIdentity,
+	createCompactionTransaction,
+	createSessionRevisionToken,
 	DEFAULT_COMPACTION_SETTINGS,
+	decideCompactionCommit,
 	estimateTokens,
+	evaluateCompactionBarrier,
 	type FileOperations,
 	findCutPoint,
 	findTurnStartIndex,
@@ -94,7 +108,31 @@ export {
 	prepareBranchEntries,
 	serializeConversation,
 	shouldCompact,
+	stepCompactionHysteresis,
+	validateCompactionEnvelope,
 } from "./core/compaction/index.ts";
+export {
+	applyContextCacheInvalidation,
+	buildContextBudgetMaterializedRepresentationCacheKeyV2,
+	buildContextBudgetPlanCacheKeyV2,
+	CONTEXT_BUDGET_POLICY_VERSION_V2,
+	type ContextBudgetCacheProviderV2,
+	type ContextCacheInvalidationEvent,
+	type ContextCacheInvalidationSnapshot,
+	createContextBudgetCacheKeyBaseV2,
+	createContextCacheInvalidationSnapshot,
+	createMemoryContextBudgetCacheProviderV2,
+	planPromptContextBudgetV2,
+	serializeContextCacheSnapshot,
+} from "./core/context-budget-governor-v2.ts";
+export {
+	computeReservedTokenBudget,
+	estimateToolResultReserve,
+	ReservedTokenBudgetError,
+	type ReservedTokenBudgetInput,
+	type ReservedTokenBudgetResult,
+	type ToolResultReserveRequest,
+} from "./core/context-budget-reserved-tokens.ts";
 export { createEventBus, type EventBus, type EventBusController } from "./core/event-bus.ts";
 // Extension system
 export type {
@@ -229,6 +267,14 @@ export {
 	type ReverseSkillSpecInput,
 	routeReverseSkill,
 } from "./core/reverse-skill.ts";
+export {
+	appendRunJournalRecordDurably,
+	type OpenRunJournalStoreOptions,
+	type RunJournalQuarantineReport,
+	RunJournalStore,
+	RunJournalStoreCorruptionError,
+	writeQuarantineBytesDurably,
+} from "./core/run-journal-store.ts";
 // SDK for programmatic usage
 export {
 	AgentSessionRuntime,
@@ -261,6 +307,7 @@ export {
 	type BranchSummaryEntry,
 	buildSessionContext,
 	type CompactionEntry,
+	type CompactionProvenanceDetails,
 	CURRENT_SESSION_VERSION,
 	type CustomEntry,
 	type CustomMessageEntry,
@@ -278,14 +325,25 @@ export {
 	type SessionInfoEntry,
 	SessionManager,
 	type SessionMessageEntry,
+	type SessionQuarantineReport,
 	type ThinkingLevelChangeEntry,
 } from "./core/session-manager.ts";
 export {
+	classifySessionTermination,
+	formatSessionTermination,
+	type SessionTermination,
+	type SessionTerminationCause,
+	SessionTerminationError,
+	type SessionTerminationKind,
+} from "./core/session-termination.ts";
+export {
+	type AgentRuntimeSettings,
 	type CompactionSettings,
 	type ImageSettings,
 	type PackageSource,
 	type RetrySettings,
 	SettingsManager,
+	type ToolSchedulerSetting,
 } from "./core/settings-manager.ts";
 // Skills
 export {
@@ -348,6 +406,68 @@ export {
 	type WriteToolOptions,
 	withFileMutationQueue,
 } from "./core/tools/index.ts";
+export {
+	executeVerifiedBash,
+	executeVerifiedLocalBash,
+	VERIFIED_BASH_REDACTION_POLICY_ID,
+	VerifiedBashAdapterError,
+	type VerifiedBashExecutionRequest,
+	type VerifiedLocalBashExecutionRequest,
+} from "./core/verified-bash-adapter.ts";
+// Execution-bound evidence
+export {
+	type CommandHmacBinder,
+	CommandRedactionError,
+	createCommandHmacBinder,
+	EVIDENCE_COMMAND_REDACTION_POLICY_ID,
+	MAX_COMMAND_REDACTION_PLACEHOLDERS,
+	parseCommandHmacBinding,
+	parseCommandRedactionSummary,
+	type RedactedCommandDescriptor,
+	redactCommandDescriptor,
+} from "./guardrails/command-redaction.ts";
+export {
+	computeEvidenceCommandSha256,
+	computeEvidenceReceiptCoreSha256,
+	constantTimeSha256Equal,
+	createEvidenceReceipt,
+	evidenceReceiptReplayPayload,
+	isSafeEvidenceReceiptId,
+	isSha256Hex,
+	parseEvidenceReceipt,
+	parseSha256Hex,
+	validateEvidenceReceipt,
+	withEvidenceReceiptEnvelope,
+} from "./guardrails/evidence-receipt.ts";
+export {
+	EvidenceReceiptStore,
+	type EvidenceReceiptStoreFaultStage,
+	type EvidenceReceiptStoreOptions,
+} from "./guardrails/evidence-receipt-store.ts";
+export {
+	EvidenceGate,
+	type EvidenceGateOptions,
+	FailClosedMergeGate,
+	latestRelevantWorkspaceMutationSeq,
+	ReplayLedgerManager,
+	TaskContractBuilder,
+} from "./guardrails/evidence-system.ts";
+export {
+	type VerifiedEvidenceExecutionOutcome,
+	type VerifiedEvidenceExecutionRequest,
+	type VerifiedEvidenceExecutionResult,
+	VerifiedEvidenceExecutor,
+	VerifiedEvidenceExecutorError,
+	type VerifiedEvidenceExecutorOptions,
+	type VerifiedEvidenceMetadata,
+} from "./guardrails/verified-executor.ts";
+export {
+	captureWorkspaceFingerprint,
+	computeGitWorkspaceDirtySha256,
+	computeGitWorkspaceManifestSha256,
+	computeWorkspaceManifestSha256,
+	parseWorkspaceFingerprint,
+} from "./guardrails/workspace-fingerprint.ts";
 // Main entry point
 export { type MainOptions, main } from "./main.ts";
 // Run modes for programmatic SDK usage
@@ -415,6 +535,32 @@ export {
 	Theme,
 	type ThemeColor,
 } from "./modes/interactive/theme/theme.ts";
+export type {
+	ArtifactSetWorkspaceFingerprint,
+	ArtifactState,
+	CommandHmacBinding,
+	CommandRedactionPlaceholder,
+	CommandRedactionPlaceholderType,
+	CommandRedactionSummary,
+	EvidenceCommandDescriptor,
+	EvidenceExecutor,
+	EvidenceItem,
+	EvidenceReceipt,
+	EvidenceReceiptDisposition,
+	EvidenceReceiptLedgerBinding,
+	EvidenceReceiptMode,
+	FileArtifactState,
+	GitWorkspaceFingerprint,
+	GitWorkspaceState,
+	MissingArtifactState,
+	ReplayEvent,
+	ReplayEventType,
+	Sha256Hex,
+	TaskContract,
+	WorkspaceFingerprint,
+	WorkspaceMutationReplayPayload,
+	WorkspaceScope,
+} from "./types/evidence.ts";
 // Clipboard utilities
 export { copyToClipboard } from "./utils/clipboard.ts";
 export { parseFrontmatter, stripFrontmatter } from "./utils/frontmatter.ts";

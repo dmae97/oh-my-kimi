@@ -15,6 +15,8 @@ import { buildInitialMessage } from "./cli/initial-message.ts";
 import { listModels } from "./cli/list-models.ts";
 import { selectSession } from "./cli/session-picker.ts";
 import { handleCodexBarQuotaCommand } from "./codexbar-cli.ts";
+import { runDoctorProviderCli } from "./commands/doctor-provider-cli.ts";
+import { runSessionDoctorCli } from "./commands/session-doctor-cli.ts";
 import { ENV_SESSION_DIR, expandTildePath, getAgentDir, getPackageDir, VERSION } from "./config.ts";
 import { type CreateAgentSessionRuntimeFactory, createAgentSessionRuntime } from "./core/agent-session-runtime.ts";
 import {
@@ -496,6 +498,18 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 
 	if (await handleCodexBarQuotaCommand(args)) {
+		return;
+	}
+
+	const sessionDoctor = await runSessionDoctorCli(args);
+	if (sessionDoctor.handled) {
+		process.exitCode = sessionDoctor.exitCode;
+		return;
+	}
+
+	const doctorProvider = await runDoctorProviderCli(args);
+	if (doctorProvider.handled) {
+		process.exitCode = doctorProvider.exitCode;
 		return;
 	}
 

@@ -141,6 +141,8 @@ To share extensions via npm or git as omk packages, see [packages.md](packages.m
 |---------|---------|
 | `open-multi-agent-kit` | Extension types (`ExtensionAPI`, `ExtensionContext`, events) |
 | `typebox` | Schema definitions for tool parameters |
+| `omk-agent-core` | General agent framework types and utilities |
+| `omk-agent-core/node` | Node-specific `omk-agent-core` entry points (use when you need the Node runtime surface) |
 | `omk-ai` | AI utilities (`StringEnum` for Google-compatible enums) |
 | `omk-tui` | TUI components for custom rendering |
 
