@@ -17,10 +17,10 @@
 - Added typed termination, incomplete-run recovery, and `omk session doctor`, including dry-run repair for unambiguous recoverable state only.
 - Added provider-origin-aware `omk provider doctor` diagnostics with sanitized Level 0–2 probes for native, custom OpenAI-compatible, and local-proxy endpoints.
 
-### Local freeze
+### Notes
 
-- The `0.90.9` workspace snapshot is locally frozen and unpublished. Local build/check, keyless workspace tests, npm packs, isolated npm/Bun installs, and the Linux x64 Bun binary/archive passed; live-provider and other-OS coverage remain outside this freeze.
-- Publication, push, tag, dist-tag, and trusted-publisher mutations remain blocked pending authoritative WORM release infrastructure.
+- Published to npm as `open-multi-agent-kit@0.90.9` (lockstep with `omk-ai`, `omk-agent-core`, and `omk-tui` at `0.90.9`); prebuilt binaries are attached to the GitHub release.
+- Verification boundary: build/check and the keyless workspace suite passed; live-provider and other-OS coverage remain outside this release. Validate existing integrations against your workload.
 
 ## [0.90.8] - 2026-07-13
 

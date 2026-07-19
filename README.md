@@ -19,7 +19,7 @@
 <p align="center">
   <a href="https://discord.com/invite/3cU7Bz4UPx"><img alt="Discord" src="https://img.shields.io/badge/discord-community-5865F2?style=flat-square&logo=discord&logoColor=white" /></a>
   <a href="https://www.npmjs.com/package/open-multi-agent-kit"><img alt="npm" src="https://img.shields.io/npm/v/open-multi-agent-kit?style=flat-square" /></a>
-  <a href="https://github.com/dmae97/omk/releases/tag/v0.90.8"><img alt="Release" src="https://img.shields.io/badge/release-v0.90.8-00d7ff?style=flat-square" /></a>
+  <a href="https://github.com/dmae97/omk/releases/tag/v0.90.9"><img alt="Release" src="https://img.shields.io/badge/release-v0.90.9-00d7ff?style=flat-square" /></a>
 </p>
 
 > New issues and PRs from new contributors are auto-closed by default. Maintainers review auto-closed issues daily. See [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -130,12 +130,18 @@ Use the minimum necessary skills per turn—usually one to three. A skill is loa
 
 The proof standard is operational: evaluate OMK against your own task completion, verification coverage, setup time, and recovery behavior. We do not claim an unmeasured benchmark win over another harness.
 
-## Local freeze v0.90.9
+## Release v0.90.9
 
-The workspace packages are locally frozen at `0.90.9`; this is not an npm or GitHub release. Local build/check, keyless tests, npm packs, isolated npm/Bun installs, and the Linux x64 Bun binary/archive passed; live-provider and other-OS coverage remain outside this freeze. Publication, push, tag, dist-tag, and trusted-publisher mutations remain blocked pending authoritative WORM release infrastructure.
+This patch release closes every tool turn with exactly one terminal result, adds the deterministic `dag-v2` resource-claim scheduler, execution-bound evidence receipts, transactional compaction, session recovery, and provider diagnostics.
 
-`dag-v2` is the local workspace default; validate it against your workload and preserve `waves-v1` (or set `OMK_TOOL_SCHEDULER=waves-v1`) as the process-local rollback. Run `omk session doctor --session <path|id> --repair --dry-run` before a repair, and use `omk provider doctor <provider-id> --level 0` to inspect provider configuration without a model probe. Package, CLI, config, session, RPC, and SDK compatibility are not newly certified by this freeze; validate existing integrations against the local workspace.
-Local-freeze notes live in [.github/RELEASE_NOTES_v0.90.9.md](.github/RELEASE_NOTES_v0.90.9.md).
+| Area | What changed |
+| Tool turns | Every emitted tool call closes with one terminal result across normal, blocked, aborted, timed-out, failed, and resume paths; missing-result repair is idempotent and duplicate/orphan results fail closed. |
+| Agent loop | The deterministic resource-claim DAG scheduler (`dag-v2`) preserves source-order result artifacts; keep `waves-v1` (or set `OMK_TOOL_SCHEDULER=waves-v1`) as the rollback path. |
+| Evidence | Optional execution-bound evidence receipts bind normalized local command outcomes, workspace/artifact fingerprints, redacted output digests, and replay-ledger state. |
+| Sessions | Transactional compaction behind closed tool turns, typed termination, incomplete-run recovery, and `omk session doctor --session <path\|id> --repair --dry-run`. |
+| Providers | `omk provider doctor <provider-id> --level 0` reports sanitized Level 0–2 diagnostics for native, custom OpenAI-compatible, and local-proxy origins. |
+
+Release notes live in [.github/RELEASE_NOTES_v0.90.9.md](.github/RELEASE_NOTES_v0.90.9.md). The GitHub release workflow also extracts the canonical release body from [packages/coding-agent/CHANGELOG.md](packages/coding-agent/CHANGELOG.md).
 
 ## Release v0.90.8
 
