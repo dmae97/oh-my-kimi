@@ -8569,19 +8569,18 @@ export class AgentSession {
 				timestamp,
 			});
 		}
-		if (
-			this.#magicKeywordEnabled("workflow") &&
-			containsWorkflow(text) &&
-			this.getActiveToolNames().includes("task")
-		) {
-			keywordNotices.push({
-				role: "custom",
-				customType: "workflow-notice",
-				content: renderWorkflowNotice({ taskBatch: this.settings.get("task.batch") }),
-				display: false,
-				attribution: "user",
-				timestamp,
-			});
+		if (this.#magicKeywordEnabled("workflow") && containsWorkflow(text)) {
+			const activeToolNames = this.getActiveToolNames();
+			if (activeToolNames.includes("task") && activeToolNames.includes("eval")) {
+				keywordNotices.push({
+					role: "custom",
+					customType: "workflow-notice",
+					content: renderWorkflowNotice({ taskBatch: this.settings.get("task.batch") }),
+					display: false,
+					attribution: "user",
+					timestamp,
+				});
+			}
 		}
 		return keywordNotices;
 	}

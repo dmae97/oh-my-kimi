@@ -68,6 +68,8 @@ describe("workflow notice", () => {
 	it("renders the Workflowz trigger with eval orchestration helper guidance", () => {
 		expect(WORKFLOW_NOTICE).toContain("**workflowz** keyword");
 		expect(WORKFLOW_NOTICE).toContain("Author the orchestration in the `eval` tool");
+		expect(WORKFLOW_NOTICE).toContain("JavaScript (`eval`, JavaScript backend):");
+		expect(WORKFLOW_NOTICE).toContain("Use ordinary code between calls to flatten/map/filter");
 		expect(WORKFLOW_NOTICE).toContain("State persists across eval calls");
 		expect(WORKFLOW_NOTICE).toContain("`parallel(thunks)`");
 	});
@@ -76,6 +78,7 @@ describe("workflow notice", () => {
 		const notice = renderWorkflowNotice({ taskBatch: false });
 		expect(notice).toContain("**workflowz** keyword");
 		expect(notice).toContain("Author the orchestration in the `eval` tool");
+		expect(notice).toContain("JavaScript (`eval`, JavaScript backend):");
 		expect(notice).toContain("State persists across eval calls");
 		expect(notice).toContain("`parallel(thunks)`");
 	});
