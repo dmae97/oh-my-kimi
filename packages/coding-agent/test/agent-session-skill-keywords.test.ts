@@ -22,12 +22,20 @@ type ObservedSkillTurn = {
 	texts: string[];
 };
 
-// 4644 gates the workflowz notice on an active `task` tool; keep one active so
+// Workflowz requires active `task` and `eval` tools; keep both active so
 // keyword steering exercises the notice path.
 const mockTaskTool: AgentTool = {
 	name: "task",
 	label: "Task",
 	description: "Mock task tool",
+	parameters: type({}),
+	execute: async () => ({ content: [{ type: "text" as const, text: "ok" }] }),
+};
+
+const mockEvalTool: AgentTool = {
+	name: "eval",
+	label: "Eval",
+	description: "Mock eval tool",
 	parameters: type({}),
 	execute: async () => ({ content: [{ type: "text" as const, text: "ok" }] }),
 };
@@ -53,7 +61,7 @@ describe("AgentSession skill prompt keyword steering", () => {
 			initialState: {
 				model,
 				systemPrompt: ["Test"],
-				tools: [mockTaskTool],
+				tools: [mockTaskTool, mockEvalTool],
 				messages: [],
 			},
 			convertToLlm,
