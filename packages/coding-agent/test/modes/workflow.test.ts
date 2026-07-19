@@ -72,6 +72,8 @@ describe("workflow notice", () => {
 		expect(WORKFLOW_NOTICE).toContain("Use ordinary code between calls to flatten/map/filter");
 		expect(WORKFLOW_NOTICE).toContain("State persists across eval calls");
 		expect(WORKFLOW_NOTICE).toContain("`parallel(thunks)`");
+		expect(WORKFLOW_NOTICE).toContain("a negative value disables the cap");
+		expect(WORKFLOW_NOTICE).toContain("await budget.remaining()");
 	});
 
 	it("renders the same eval notice when task.batch is disabled", () => {
