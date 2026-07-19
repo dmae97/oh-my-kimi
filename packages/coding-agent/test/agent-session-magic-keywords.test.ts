@@ -115,7 +115,7 @@ describe("AgentSession magic keyword settings", () => {
 		]);
 	});
 
-	it("renders workflowz notice for the active task schema", async () => {
+	it("renders the eval-specific workflowz notice", async () => {
 		const created = await createMagicKeywordSession(root);
 		session = created.session;
 		authStorage = created.authStorage;
@@ -126,9 +126,10 @@ describe("AgentSession magic keyword settings", () => {
 
 		const promptMessages = promptSpy.mock.calls[0]![0] as unknown as Array<{ content?: string; customType?: string }>;
 		const notice = promptMessages.find(message => message.customType === "workflow-notice")?.content ?? "";
-		expect(notice).toContain("once per independent subagent");
-		expect(notice).toContain("Do not pass `context` or `tasks[]`");
-		expect(notice).not.toContain("Call `task` once per independent fan-out batch");
+		expect(notice).toContain("Author the orchestration in the `eval` tool");
+		expect(notice).toContain("Every eval call has:");
+		expect(notice).toContain("`parallel(thunks)`");
+		expect(notice).not.toContain("Python backend");
 	});
 
 	it("skips workflowz notice when the task tool is inactive", async () => {
