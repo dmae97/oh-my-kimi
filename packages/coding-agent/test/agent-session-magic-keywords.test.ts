@@ -137,7 +137,8 @@ describe("AgentSession magic keyword settings", () => {
 		expect(notice).toContain("Author the orchestration in the `eval` tool");
 		expect(notice).toContain("Every eval call has:");
 		expect(notice).toContain("`parallel(thunks)`");
-		expect(notice).not.toContain("Python backend");
+		expect(notice).toContain("**Python (`eval`, Python backend):**");
+		expect(notice).toContain("**JavaScript (`eval`, JavaScript backend):**");
 	});
 
 	it("skips workflowz notice when the task tool is inactive", async () => {
