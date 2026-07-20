@@ -54,6 +54,10 @@
     },
     "./grammar.lark": "./src/grammar.lark",
     "./prompt.md": "./src/prompt.md",
+    "./proposal": {
+      "types": "./src/proposal.ts",
+      "import": "./src/proposal.ts"
+    },
     "./*": {
       "types": "./src/*.ts",
       "import": "./src/*.ts"
