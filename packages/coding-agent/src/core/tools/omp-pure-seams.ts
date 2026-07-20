@@ -3,8 +3,9 @@
  *
  * These seams are pure data/proposal-only functions (planning + presentation +
  * hashline parsing). They do NOT touch edit/write/file-mutation paths. The
- * loader is opt-in via OMK_OMP_SEAMS=1 and otherwise throws DISABLED, so the
- * feature is inert in all existing sessions unless explicitly enabled.
+ * loader is enabled by default and opts out via OMK_OMP_SEAMS=0 (ADR-OMP-009);
+ * when disabled it throws DISABLED and tool behavior falls back to the
+ * pre-seam implementation byte-identically.
  *
  * The file is erasable TypeScript: no `enum`, no parameter properties, no `as`,
  * no non-null assertions, no `any` annotations, and no runtime dependencies
@@ -40,12 +41,13 @@ export interface OmpPureSeams {
 }
 
 /**
- * Returns true only when the seams feature is explicitly enabled
- * (OMK_OMP_SEAMS === "1"). Reads `process.env` when no record is supplied.
+ * Returns true unless the seams feature is explicitly disabled
+ * (OMK_OMP_SEAMS === "0"). Enabled by default per ADR-OMP-009.
+ * Reads `process.env` when no record is supplied.
  */
 export function isOmpSeamsEnabled(env?: Record<string, string | undefined>): boolean {
 	const source: Record<string, string | undefined> = env ?? process.env;
-	return source.OMK_OMP_SEAMS === "1";
+	return source.OMK_OMP_SEAMS !== "0";
 }
 
 const VENDOR_SEGMENT = join("vendor", "oh-my-pi");
@@ -105,7 +107,10 @@ export async function loadOmpPureSeams(options?: {
 }): Promise<OmpPureSeams> {
 	const env: Record<string, string | undefined> = options?.env ?? process.env;
 	if (!isOmpSeamsEnabled(env)) {
-		throw new OmpSeamsError("DISABLED", "OMP pure seams are disabled (set OMK_OMP_SEAMS=1 to enable).");
+		throw new OmpSeamsError(
+			"DISABLED",
+			"OMP pure seams are disabled (OMK_OMP_SEAMS=0; unset or set to any other value to enable).",
+		);
 	}
 
 	let vendorDir: string | undefined = options?.vendorDir ?? env.OMK_OMP_VENDOR_DIR;

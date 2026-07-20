@@ -27,22 +27,22 @@ const EXPECTED_MEMBERS = [
 ] as const;
 
 describe("isOmpSeamsEnabled", () => {
-	it("is disabled unless OMK_OMP_SEAMS === '1'", () => {
-		expect(isOmpSeamsEnabled({})).toBe(false);
-		expect(isOmpSeamsEnabled({ OMK_OMP_SEAMS: undefined })).toBe(false);
-		expect(isOmpSeamsEnabled({ OMK_OMP_SEAMS: "0" })).toBe(false);
-		expect(isOmpSeamsEnabled({ OMK_OMP_SEAMS: "true" })).toBe(false);
-		expect(isOmpSeamsEnabled({ OMK_OMP_SEAMS: "yes" })).toBe(false);
+	it("is enabled by default and for any value other than '0' (ADR-OMP-009)", () => {
+		expect(isOmpSeamsEnabled({})).toBe(true);
+		expect(isOmpSeamsEnabled({ OMK_OMP_SEAMS: undefined })).toBe(true);
+		expect(isOmpSeamsEnabled({ OMK_OMP_SEAMS: "1" })).toBe(true);
+		expect(isOmpSeamsEnabled({ OMK_OMP_SEAMS: "true" })).toBe(true);
+		expect(isOmpSeamsEnabled({ OMK_OMP_SEAMS: "yes" })).toBe(true);
 	});
 
-	it("is enabled only for the exact '1' value", () => {
-		expect(isOmpSeamsEnabled({ OMK_OMP_SEAMS: "1" })).toBe(true);
+	it("is disabled only for the exact '0' opt-out value", () => {
+		expect(isOmpSeamsEnabled({ OMK_OMP_SEAMS: "0" })).toBe(false);
 	});
 });
 
 describe("loadOmpPureSeams disabled gate", () => {
-	it("rejects with OmpSeamsError DISABLED when env is empty", async () => {
-		const promise = loadOmpPureSeams({ env: {} });
+	it("rejects with OmpSeamsError DISABLED when OMK_OMP_SEAMS is '0'", async () => {
+		const promise = loadOmpPureSeams({ env: { OMK_OMP_SEAMS: "0" } });
 		await expect(promise).rejects.toBeInstanceOf(OmpSeamsError);
 		await expect(promise).rejects.toMatchObject({ code: "DISABLED" });
 	});

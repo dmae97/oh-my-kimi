@@ -16,6 +16,11 @@ import {
 } from "../src/index.ts";
 import * as shellModule from "../src/utils/shell.ts";
 
+// These tests assert the legacy OMK read/grep presentation format. Pin the
+// OMP seam opt-out (ADR-OMP-009) so they exercise the fallback path; the
+// default-on seam path is covered by omp-seam-wiring.test.ts.
+process.env.OMK_OMP_SEAMS = "0";
+
 // Hosts may have a locale configured that is not installed (e.g. LC_ALL=ko_KR.UTF-8),
 // which makes spawned shells print a setlocale warning on stderr and break exact
 // output assertions below. Pin LC_ALL to the always-available C locale for this file.

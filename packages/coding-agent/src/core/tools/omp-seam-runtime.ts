@@ -1,10 +1,10 @@
 /**
  * Typed runtime facade over the flag-gated OMP pure-seam loader.
  *
- * Wiring boundary for I2 (ADR-OMP-008): when `OMK_OMP_SEAMS=1`, the read and
- * grep tools delegate request validation and output presentation to the
- * vendored OMP pure seams. When the flag is off (default), this module
- * returns undefined and tool behavior is byte-identical to before.
+ * Wiring boundary for I2 (ADR-OMP-008/009): the read and grep tools delegate
+ * request validation and output presentation to the vendored OMP pure seams.
+ * Enabled by default; `OMK_OMP_SEAMS=0` opts out and tool behavior falls back
+ * byte-identically to the pre-seam implementation.
  *
  * The loader exposes unknown-in/unknown-out signatures; all structural
  * assertions live in this single file so tool code stays clean.
@@ -77,9 +77,9 @@ export type OmpSearchPresentResult =
 let cached: Promise<OmpPureSeams> | undefined;
 
 /**
- * Returns the memoized seam set when `OMK_OMP_SEAMS=1`; `undefined` when the
- * flag is off. Loader errors (VENDOR_NOT_FOUND, INVALID_SEAM) propagate to
- * the caller of the returned promise — the flag is an explicit opt-in.
+ * Returns the memoized seam set unless `OMK_OMP_SEAMS=0`; `undefined` when
+ * opted out. Loader errors (VENDOR_NOT_FOUND, INVALID_SEAM) propagate to
+ * the caller of the returned promise.
  */
 export function getOmpSeams(): Promise<OmpPureSeams> | undefined {
 	if (!isOmpSeamsEnabled()) return undefined;

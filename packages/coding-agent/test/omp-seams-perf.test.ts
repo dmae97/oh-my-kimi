@@ -57,7 +57,7 @@ describe("OMP seam benchmark (I2)", () => {
 	it("measures flag-off vs flag-on and writes a JSON report", async () => {
 		const saved = process.env[FLAG];
 		try {
-			delete process.env[FLAG];
+			process.env[FLAG] = "0";
 			const readDef = createReadToolDefinition(dir);
 			const grepDef = createGrepToolDefinition(dir);
 			// warmup
