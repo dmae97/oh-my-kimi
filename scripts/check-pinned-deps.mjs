@@ -4,8 +4,8 @@ import { join, relative } from "node:path";
 const dependencySections = ["dependencies", "devDependencies", "optionalDependencies"];
 const exactVersionPattern = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const ignoredDirectories = new Set([".git", "dist", "node_modules"]);
-// These paths are relative to the scan root; do not blanket-ignore `.omk`.
-const ignoredDirectoryPaths = new Set([".omk/git", ".omk/goals", ".omk/npm"]);
+// These paths are relative to the scan root; keep exclusions exact.
+const ignoredDirectoryPaths = new Set([".omk/git", ".omk/goals", ".omk/npm", join("vendor", "oh-my-pi")]);
 // The pre-existing third-party scratch tree is only the exact `~` child of the scan root.
 const rootScratchDirectory = "~";
 const internalWorkspaceDependencies = new Set(["omk-agent-core", "omk-ai", "omk-tui"]);

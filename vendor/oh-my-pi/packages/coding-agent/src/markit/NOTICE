@@ -1,0 +1,32 @@
+This directory contains an in-house document-to-markdown engine adapted from
+markit-ai (https://github.com/Michaelliv/markit), used under the MIT License.
+
+  Copyright (c) 2026 Michael Liv
+
+Only the converters for the document formats omp supports are ported (pdf,
+docx, pptx, xlsx, epub); the CLI, plugin/provider, and unused converters
+(html, image, audio, plain-text, rss, github, wikipedia, csv, json, yaml,
+ipynb, iwork, zip, xml) were dropped. Legacy binary `.doc`/`.ppt`/`.xls` and
+`.rtf` are routed by the read/fetch tools but have no converter — they surface
+a conversion error, exactly as upstream markit did. Logic is ported faithfully
+so conversion output matches the upstream package.
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

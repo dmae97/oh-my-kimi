@@ -34,6 +34,23 @@ describe("check-pinned-deps root scratch exclusion", () => {
 		expectScannerSuccess(pinnedDepsScript, root);
 	});
 
+	it("excludes the exact imported OMP source tree", () => {
+		const root = createFixture();
+		writePackageJson(join(root, "vendor", "oh-my-pi", "package.json"), {
+			dependencies: { thirdParty: "^1.0.0" },
+		});
+
+		expectScannerSuccess(pinnedDepsScript, root);
+	});
+
+	it("rejects unpinned dependencies in a nested OMP-like path", () => {
+		const root = createFixture();
+		const packageJsonPath = join(root, "workspace", "vendor", "oh-my-pi", "package.json");
+		writePackageJson(packageJsonPath, { dependencies: { thirdParty: "^1.0.0" } });
+
+		expectPinnedDepsFailure(root, packageJsonPath);
+	});
+
 	it("rejects unpinned dependencies in a nested ~ directory", () => {
 		const root = createFixture();
 		const packageJsonPath = join(root, "workspace", "~", "package.json");
@@ -57,6 +74,20 @@ describe("check-ts-relative-imports root scratch exclusion", () => {
 		writeTypescript(join(root, "~", "ignored.ts"));
 
 		expectScannerSuccess(tsImportsScript, root);
+	});
+
+	it("excludes the exact imported OMP source tree", () => {
+		const root = createFixture();
+		writeTypescript(join(root, "vendor", "oh-my-pi", "ignored.ts"));
+
+		expectScannerSuccess(tsImportsScript, root);
+	});
+
+	it("rejects relative JavaScript imports in a nested OMP-like path", () => {
+		const root = createFixture();
+		writeTypescript(join(root, "workspace", "vendor", "oh-my-pi", "bad.ts"));
+
+		expectTypescriptFailure(root);
 	});
 
 	it("rejects relative JavaScript imports in a nested ~ directory", () => {

@@ -1,0 +1,72 @@
+#!/usr/bin/env bun
+
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { $ } from "bun";
+
+const GENERATED_FILE = path.join("src", "embedded-client.generated.txt");
+const DIST_CLIENT_DIR = path.join("dist", "client");
+
+const GENERATE_FLAG = "--generate";
+const RESET_FLAG = "--reset";
+
+// `--reset` restores the checked-in state: an empty file. The runtime treats
+// blank (or any non-base64) content as "no archive embedded" and builds the
+// dashboard from source instead; see src/embedded-client.ts.
+
+async function collectFiles(dir: string): Promise<string[]> {
+	const entries = await fs.readdir(dir, { withFileTypes: true });
+	const files: string[] = [];
+	for (const entry of entries) {
+		const fullPath = path.join(dir, entry.name);
+		if (entry.isDirectory()) {
+			files.push(...(await collectFiles(fullPath)));
+		} else if (entry.isFile()) {
+			files.push(fullPath);
+		}
+	}
+	files.sort((a, b) => a.localeCompare(b));
+	return files;
+}
+
+async function buildArchiveBase64(dir: string): Promise<string> {
+	const files = await collectFiles(dir);
+	const entries: Record<string, Uint8Array> = {};
+	for (const filePath of files) {
+		const relativePath = path.relative(dir, filePath).split(path.sep).join("/");
+		entries[relativePath] = await fs.readFile(filePath);
+	}
+
+	const tempArchivePath = path.join(
+		os.tmpdir(),
+		`omp-stats-client-${Bun.hash(Date.now().toString() + Math.random().toString(16)).toString(16)}.tar.gz`,
+	);
+	try {
+		await Bun.Archive.write(tempArchivePath, entries, { compress: "gzip" });
+		const archiveBytes = await Bun.file(tempArchivePath).bytes();
+		return Buffer.from(archiveBytes).toString("base64");
+	} finally {
+		await fs.rm(tempArchivePath, { force: true });
+	}
+}
+
+async function main(): Promise<void> {
+	if (process.argv.includes(RESET_FLAG)) {
+		await Bun.write(GENERATED_FILE, "");
+		console.log(`Reset ${GENERATED_FILE}`);
+		return;
+	}
+
+	if (!process.argv.includes(GENERATE_FLAG)) {
+		console.log(`Skipping ${GENERATED_FILE}; pass ${GENERATE_FLAG} to build the embedded bundle`);
+		return;
+	}
+
+	await $`bun run build`;
+	const archiveBase64 = await buildArchiveBase64(DIST_CLIENT_DIR);
+	await Bun.write(GENERATED_FILE, archiveBase64);
+	console.log(`Generated ${GENERATED_FILE}`);
+}
+
+await main();

@@ -38,6 +38,7 @@
 			"!**/models.generated.ts",
 			"!packages/mom/data/**/*",
 			"!!**/node_modules",
+			"!!vendor/oh-my-pi",
 			"!!**/pi-extensions"
 		]
 	}
