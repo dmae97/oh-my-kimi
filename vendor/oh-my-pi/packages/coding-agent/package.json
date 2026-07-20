@@ -506,6 +506,14 @@
       "import": "./src/plan-mode/*.ts"
     },
     "./prompts/*": "./src/prompts/*.md",
+    "./pure/read": {
+      "types": "./src/pure/read.ts",
+      "import": "./src/pure/read.ts"
+    },
+    "./pure/search": {
+      "types": "./src/pure/search.ts",
+      "import": "./src/pure/search.ts"
+    },
     "./secrets": {
       "types": "./src/secrets/index.ts",
       "import": "./src/secrets/index.ts"
