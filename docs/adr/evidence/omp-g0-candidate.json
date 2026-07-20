@@ -1,0 +1,544 @@
+{
+  "schemaVersion": 1,
+  "kind": "omp-g0-local-candidate-draft",
+  "status": "DRAFT",
+  "statusDetail": "BLOCKED — U1 requires can1357 upstream acceptance in a named commit before this record may become PROPOSED",
+  "recordedDate": "2026-07-20",
+  "decisionRecord": "docs/adr/ADR-OMP-004.md",
+  "roadmap": "docs/omp-migration-roadmap.md",
+  "authorization": {
+    "g0": "NOT AUTHORIZED",
+    "g1": "NOT AUTHORIZED",
+    "h1": "NOT AUTHORIZED",
+    "productActivation": "TERMINATED",
+    "qualificationStarted": false,
+    "reason": "The public fork route exists in FORK CREATED / BRANCH PENDING state, but the exact candidate has not been pushed, no can1357 pull request has been opened, and can1357 acceptance in a named commit is not evidenced. The candidate remains draft evidence and does not pass U1. Operator acceptance alone cannot open G0; Node 22.19.0 is also unavailable."
+  },
+  "s0": {
+    "status": "ACCEPTED",
+    "shareStatus": "local branch has no configured upstream/tracking ref; no remote publication is claimed or evidenced",
+    "localBranch": "yu/omp-migrate-39c95e5e",
+    "configuredUpstreamTrackingRefAtLocalObservation": null,
+    "commit": "360d5036b58a0547a3d26e8f3b52c1daf24690b6",
+    "tree": "a8efb6013471881fd9ce3678d508215b96a0c839",
+    "parents": [
+      {
+        "role": "OMK first parent",
+        "commit": "1158d6d25230ad68946210aabe548fdf94896594"
+      },
+      {
+        "role": "OMP second parent",
+        "commit": "39c95e5e29b1c8b082059f57421ce445c3dffdd4"
+      }
+    ],
+    "vendorPrefix": "vendor/oh-my-pi",
+    "vendorTree": "256c587a69cd7ae7dc2a9063689db690b4ed741d",
+    "vendorLeafEntries": 5501,
+    "activeProductConsumption": false
+  },
+  "candidate": {
+    "classification": "upstream-derived local Git object durably retained by an authorized local private ref as draft evidence; does not pass U1",
+    "commit": "b6e75dbbc545c815786ecc15d155a332c21cad2b",
+    "tree": "296cfdbb83bbb7db30248864938cd7f456e2b8f5",
+    "parent": "39c95e5e29b1c8b082059f57421ce445c3dffdd4",
+    "subject": "feat(pure): add source-bound OMP seams",
+    "changedPathCount": 10,
+    "contentAddressedImmutable": true,
+    "localPrivateRef": {
+      "name": "refs/omp/candidates/b6e75dbbc545c815786ecc15d155a332c21cad2b",
+      "target": "b6e75dbbc545c815786ecc15d155a332c21cad2b",
+      "authorized": true,
+      "scope": "durable local private retention only",
+      "publicationOrAcceptanceEvidence": false
+    },
+    "retentionAtLocalObservation": {
+      "date": "2026-07-20",
+      "mechanism": "authorized local private Git ref; detached worktree HEAD is supplementary",
+      "localPrivateRef": "refs/omp/candidates/b6e75dbbc545c815786ecc15d155a332c21cad2b",
+      "localPrivateRefTarget": "b6e75dbbc545c815786ecc15d155a332c21cad2b",
+      "worktree": "/tmp/omp-u1-pure-seams",
+      "head": "b6e75dbbc545c815786ecc15d155a332c21cad2b",
+      "detachedWorktreeClean": true,
+      "normalBranchOrRefObserved": true,
+      "durability": "durable local private-ref retention; the public fork route exists, but no remote durability or publication of the candidate is claimed"
+    },
+    "can1357PublicationAcceptanceEvidence": "The local private ref is retention only. The public fork is a named repository handoff route in FORK CREATED / BRANCH PENDING state; the candidate branch was not pushed, no pull request was opened, and no can1357 publication or acceptance is claimed or evidenced.",
+    "appliedToS0VendorTree": false,
+    "changedPaths": [
+      {
+        "path": "packages/coding-agent/package.json",
+        "change": "modified",
+        "mode": "100644",
+        "parentBlob": "efab2f1a18b93f125f502da954680fed10c2435d",
+        "candidateBlob": "9b71de0581b5a86cb56e340992b7f16abb6aea09"
+      },
+      {
+        "path": "packages/coding-agent/src/pure/read.ts",
+        "change": "added",
+        "mode": "100644",
+        "parentBlob": null,
+        "candidateBlob": "2a98c358a4ee31f873d4a2bbe4e7b39590da718e"
+      },
+      {
+        "path": "packages/coding-agent/src/pure/search.ts",
+        "change": "added",
+        "mode": "100644",
+        "parentBlob": null,
+        "candidateBlob": "b9f03d5920a74be4c6b826a0efaa9a05d5e489d2"
+      },
+      {
+        "path": "packages/coding-agent/test/pure/node-import.mjs",
+        "change": "added",
+        "mode": "100644",
+        "parentBlob": null,
+        "candidateBlob": "d9ee7e56beb0a89cae7e11df5c6006dcaccc50f8"
+      },
+      {
+        "path": "packages/coding-agent/test/pure/read.test.ts",
+        "change": "added",
+        "mode": "100644",
+        "parentBlob": null,
+        "candidateBlob": "eb6e0ca44ae2ac994778f33679063f4964cb2755"
+      },
+      {
+        "path": "packages/coding-agent/test/pure/search.test.ts",
+        "change": "added",
+        "mode": "100644",
+        "parentBlob": null,
+        "candidateBlob": "4dadb05f4d8db7a56a357b7075bd0fd8fc85de7c"
+      },
+      {
+        "path": "packages/hashline/package.json",
+        "change": "modified",
+        "mode": "100644",
+        "parentBlob": "7c420409bf52dcf2ae7a34eb93c52a86ef81dbd6",
+        "candidateBlob": "11ed1807e3c81731c2e5b7e85fc3ec538968b7d7"
+      },
+      {
+        "path": "packages/hashline/src/proposal-types.ts",
+        "change": "added",
+        "mode": "100644",
+        "parentBlob": null,
+        "candidateBlob": "a773124cda9af48f9d78fdbb7bf5297f585714da"
+      },
+      {
+        "path": "packages/hashline/src/proposal.ts",
+        "change": "added",
+        "mode": "100644",
+        "parentBlob": null,
+        "candidateBlob": "7aa7deb6dac2ac08f75983292d5413515d0236e3"
+      },
+      {
+        "path": "packages/hashline/test-node/proposal.test.mjs",
+        "change": "added",
+        "mode": "100644",
+        "parentBlob": null,
+        "candidateBlob": "d8a58d4c58ef65b05b8be636b747d84c5d82816d"
+      }
+    ]
+  },
+  "publicationHandoffRoute": {
+    "status": "FORK CREATED / BRANCH PENDING",
+    "authorizedAction": "create public fork only",
+    "repository": "https://github.com/dmae97/oh-my-pi",
+    "visibility": "PUBLIC",
+    "repositoryIdentityObservation": {
+      "isFork": true,
+      "defaultBranch": "main",
+      "publicHeadSymref": "refs/heads/main",
+      "publicHeadCommit": "39c95e5e29b1c8b082059f57421ce445c3dffdd4",
+      "publicMainCommit": "39c95e5e29b1c8b082059f57421ce445c3dffdd4",
+      "claimBoundary": "This records only the public repository identity, the isFork metadata value, the default branch, and public HEAD/main resolution. It does not claim a specific parent repository relationship."
+    },
+    "localCloneCreated": false,
+    "localRemoteAdded": false,
+    "candidateBranch": {
+      "status": "NOT PUSHED",
+      "name": null,
+      "requiredExactCommit": "b6e75dbbc545c815786ecc15d155a332c21cad2b",
+      "candidateCommitPublishedByThisRoute": false
+    },
+    "pullRequest": {
+      "status": "NOT OPENED",
+      "targetRepository": "https://github.com/can1357/oh-my-pi"
+    },
+    "can1357Acceptance": {
+      "evidenced": false,
+      "acceptedNamedCommit": null
+    },
+    "nextPrerequisites": [
+      "push exact candidate b6e75dbbc545c815786ecc15d155a332c21cad2b to a named branch in the public fork",
+      "open a pull request from that branch to can1357 upstream",
+      "await acceptance in a named can1357 upstream commit",
+      "revalidate the accepted object, parent, tree, exact path/blob inventory, exports, source blobs, and license identity"
+    ],
+    "secretBoundary": "No secret, token, or credential value was accessed or recorded during this evidence refresh."
+  },
+  "source": {
+    "upstreamRepository": "https://github.com/can1357/oh-my-pi.git",
+    "auditedUpstreamCommit": "39c95e5e29b1c8b082059f57421ce445c3dffdd4",
+    "derivation": "The candidate is one local commit with exactly ten changed paths on the audited upstream commit.",
+    "upstreamPublicationOrAcceptanceClaim": "No can1357 publication or acceptance is evidenced; the public fork establishes only the bounded branch-pending handoff route.",
+    "remoteObservations": [
+      {
+        "date": "2026-07-20",
+        "method": "public read-only git ls-remote",
+        "command": "git ls-remote --symref https://github.com/can1357/oh-my-pi.git HEAD refs/heads/main",
+        "observedHeadSymref": "refs/heads/main",
+        "observedHeadCommit": "39c95e5e29b1c8b082059f57421ce445c3dffdd4",
+        "observedMainCommit": "39c95e5e29b1c8b082059f57421ce445c3dffdd4",
+        "claimBoundary": "The output did not contain b6e75dbbc545c815786ecc15d155a332c21cad2b because the command queried only public HEAD and main, not that local commit through a public ref. This does not establish absence from every public ref and does not evidence publication or acceptance."
+      },
+      {
+        "date": "2026-07-20",
+        "repository": "https://github.com/dmae97/oh-my-pi.git",
+        "method": "public read-only git ls-remote",
+        "command": "git ls-remote --symref https://github.com/dmae97/oh-my-pi.git HEAD refs/heads/main",
+        "observedHeadSymref": "refs/heads/main",
+        "observedHeadCommit": "39c95e5e29b1c8b082059f57421ce445c3dffdd4",
+        "observedMainCommit": "39c95e5e29b1c8b082059f57421ce445c3dffdd4",
+        "claimBoundary": "This proves only the public fork HEAD/main resolution at the bounded observation; it does not evidence the candidate through a public branch, a pull request, or can1357 acceptance."
+      },
+      {
+        "date": "2026-07-20",
+        "repository": "https://github.com/dmae97/oh-my-pi",
+        "method": "bounded gh repository metadata observation",
+        "visibility": "PUBLIC",
+        "isFork": true,
+        "defaultBranch": "main",
+        "claimBoundary": "This records public repository identity, isFork: true, and default branch main only. It does not claim a specific parent repository relationship, candidate publication, a pull request, or can1357 acceptance."
+      }
+    ],
+    "packages": [
+      {
+        "name": "@oh-my-pi/pi-coding-agent",
+        "version": "17.0.5",
+        "manifestPath": "packages/coding-agent/package.json",
+        "manifestBlob": "9b71de0581b5a86cb56e340992b7f16abb6aea09",
+        "license": "MIT"
+      },
+      {
+        "name": "@oh-my-pi/hashline",
+        "version": "17.0.5",
+        "manifestPath": "packages/hashline/package.json",
+        "manifestBlob": "11ed1807e3c81731c2e5b7e85fc3ec538968b7d7",
+        "license": "MIT"
+      }
+    ]
+  },
+  "license": {
+    "scope": "candidate root",
+    "spdx": "MIT",
+    "path": "LICENSE",
+    "blob": "cc0c5aa7c10d87c5142af1274b37da95c005184d",
+    "sha256": "545636e19386d3d4e0ae6d77354527499999c3ebfbca61b9fa5aa4ead7c0b308",
+    "bytes": 1106,
+    "unchangedFromParent": true,
+    "recomputedFromCandidateObject": true
+  },
+  "exports": [
+    {
+      "package": "@oh-my-pi/pi-coding-agent",
+      "subpath": "./pure/read",
+      "manifestBlob": "9b71de0581b5a86cb56e340992b7f16abb6aea09",
+      "target": "./src/pure/read.ts",
+      "sourcePath": "packages/coding-agent/src/pure/read.ts",
+      "sourceBlob": "2a98c358a4ee31f873d4a2bbe4e7b39590da718e",
+      "runtimeImports": [],
+      "valueExports": [
+        "READ_DEFAULT_OFFSET",
+        "READ_DEFAULT_LIMIT",
+        "READ_MAX_LIMIT",
+        "planRead(input: unknown): ReadPlanResult",
+        "presentRead(plan: ReadPlan, file: ReadHostFile): ReadPresentResult"
+      ],
+      "typeExports": [
+        "ReadIssueCode",
+        "ReadIssueField",
+        "ReadIssue",
+        "ReadPlan",
+        "ReadPlanResult",
+        "ReadLineDigest",
+        "ReadHostFile",
+        "ReadLineRecord",
+        "ReadWindow",
+        "ReadPresentation",
+        "ReadDigestConflict",
+        "ReadPresentResult"
+      ]
+    },
+    {
+      "package": "@oh-my-pi/pi-coding-agent",
+      "subpath": "./pure/search",
+      "manifestBlob": "9b71de0581b5a86cb56e340992b7f16abb6aea09",
+      "target": "./src/pure/search.ts",
+      "sourcePath": "packages/coding-agent/src/pure/search.ts",
+      "sourceBlob": "b9f03d5920a74be4c6b826a0efaa9a05d5e489d2",
+      "runtimeImports": [],
+      "valueExports": [
+        "SEARCH_DEFAULT_PATH",
+        "SEARCH_DEFAULT_CONTEXT",
+        "SEARCH_DEFAULT_LIMIT",
+        "planSearch(input: unknown): SearchPlanResult",
+        "presentSearch(plan: SearchPlan, matches: readonly SearchHostMatch[], sourceDigests?: readonly SearchSourceDigest[]): SearchPresentResult"
+      ],
+      "typeExports": [
+        "SearchIssueCode",
+        "SearchIssueField",
+        "SearchIssue",
+        "SearchPlan",
+        "SearchPlanResult",
+        "SearchHostMatch",
+        "SearchSourceDigest",
+        "SearchMatchRecord",
+        "SearchGroup",
+        "SearchConflict",
+        "SearchPresentation",
+        "SearchPresentResult"
+      ]
+    },
+    {
+      "package": "@oh-my-pi/hashline",
+      "subpath": "./proposal",
+      "manifestBlob": "11ed1807e3c81731c2e5b7e85fc3ec538968b7d7",
+      "target": "./src/proposal.ts",
+      "sourcePath": "packages/hashline/src/proposal.ts",
+      "sourceBlob": "7aa7deb6dac2ac08f75983292d5413515d0236e3",
+      "typeSourcePath": "packages/hashline/src/proposal-types.ts",
+      "typeSourceBlob": "a773124cda9af48f9d78fdbb7bf5297f585714da",
+      "runtimeImports": [],
+      "typeOnlyImports": [
+        "./proposal-types.js"
+      ],
+      "valueExports": [
+        "HashProposalEncodingError extends Error",
+        "hashProposalSource(text: string): Promise<string>",
+        "hashProposalLine(text: string): Promise<string>",
+        "parseHashlineProposal(untrustedText: string): HashProposalParseResult"
+      ],
+      "typeExports": [
+        "HashProposalErrorCode",
+        "HashProposalError",
+        "HashProposalParseResult",
+        "HashAnchor",
+        "HashProposalFileExpectation",
+        "HashProposalLineExpectation",
+        "HashProposalReplaceEdit",
+        "HashProposalDeleteEdit",
+        "HashProposalInsertBeforeEdit",
+        "HashProposalInsertAfterEdit",
+        "HashProposalInsertHeadEdit",
+        "HashProposalInsertTailEdit",
+        "HashProposalReplaceBlockEdit",
+        "HashProposalDeleteBlockEdit",
+        "HashProposalInsertAfterBlockEdit",
+        "HashProposalRemoveEdit",
+        "HashProposalMoveEdit",
+        "HashProposalEdit",
+        "HashProposalSection",
+        "HashProposal"
+      ]
+    }
+  ],
+  "runtimeAvailability": {
+    "formalQualificationLanes": [
+      {
+        "node": "22.19.0",
+        "availableAtLocalObservation": false,
+        "developmentCheck": "NOT RUN in this recovery",
+        "qualification": "BLOCKED"
+      },
+      {
+        "node": "24.13.0",
+        "availableAtLocalObservation": true,
+        "developmentCheck": "PASS reported before this recovery; not formal G1/H1 evidence",
+        "qualification": "NOT STARTED"
+      }
+    ],
+    "additionalDevelopmentObservation": {
+      "node": "22.22.3",
+      "availableAtLocalObservation": true,
+      "developmentCheck": "PASS reported before this recovery; not a substitute for Node 22.19.0",
+      "qualification": "NOT STARTED"
+    },
+    "executionInThisRecovery": false
+  },
+  "ownerHandles": {
+    "decision": "operator:user",
+    "candidate": "omk-root",
+    "independentSupplyChain": "compliance-auditor",
+    "runtime": "qa-engineer",
+    "laterIntegration": "omk-coder"
+  },
+  "ownerHandleDisclaimer": "These draft local roles grant no qualification or integration authority. The operator cannot accept this DRAFT as G0; can1357 upstream acceptance must first exist in a named commit.",
+  "qualificationPlan": {
+    "u1": {
+      "status": "BLOCKED",
+      "entry": "The public fork route exists in FORK CREATED / BRANCH PENDING state. Push exact candidate b6e75dbbc545c815786ecc15d155a332c21cad2b to a named fork branch, open a pull request to can1357 upstream, and revalidate the accepted object, parent, tree, exact path/blob inventory, exports, source blobs, and license.",
+      "pass": "can1357 upstream accepts the complete required seams in a named upstream commit and the evidence is refreshed to that exact identity.",
+      "fail": "A fork without the exact candidate branch, the local private ref, operator acceptance, a missing object, or identity drift does not pass U1 and cannot authorize G0, G1, or H1."
+    },
+    "g0": {
+      "status": "NOT AUTHORIZED",
+      "entry": "U1 passes, ADR-OMP-004 is refreshed from DRAFT to PROPOSED for the exact named upstream commit, and all identities are revalidated immediately before acceptance.",
+      "pass": "operator:user accepts the refreshed proposal naming the exact accepted commit, tree, parent, path/blob inventory, Node 22.19.0 and 24.13.0 lanes, evidence boundary, rollback, and forbidden work.",
+      "fail": "This DRAFT cannot be accepted. Operator acceptance alone, missing or conditional upstream acceptance, a missing object, or identity drift leaves product activation TERMINATED and prohibits candidate execution."
+    },
+    "runtimeReadiness": {
+      "status": "BLOCKED",
+      "entry": "A future refreshed G0 proposal is accepted",
+      "pass": "Plain Node 22.19.0 and 24.13.0 runners are both available and their exact executable/version identities are captured.",
+      "fail": "Either runtime is absent or substituted; G1 and H1 do not start."
+    },
+    "g1": {
+      "status": "NOT AUTHORIZED",
+      "scope": [
+        "./pure/read",
+        "./pure/search"
+      ],
+      "entry": "G0 passes and runtime readiness passes",
+      "evidence": [
+        "unchanged package-subpath imports on both formal Node lanes",
+        "exact commit, tree, manifest blobs, source blobs, commands, executable identities, fixtures, outputs, and digests",
+        "static closure and runtime traps for forbidden authority",
+        "determinism, deep immutability, typed failures, conflict handling, and zero external mutation"
+      ],
+      "pass": "Both seams pass alone, together, unchanged, and without a bundler, loader workaround, polyfill, extraction, bridge, or forbidden runtime authority.",
+      "fail": "Any failed import, contract, determinism, identity, authority, or evidence check terminates the candidate review."
+    },
+    "h1": {
+      "status": "NOT AUTHORIZED",
+      "scope": [
+        "./proposal"
+      ],
+      "entry": "G0 and G1 pass",
+      "evidence": [
+        "unchanged package-subpath import on both formal Node lanes",
+        "exact parser and type-source blobs, command lines, fixtures, outputs, and digests",
+        "malformed, oversized, Unicode, CRLF/LF, duplicate, conflicting, overlapping, stale-hash, and resource-bound cases",
+        "expectedFileHashes and expectedLineHashes source binding",
+        "runtime traps and filesystem sentinels proving zero read, write, move, delete, network, process, session, TUI, native, browser, or Bun authority"
+      ],
+      "pass": "The direct hashline seam and the combined all-three suite pass unchanged on both formal Node lanes with zero external mutation.",
+      "fail": "Any semantic, source-binding, runtime, mutation, identity, or evidence failure terminates the candidate review; extraction is not a fallback under this proposal."
+    },
+    "integration": {
+      "status": "NOT AUTHORIZED",
+      "entry": "Fresh G1 and H1 passes plus a separate accepted integration ADR",
+      "ownerHandle": "omk-coder"
+    }
+  },
+  "forbiddenAuthorities": {
+    "candidateRuntimeClosure": [
+      "Bun",
+      "native",
+      "filesystem",
+      "process",
+      "network",
+      "browser",
+      "session",
+      "TUI",
+      "edit or mutation"
+    ],
+    "methods": [
+      "runtime bundler",
+      "custom loader",
+      "polyfill",
+      "workaround",
+      "partial bridge",
+      "hand reimplementation",
+      "mechanical extraction"
+    ],
+    "actionsBeforeExplicitAcceptance": [
+      "treat this DRAFT or operator acceptance alone as a G0 pass",
+      "start G0 qualification execution before U1 and acceptance of a refreshed PROPOSED record",
+      "start G1 or H1",
+      "materialize or modify candidate source in an owner checkout",
+      "change vendor, active code, manifests, lockfiles, tests, workspaces, release wiring, or product/release publication state",
+      "push a candidate branch or open a pull request without a separate exact authorization",
+      "claim can1357 upstream publication or acceptance without evidence"
+    ]
+  },
+  "mutationAndPublication": {
+    "candidateSourceMutation": false,
+    "candidateRefMutation": false,
+    "authorizedCandidateRefObservedBeforeDocumentationRefresh": true,
+    "ownerCheckoutMutation": false,
+    "vendorOrActiveProductMutation": false,
+    "gitIndexMutation": false,
+    "gitCommitMutation": false,
+    "gitRefMutation": false,
+    "localCloneMutation": false,
+    "localRemoteMutation": false,
+    "authorizedPublicForkCreationRecorded": true,
+    "networkMutationDuringAuthorizedForkCreation": true,
+    "publicationMutationDuringAuthorizedForkCreation": true,
+    "candidateBranchPublicationMutation": false,
+    "pullRequestMutation": false,
+    "networkMutationDuringDocumentationRefresh": false,
+    "secretOrCredentialValueAccessDuringEvidenceRefresh": false,
+    "thisRefreshDocumentationMutationOnly": true,
+    "documentationTargets": [
+      "docs/adr/ADR-OMP-004.md",
+      "docs/adr/evidence/omp-g0-candidate.json",
+      "docs/omp-migration-roadmap.md"
+    ]
+  },
+  "rollback": {
+    "draftBlockedOrExpired": "Start no qualification and leave S0 inert. Its local branch has no configured upstream/tracking ref and no remote publication is claimed or evidenced. The local candidate is not applied to the S0 vendor tree; no runtime or product rollback is required.",
+    "qualificationFailureAfterFutureAcceptance": "Before deleting anything, preserve a durable PASS/FAIL report binding candidate and runtime identities, exact commands, and raw-artifact digests, and verify the stored report and digests. Only then delete disposable worktrees, fixtures, and raw probe output; verify owner and active OMK paths remain unchanged; retain S0 and product activation TERMINATED.",
+    "candidateIdentityDrift": "Stop, preserve the prior observation as historical evidence, record a refreshed commit/tree/path/blob/license inventory, and require a refreshed decision. A missing object at required revalidation expires this draft.",
+    "publication": "The public fork is a handoff route only and creates no product rollback obligation. No candidate branch was pushed and no pull request was opened, so the recorded state has no candidate-publication rollback. Any later route retirement requires separate authorization; this draft grants no further publication authority."
+  },
+  "reconstruction": {
+    "description": "Reconstruct the inventory from the authorized local private ref and local Git object database without checkout, ref mutation, network access, or candidate execution.",
+    "objectAvailabilityBoundary": "Authorized local private ref refs/omp/candidates/b6e75dbbc545c815786ecc15d155a332c21cad2b durably retains candidate commit b6e75dbbc545c815786ecc15d155a332c21cad2b independent of detached worktree /tmp/omp-u1-pure-seams. The public fork is a branch-pending handoff route only; the local ref does not evidence remote candidate publication or can1357 acceptance.",
+    "assertions": [
+      "authorized local private ref refs/omp/candidates/b6e75dbbc545c815786ecc15d155a332c21cad2b exists",
+      "the local private ref resolves exactly to commit b6e75dbbc545c815786ecc15d155a332c21cad2b",
+      "retained commit b6e75dbbc545c815786ecc15d155a332c21cad2b has tree 296cfdbb83bbb7db30248864938cd7f456e2b8f5 and sole parent 39c95e5e29b1c8b082059f57421ce445c3dffdd4",
+      "the exact ten-path mode and parent/candidate blob inventory matches candidate.changedPaths",
+      "the LICENSE identity matches blob cc0c5aa7c10d87c5142af1274b37da95c005184d and SHA-256 545636e19386d3d4e0ae6d77354527499999c3ebfbca61b9fa5aa4ead7c0b308"
+    ],
+    "commands": [
+      "git show-ref --verify refs/omp/candidates/b6e75dbbc545c815786ecc15d155a332c21cad2b",
+      "git rev-parse refs/omp/candidates/b6e75dbbc545c815786ecc15d155a332c21cad2b^{commit}",
+      "git cat-file -e b6e75dbbc545c815786ecc15d155a332c21cad2b^{commit}",
+      "git show -s --format='%H %T %P' b6e75dbbc545c815786ecc15d155a332c21cad2b",
+      "git diff-tree -r --no-commit-id --raw --full-index b6e75dbbc545c815786ecc15d155a332c21cad2b",
+      "git show b6e75dbbc545c815786ecc15d155a332c21cad2b:LICENSE | sha256sum",
+      "git ls-tree b6e75dbbc545c815786ecc15d155a332c21cad2b -- LICENSE packages/coding-agent/package.json packages/coding-agent/src/pure/read.ts packages/coding-agent/src/pure/search.ts packages/hashline/package.json packages/hashline/src/proposal-types.ts packages/hashline/src/proposal.ts"
+    ]
+  },
+  "revalidation": {
+    "requiredAfter": "can1357 acceptance in a named upstream commit exists",
+    "requiredImmediatelyBefore": "any future G0 acceptance",
+    "assertions": [
+      "recorded local private ref still resolves exactly to the retained candidate unless refreshed evidence explicitly supersedes that local identity",
+      "candidate or accepted upstream commit object exists",
+      "candidate or accepted upstream parent and tree match the refreshed record",
+      "exact changed-path count, modes, parent blobs, and candidate blobs match",
+      "manifest exports and source/type blobs match",
+      "LICENSE blob, bytes, parent equality, and SHA-256 match"
+    ],
+    "missingObjectResult": "expire this draft; do not open G0"
+  },
+  "localObservation": {
+    "date": "2026-07-20",
+    "targetRoot": "/tmp/omk-omp-git-migration",
+    "candidateNormalRefsObserved": [
+      "refs/omp/candidates/b6e75dbbc545c815786ecc15d155a332c21cad2b"
+    ],
+    "candidatePrivateRefTarget": "b6e75dbbc545c815786ecc15d155a332c21cad2b",
+    "candidateDetachedWorktree": "/tmp/omp-u1-pure-seams",
+    "candidateDetachedHead": "b6e75dbbc545c815786ecc15d155a332c21cad2b",
+    "candidateDetachedWorktreeClean": true,
+    "retentionClassification": "durable local private ref; public fork route exists, but no remote candidate publication claim",
+    "nodeExecutablesObserved": [
+      "22.22.3",
+      "24.13.0"
+    ],
+    "node22190Observed": false,
+    "stagehandExecutionOccurred": false
+  }
+}

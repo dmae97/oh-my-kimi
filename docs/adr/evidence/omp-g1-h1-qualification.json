@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "kind": "omp-g1-h1-local-qualification",
+  "status": "PASS",
+  "recordedDate": "2026-07-20",
+  "decisionRecords": ["docs/adr/ADR-OMP-005.md", "docs/adr/ADR-OMP-006.md"],
+  "authorizingDecision": "AUTH-LOCAL-QUAL-DECISION-20260720-01 accepted by operator:user; recorded in ADR-OMP-005",
+  "candidate": {
+    "commit": "b6e75dbbc545c815786ecc15d155a332c21cad2b",
+    "tree": "296cfdbb83bbb7db30248864938cd7f456e2b8f5",
+    "parent": "39c95e5e29b1c8b082059f57421ce445c3dffdd4",
+    "privateRef": "refs/omp/candidates/b6e75dbbc545c815786ecc15d155a332c21cad2b",
+    "materialization": "clean detached worktree at the exact candidate commit; preflight verified HEAD equality and zero dirty paths"
+  },
+  "runtimes": [
+    {"node": "22.19.0", "executable": "/home/yu/.nvm/versions/node/v22.19.0/bin/node"},
+    {"node": "24.13.0", "executable": "/home/yu/.nvm/versions/node/v24.13.0/bin/node"}
+  ],
+  "transformBoundary": "Direct .ts source imports using native Node type stripping only. No bundler, custom loader, polyfill, flag, or code transformation was used; no --experimental flag was required on either lane.",
+  "probes": [
+    {"id": "node-import", "command": "node test/pure/node-import.mjs", "cwd": "packages/coding-agent", "result": "PASS both lanes", "logSha256": {"22.19.0": "9bc8bf5bfa934a9f5a0e128ed62963c141e6474d89abfe4febf69bde12eef612", "24.13.0": "9bc8bf5bfa934a9f5a0e128ed62963c141e6474d89abfe4febf69bde12eef612"}},
+    {"id": "hashline-suite", "command": "node --test packages/hashline/test-node/proposal.test.mjs", "result": "23 tests, 23 pass, 0 fail on each lane", "logSha256": {"22.19.0": "faf9345041dcae10a845fd2bced660004d36ec0701e7a220cb71597bbb29029e", "24.13.0": "e65d18962590ddabb3bd817c7d48049b321e015d074e5d382487c0988f0d4904"}},
+    {"id": "alone-read", "result": "PASS both lanes", "logSha256Identical": "d7fbd33b1cf374a2105b35985dbb641b3ff1b5b35401eaa604016e1c01e92f05"},
+    {"id": "alone-search", "result": "PASS both lanes", "logSha256Identical": "05a07fa4141d6c6a9e41fdc0bcbaaec340a0dd19dc83d43f5f56b03d11945871"},
+    {"id": "alone-proposal", "result": "PASS both lanes", "logSha256Identical": "7291bf5d8d29d1c633a1e6a8e0d8073ff1475ebe12b118fe49cd8e549571962c"},
+    {"id": "combined-determinism", "description": "all three seams imported together; frozen and invalid inputs replayed with byte-identical serialized results; hashProposalLine determinism and 64-hex shape", "result": "PASS both lanes", "logSha256Identical": "9604aed98f464cca481426ed9b692ea9b42c5dafb3667b791c628e1107ad8fe4"}
+  ],
+  "probeScriptSha256": {
+    "probe-alone-read.mjs": "284b4a3d3765ba6113ba48bb0efc43088395eefab2b277ebd8eded1c511a7336",
+    "probe-alone-search.mjs": "0b6b82282d9451440c026374e8789497efc5fd3ca3cab784e057d8ccaaa76cb2",
+    "probe-alone-proposal.mjs": "76ff2b12a77b00aeb994294ee8227a4a1f3ed33fad1061519c6715f71e0c6abc",
+    "probe-combined.mjs": "77765571f175123eac525ff185900c72d4803aa74621831ae4455625789b5d5e"
+  },
+  "zeroMutation": "git status --porcelain of the candidate worktree was empty immediately before and after the full matrix.",
+  "authorityClosure": "Runtime import closure of the three seams contains no runtime module imports (one erased type-only edge); prior static closure audit recorded in omp-g0-candidate.json exports inventory.",
+  "developmentObservationsDistinct": "Earlier Node 22.22.3/24.13.0 development checks remain recorded separately in omp-g0-candidate.json; this file records the formal G1/H1 matrix.",
+  "localObservationRoot": "/tmp/omp-qual (disposable probe scripts and logs; digests above make results reconstructable)"
+}
