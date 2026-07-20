@@ -12,6 +12,12 @@ import { formatDimensionNote, resizeImage } from "../../utils/image-resize.ts";
 import { detectSupportedImageMimeTypeFromFile } from "../../utils/mime.ts";
 import { formatPathRelativeToCwdOrAbsolute } from "../../utils/paths.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
+import {
+	formatOmpIssues,
+	getOmpSeams,
+	planRead as ompPlanRead,
+	presentRead as ompPresentRead,
+} from "./omp-seam-runtime.ts";
 import { resolveReadPathAsync, resolveToCwd } from "./path-utils.ts";
 import { getTextOutput, renderToolPath, replaceTabs, str } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -248,7 +254,37 @@ export function createReadToolDefinition(
 							let content: (TextContent | ImageContent)[];
 							let details: ReadToolDetails | undefined;
 							const nonVisionImageNote = getNonVisionImageNote(ctx?.model);
-							if (mimeType) {
+							const ompSeamsPromise = mimeType ? undefined : getOmpSeams();
+							if (ompSeamsPromise) {
+								// OMP seam path (OMK_OMP_SEAMS=1): validation and presentation are
+								// delegated to the vendored pure read seam (ADR-OMP-008). The host
+								// still performs path resolution, policy checks, and file I/O.
+								const seams = await ompSeamsPromise;
+								const planned = ompPlanRead(seams, { path, offset, limit });
+								if (!planned.ok) {
+									throw new Error(`Invalid read request: ${formatOmpIssues(planned.issues)}`);
+								}
+								const plan = planned.plan;
+								const buffer = await ops.readFile(absolutePath);
+								const textContent = buffer.toString("utf-8");
+								const normLines = textContent.replace(/\r\n?/g, "\n").split("\n");
+								const endLine = Math.min(plan.offset + plan.limit - 1, normLines.length);
+								const windowTexts: string[] = [];
+								for (let n = plan.offset; n <= endLine; n += 1) windowTexts.push(normLines[n - 1] ?? "");
+								const [sourceDigest, ...lineHashes] = await Promise.all([
+									seams.hashProposalSource(textContent),
+									...windowTexts.map((lineText) => seams.hashProposalLine(lineText)),
+								]);
+								const presented = ompPresentRead(seams, plan, {
+									text: textContent,
+									sourceDigest,
+									lineDigests: lineHashes.map((digest, i) => ({ line: plan.offset + i, digest })),
+								});
+								if (!presented.ok) {
+									throw new Error("OMP read presentation failed: conflicting line digests");
+								}
+								content = [{ type: "text", text: presented.presentation.text }];
+							} else if (mimeType) {
 								// Read image as binary.
 								const buffer = await ops.readFile(absolutePath);
 								if (autoResizeImages) {
