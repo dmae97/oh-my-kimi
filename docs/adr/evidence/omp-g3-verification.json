@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "kind": "omp-g3-verification",
+  "status": "PASS",
+  "recordedDate": "2026-07-21",
+  "phase": "G3 (verify product and rollback) \u2014 PASS; accepted by operator via REQ-OMP-G3-R1-001 under ADR-OMP-007",
+  "integrationUnit": {
+    "adr": "docs/adr/ADR-OMP-006.md",
+    "commits": [
+      "cbaa4d0722144b1ad15f1c94848e8a40fc1b29e2",
+      "368fada47f38c7daca7d8f2b86e333ab76d7a8cc"
+    ],
+    "docsCommit": "bf9a941a329bc2db84356585f47f709a5f60919b",
+    "candidate": "b6e75dbbc545c815786ecc15d155a332c21cad2b"
+  },
+  "gates": {
+    "regression": {
+      "verdict": "PASS",
+      "evidence": "vitest full suite at HEAD bf9a941a32: 4036 pass / 18 fail / 4058 (64.58s). All 18 failures in 4 LLM-e2e files; root cause '401 authentication_error: Invalid bearer token' (environmental). Matched-pair S0 baseline (360d5036b5): same 4 files fail identically. Zero OMP-attributable regression.",
+      "logs": [
+        "/tmp/omk-loop-omp/t7-regression.log",
+        "/tmp/omk-loop-omp/t7-s0-baseline.log"
+      ]
+    },
+    "security": {
+      "verdict": "PASS",
+      "evidence": "T3 closure: 1 type-only import across 4 pure modules; 0 forbidden-authority hits; WebCrypto-only global use (proposal.ts:80). Secret scan of I1 diff: no secret values. Loader default-off, DISABLED before side effects.",
+      "reports": [
+        "/tmp/omk-loop-omp/review-compliance.md"
+      ]
+    },
+    "package": {
+      "verdict": "PASS",
+      "evidence": "No active manifest/lockfile drift in I1 range; vendor not in workspaces; biome excludes vendor; guard scripts unchanged during I1."
+    },
+    "license": {
+      "verdict": "PASS",
+      "evidence": "vendor/oh-my-pi/LICENSE blob cc0c5aa7c10d87c5142af1274b37da95c005184d exact match; MIT (Mario Zechner)."
+    },
+    "race": {
+      "verdict": "PASS",
+      "evidence": "Zero write path added; zero loader call sites in packages/coding-agent/src; single OMK mutation queue untouched; hashline proposal-only."
+    },
+    "rollback": {
+      "verdict": "PASS",
+      "evidence": "Disposable worktree rehearsal: revert of cbaa4d0722+368fada47f restores byte-exact S0 tree (git diff 360d5036b5 empty for vendor+packages/coding-agent). Rehearsal worktree removed."
+    },
+    "cleanDiff": {
+      "verdict": "PASS",
+      "evidence": "I1 committed surface == ADR-OMP-006 approved set exactly (10 vendor paths + loader + test + docs/evidence). Working tree names only out-of-scope unrelated files (packages/ai models files, 2 untracked py scripts)."
+    },
+    "freshQualification": {
+      "verdict": "PASS",
+      "evidence": "node-import probe PASS both lanes with log sha256 9bc8bf5bfa934a9f5a0e128ed62963c141e6474d89abfe4febf69bde12eef612 identical to G1 record on both Node 22.19.0 and 24.13.0; hashline suite 23/23 both lanes; focused loader vitest 7/7.",
+      "logs": [
+        "/tmp/omk-loop-omp/node-import-22.log",
+        "/tmp/omk-loop-omp/node-import-24.log",
+        "/tmp/omk-loop-omp/hashline-22.log",
+        "/tmp/omk-loop-omp/hashline-24.log"
+      ]
+    }
+  },
+  "reviews": {
+    "independentReviewer": "/tmp/omk-loop-omp/review-omk-reviewer.md (PASS; substitute lane after subagent 180s timeout; reviewer did not author I1)",
+    "complianceAuditor": "/tmp/omk-loop-omp/review-compliance.md (PASS; substitute lane)"
+  },
+  "findings": {
+    "F1": "owner-checkout main tip == isolated branch tip bf9a941a32 (I1 reachable from owner-checkout main; no publication: main ahead of origin/main by 13716). Roadmap records owner-checkout main merge as excluded pending separate approval \u2014 operator disposition required.",
+    "F-ENV-1": "18 pre-existing LLM-auth e2e failures, reproducible at S0, unrelated to I1."
+  },
+  "notEvidenced": [
+    "publication",
+    "release",
+    "owner-checkout main merge approval",
+    "can1357 upstream acceptance"
+  ],
+  "r1Decision": "DECIDED 2026-07-21: publication remains disabled (ADR-OMP-007)"
+}
