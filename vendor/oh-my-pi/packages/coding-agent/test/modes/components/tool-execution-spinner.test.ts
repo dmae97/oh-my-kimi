@@ -1,0 +1,188 @@
+import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
+import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
+import { TranscriptContainer } from "@oh-my-pi/pi-coding-agent/modes/components/transcript-container";
+import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import type { TUI } from "@oh-my-pi/pi-tui";
+
+// Contract under test: live tool previews that render a pending/running status
+// must keep the spinner glyph tied to the shared tool-frame ticker. This covers
+// both the shared ToolExecutionComponent interval and renderer-local caches that
+// would otherwise keep serving the first pending frame.
+describe("ToolExecutionComponent live preview spinners", () => {
+	beforeAll(async () => {
+		await initTheme();
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+	});
+
+	it("animates the eval pending cell while the call is live", () => {
+		vi.useFakeTimers();
+		const requestRender = vi.fn();
+		const requestComponentRender = vi.fn();
+		const component = new ToolExecutionComponent(
+			"eval",
+			{ language: "py", code: "import time\ntime.sleep(10)" },
+			{},
+			undefined,
+			{ requestRender, requestComponentRender } as unknown as TUI,
+			process.cwd(),
+		);
+
+		try {
+			const firstFrame = stripVTControlCharacters(component.render(80).join("\n"));
+			vi.advanceTimersByTime(120);
+			const secondFrame = stripVTControlCharacters(component.render(80).join("\n"));
+
+			expect(requestComponentRender).toHaveBeenCalledWith(component);
+			expect(requestRender).not.toHaveBeenCalled();
+			expect(firstFrame).toContain("time.sleep(10)");
+			expect(secondFrame).toContain("time.sleep(10)");
+			expect(secondFrame).not.toBe(firstFrame);
+		} finally {
+			component.stopAnimation();
+		}
+	});
+
+	it("does not tick headerless bash pending previews", () => {
+		vi.useFakeTimers();
+		const requestRender = vi.fn();
+		const requestComponentRender = vi.fn();
+		const component = new ToolExecutionComponent(
+			"bash",
+			{ command: "sleep 600" },
+			{},
+			undefined,
+			{ requestRender, requestComponentRender } as unknown as TUI,
+			process.cwd(),
+		);
+
+		try {
+			requestRender.mockClear();
+			requestComponentRender.mockClear();
+			vi.advanceTimersByTime(500);
+			expect(requestRender).not.toHaveBeenCalled();
+			expect(requestComponentRender).not.toHaveBeenCalled();
+		} finally {
+			component.stopAnimation();
+		}
+	});
+
+	it("does not tick detached async bash result snapshots", () => {
+		vi.useFakeTimers();
+		const requestRender = vi.fn();
+		const requestComponentRender = vi.fn();
+		const component = new ToolExecutionComponent(
+			"bash",
+			{ command: "sleep 600", async: true },
+			{},
+			undefined,
+			{ requestRender, requestComponentRender } as unknown as TUI,
+			process.cwd(),
+		);
+
+		try {
+			component.updateResult(
+				{
+					content: [{ type: "text", text: "started background job" }],
+					details: {
+						command: "sleep 600",
+						async: { state: "running", jobId: "job-1", type: "bash" },
+					},
+				},
+				true,
+			);
+			requestRender.mockClear();
+			requestComponentRender.mockClear();
+			vi.advanceTimersByTime(500);
+			expect(requestRender).not.toHaveBeenCalled();
+			expect(requestComponentRender).not.toHaveBeenCalled();
+		} finally {
+			component.stopAnimation();
+		}
+	});
+
+	it("does not tick github pending previews whose Text is materialized per rebuild", () => {
+		vi.useFakeTimers();
+		const requestRender = vi.fn();
+		const requestComponentRender = vi.fn();
+		const component = new ToolExecutionComponent(
+			"github",
+			{ op: "run_watch", run: "12345" },
+			{},
+			undefined,
+			{ requestRender, requestComponentRender } as unknown as TUI,
+			process.cwd(),
+		);
+
+		try {
+			requestRender.mockClear();
+			requestComponentRender.mockClear();
+			vi.advanceTimersByTime(500);
+			expect(requestRender).not.toHaveBeenCalled();
+			expect(requestComponentRender).not.toHaveBeenCalled();
+		} finally {
+			component.stopAnimation();
+		}
+	});
+
+	it("does not tick custom tools whose pending label is a static tool-name Text", () => {
+		vi.useFakeTimers();
+		const requestRender = vi.fn();
+		const requestComponentRender = vi.fn();
+		// A renderResult-only custom tool renders the static tool-name label
+		// while pending, so the spinner interval must not start.
+		const tool = { name: "ext_tool", renderResult: () => undefined };
+		const component = new ToolExecutionComponent(
+			"ext_tool",
+			{ input: 1 },
+			{},
+			tool as never,
+			{ requestRender, requestComponentRender } as unknown as TUI,
+			process.cwd(),
+		);
+
+		try {
+			requestRender.mockClear();
+			requestComponentRender.mockClear();
+			vi.advanceTimersByTime(500);
+			expect(requestRender).not.toHaveBeenCalled();
+			expect(requestComponentRender).not.toHaveBeenCalled();
+		} finally {
+			component.stopAnimation();
+		}
+	});
+
+	it("pins the live vibe_wait wall and releases it after the final result", () => {
+		const component = new ToolExecutionComponent(
+			"vibe_wait",
+			{},
+			{},
+			undefined,
+			{ requestRender: vi.fn(), requestComponentRender: vi.fn() } as unknown as TUI,
+			process.cwd(),
+		);
+		const transcript = new TranscriptContainer();
+		transcript.addChild(component);
+
+		try {
+			transcript.render(80);
+			expect(transcript.isNativeScrollbackLiveRegionPinned()).toBe(true);
+
+			component.updateResult(
+				{
+					content: [{ type: "text", text: "No turns in flight to wait for." }],
+					details: { op: "wait", screens: [] },
+				},
+				false,
+			);
+			transcript.render(80);
+			expect(transcript.isNativeScrollbackLiveRegionPinned()).toBe(false);
+		} finally {
+			component.stopAnimation();
+		}
+	});
+});

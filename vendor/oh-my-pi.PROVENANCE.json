@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "kind": "vendored-git-tree-provenance",
+  "upstream": "https://github.com/can1357/oh-my-pi.git",
+  "commit": "39c95e5e29b1c8b082059f57421ce445c3dffdd4",
+  "tree": "256c587a69cd7ae7dc2a9063689db690b4ed741d",
+  "mergeBase": "15d5120b6a5dc757355b99d20d8d1885143d0865",
+  "omkFirstParent": "1158d6d25230ad68946210aabe548fdf94896594",
+  "prefix": "vendor/oh-my-pi",
+  "materialization": "git merge --strategy=ours --no-commit followed by git read-tree --prefix",
+  "leafEntries": 5501,
+  "perPathBlobBytes": 95666921,
+  "license": {
+    "spdx": "MIT",
+    "path": "vendor/oh-my-pi/LICENSE",
+    "blob": "cc0c5aa7c10d87c5142af1274b37da95c005184d",
+    "sha256": "545636e19386d3d4e0ae6d77354527499999c3ebfbca61b9fa5aa4ead7c0b308"
+  },
+  "productActivation": false,
+  "publishedArtifactInclusion": false,
+  "materializedAt": "2026-07-20T06:00:20Z"
+}

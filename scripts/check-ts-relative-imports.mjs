@@ -1,8 +1,9 @@
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import ts from "typescript";
 
 const ignoredDirectories = new Set([".git", "coverage", "dist", "node_modules"]);
+const ignoredDirectoryPaths = new Set([join("vendor", "oh-my-pi")]);
 // The pre-existing third-party scratch tree is only the exact `~` child of the scan root.
 const rootScratchDirectory = "~";
 const files = [];
@@ -12,7 +13,7 @@ function collectTypescriptFiles(directory) {
 	for (const entry of readdirSync(directory, { withFileTypes: true })) {
 		if (entry.isDirectory()) {
 			const childDirectory = join(directory, entry.name);
-			if (!isIgnoredDirectory(directory, entry.name)) {
+			if (!isIgnoredDirectory(directory, entry.name, childDirectory)) {
 				collectTypescriptFiles(childDirectory);
 			}
 			continue;
@@ -23,8 +24,12 @@ function collectTypescriptFiles(directory) {
 		}
 	}
 }
-function isIgnoredDirectory(directory, name) {
-	return ignoredDirectories.has(name) || (directory === scanRoot && name === rootScratchDirectory);
+function isIgnoredDirectory(directory, name, childDirectory) {
+	return (
+		ignoredDirectories.has(name) ||
+		ignoredDirectoryPaths.has(relative(scanRoot, childDirectory)) ||
+		(directory === scanRoot && name === rootScratchDirectory)
+	);
 }
 
 

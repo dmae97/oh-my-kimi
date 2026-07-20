@@ -1,0 +1,317 @@
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as path from "node:path";
+import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
+import { type Api, Effort, type Model } from "@oh-my-pi/pi-ai";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { TempDir } from "@oh-my-pi/pi-utils";
+import { type } from "arktype";
+import { ModelRegistry } from "../src/config/model-registry";
+import { InteractiveMode } from "../src/modes/interactive-mode";
+
+function makeTool(name: string): AgentTool {
+	return {
+		name,
+		label: name,
+		description: `Fake ${name}`,
+		parameters: type({}),
+		async execute() {
+			return { content: [{ type: "text" as const, text: "ok" }] };
+		},
+	};
+}
+
+interface HarnessOptions {
+	extraRegistryTools?: readonly AgentTool[];
+	builtInToolNames?: Iterable<string>;
+	rebuildGate?: { fail: boolean; calls?: number };
+}
+
+describe("InteractiveMode plan.defaultOnStartup", () => {
+	let tempDir: TempDir;
+	let authStorage: AuthStorage;
+	let mode: InteractiveMode | undefined;
+	let session: AgentSession | undefined;
+
+	beforeAll(() => {
+		initTheme();
+	});
+
+	beforeEach(async () => {
+		resetSettingsForTest();
+		tempDir = TempDir.createSync("@pi-default-plan-");
+		await Settings.init({ inMemory: true, cwd: tempDir.path() });
+		Settings.instance.set("startup.quiet", true);
+		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+	});
+
+	afterEach(async () => {
+		vi.restoreAllMocks();
+		mode?.stop();
+		await session?.dispose();
+		authStorage?.close();
+		tempDir?.removeSync();
+		mode = undefined;
+		session = undefined;
+		authStorage = undefined as unknown as AuthStorage;
+		tempDir = undefined as unknown as TempDir;
+		resetSettingsForTest();
+	});
+
+	function modelOrThrow(registry: ModelRegistry, id: string): Model<Api> {
+		const model = registry.find("anthropic", id);
+		if (!model) throw new Error(`Expected anthropic model ${id} to exist`);
+		return model;
+	}
+
+	/** Build an InteractiveMode over a brand-new (never-persisted) session.
+	 *  `extraRegistryTools` registers additional tools that are NOT initially
+	 *  active — modeling tools hidden by `tools.discoveryMode === "all"` that
+	 *  modes may force-activate on entry. `builtInToolNames` marks which registry
+	 *  entries still have built-in provenance after extension shadowing. */
+	function createHarness(settings: Settings, options: HarnessOptions = {}): InteractiveMode {
+		const registry = new ModelRegistry(authStorage, path.join(tempDir.path(), `models-${Bun.nanoseconds()}.yml`));
+		const initialModel = modelOrThrow(registry, "claude-sonnet-4-5");
+		const readTool = makeTool("read");
+		// AgentSession requires a Map-typed tool registry; `read` is the initial
+		// active tool. Plan approval is a `write` to xd://propose, so plan-mode
+		// entry only augments the built-in `write` tool when present.
+		const toolRegistry = new Map<string, AgentTool>([[readTool.name, readTool]]);
+		for (const tool of options.extraRegistryTools ?? []) {
+			toolRegistry.set(tool.name, tool);
+		}
+		const manager = SessionManager.create(tempDir.path(), path.join(tempDir.path(), `active-${Bun.nanoseconds()}`));
+		const createdSession = new AgentSession({
+			agent: new Agent({
+				initialState: {
+					model: initialModel,
+					systemPrompt: ["Test"],
+					tools: [readTool],
+					messages: [],
+					thinkingLevel: Effort.Medium,
+				},
+			}),
+			sessionManager: manager,
+			settings,
+			modelRegistry: registry,
+			toolRegistry,
+			builtInToolNames: options.builtInToolNames ?? ["read"],
+			rebuildSystemPrompt: options.rebuildGate
+				? async () => {
+						if (options.rebuildGate) options.rebuildGate.calls = (options.rebuildGate.calls ?? 0) + 1;
+						if (options.rebuildGate?.fail) throw new Error("rebuild failed");
+						return { systemPrompt: ["Test"] };
+					}
+				: undefined,
+		});
+		session = createdSession;
+		mode = new InteractiveMode(createdSession, "test");
+		return mode;
+	}
+
+	it("enters plan mode at startup when the setting is enabled", async () => {
+		const created = createHarness(Settings.isolated({ "plan.defaultOnStartup": true, "compaction.enabled": false }));
+
+		await created.init({ suppressWelcomeIntro: true });
+
+		expect(created.planModeEnabled).toBe(true);
+		expect(session?.getPlanModeState()).toMatchObject({ enabled: true, planFilePath: "local://PLAN.md" });
+		expect(session?.getActiveToolNames()).toContain("read");
+	});
+
+	it("activates write when entering plan mode even if it was hidden by discoveryMode (issue #3165)", async () => {
+		// `plan-mode-active.md` instructs the agent to draft the plan file with
+		// `write` and refine it with `edit`. Under `tools.discoveryMode === "all"`
+		// `write` is hidden behind `search_tool_bm25` so it's in the registry but
+		// not the initial active set. Plan-mode entry must force-activate it or
+		// the agent only has `edit`, which fails on a non-existent file.
+		const writeTool = makeTool("write");
+		const created = createHarness(Settings.isolated({ "plan.defaultOnStartup": true, "compaction.enabled": false }), {
+			extraRegistryTools: [writeTool],
+			builtInToolNames: ["read", "write"],
+		});
+
+		expect(session?.getActiveToolNames()).not.toContain("write");
+
+		await created.init({ suppressWelcomeIntro: true });
+
+		expect(created.planModeEnabled).toBe(true);
+		expect(session?.getActiveToolNames()).toContain("write");
+	});
+
+	it("does not activate an extension-shadowed write tool in plan mode", async () => {
+		const shadowWriteTool = makeTool("write");
+		const created = createHarness(Settings.isolated({ "plan.defaultOnStartup": true, "compaction.enabled": false }), {
+			extraRegistryTools: [shadowWriteTool],
+		});
+
+		await created.init({ suppressWelcomeIntro: true });
+
+		expect(created.planModeEnabled).toBe(true);
+		expect(session?.getActiveToolNames()).not.toContain("write");
+	});
+
+	it("removes plan-only write when exiting to the previous read-only tool set", async () => {
+		const writeTool = makeTool("write");
+		const created = createHarness(Settings.isolated({ "plan.defaultOnStartup": true, "compaction.enabled": false }), {
+			extraRegistryTools: [writeTool],
+			builtInToolNames: ["read", "write"],
+		});
+		await created.init({ suppressWelcomeIntro: true });
+		expect(session?.getActiveToolNames()).toContain("write");
+
+		await created.handlePlanModeCommand();
+
+		expect(created.planModeEnabled).toBe(false);
+		expect(session?.getPlanModeState()).toBeUndefined();
+		expect(session?.getActiveToolNames()).toEqual(["read"]);
+	});
+
+	it("keeps plan mode retryable when prior-tool restoration fails", async () => {
+		const writeTool = makeTool("write");
+		const rebuildGate = { fail: false };
+		const created = createHarness(Settings.isolated({ "plan.defaultOnStartup": true, "compaction.enabled": false }), {
+			extraRegistryTools: [writeTool],
+			builtInToolNames: ["read", "write"],
+			rebuildGate,
+		});
+		await created.init({ suppressWelcomeIntro: true });
+		const activeBefore = session?.getActiveToolNames();
+		rebuildGate.fail = true;
+
+		await expect(created.handlePlanModeCommand()).rejects.toThrow("rebuild failed");
+		expect(created.planModeEnabled).toBe(true);
+		expect(session?.getPlanModeState()?.enabled).toBe(true);
+		expect(session?.getActiveToolNames()).toEqual(activeBefore);
+
+		rebuildGate.fail = false;
+		await created.handlePlanModeCommand();
+		expect(created.planModeEnabled).toBe(false);
+		expect(session?.getPlanModeState()).toBeUndefined();
+		expect(session?.getActiveToolNames()).toEqual(["read"]);
+	});
+
+	it("clears old plan UI state when target-session reconciliation restore fails", async () => {
+		const writeTool = makeTool("write");
+		const rebuildGate = { fail: false, calls: 0 };
+		const created = createHarness(Settings.isolated({ "plan.defaultOnStartup": true, "compaction.enabled": false }), {
+			extraRegistryTools: [writeTool],
+			builtInToolNames: ["read", "write"],
+			rebuildGate,
+		});
+		await created.init({ suppressWelcomeIntro: true });
+		expect(created.planModeEnabled).toBe(true);
+		expect(session?.peekPlanProposalHandler()).toBeDefined();
+
+		const targetManager = SessionManager.create(tempDir.path(), path.join(tempDir.path(), "target-sessions"));
+		await targetManager.flush();
+		const targetSessionFile = targetManager.getSessionFile();
+		expect(targetSessionFile).toBeString();
+		await targetManager.close();
+		const callsBeforeSwitch = rebuildGate.calls;
+		rebuildGate.fail = true;
+
+		await expect(session!.switchSession(targetSessionFile!)).resolves.toBe(true);
+		expect(session?.sessionFile).toBe(targetSessionFile);
+		expect(created.planModeEnabled).toBe(false);
+		expect(rebuildGate.calls).toBeGreaterThan(callsBeforeSwitch);
+		expect(created.planModePaused).toBe(false);
+		expect(session?.getPlanModeState()).toBeUndefined();
+		expect(session?.peekPlanProposalHandler()).toBeUndefined();
+	});
+
+	it("does not enter plan mode at startup by default", async () => {
+		const created = createHarness(Settings.isolated({ "compaction.enabled": false }));
+
+		await created.init({ suppressWelcomeIntro: true });
+
+		expect(created.planModeEnabled).toBe(false);
+		expect(session?.getPlanModeState()).toBeUndefined();
+	});
+
+	it("does not enter plan mode when the session has restored conversation", async () => {
+		// A genuinely resumed session has prior conversation messages. Gating on
+		// message entries (not the CLI resume flag) means a `--continue` that
+		// created a *fresh* session still gets the startup default (above), while
+		// one with restored conversation is left in its reconciled mode.
+		const created = createHarness(Settings.isolated({ "plan.defaultOnStartup": true, "compaction.enabled": false }));
+		created.sessionManager.appendMessage({ role: "user", content: "prior turn", timestamp: Date.now() });
+
+		await created.init({ suppressWelcomeIntro: true });
+
+		expect(created.planModeEnabled).toBe(false);
+		expect(session?.getPlanModeState()).toBeUndefined();
+	});
+
+	it("enters plan mode for a fresh session that carries only startup metadata", async () => {
+		// createAgentSession appends model_change / thinking_level_change for a
+		// brand-new session before init(); those are not conversation history, so
+		// the startup default must still apply (regression: gating on entry count
+		// instead of message entries skipped plan mode for every real new session).
+		const created = createHarness(Settings.isolated({ "plan.defaultOnStartup": true, "compaction.enabled": false }));
+		created.sessionManager.appendModelChange("anthropic/claude-sonnet-4-5");
+		created.sessionManager.appendThinkingLevelChange("medium");
+
+		await created.init({ suppressWelcomeIntro: true });
+
+		expect(created.planModeEnabled).toBe(true);
+		expect(session?.getPlanModeState()).toMatchObject({ enabled: true });
+	});
+
+	it("enters plan mode for a fresh session that carries an extension custom entry", async () => {
+		// An extension can persist a custom entry during session_start; that is not
+		// conversation or a mode change, so the startup default must still apply
+		// (regression: an allowlist of SDK metadata types skipped plan mode here).
+		const created = createHarness(Settings.isolated({ "plan.defaultOnStartup": true, "compaction.enabled": false }));
+		created.sessionManager.appendModelChange("anthropic/claude-sonnet-4-5");
+		created.sessionManager.appendCustomEntry("my-extension-state", { foo: "bar" });
+
+		await created.init({ suppressWelcomeIntro: true });
+
+		expect(created.planModeEnabled).toBe(true);
+		expect(session?.getPlanModeState()).toMatchObject({ enabled: true });
+	});
+
+	it("does not enter plan mode for a compacted session with no trailing message", async () => {
+		// A compacted branch carries summary context (buildSessionContext emits the
+		// compaction summary as a message), so it is not fresh even without a literal
+		// `message` entry; the startup default must not override its restored mode.
+		const created = createHarness(Settings.isolated({ "plan.defaultOnStartup": true, "compaction.enabled": false }));
+		created.sessionManager.appendModelChange("anthropic/claude-sonnet-4-5");
+		created.sessionManager.appendCompaction("prior conversation summary", undefined, "first-kept", 1000);
+
+		await created.init({ suppressWelcomeIntro: true });
+
+		expect(created.planModeEnabled).toBe(false);
+		expect(session?.getPlanModeState()).toBeUndefined();
+	});
+
+	it("does not re-enter plan mode when a restored mode_change turned it off (no message yet)", async () => {
+		// User enabled plan, toggled it off (mode_change "none"), then quit before
+		// sending a turn. On --continue the reconciler restores that off state; the
+		// startup default must not override it just because there is no message entry.
+		const created = createHarness(Settings.isolated({ "plan.defaultOnStartup": true, "compaction.enabled": false }));
+		created.sessionManager.appendModeChange("plan", { planFilePath: "local://PLAN.md" });
+		created.sessionManager.appendModeChange("none");
+
+		await created.init({ suppressWelcomeIntro: true });
+
+		expect(created.planModeEnabled).toBe(false);
+		expect(session?.getPlanModeState()).toBeUndefined();
+	});
+
+	it("does not enter plan mode when plan mode is globally disabled", async () => {
+		const created = createHarness(
+			Settings.isolated({ "plan.defaultOnStartup": true, "plan.enabled": false, "compaction.enabled": false }),
+		);
+
+		await created.init({ suppressWelcomeIntro: true });
+
+		expect(created.planModeEnabled).toBe(false);
+		expect(session?.getPlanModeState()).toBeUndefined();
+	});
+});
