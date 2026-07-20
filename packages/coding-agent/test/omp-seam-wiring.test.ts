@@ -35,9 +35,9 @@ afterEach(() => {
 	rmSync(dir, { recursive: true, force: true });
 });
 
-describe("read tool — flag off (default)", () => {
+describe("read tool — opted out (OMK_OMP_SEAMS=0)", () => {
 	it("keeps the plain OMK presentation (no line numbers, no digests)", async () => {
-		delete process.env[FLAG];
+		process.env[FLAG] = "0";
 		const def = createReadToolDefinition(dir);
 		const result = await def.execute("t1", { path: "fixture.txt" }, undefined, undefined, {} as never);
 		const text = textOf(result);
@@ -92,9 +92,9 @@ describe("read tool — flag on (OMP seam)", () => {
 	});
 });
 
-describe("grep tool — flag off (default)", () => {
+describe("grep tool — opted out (OMK_OMP_SEAMS=0)", () => {
 	it("keeps the OMK path:line presentation", async () => {
-		delete process.env[FLAG];
+		process.env[FLAG] = "0";
 		const def = createGrepToolDefinition(dir);
 		const result = await def.execute("g1", { pattern: "hello" }, undefined, undefined, {} as never);
 		const text = textOf(result);

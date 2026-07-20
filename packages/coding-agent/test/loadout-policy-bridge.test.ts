@@ -13,6 +13,11 @@ import {
 } from "../src/core/loadout-runtime.ts";
 import { applyLoadoutProfile } from "../src/core/loadouts.ts";
 import type { ResourceLoader } from "../src/core/resource-loader.ts";
+
+// These tests assert legacy OMK read/grep outputs. Pin the OMP seam opt-out
+// (ADR-OMP-009); the default-on seam path is covered by omp-seam-wiring.test.ts.
+process.env.OMK_OMP_SEAMS = "0";
+
 import type { Skill } from "../src/core/skills.ts";
 import {
 	type BashOperations,
