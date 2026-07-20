@@ -1,20 +1,23 @@
 # OMP migration feasibility roadmap
 
-> **Current verdict — source import `ACCEPTED`; product activation `TERMINATED`:** ADR-OMP-003 authorizes exact OMP ancestry and inert source presence at `vendor/oh-my-pi`. The imported source is not wired into OMK. The required `read`, `search`, and `hashline-apply` seams still fail the conjunctive runtime gate.
+> **Current verdict — source import `ACCEPTED`; G1/H1 `PASS`; G2 `ACCEPTED (scope-bounded)`; I1 `IN PROGRESS` on isolated branch; publication/release disabled; owner-checkout main merge excluded:** S0 is local merge commit `360d5036b58a0547a3d26e8f3b52c1daf24690b6`; its local branch has no configured upstream/tracking ref, and no remote publication is claimed or evidenced. [ADR-OMP-005](adr/ADR-OMP-005.md) (`ACCEPTED`, operator request `AUTH-LOCAL-QUAL-DECISION-20260720-01`) supersedes the can1357-upstream-acceptance U1 gate for this repository's intake path: the qualification/integration source identity is now the exact local candidate `b6e75dbbc545c815786ecc15d155a332c21cad2b` durably retained at private ref `refs/omp/candidates/b6e75dbbc545c815786ecc15d155a332c21cad2b`, and **G0 is REOPENED for that exact identity only**. Formal G1/H1 qualification `PASSED` on plain Node 22.19.0 and 24.13.0 (both installed and identified) using direct unchanged `.ts` source imports alone and together; the hashline suite ran 23/23 on both lanes, cross-lane probe-log digests matched, and the candidate worktree showed zero mutation ([evidence](adr/evidence/omp-g1-h1-qualification.json)). [ADR-OMP-006](adr/ADR-OMP-006.md) (`ACCEPTED`, scope-bounded) approves the bounded I1 on isolated branch `yu/omp-migrate-39c95e5e`: a ten-path vendor refresh to candidate tree `296cfdbb83bbb7db30248864938cd7f456e2b8f5` plus a flag-gated (`OMK_OMP_SEAMS=1`, default off) pure-seam loader and focused tests under `packages/coding-agent/`, with no tool-behavior/registry/queue/manifest/lockfile change and hashline staying proposal-only. Publication/release remain disabled and owner-checkout main merge remains excluded pending separate approval; the upstream fork `dmae97/oh-my-pi` and PR draft remain optional parallel work and no longer gate intake. can1357 acceptance is not evidenced and is not claimed; owner-checkout `main` has not been migrated.
 
 - **Decision record:** 2026-07-20
 - **Roadmap review:** 2026-07-20
 - **Upstream audit:** 2026-07-20 02:48 UTC
 - **Reviewed OMP pin:** `9fd6e97113f5ed3a847e66d346970efdf8afcad9`
 - **Audited upstream `main`:** `39c95e5e29b1c8b082059f57421ce445c3dffdd4`
-- **Controlling decisions:** [ADR-OMP-001](adr/ADR-OMP-001.md), [ADR-OMP-002](adr/ADR-OMP-002.md), and [ADR-OMP-003](adr/ADR-OMP-003.md)
+- **Local S0 merge:** `360d5036b58a0547a3d26e8f3b52c1daf24690b6` (local branch has no configured upstream/tracking ref; no remote publication claimed/evidenced)
+- **Draft local candidate observation:** `b6e75dbbc545c815786ecc15d155a332c21cad2b` (durably retained at local private ref `refs/omp/candidates/b6e75dbbc545c815786ecc15d155a332c21cad2b`; public fork route created, candidate branch pending; does not pass U1)
+- **Controlling decisions:** [ADR-OMP-001](adr/ADR-OMP-001.md), [ADR-OMP-002](adr/ADR-OMP-002.md), [ADR-OMP-003](adr/ADR-OMP-003.md), [ADR-OMP-005](adr/ADR-OMP-005.md), and [ADR-OMP-006](adr/ADR-OMP-006.md)
+- **Superseded G0 intake template:** [ADR-OMP-004](adr/ADR-OMP-004.md) — `DRAFT / BLOCKED`, superseded for the U1-upstream-acceptance requirement and G0 reopening by [ADR-OMP-005](adr/ADR-OMP-005.md); historical record preserved
 - **Next review:** Trigger-based; see [Reopen trigger](#reopen-trigger)
 
 ## Decision summary
 
-ADR-OMP-003 approves a Git-native source migration: preserve OMK as first parent, record the audited OMP commit as second parent, and materialize its exact tree under `vendor/oh-my-pi`. This imports source and provenance without resolving OMP into OMK's active root paths.
+ADR-OMP-003 approved a Git-native source migration: preserve OMK as first parent, record the audited OMP commit as second parent, and materialize its exact tree under `vendor/oh-my-pi`. S0 now records that design in a local merge commit without resolving OMP into OMK's active root paths. Its local branch has no configured upstream/tracking ref; no remote publication is claimed or evidenced.
 
-The audited upstream commit does not remove the product-activation blockers. Its `read`, `search`, and `packages/hashline` gate sources are unchanged from the rejected pin. Keep the imported tree inert until a new exact OMP revision passes every runtime gate and a later ADR approves product integration.
+The public upstream commit observed on 2026-07-20 has the product-activation blockers recorded by ADR-OMP-002. A separate upstream-derived local object adds the proposed seams in exactly ten changed paths. The public fork establishes a named repository handoff route, but its `HEAD`/`main` remain at the audited baseline, the candidate branch is not pushed, no pull request is open, and the bounded observations do not evidence can1357 publication or acceptance. The local object does not pass U1 and supports only a **DRAFT / BLOCKED** inventory. Operator acceptance alone cannot open G0; product activation stays terminated.
 
 ## Scope
 
@@ -34,9 +37,13 @@ ADR-OMP-003 separately authorizes exact source presence. It does not claim that 
 | `SOURCE PRESENT` | Exact upstream source and ancestry are imported under an inert prefix; no runtime consumes them. |
 | `TERMINATED` | The current conjunctive product-activation gate ended with a no-go decision. |
 | `NOT AUTHORIZED` | A downstream phase must not start under the current ADRs. |
-| `REOPENED` | A future intake ADR authorizes disposable review for one exact revision. It does not authorize owner-checkout changes. |
+| `DRAFT / BLOCKED` | A non-acceptance-ready identity template; it grants no gate authority. |
+| `PROPOSED` | A future exact record that may be considered only after U1 passes. |
+| `REOPENED` | A future accepted G0 ADR authorizes disposable review for one exact revision. It does not authorize owner-checkout changes. |
 | `APPROVED` | A future ADR authorizes one named extraction or integration step. |
 | `SUPERSEDED` | A later ADR replaces the decision for a stated evidence boundary. |
+| `PASS` | A formal gate ran successfully at the exact candidate identity with recorded evidence; it does not authorize product activation beyond the next bounded gate. |
+| `IN PROGRESS` | An approved phase is being executed within its bounded scope; it grants no authority outside that scope. |
 
 `GO` and `NO-GO` are gate outcomes, not document statuses.
 
@@ -48,6 +55,11 @@ ADR-OMP-003 separately authorizes exact source presence. It does not claim that 
 | [Topology report](adr/evidence/omp-topology-report.json) | Reconstructable topology assertions for the reviewed pin; owner and publication mutation flags are false. | Durable source availability at its recorded `/tmp` path. |
 | [ADR-OMP-002](adr/ADR-OMP-002.md) | The pure-source product-activation gate is `TERMINATED` and defines the reopen conditions. | Runtime, bridge, extraction, compatibility, or product-integration approval. ADR-OMP-003 supersedes only its inert ancestry/source-presence prohibition. |
 | [ADR-OMP-003](adr/ADR-OMP-003.md) | Exact current OMP ancestry and source may be imported under `vendor/oh-my-pi` while OMK remains active first-parent authority. | Runtime consumption, tool integration, package publication, or release approval. |
+| [ADR-OMP-004](adr/ADR-OMP-004.md) | Records a **DRAFT / BLOCKED** intake template, the public-fork branch-pending handoff route, and strict U1-before-G0 refresh conditions. | A proposal, acceptance, G0 authority, candidate execution, integration, candidate-branch publication, a pull request, or upstream acceptance. |
+| [ADR-OMP-005](adr/ADR-OMP-005.md) | Operator `ACCEPTED` local-candidate qualification strategy (`AUTH-LOCAL-QUAL-DECISION-20260720-01`); supersedes the can1357-upstream-acceptance U1 gate for intake, reopens G0 for candidate `b6e75dbbc545c815786ecc15d155a332c21cad2b` only, and authorizes disposable G1/H1 plus bounded I1 under ADR-OMP-006. | Remote publication, release, tags, or owner-checkout main mutation; authority over identity-drifted candidates; it does not evidence can1357 acceptance. |
+| [ADR-OMP-006](adr/ADR-OMP-006.md) | Operator `ACCEPTED` (scope-bounded) the I1 integration unit on isolated branch `yu/omp-migrate-39c95e5e`: ten-path vendor refresh to candidate tree `296cfdbb83bbb7db30248864938cd7f456e2b8f5` plus a flag-gated (`OMK_OMP_SEAMS=1`, default off) pure-seam loader and tests under `packages/coding-agent`. | Tool-behavior/registry/queue/manifest/lockfile changes, a hashline write path, publication/release, owner-checkout main merge, or work outside the two named I1 commits. |
+| [G1/H1 qualification](adr/evidence/omp-g1-h1-qualification.json) | Formal G1/H1 `PASS` on plain Node 22.19.0 and 24.13.0 via direct unchanged `.ts` source imports; hashline 23/23 both lanes; identical cross-lane probe-log digests; zero worktree mutation. | Remote publication, release, integration outside the ADR-OMP-006 unit, owner-checkout main migration, or can1357 upstream acceptance. |
+| [G0 candidate inventory](adr/evidence/omp-g0-candidate.json) | Exact S0 and draft-candidate identities, authorized local private-ref retention, ten changed paths and blobs, exports, signatures, license, runtime availability, proposed owners, qualification plan, and bounded **FORK CREATED / BRANCH PENDING** route state. | Remote candidate durability/publication, a pushed candidate branch, a pull request, U1 completion, an accepted decision, formal qualification, or acceptance by can1357 upstream. |
 | [Pure probe report](adr/evidence/omp-pure-probes.json) | Bun source parsing succeeded, raw Node v22.22.3 import failed, and a Bun-built tree-shaken bundle ran under Node. | An approved unchanged Node source seam. The bundle is evidence only. |
 | [Pure-source inventory](adr/evidence/omp-pure-source-inventory.json) | Closure audits, authority matrices, source blobs, and the all-three board verdict. | Approval to use private helpers or substitute equivalent behavior. |
 
@@ -61,12 +73,23 @@ Recorded identities:
 | Topology report SHA-256 | `806aa07ae1f13276d11b30cbabb4a5873e6a4e75dde076040a2d246bf1d68f4d` |
 | Pure probe report SHA-256 | `ef2fdcf288b084537fa1994e5cd19faa154eca8c866b570962cac2e9e942c507` |
 | Pure-source inventory SHA-256 | `e77b5524dc2ff805aba37c53478849056de937573d74359688a7a7d8065aab21` |
+| S0 local merge commit | `360d5036b58a0547a3d26e8f3b52c1daf24690b6` |
+| S0 local merge tree | `a8efb6013471881fd9ce3678d508215b96a0c839` |
+| Draft local candidate commit | `b6e75dbbc545c815786ecc15d155a332c21cad2b` |
+| Draft local candidate tree | `296cfdbb83bbb7db30248864938cd7f456e2b8f5` |
+| Draft local candidate parent | `39c95e5e29b1c8b082059f57421ce445c3dffdd4` |
+| Authorized local private ref | `refs/omp/candidates/b6e75dbbc545c815786ecc15d155a332c21cad2b` → `b6e75dbbc545c815786ecc15d155a332c21cad2b` |
+| Candidate root license | MIT; blob `cc0c5aa7c10d87c5142af1274b37da95c005184d`; SHA-256 `545636e19386d3d4e0ae6d77354527499999c3ebfbca61b9fa5aa4ead7c0b308` |
 
 The inventory records the topology and probe hashes. Its own hash above documents this roadmap review; it is not a self-recorded canonical manifest value. The `agent://` receipts in ADR-OMP-002 are supplementary; static readers can evaluate the committed ADRs and JSON evidence without them.
 
 ## Current upstream check
 
-The 2026-07-20 audit resolved the public default branch to OMP `main` commit `39c95e5e29b1c8b082059f57421ce445c3dffdd4`. The reviewed pin is its merge base. Changes after the pin only affect workflow-notice/session behavior and related tests; they do not touch the migration-gate sources or package runtime metadata.
+On 2026-07-20, public read-only `git ls-remote --symref https://github.com/can1357/oh-my-pi.git HEAD refs/heads/main` observed public `HEAD` pointing to `main` and both at `39c95e5e29b1c8b082059f57421ce445c3dffdd4`. The command queried only public `HEAD` and `main`; its output did not contain local commit `b6e75dbbc545c815786ecc15d155a332c21cad2b` because that commit was not queried through a public ref. This does not prove absence from every public ref, and no can1357 publication or acceptance is claimed or evidenced.
+
+A separate exact authorized action created public fork `https://github.com/dmae97/oh-my-pi`. A public read-only observation resolved its `HEAD` and `main` to `39c95e5e29b1c8b082059f57421ce445c3dffdd4`; a bounded `gh` metadata observation reported public identity, `isFork: true`, and default branch `main`. These facts establish only the public repository route and bounded `isFork` identity; no specific parent repository relationship is claimed. No local clone or remote was added, the candidate branch was not pushed, no pull request was opened, and can1357 acceptance is not evidenced. No secret, token, or credential value was accessed or recorded during this evidence refresh.
+
+For the dated upstream audit at `39c95e5e29b1c8b082059f57421ce445c3dffdd4`, the reviewed pin is its merge base. Changes after the pin only affect workflow-notice/session behavior and related tests; they do not touch the migration-gate sources or package runtime metadata.
 
 | Surface | Pin and audited `main` identity | Result |
 | --- | --- | --- |
@@ -75,27 +98,29 @@ The 2026-07-20 audit resolved the public default branch to OMP `main` commit `39
 | `packages/hashline` | Tree `94366ec5bea77d1d1adf8205cfb537e2888ae9ba` | Unchanged; blocked. |
 | Root and relevant package manifests | No diff from the reviewed pin | Runtime/import requirements are unchanged. |
 
-This is a dated observation, not a moving “latest” claim. Re-resolve the upstream default branch before the next review.
+This is a dated public-upstream observation, not a moving “latest” claim. Re-resolve the upstream default branch before the next upstream review.
+
+Separately, local candidate observation `b6e75dbbc545c815786ecc15d155a332c21cad2b` has tree `296cfdbb83bbb7db30248864938cd7f456e2b8f5`, parent `39c95e5e29b1c8b082059f57421ce445c3dffdd4`, and exactly ten changed paths. On 2026-07-20 authorized local private ref `refs/omp/candidates/b6e75dbbc545c815786ecc15d155a332c21cad2b` resolved exactly to that commit, providing durable local retention; detached worktree `HEAD` at `/tmp/omp-u1-pure-seams` also remained at that commit and its worktree was clean. This local ref is not remote publication or can1357 acceptance. The fork route does not publish or durably retain the candidate until the exact commit is pushed to a named branch. No can1357 publication or acceptance is claimed or evidenced. Development checks were earlier reported passing on Node 22.22.3 and 24.13.0; under [ADR-OMP-005](adr/ADR-OMP-005.md), formal G1/H1 qualification has since `PASSED` on plain Node 22.19.0 and 24.13.0 (both installed and identified) using direct unchanged `.ts` source imports alone and together, with the hashline suite 23/23 on both lanes and zero worktree mutation ([evidence](adr/evidence/omp-g1-h1-qualification.json)).
 
 ## Current gate results
 
 All three operations must pass at one exact source revision. Source presence or partial success does not qualify product activation.
 
-| Operation | Current result | Decisive blocker |
+| Operation | Current result | Basis and remaining boundary |
 | --- | --- | --- |
-| `read` | `TERMINATED` | The public runtime surface remains a `ToolSession`-bound tool and TUI renderer. Candidate planner/formatter helpers remain private or incomplete, and the import closure carries Bun, filesystem, native, network, session, process, TUI, or edit authority. |
-| `search` | `TERMINATED` | Exported pure leaves remain formatting fragments, not a complete immutable query/scope plus OMK-supplied-results seam. The complete runtime closure remains authority-bearing. |
-| `hashline-apply` | `TERMINATED` | Parsed anchors still contain line numbers only; `expectedLineHashes[]` is absent. Raw Node v22.22.3 source import still fails, and the static closure still reaches `Bun.hash.xxHash32`. The successful tree-shaken bundle remains unapproved extraction. |
+| `read` | `PASS at candidate revision (local strategy)` | Public `main` at `39c95e5e29b1c8b082059f57421ce445c3dffdd4` remains blocked, but [ADR-OMP-005](adr/ADR-OMP-005.md) reopens G0 for local candidate `b6e75dbbc545c815786ecc15d155a332c21cad2b` and the formal G1 lane passed unchanged direct `./pure/read` imports on Node 22.19.0 and 24.13.0. |
+| `search` | `PASS at candidate revision (local strategy)` | Public `main` at `39c95e5e29b1c8b082059f57421ce445c3dffdd4` lacks the complete seam, but [ADR-OMP-005](adr/ADR-OMP-005.md) reopens G0 for the local candidate and the formal G1 lane passed unchanged direct `./pure/search` imports on both Node lanes. |
+| `hashline-apply` | `PASS (proposal-only) at candidate revision (local strategy)` | The local candidate adds direct `./proposal` parsing with `expectedLineHashes[]`; [ADR-OMP-005](adr/ADR-OMP-005.md) reopens G0 and the formal H1 lane ran 23/23 on both Node lanes. Hashline remains proposal-only at integration; no write path is added. |
 
 ## Feasibility answer
 
 | Question | Answer |
 | --- | --- |
 | Is Git topology/materialization possible? | **Yes.** ADR-OMP-003 selects exact ancestry plus prefixed tree materialization. |
-| Is OMP source migrated? | **Yes, when the staged merge is committed:** exact source under `vendor/oh-my-pi`, with no active runtime wiring. |
-| Can OMK activate the three required OMP operations now? | **No.** The contracts and Node closure still fail ADR-OMP-002. |
+| Is OMP source migrated? | **Yes, locally.** S0 merge `360d5036b58a0547a3d26e8f3b52c1daf24690b6` records exact inert source under `vendor/oh-my-pi`; its local branch has no configured upstream/tracking ref, and no remote publication is claimed or evidenced. |
+| Can OMK activate the three required OMP operations now? | **Locally qualified; product activation still bounded.** [ADR-OMP-005](adr/ADR-OMP-005.md) supersedes the U1 gate for intake, G0 is reopened for candidate `b6e75dbbc545c815786ecc15d155a332c21cad2b`, G1/H1 passed on Node 22.19.0 and 24.13.0, and [ADR-OMP-006](adr/ADR-OMP-006.md) approves a bounded flag-gated I1 on the isolated branch. Hashline stays proposal-only, publication/release stay disabled, owner-checkout main merge stays excluded, and can1357 acceptance is not evidenced. |
 | Can OMK add a bridge or compatibility layer now? | **No.** ADR-OMP-003 authorizes inert source presence only. |
-| Is future product integration possible? | **Conditionally.** A new exact OMP revision must add the required public pure seams, pass the all-three proof, and receive prior ADR approval. |
+| Is future product integration possible? | **Yes, bounded.** [ADR-OMP-006](adr/ADR-OMP-006.md) approves a scope-bounded I1 (ten-path vendor refresh plus a flag-gated pure-seam loader, default off) on isolated branch `yu/omp-migrate-39c95e5e`. Full product activation, a hashline write path, publication/release, and owner-checkout main merge still require separate authority. |
 | Has a full OMP runtime migration been proven feasible? | **No.** It is outside the recorded proof and remains unauthorized. |
 
 ## Strategy
@@ -115,45 +140,49 @@ Do not put AgentHarness migration on the OMP critical path. Current OMK tool fac
 
 ## Work allowed now
 
-1. Import the exact audited OMP commit and tree under the ADR-OMP-003 prefix while preserving OMK as first parent.
+1. Preserve and verify the exact local S0 merge while keeping its vendored tree inert; its branch has no configured upstream/tracking ref, and no remote publication is claimed or evidenced.
 2. Add only exact-prefix scanner exclusions, provenance, decision documentation, and their guard tests.
-3. Propose and implement the three public pure seams upstream.
-4. Specify the hashline source-binding contract: output shape, hash algorithm, line-ending and Unicode normalization, duplicate-anchor behavior, and mismatch semantics.
-5. Prepare disposable product-activation probes and assign runtime, integration, review, and release owners.
+3. Execute the bounded I1 unit on isolated branch `yu/omp-migrate-39c95e5e` under [ADR-OMP-006](adr/ADR-OMP-006.md): the ten-path vendor refresh to candidate tree `296cfdbb83bbb7db30248864938cd7f456e2b8f5` and the flag-gated (`OMK_OMP_SEAMS=1`, default off) pure-seam loader plus focused tests under `packages/coding-agent`, with no tool-behavior/registry/queue/manifest/lockfile change and hashline staying proposal-only.
+4. Continue the optional parallel upstream work — push candidate `b6e75dbbc545c815786ecc15d155a332c21cad2b` to a named branch in `https://github.com/dmae97/oh-my-pi` and open a can1357 pull request — without treating it as a gate or making unevidenced acceptance claims.
+5. Specify the hashline source-binding contract: output shape, hash algorithm, line-ending and Unicode normalization, duplicate-anchor behavior, and mismatch semantics (proposal-only until a separately reviewed source-validation write path exists).
 6. Continue OMP-independent AgentHarness work without presenting it as OMP gate progress.
 
 ## Work not allowed now
 
-- Adding OMP workspaces, dependencies, lockfiles, workflows, or package identities to OMK's active root surface.
-- Importing from `vendor/oh-my-pi`, registering OMP tools, or adding a bridge, compatibility layer, product adapter, feature flag, session migration, or release wiring.
+- Merging the I1 branch into owner-checkout `main`, publishing, releasing, or tagging; owner-checkout `main` has not been migrated and remains excluded pending separate approval.
+- Changing tool behavior, tool registry, mutation queue, manifests, or lockfiles as part of I1, or enabling `OMK_OMP_SEAMS=1` by default.
+- Adding a hashline write path or treating hashline output as more than proposal-only data.
+- Adding OMP workspaces, dependencies, workflows, or package identities to OMK's active root surface beyond the ADR-OMP-006 unit.
+- Importing from `vendor/oh-my-pi` into active OMK runtime outside the flag-gated pure-seam loader, or adding a bridge, compatibility layer, product adapter, session migration, or release wiring.
 - Tree-shaken runtime bundles, Bun workarounds, polyfills, partial bridges, or hand reimplementations.
-- Product-integration or release claims based on source presence, topology, or probe observations.
+- Claiming can1357 upstream acceptance; the fork and PR draft are optional parallel work, not gating evidence.
+- Product-integration or release claims beyond the bounded I1 unit on the isolated branch.
 
 ## Proposed gated roadmap
 
-The S0 source-presence phase is approved by ADR-OMP-003. Later phases describe the still-gated product-activation flow.
+The S0 source-presence phase is approved and locally committed. Later phases remain gated; the draft local object and **DRAFT / BLOCKED** ADR-OMP-004 grant no qualification authority.
 
 | Phase | Status now | Entry condition | GO criteria | NO-GO and rollback boundary |
 | --- | --- | --- | --- | --- |
-| **S0. Import exact inert source** | `ACCEPTED` by ADR-OMP-003 | Exact audited OMP commit, tree, prefix, and OMK first parent. | Second-parent identity, exact prefix-tree equality, 5,501 paths, zero unmerged entries, exact scanner exclusions, no active OMK package/runtime/release drift. | Any identity mismatch, unexpected active-path change, package consumption, or failed rollback boundary. Abort the isolated merge. |
-| **U1. Add upstream public seams** | External work may start | Upstream accepts the required data-only APIs. | `read`, `search`, and hashline APIs are public, complete, source-bound, immutable-input, and contain the required semantics. | Private fragments, extraction-time semantics, or effect authority remain. Revise upstream; OMK stays unchanged. |
-| **G0. Reopen disposable review** | `NOT AUTHORIZED` until an intake ADR passes | One exact OMP revision contains all required source-visible semantics and a reproducible candidate evidence package. | An intake ADR names the revision, scope, owners, Node lanes, evidence plan, and authorizes disposable requalification only. Status becomes `REOPENED`; owner-checkout integration remains prohibited. | Candidate existence without an intake ADR. Remain `TERMINATED`; do not start qualification. |
-| **G1. Qualify direct `read` and `search`** | `NOT AUTHORIZED` until G0 is `REOPENED` | G0 passes and both seams have directly importable Node source/package exports. | Disposable direct-source probes pass for both seams on Node 22.19.0 and the current supported Node lane, unchanged and without forbidden authority. Evidence binds the commit, tree, blobs, runtimes, fixtures, closure, license, and digests. | Either seam fails or needs generated code. Close the candidate review as `TERMINATED`; extraction cannot replace `read` or `search`. |
-| **H1. Qualify direct hashline** | `NOT AUTHORIZED`; preferred hashline branch | G0 is `REOPENED`, G1 passes, and hashline has a directly importable Node source/package export. | The direct hashline seam passes on both Node lanes and the combined all-three direct-source suite passes without forbidden authority. | Missing semantics closes the candidate review. If only package shape blocks direct import, use E1 after its dedicated prior ADR. |
+| **S0. Import exact inert source** | `ACCEPTED`; local merge `360d5036b58a0547a3d26e8f3b52c1daf24690b6`; branch has no configured upstream/tracking ref and no remote publication is claimed/evidenced | Exact audited OMP commit, tree, prefix, and OMK first parent. | Second-parent identity, exact prefix-tree equality, 5,501 paths, zero unmerged entries, exact scanner exclusions, no active OMK package/runtime/release drift. | Any identity mismatch, unexpected active-path change, or package consumption. Before remote publication, abandon or revert the isolated local merge; after evidenced sharing, use first-parent merge-revert semantics. |
+| **U1. Add upstream public seams** | `SUPERSEDED` for intake by [ADR-OMP-005](adr/ADR-OMP-005.md); fork `dmae97/oh-my-pi` and PR draft remain optional parallel work; can1357 acceptance not evidenced and no longer gating | Operator decision `AUTH-LOCAL-QUAL-DECISION-20260720-01` rebinds intake to exact local candidate `b6e75dbbc545c815786ecc15d155a332c21cad2b` at private ref `refs/omp/candidates/b6e75dbbc545c815786ecc15d155a332c21cad2b`. | Local-candidate intake path qualified under ADR-OMP-005; upstream acceptance remains available as optional parallel work without gating. | Identity drift from `b6e75dbbc545c815786ecc15d155a332c21cad2b` closes the local path and requires refreshed evidence; the historical U1 record is preserved. |
+| **G0. Reopen disposable review** | `REOPENED` for candidate `b6e75dbbc545c815786ecc15d155a332c21cad2b` only by [ADR-OMP-005](adr/ADR-OMP-005.md); ADR-OMP-004 remains a historical `DRAFT / BLOCKED` record | ADR-OMP-005 accepts the local-candidate intake identity; identity revalidated immediately before qualification. | `operator:user` accepted the local-candidate strategy via `AUTH-LOCAL-QUAL-DECISION-20260720-01`; disposable qualification has begun and passed (G1/H1). | Identity drift from `b6e75dbbc545c815786ecc15d155a332c21cad2b` closes G0 again and requires refreshed evidence; product activation stays bounded. |
+| **G1. Qualify direct `read` and `search`** | `PASS` — formal qualification passed on Node 22.19.0 and 24.13.0 ([evidence](adr/evidence/omp-g1-h1-qualification.json)) | G0 reopened by ADR-OMP-005; both Node runtimes installed and identified; both seams directly importable unchanged. | Direct unchanged `.ts` source imports passed alone and together on both lanes with identical probe-log digests and zero mutation; evidence binds commit, tree, blobs, runtimes, fixtures, closure, license, and digests. | Any identity drift, runtime substitution, seam failure, or generated code closes the candidate review; extraction cannot replace `read` or `search`. |
+| **H1. Qualify direct hashline** | `PASS` — formal qualification passed on Node 22.19.0 and 24.13.0 ([evidence](adr/evidence/omp-g1-h1-qualification.json)) | G0 reopened by ADR-OMP-005; G1 passed; `./proposal` directly imported unchanged. | The direct hashline seam ran 23/23 on both lanes and the combined all-three direct-source suite passed without forbidden authority or mutation; hashline stays proposal-only. | Any semantic, source-binding, runtime, mutation, or identity failure closes the candidate review. Extraction is not a fallback under ADR-OMP-004/005. |
 | **E1. Optional hashline extraction qualification** | `NOT AUTHORIZED`; alternative to H1 | G0 is `REOPENED`; G1 passes; hashline source contains the full required semantics; a dedicated prior ADR approves the exact extraction design before the artifact is used as a qualifying seam. | The artifact matches approved source-range/AST identity, deterministic generator and expected digest, license proof, and zero-semantic-edit proof; it imports on both Node lanes without a runtime bundler, loader workaround, or polyfill; the combined G1+E1 suite passes. | Missing prior ADR, source semantics, identity, reproducibility, digest, or G1 qualification. Dispose of artifacts and close the candidate review. |
-| **G2. Approve integration** | `NOT AUTHORIZED` | G1 passes and either H1 or E1 passes at the same exact revision. | A new ADR names the qualified revision and strategy, source/license identity, allowed OMK paths, owners, tests, rollback, and release boundary. | Missing approval or unresolved provenance, closure, or semantic issue. No owner-checkout change. |
-| **I1. Integrate at the coding-agent boundary** | `NOT AUTHORIZED` | G2 explicitly approves integration. | Only approved coding-agent paths change; effects stay in OMK; hashline remains proposal-only until source validation; writes remain serialized; existing tool contracts are preserved or explicitly migrated. | Scope drift, stale evidence, session coupling, hidden authority, or failed source validation. Revert the bounded integration unit. |
+| **G2. Approve integration** | `ACCEPTED (scope-bounded)` via [ADR-OMP-006](adr/ADR-OMP-006.md) | G1 and H1 passed at the same exact candidate revision. | ADR-OMP-006 names the qualified candidate, the ten-path vendor refresh, the flag-gated (`OMK_OMP_SEAMS=1`, default off) pure-seam loader and tests under `packages/coding-agent`, the proposal-only hashline boundary, and the rollback unit; no tool/registry/queue/manifest/lockfile change. | Scope drift, stale evidence, session coupling, hidden authority, publication/release, or owner-checkout main merge. No owner-checkout main change is approved. |
+| **I1. Integrate at the coding-agent boundary** | `IN PROGRESS` on isolated branch `yu/omp-migrate-39c95e5e` under [ADR-OMP-006](adr/ADR-OMP-006.md) | G2 scope-bounded approval exists; both I1 commits stay on the isolated branch. | Only the ten approved vendor paths plus the flag-gated pure-seam loader and tests under `packages/coding-agent` change; hashline stays proposal-only; writes stay serialized; existing tool contracts are preserved. | Scope drift, stale evidence, session coupling, hidden authority, default-on flag, tool/registry/queue/manifest/lockfile change, publication/release, or owner-checkout main merge. Revert the bounded integration unit. |
 | **G3. Verify product and rollback** | `NOT AUTHORIZED` | I1 is complete in an isolated worktree. | Regression, security, package, license, race, rollback, and clean-diff gates pass with fresh evidence. | Any failed gate. Revert I1 and rerun the OMK baseline. |
 | **R1. Decide publication** | `NOT AUTHORIZED` | G3 passes. | A separate release decision names artifacts, acceptance, publication authority, and rollback or forward-fix policy. | No explicit release approval. Keep publication disabled. |
 
 ## Required future seam contract
 
-A candidate does not enter G0 until all three source-visible contracts exist:
+A draft cannot be refreshed into a **PROPOSED** G0 record until U1 passes in a named can1357 upstream commit and all three source-visible contracts exist at that exact identity:
 
 - **Read:** a public authority-free module accepts immutable request/planning input and OMK-supplied read results, then returns deterministic model/presentation data.
 - **Search:** a public authority-free module accepts immutable query/scope input and OMK-supplied matches, then returns deterministic normalized/presentation data.
 - **Hashline:** a public authority-free parser accepts untrusted patch text and returns proposed edits plus `expectedLineHashes[]` without reading, writing, or mutating external state.
-- **Read/search runtime:** both seams import unchanged on Node `>=22.19`, alone and together, without Bun, native, filesystem, process, network, browser, session, TUI, or edit authority.
+- **Read/search runtime:** both seams import unchanged on Node 22.19.0 and 24.13.0, alone and together, without Bun, native, filesystem, process, network, browser, session, TUI, or edit authority.
 - **Hashline qualification:** either H1 imports the upstream seam unchanged, or E1 imports the exact prior-ADR-approved artifact. Both routes must run on the same Node lanes without forbidden authority or runtime bundling, loaders, or polyfills.
 - **Combined proof:** G1 plus H1 or E1 must pass together at one exact revision.
 - **Identity:** public signatures, schemas, static closure, source blobs, license, runtime identity, fixtures, and outputs bind to that revision.
@@ -165,7 +194,7 @@ H1 is the preferred direct path. If hashline extraction remains necessary, use E
 | ID | Gate | Required evidence |
 | --- | --- | --- |
 | T1 | Exact source identity | Commit, tree, blobs, merge base, default branch observation, no tags, disabled push, and durable source/license hashes. |
-| T2 | Node imports | G1 imports upstream `read`/`search` unchanged. H1 also imports upstream hashline unchanged; E1 instead imports the exact ADR-approved hashline artifact. Run each seam and the selected combination on Node 22.19.0 and the current supported Node version, with no runtime bundler, loader workaround, or polyfill. |
+| T2 | Node imports | G1 imports candidate `read`/`search` unchanged. H1 also imports candidate hashline unchanged; E1 instead imports the exact ADR-approved hashline artifact. Run each seam and the selected combination on Node 22.19.0 and 24.13.0, with no runtime bundler, loader workaround, or polyfill. |
 | T3 | Authority closure | Static and dynamic closure plus runtime traps prove no Bun, native, filesystem, process, network, browser, session, TUI, or edit authority. |
 | T4 | Pure determinism | Frozen immutable inputs, repeated identical outputs, no reads/writes/global mutation, and complete public schemas. |
 | T5 | Untrusted hashline input | Golden and fuzz cases for malformed/large input, Unicode, CRLF/LF, duplicate or overlapping anchors, path strings, stale hashes, and resource bounds; zero mutation. |
@@ -186,42 +215,45 @@ Run AgentHarness-specific tests only if integration changes generic tool or harn
 | A bundle is mistaken for unchanged Node-compatible source. | Test direct source imports; treat generated bundles as extraction proposals requiring prior approval. |
 | Hashline output cannot bind edits to reviewed source. | Make `expectedLineHashes[]` and mismatch behavior hard assertions. |
 | Evidence drifts when the OMP revision changes. | Re-run every gate for each exact revision; never carry a GO result forward. |
-| `/tmp` evidence disappears. | Commit reports, hashes, source identities, fixtures, and reconstruction commands; never rely on an ephemeral path. |
+| `/tmp` evidence or the detached candidate `HEAD` disappears. | Retain the candidate through the authorized local private ref, independently of the detached worktree. The fork route exists but does not retain the candidate until exact `b6e75d…` is pushed to a named branch. After can1357 acceptance, revalidate the accepted upstream object and full identity, then repeat revalidation immediately before G0. Preserve and verify durable reports and digests before deleting disposable raw artifacts. |
 | Integration couples to sessions or AgentHarness. | Keep the adapter at coding-agent tool factories and avoid OMP-specific durable state. |
 | Rollback leaves dual mutation paths. | Never dual-run writes; preserve one OMK mutation queue and rehearse bounded reversion. |
 
 ## Rollback policy
 
-- **Current source-import state:** The exact source tree and bounded support delta are staged only in an isolated no-commit merge worktree.
-- **S0:** Before commit, abort or delete only the isolated worktree and branch. After a shared merge, revert with first-parent semantics; the current tree loses the source while Git history retains ancestry.
-- **G0–E1:** Delete only disposable qualification artifacts and probe output. Verify that active OMK paths remain unchanged.
-- **G2:** Rejecting an ADR leaves the repository at S0.
+- **Current source-import state:** S0 is local merge commit `360d5036b58a0547a3d26e8f3b52c1daf24690b6`. Its local branch has no configured upstream/tracking ref, and no remote publication is claimed or evidenced. It is not a staged-only change, and no merge is open.
+- **S0:** Before evidenced remote publication, abandon the isolated branch/worktree or revert the local merge with first-parent semantics. After evidenced sharing, use a first-parent merge revert; the current tree loses the source while Git history retains ancestry. Do not use merge-abort instructions for the committed state.
+- **G0–E1:** If a future accepted intake starts qualification, first preserve a durable PASS/FAIL report binding candidate/runtime identities, exact commands, and raw-artifact digests, and verify the stored report and digests. Only then delete disposable worktrees, fixtures, and raw probe output. Verify that active OMK paths remain unchanged.
+- **G2:** Rejecting an integration ADR leaves the repository at S0.
 - **I1–G3:** Revert only the approved integration unit. Do not add session conversion or dual writes, so current tool factories remain the restoration target.
-- **Source drift:** A changed commit, export, AST range, generator output, license, or closure returns to G1 and H1 or E1, then requires a fresh G2 decision.
-- **Publication:** Keep publication disabled until R1 grants separate authority.
+- **Source drift:** A changed or missing commit/object, export, AST range, generator output, license, or closure returns to U1 and requires refreshed evidence before any new G0 proposal; later gates and G2 remain closed.
+- **Publication:** The public fork handoff route exists, but no candidate branch or pull request exists in the recorded state. Any next handoff action requires separate exact authorization. Keep product/release publication disabled until R1 grants separate authority.
 
 ## Ownership
 
-ADR-OMP-003 resolves source-presence scope only. Assign named owners before reopening product activation.
+ADR-OMP-003 resolves source presence. [ADR-OMP-005](adr/ADR-OMP-005.md) (`ACCEPTED`) reopens G0 for the local candidate and binds the intake decision to `operator:user` via `AUTH-LOCAL-QUAL-DECISION-20260720-01`; [ADR-OMP-006](adr/ADR-OMP-006.md) (`ACCEPTED`, scope-bounded) approves the I1 unit. The rows below now reflect the satisfied decision scope; they still do not evidence can1357 upstream acceptance.
 
-| Responsibility | Required owner | Required before |
-| --- | --- | --- |
-| Decision scope and ADR | OMK architecture maintainer | Reopen intake |
-| OMP public seams | OMP upstream maintainer | U1 completion |
-| Closure, source, and license audit | Independent OMK security/supply-chain reviewer | G1 and H1/E1 completion |
-| Node runtime verification | Runtime/test maintainer | G1 and H1/E1 completion |
-| Coding-agent integration | Coding-agent tool/runtime maintainer | I1 |
-| Independent regression and rollback | Reviewer who did not author I1 | G3 |
-| Product acceptance | Product owner | R1 |
-| Publication | Release owner | R1 |
+| Responsibility | Required owner role | Handle | Status |
+| --- | --- | --- | --- |
+| Decision scope and ADR acceptance | Operator | `operator:user` | Satisfied for U1-supersede / G0 reopen (ADR-OMP-005) and bounded I1 (ADR-OMP-006); still required for G3 and R1 |
+| Candidate identity and evidence | OMK root coordinator | `omk-root` | Local private-ref retention in place; revalidation required on any identity drift |
+| Upstream public-seam acceptance | can1357 upstream maintainer | Not locally assignable | Optional parallel work; not gating under ADR-OMP-005; not evidenced |
+| Closure, source, license, and supply-chain audit | Independent reviewer | `compliance-auditor` | G1/H1 evidence reviewed; required again for G3 |
+| Node runtime verification | Runtime/test maintainer | `qa-engineer` | G1/H1 completed on Node 22.19.0 and 24.13.0 |
+| Coding-agent integration | Coding-agent tool/runtime maintainer | `omk-coder` | I1 in progress on isolated branch `yu/omp-migrate-39c95e5e` |
+| Independent regression and rollback | Reviewer who did not author I1 | Unassigned | Required for G3 |
+| Product acceptance | Product owner | Unassigned | Required for R1 |
+| Publication | Release owner | Unassigned | Required for R1; publication/release disabled |
 
 An unassigned required owner is an automatic no-go for that phase.
 
 ## Reopen trigger
 
-Review again only when one exact OMP revision includes reproducible evidence that all three minimum operations can satisfy ADR-OMP-002. At minimum, the candidate must include public source-bound `read` and `search` seams that can run unchanged on Node `>=22.19`, hashline `expectedLineHashes[]`, and either a directly importable hashline seam or the complete E1 prior-approval package. Every selected runtime path must exclude forbidden authority.
+[ADR-OMP-005](adr/ADR-OMP-005.md) (`ACCEPTED`, `AUTH-LOCAL-QUAL-DECISION-20260720-01`) reopened G0 for the exact local candidate `b6e75dbbc545c815786ecc15d155a332c21cad2b` only, with durable retention at private ref `refs/omp/candidates/b6e75dbbc545c815786ecc15d155a332c21cad2b`. Formal G1/H1 qualification `PASSED` on Node 22.19.0 and 24.13.0 ([evidence](adr/evidence/omp-g1-h1-qualification.json)), and [ADR-OMP-006](adr/ADR-OMP-006.md) approves a bounded I1 on isolated branch `yu/omp-migrate-39c95e5e`. The fork `dmae97/oh-my-pi` and PR draft remain optional parallel work; can1357 acceptance is not evidenced and is not claimed.
 
-That evidence permits proposing the G0 intake ADR only. It does not start qualification, authorize extraction, or permit runtime/product changes. A new commit, topology replay, private helper, successful Bun run, or tree-shaken bundle alone does not trigger reopening. A hashline extraction proposal enters E1 only after G0 and the dedicated prior extraction ADR pass.
+The reopen trigger is now **candidate-drift re-qualification**: if the qualified commit, tree, parent (`39c95e5e29b1c8b082059f57421ce445c3dffdd4`), ten changed paths, package exports, source blobs, license, or Node 22.19.0/24.13.0 runtime identity changes from `b6e75dbbc545c815786ecc15d155a332c21cad2b`, G0 closes again. Revalidate the object, parent, tree, exact path/blob inventory, exports, source blobs, license, and Node 22.19.0/24.13.0 identities, then re-run the full G1/H1 matrix and refresh the qualification evidence before any new G0/G2/I1 step. A missing object expires the reopened state.
+
+Operator acceptance beyond the recorded `AUTH-LOCAL-QUAL-DECISION-20260720-01` boundary cannot extend G0/I1. The qualified evidence does not authorize extraction as a substitute seam, owner-checkout `main` mutation, publication/release, or any I1 scope outside [ADR-OMP-006](adr/ADR-OMP-006.md). A changed commit, topology replay, private helper, successful Bun run, or bundle cannot carry acceptance forward. E1 still requires its own prior ADR.
 
 ## Current verification commands
 
@@ -231,14 +263,17 @@ The following bounded checks reproduce the committed-document boundary. Use a di
 node -e 'for (const p of process.argv.slice(1)) JSON.parse(require("node:fs").readFileSync(p, "utf8"))' \
   docs/adr/evidence/omp-topology-report.json \
   docs/adr/evidence/omp-pure-probes.json \
-  docs/adr/evidence/omp-pure-source-inventory.json
+  docs/adr/evidence/omp-pure-source-inventory.json \
+  docs/adr/evidence/omp-g0-candidate.json \
+  docs/adr/evidence/omp-g1-h1-qualification.json
 
 printf '%s  %s\n' \
   806aa07ae1f13276d11b30cbabb4a5873e6a4e75dde076040a2d246bf1d68f4d docs/adr/evidence/omp-topology-report.json \
   ef2fdcf288b084537fa1994e5cd19faa154eca8c866b570962cac2e9e942c507 docs/adr/evidence/omp-pure-probes.json \
   e77b5524dc2ff805aba37c53478849056de937573d74359688a7a7d8065aab21 docs/adr/evidence/omp-pure-source-inventory.json | sha256sum -c -
 
-git ls-remote --symref https://github.com/can1357/oh-my-pi.git HEAD
+git ls-remote --symref https://github.com/can1357/oh-my-pi.git HEAD refs/heads/main
+git ls-remote --symref https://github.com/dmae97/oh-my-pi.git HEAD refs/heads/main
 
 # In a disposable full-history OMP clone:
 PIN=9fd6e97113f5ed3a847e66d346970efdf8afcad9
@@ -253,11 +288,15 @@ git diff --quiet "$PIN" "$HEAD" -- \
   packages/hashline/package.json
 ```
 
-Before merging a roadmap update, parse the JSON evidence and verify all relative links. After adding a new roadmap file to the index, run both `git diff --cached --check -- docs/omp-migration-roadmap.md` and `git diff --check -- docs/omp-migration-roadmap.md`; this checks staged content and later unstaged edits. Confirm that `git status --short` contains no unintended files.
+Before sharing a roadmap update, parse the JSON evidence and verify all relative links. Run `git diff --check -- docs/adr/ADR-OMP-004.md docs/adr/evidence/omp-g0-candidate.json docs/omp-migration-roadmap.md` and confirm that `git status --short` names only the intended documentation. Do not stage as part of this draft-only recovery.
 
 ## Document history
 
 | Date | Change |
 | --- | --- |
+| 2026-07-20 | Consistency refresh after ADR-OMP-005/006 acceptance and G1/H1 PASS: recorded ADR-OMP-005 (`ACCEPTED`, `AUTH-LOCAL-QUAL-DECISION-20260720-01`) superseding the U1 upstream-acceptance gate for intake and reopening G0 for candidate `b6e75dbbc545c815786ecc15d155a332c21cad2b` only; recorded formal G1/H1 `PASS` on Node 22.19.0 and 24.13.0 (`docs/adr/evidence/omp-g1-h1-qualification.json`); recorded ADR-OMP-006 (`ACCEPTED`, scope-bounded) approving the I1 unit on isolated branch `yu/omp-migrate-39c95e5e`; updated the verdict, status terms, evidence table, gate-results, feasibility, U1/G0/G1/H1/G2/I1 phase rows, work allowed/not allowed, ownership, reopen trigger, and Node 22.19.0 availability; kept publication/release disabled and owner-checkout main merge excluded. |
 | 2026-07-20 | Added a decision-ready roadmap and rechecked the public OMP default branch against the reviewed pin. |
 | 2026-07-20 | Recorded ADR-OMP-003's exact inert source import while keeping product activation terminated. |
+| 2026-07-20 | Recorded S0's local no-tracking-ref observation, changed ADR-OMP-004 to **DRAFT / BLOCKED**, made can1357 acceptance in a named upstream commit a strict U1 prerequisite, recorded the then-ephemeral detached-worktree retention and bounded remote observations, and required durable PASS/FAIL evidence before raw-artifact deletion. |
+| 2026-07-20 | Recorded authorized local private ref `refs/omp/candidates/b6e75dbbc545c815786ecc15d155a332c21cad2b` as durable local retention for the exact candidate while keeping U1 blocked, G0 unauthorized, product activation terminated, remote candidate publication unclaimed, and future G0 revalidation mandatory. |
+| 2026-07-20 | Recorded the exact authorized creation of public fork `https://github.com/dmae97/oh-my-pi` as **FORK CREATED / BRANCH PENDING**, with public `HEAD`/`main` at `39c95e5e29b1c8b082059f57421ce445c3dffdd4`, `isFork: true`, default branch `main`, no local clone/remote, no candidate branch or pull request, and no evidenced can1357 acceptance. |
