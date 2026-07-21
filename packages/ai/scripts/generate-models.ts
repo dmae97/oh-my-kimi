@@ -1555,6 +1555,11 @@ async function generateModels() {
 			candidate.cost.cacheRead = 0.119;
 		}
 
+		// Enable xhigh/max thinking levels for Qwen reasoning models
+		if (candidate.reasoning && /qwen/i.test(candidate.id)) {
+			mergeThinkingLevelMap(candidate, { xhigh: "high", max: "max" });
+		}
+
 	}
 
 

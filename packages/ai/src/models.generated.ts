@@ -1463,6 +1463,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text"],
 			cost: {
 				input: 0.15,
@@ -1514,6 +1515,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text"],
 			cost: {
 				input: 0.22,
@@ -4003,6 +4005,7 @@ export const MODELS = {
 			baseUrl: "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1",
 			compat: {"sendSessionAffinityHeaders":true},
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text"],
 			cost: {
 				input: 0.0509,
@@ -4279,6 +4282,7 @@ export const MODELS = {
 			baseUrl: "https://api.fireworks.ai/inference",
 			compat: {"sendSessionAffinityHeaders":true,"supportsEagerToolInputStreaming":false,"supportsCacheControlOnTools":false,"supportsLongCacheRetention":false},
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.4,
@@ -5537,7 +5541,7 @@ export const MODELS = {
 			provider: "groq",
 			baseUrl: "https://api.groq.com/openai/v1",
 			reasoning: true,
-			thinkingLevelMap: {"minimal":null,"low":null,"medium":null,"high":"default"},
+			thinkingLevelMap: {"xhigh":"high","max":"max","minimal":null,"low":null,"medium":null,"high":"default"},
 			input: ["text"],
 			cost: {
 				input: 0.29,
@@ -5648,6 +5652,7 @@ export const MODELS = {
 			baseUrl: "https://router.huggingface.co/v1",
 			compat: {"supportsDeveloperRole":false},
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text"],
 			cost: {
 				input: 0.2,
@@ -5666,6 +5671,7 @@ export const MODELS = {
 			baseUrl: "https://router.huggingface.co/v1",
 			compat: {"supportsDeveloperRole":false},
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text"],
 			cost: {
 				input: 0.3,
@@ -5684,6 +5690,7 @@ export const MODELS = {
 			baseUrl: "https://router.huggingface.co/v1",
 			compat: {"supportsDeveloperRole":false},
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text"],
 			cost: {
 				input: 0.29,
@@ -5792,6 +5799,7 @@ export const MODELS = {
 			baseUrl: "https://router.huggingface.co/v1",
 			compat: {"supportsDeveloperRole":false},
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.4,
@@ -5810,6 +5818,7 @@ export const MODELS = {
 			baseUrl: "https://router.huggingface.co/v1",
 			compat: {"supportsDeveloperRole":false},
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.3,
@@ -5828,6 +5837,7 @@ export const MODELS = {
 			baseUrl: "https://router.huggingface.co/v1",
 			compat: {"supportsDeveloperRole":false},
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.25,
@@ -5846,6 +5856,7 @@ export const MODELS = {
 			baseUrl: "https://router.huggingface.co/v1",
 			compat: {"supportsDeveloperRole":false},
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.6,
@@ -5864,6 +5875,7 @@ export const MODELS = {
 			baseUrl: "https://router.huggingface.co/v1",
 			compat: {"supportsDeveloperRole":false},
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.17,
@@ -5882,6 +5894,7 @@ export const MODELS = {
 			baseUrl: "https://router.huggingface.co/v1",
 			compat: {"supportsDeveloperRole":false},
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.47,
@@ -5900,6 +5913,7 @@ export const MODELS = {
 			baseUrl: "https://router.huggingface.co/v1",
 			compat: {"supportsDeveloperRole":false},
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.15,
@@ -6434,25 +6448,6 @@ export const MODELS = {
 		} satisfies Model<"openai-completions">,
 	},
 	"kimi-coding": {
-		"k2p7": {
-			id: "k2p7",
-			name: "Kimi K2.7 Code",
-			api: "anthropic-messages",
-			provider: "kimi-coding",
-			baseUrl: "https://api.kimi.com/coding",
-			headers: {"User-Agent":"KimiCLI/1.5"},
-			reasoning: true,
-			thinkingLevelMap: {"off":null,"minimal":null,"low":null,"medium":null,"high":"high","xhigh":"xhigh"},
-			input: ["text", "image"],
-			cost: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-			},
-			contextWindow: 262144,
-			maxTokens: 32768,
-		} satisfies Model<"anthropic-messages">,
 		"k3": {
 			id: "k3",
 			name: "Kimi K3",
@@ -6471,6 +6466,25 @@ export const MODELS = {
 			},
 			contextWindow: 1048576,
 			maxTokens: 131072,
+		} satisfies Model<"anthropic-messages">,
+		"kimi-for-coding": {
+			id: "kimi-for-coding",
+			name: "Kimi K2.7 Code",
+			api: "anthropic-messages",
+			provider: "kimi-coding",
+			baseUrl: "https://api.kimi.com/coding",
+			headers: {"User-Agent":"KimiCLI/1.5"},
+			reasoning: true,
+			thinkingLevelMap: {"off":null,"minimal":null,"low":null,"medium":null,"high":"high","xhigh":"xhigh"},
+			input: ["text", "image"],
+			cost: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+			},
+			contextWindow: 262144,
+			maxTokens: 32768,
 		} satisfies Model<"anthropic-messages">,
 		"kimi-for-coding-highspeed": {
 			id: "kimi-for-coding-highspeed",
@@ -7778,25 +7792,6 @@ export const MODELS = {
 			},
 			contextWindow: 131072,
 			maxTokens: 32768,
-		} satisfies Model<"openai-completions">,
-		"qwen/qwen3.5-122b-a10b": {
-			id: "qwen/qwen3.5-122b-a10b",
-			name: "Qwen3.5 122B-A10B",
-			api: "openai-completions",
-			provider: "nvidia",
-			baseUrl: "https://integrate.api.nvidia.com/v1",
-			headers: {"NVCF-POLL-SECONDS":"3600"},
-			compat: {"supportsStore":false,"supportsDeveloperRole":false,"supportsReasoningEffort":false,"maxTokensField":"max_tokens","supportsStrictMode":false,"supportsLongCacheRetention":false},
-			reasoning: true,
-			input: ["text", "image"],
-			cost: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-			},
-			contextWindow: 262144,
-			maxTokens: 65536,
 		} satisfies Model<"openai-completions">,
 		"stepfun-ai/step-3.5-flash": {
 			id: "stepfun-ai/step-3.5-flash",
@@ -9585,23 +9580,6 @@ export const MODELS = {
 			contextWindow: 256000,
 			maxTokens: 256000,
 		} satisfies Model<"openai-completions">,
-		"hy3-free": {
-			id: "hy3-free",
-			name: "Hy3 Free",
-			api: "openai-completions",
-			provider: "opencode",
-			baseUrl: "https://opencode.ai/zen/v1",
-			reasoning: true,
-			input: ["text"],
-			cost: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-			},
-			contextWindow: 190000,
-			maxTokens: 64000,
-		} satisfies Model<"openai-completions">,
 		"kimi-k2.5": {
 			id: "kimi-k2.5",
 			name: "Kimi K2.5",
@@ -9763,6 +9741,7 @@ export const MODELS = {
 			provider: "opencode",
 			baseUrl: "https://opencode.ai/zen",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.2,
@@ -9780,6 +9759,7 @@ export const MODELS = {
 			provider: "opencode",
 			baseUrl: "https://opencode.ai/zen",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.5,
@@ -10010,6 +9990,7 @@ export const MODELS = {
 			baseUrl: "https://opencode.ai/zen/go/v1",
 			compat: {"thinkingFormat":"qwen"},
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.5,
@@ -10027,6 +10008,7 @@ export const MODELS = {
 			provider: "opencode-go",
 			baseUrl: "https://opencode.ai/zen/go",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text"],
 			cost: {
 				input: 2.5,
@@ -10044,6 +10026,7 @@ export const MODELS = {
 			provider: "opencode-go",
 			baseUrl: "https://opencode.ai/zen/go",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.4,
@@ -10787,9 +10770,9 @@ export const MODELS = {
 			thinkingLevelMap: {"minimal":null,"low":null,"medium":null,"high":"high","xhigh":"xhigh"},
 			input: ["text"],
 			cost: {
-				input: 0.098,
-				output: 0.196,
-				cacheRead: 0.0196,
+				input: 0.09380000000000001,
+				output: 0.18760000000000002,
+				cacheRead: 0.01876,
 				cacheWrite: 0,
 			},
 			contextWindow: 1048576,
@@ -11095,13 +11078,13 @@ export const MODELS = {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: {
-				input: 0.22,
-				output: 0.55,
-				cacheRead: 0.12,
+				input: 0.12,
+				output: 0.37,
+				cacheRead: 0,
 				cacheWrite: 0,
 			},
 			contextWindow: 262144,
-			maxTokens: 262144,
+			maxTokens: 16384,
 		} satisfies Model<"openai-completions">,
 		"google/gemma-4-31b-it:free": {
 			id: "google/gemma-4-31b-it:free",
@@ -11256,6 +11239,23 @@ export const MODELS = {
 			},
 			contextWindow: 256000,
 			maxTokens: 80000,
+		} satisfies Model<"openai-completions">,
+		"meituan/longcat-2.0": {
+			id: "meituan/longcat-2.0",
+			name: "Meituan: LongCat 2.0",
+			api: "openai-completions",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			reasoning: true,
+			input: ["text"],
+			cost: {
+				input: 0.3,
+				output: 1.2,
+				cacheRead: 0.006,
+				cacheWrite: 0,
+			},
+			contextWindow: 1048756,
+			maxTokens: 262144,
 		} satisfies Model<"openai-completions">,
 		"meta-llama/llama-3.1-70b-instruct": {
 			id: "meta-llama/llama-3.1-70b-instruct",
@@ -11845,9 +11845,9 @@ export const MODELS = {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: {
-				input: 0.85,
-				output: 3.8,
-				cacheRead: 0.16999999999999998,
+				input: 0.82,
+				output: 3.75,
+				cacheRead: 0.16,
 				cacheWrite: 0,
 			},
 			contextWindow: 262144,
@@ -11964,13 +11964,13 @@ export const MODELS = {
 			reasoning: true,
 			input: ["text"],
 			cost: {
-				input: 0.08499999999999999,
-				output: 0.39999999999999997,
+				input: 0.08,
+				output: 0.44999999999999996,
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
 			contextWindow: 1000000,
-			maxTokens: 16384,
+			maxTokens: 4096,
 		} satisfies Model<"openai-completions">,
 		"nvidia/nemotron-3-super-120b-a12b:free": {
 			id: "nvidia/nemotron-3-super-120b-a12b:free",
@@ -13272,6 +13272,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text"],
 			cost: {
 				input: 0.26,
@@ -13289,6 +13290,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text"],
 			cost: {
 				input: 0.12,
@@ -13306,6 +13308,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text"],
 			cost: {
 				input: 0.45499999999999996,
@@ -13340,15 +13343,16 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text"],
 			cost: {
-				input: 0.14950000000000002,
-				output: 1.495,
+				input: 0.3,
+				output: 3,
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
 			contextWindow: 262144,
-			maxTokens: 4096,
+			maxTokens: 32768,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-30b-a3b": {
 			id: "qwen/qwen3-30b-a3b",
@@ -13357,6 +13361,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text"],
 			cost: {
 				input: 0.13,
@@ -13391,6 +13396,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text"],
 			cost: {
 				input: 0.13,
@@ -13408,6 +13414,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text"],
 			cost: {
 				input: 0.08,
@@ -13425,6 +13432,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text"],
 			cost: {
 				input: 0.117,
@@ -13544,6 +13552,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text"],
 			cost: {
 				input: 0.78,
@@ -13563,13 +13572,13 @@ export const MODELS = {
 			reasoning: false,
 			input: ["text"],
 			cost: {
-				input: 0.09999999999999999,
-				output: 1.1,
-				cacheRead: 0.07,
+				input: 0.0975,
+				output: 0.78,
+				cacheRead: 0,
 				cacheWrite: 0,
 			},
 			contextWindow: 262144,
-			maxTokens: 262144,
+			maxTokens: 32768,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-next-80b-a3b-thinking": {
 			id: "qwen/qwen3-next-80b-a3b-thinking",
@@ -13578,6 +13587,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text"],
 			cost: {
 				input: 0.0975,
@@ -13612,6 +13622,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.26,
@@ -13646,6 +13657,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.13,
@@ -13697,6 +13709,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.117,
@@ -13714,6 +13727,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.26,
@@ -13731,6 +13745,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.26,
@@ -13748,6 +13763,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.14,
@@ -13765,6 +13781,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.39,
@@ -13782,6 +13799,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.09999999999999999,
@@ -13799,6 +13817,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.065,
@@ -13816,6 +13835,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.26,
@@ -13833,6 +13853,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.3,
@@ -13850,6 +13871,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.44999999999999996,
@@ -13867,6 +13889,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.14,
@@ -13884,6 +13907,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.1875,
@@ -13901,6 +13925,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text"],
 			cost: {
 				input: 1.04,
@@ -13918,6 +13943,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.325,
@@ -13935,6 +13961,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text"],
 			cost: {
 				input: 1.475,
@@ -13952,6 +13979,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.32,
@@ -14073,13 +14101,13 @@ export const MODELS = {
 			reasoning: true,
 			input: ["text"],
 			cost: {
-				input: 0.19999999999999998,
-				output: 0.7999999999999999,
-				cacheRead: 0.049999999999999996,
+				input: 0.14,
+				output: 0.58,
+				cacheRead: 0.035,
 				cacheWrite: 0,
 			},
 			contextWindow: 262144,
-			maxTokens: 131072,
+			maxTokens: 262144,
 		} satisfies Model<"openai-completions">,
 		"tencent/hy3-preview": {
 			id: "tencent/hy3-preview",
@@ -14097,23 +14125,6 @@ export const MODELS = {
 			},
 			contextWindow: 262144,
 			maxTokens: 4096,
-		} satisfies Model<"openai-completions">,
-		"tencent/hy3:free": {
-			id: "tencent/hy3:free",
-			name: "Tencent: Hy3 (free)",
-			api: "openai-completions",
-			provider: "openrouter",
-			baseUrl: "https://openrouter.ai/api/v1",
-			reasoning: true,
-			input: ["text"],
-			cost: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-			},
-			contextWindow: 262144,
-			maxTokens: 262144,
 		} satisfies Model<"openai-completions">,
 		"thedrummer/unslopnemo-12b": {
 			id: "thedrummer/unslopnemo-12b",
@@ -14401,8 +14412,8 @@ export const MODELS = {
 				cacheRead: 0.119,
 				cacheWrite: 0,
 			},
-			contextWindow: 202752,
-			maxTokens: 202752,
+			contextWindow: 204800,
+			maxTokens: 131072,
 		} satisfies Model<"openai-completions">,
 		"z-ai/glm-5-turbo": {
 			id: "z-ai/glm-5-turbo",
@@ -14447,9 +14458,9 @@ export const MODELS = {
 			reasoning: true,
 			input: ["text"],
 			cost: {
-				input: 0.25339999999999996,
-				output: 0.7964,
-				cacheRead: 0.04706,
+				input: 0.9548,
+				output: 3.0008000000000004,
+				cacheRead: 0.17732,
 				cacheWrite: 0,
 			},
 			contextWindow: 1048576,
@@ -14708,7 +14719,7 @@ export const MODELS = {
 			baseUrl: "https://api.together.ai/v1",
 			compat: {"supportsStore":false,"supportsDeveloperRole":false,"supportsReasoningEffort":false,"maxTokensField":"max_tokens","supportsStrictMode":false,"supportsLongCacheRetention":false,"thinkingFormat":"together"},
 			reasoning: true,
-			thinkingLevelMap: {"minimal":null,"low":null,"medium":null},
+			thinkingLevelMap: {"minimal":null,"low":null,"medium":null,"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.17,
@@ -14727,7 +14738,7 @@ export const MODELS = {
 			baseUrl: "https://api.together.ai/v1",
 			compat: {"supportsStore":false,"supportsDeveloperRole":false,"supportsReasoningEffort":false,"maxTokensField":"max_tokens","supportsStrictMode":false,"supportsLongCacheRetention":false,"thinkingFormat":"together"},
 			reasoning: true,
-			thinkingLevelMap: {"minimal":null,"low":null,"medium":null},
+			thinkingLevelMap: {"minimal":null,"low":null,"medium":null,"xhigh":"high","max":"max"},
 			input: ["text"],
 			cost: {
 				input: 0.5,
@@ -14954,6 +14965,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text"],
 			cost: {
 				input: 0.12,
@@ -14971,6 +14983,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text"],
 			cost: {
 				input: 0.22,
@@ -14988,6 +15001,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text"],
 			cost: {
 				input: 0.12,
@@ -15005,6 +15019,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text"],
 			cost: {
 				input: 0.16,
@@ -15022,6 +15037,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text"],
 			cost: {
 				input: 1.3,
@@ -15039,6 +15055,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.39999999999999997,
@@ -15158,6 +15175,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text"],
 			cost: {
 				input: 1.2,
@@ -15192,6 +15210,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text"],
 			cost: {
 				input: 0.15,
@@ -15243,6 +15262,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.39999999999999997,
@@ -15260,6 +15280,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.09999999999999999,
@@ -15277,6 +15298,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.39999999999999997,
@@ -15294,6 +15316,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.6,
@@ -15311,6 +15334,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.5,
@@ -15328,6 +15352,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text"],
 			cost: {
 				input: 1.25,
@@ -15345,6 +15370,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 0.39999999999999997,
@@ -17859,7 +17885,7 @@ export const MODELS = {
 			cost: {
 				input: 2,
 				output: 6,
-				cacheRead: 0.5,
+				cacheRead: 0.3,
 				cacheWrite: 0,
 			},
 			contextWindow: 500000,

@@ -471,6 +471,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 			timestamp: Date.now(),
 		};
 
+		let rawStopReason: string | undefined;
+
 		try {
 			let client: Anthropic;
 			let isOAuth: boolean;
@@ -660,6 +662,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 					}
 				} else if (event.type === "message_delta") {
 					if (event.delta.stop_reason) {
+						rawStopReason = event.delta.stop_reason;
 						output.stopReason = mapStopReason(event.delta.stop_reason);
 					}
 					// Only update usage fields if present (not null).
@@ -688,7 +691,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 			}
 
 			if (output.stopReason === "aborted" || output.stopReason === "error") {
-				throw new Error("An unknown error occurred");
+				throw new Error(
+					output.stopReason === "error"
+						? `Model ended the turn with a content/safety stop (stop_reason=${rawStopReason ?? "refusal"}); the response was not completed. Often a false positive on benign input — rephrase or retry.`
+						: "An unknown error occurred",
+				);
 			}
 
 			stream.push({ type: "done", reason: output.stopReason, message: output });
