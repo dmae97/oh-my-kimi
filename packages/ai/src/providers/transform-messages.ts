@@ -152,11 +152,16 @@ export function transformMessages<TApi extends Api>(
 		return msg;
 	});
 
-	// Second pass: insert synthetic empty tool results for orphaned tool calls
-	// This preserves thinking signatures and satisfies API requirements
+	// Second pass: insert synthetic empty tool results for orphaned tool calls,
+	// and DROP tool results that no longer have a parent tool call.
+	// Critical for Kimi/K3 and OpenAI-compat APIs that reject:
+	//   400 tool_call_id is not found
+	// when an errored/aborted assistant (with toolCalls) was dropped but its toolResults remained.
 	const result: Message[] = [];
 	let pendingToolCalls: ToolCall[] = [];
 	let existingToolResultIds = new Set<string>();
+	/** toolCall ids that belong to assistants we actually keep in the replay */
+	const liveToolCallIds = new Set<string>();
 	const insertSyntheticToolResults = () => {
 		if (pendingToolCalls.length > 0) {
 			for (const tc of pendingToolCalls) {
@@ -188,6 +193,7 @@ export function transformMessages<TApi extends Api>(
 			// - May have partial content (reasoning without message, incomplete tool calls)
 			// - Replaying them can cause API errors (e.g., OpenAI "reasoning without following item")
 			// - The model should retry from the last valid state
+			// IMPORTANT: also skip their tool results below (no liveToolCallIds registered).
 			const assistantMsg = msg as AssistantMessage;
 			if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
 				continue;
@@ -198,12 +204,20 @@ export function transformMessages<TApi extends Api>(
 			if (toolCalls.length > 0) {
 				pendingToolCalls = toolCalls;
 				existingToolResultIds = new Set();
+				for (const tc of toolCalls) {
+					if (tc.id) liveToolCallIds.add(tc.id);
+				}
 			}
 
 			result.push(msg);
 		} else if (msg.role === "toolResult") {
-			existingToolResultIds.add(msg.toolCallId);
-			result.push(msg);
+			const id = (msg.toolCallId ?? "").trim();
+			// Drop empty ids and results whose parent tool call was never kept (dropped error/aborted assistant).
+			if (!id || !liveToolCallIds.has(id)) {
+				continue;
+			}
+			existingToolResultIds.add(id);
+			result.push(id === msg.toolCallId ? msg : { ...msg, toolCallId: id });
 		} else if (msg.role === "user") {
 			// User message interrupts tool flow - insert synthetic results for orphaned calls
 			insertSyntheticToolResults();
