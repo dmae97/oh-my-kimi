@@ -437,14 +437,6 @@ function classifyProtectedGitCommand(command: string): CommandVerdict | null {
 	if (gitCommand.command === "stash" && gitCommand.originalArgs.length === 0) {
 		return verdict("confirm", "git.stash_bare", "Bare git stash can hide local worktree changes.");
 	}
-	if (gitCommand.command === "add") {
-		if (gitCommand.originalArgs.includes(".")) {
-			return verdict("confirm", "git.add_dot", "git add . can stage unrelated local changes.");
-		}
-		if (gitCommand.originalArgs.includes("-A") || gitCommand.args.includes("--all")) {
-			return verdict("confirm", "git.add_all", "git add -A can stage unrelated local changes.");
-		}
-	}
 	if (gitCommand.command === "commit" && gitCommand.args.includes("--no-verify")) {
 		return verdict("confirm", "git.no_verify", "git commit --no-verify bypasses repository verification hooks.");
 	}
