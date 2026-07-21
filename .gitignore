@@ -87,3 +87,5 @@ collect.sh
 
 # Nested independent extension workspace (own lockfile/config); kept out of the monorepo tree.
 /pi-extensions/
+.turbo/
+.turbo/**
