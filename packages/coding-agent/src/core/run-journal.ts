@@ -12,6 +12,7 @@
  */
 import {
 	assertPreRedactedTerminationMessage,
+	SESSION_TERMINATION_KIND_VALUES,
 	SESSION_TERMINATION_SCHEMA_VERSION,
 	type SessionTermination,
 } from "./session-termination.ts";
@@ -216,25 +217,7 @@ const COMMON_RECORD_KEYS = [
 	"hash",
 ] as const;
 
-const SESSION_TERMINATION_KINDS: ReadonlySet<string> = new Set([
-	"completed",
-	"user_abort",
-	"provider_abort",
-	"provider_auth",
-	"provider_rate_limit",
-	"provider_network",
-	"provider_protocol",
-	"context_overflow",
-	"tool_timeout",
-	"tool_fatal",
-	"compaction",
-	"persistence",
-	"process_signal",
-	"process_crash",
-	"transcript_invalid",
-	"configuration",
-	"internal_error",
-]);
+const SESSION_TERMINATION_KINDS: ReadonlySet<string> = new Set(SESSION_TERMINATION_KIND_VALUES);
 const SESSION_TERMINATION_PHASES: ReadonlySet<string> = new Set([
 	"completed",
 	"control",
@@ -550,7 +533,13 @@ function assertTerminationCoherence(termination: SessionTermination): void {
 				case "protocol":
 					expectedKind = "provider_protocol";
 					expectedPhase = "provider";
-					expectedRetryable = false;
+					// Orphan tool_call_id / sticky transcript shape — retry after sanitize.
+					expectedRetryable = true;
+					break;
+				case "refusal":
+					expectedKind = "provider_refusal";
+					expectedPhase = "provider";
+					expectedRetryable = true;
 					break;
 				case "context_overflow":
 					expectedKind = "context_overflow";
@@ -671,11 +660,15 @@ function assertTerminationCoherence(termination: SessionTermination): void {
 		throw new TypeError("termination transcriptIssue is only valid for transcript causes");
 	}
 
+	// Keep in lockstep with isSafeToAutoRetry() in session-termination.ts.
+	// provider_refusal: Fable/Claude false-positive safety stops may auto-retry once when sideEffects=none.
 	const expectedSafeToAutoRetry =
 		termination.retryable &&
 		termination.source === "observed" &&
 		termination.sideEffects === "none" &&
-		(termination.kind === "provider_rate_limit" || termination.kind === "provider_network");
+		(termination.kind === "provider_rate_limit" ||
+			termination.kind === "provider_network" ||
+			termination.kind === "provider_refusal");
 	if (termination.safeToAutoRetry !== expectedSafeToAutoRetry) {
 		throw new TypeError("termination safeToAutoRetry flag is incoherent");
 	}

@@ -17,7 +17,12 @@ import {
 	serializeRunJournalLine,
 	serializeRunJournalMaterial,
 } from "../src/core/run-journal.ts";
-import { classifySessionTermination, type SessionTermination } from "../src/core/session-termination.ts";
+import {
+	classifySessionTermination,
+	SESSION_TERMINATION_KIND_VALUES,
+	type SessionTermination,
+	type SessionTerminationCause,
+} from "../src/core/session-termination.ts";
 
 const NOW = "2026-07-16T00:00:00.000Z";
 const NOW2 = "2026-07-16T00:00:01.000Z";
@@ -184,6 +189,90 @@ describe("RunJournal writer", () => {
 		expect(report.ok).toBe(true);
 		expect(report.records).toHaveLength(2);
 		expect(report.openRunId).toBeNull();
+	});
+
+	it("journals a provider refusal termination without masking it as a protocol error", () => {
+		const journal = new RunJournal({
+			hashFn: testHash,
+			sessionId: SESSION,
+			runId: "run-1",
+			sessionRevision: 0,
+			timestamp: NOW,
+		});
+		const refusal = classifySessionTermination({
+			sessionId: SESSION,
+			runId: "run-1",
+			timestamp: NOW2,
+			source: "observed",
+			message:
+				"Model ended the turn with a content/safety stop (stop_reason=refusal); the response was not completed. Often a false positive on benign input — rephrase or retry.",
+			cause: { area: "provider", code: "refusal" },
+			sideEffects: "none",
+			provider: "anthropic",
+			model: "claude-fable-5",
+		});
+		expect(refusal.kind).toBe("provider_refusal");
+
+		const finished = journal.finish({ termination: refusal, sessionRevision: 0, timestamp: NOW2 });
+		expect(finished.termination.kind).toBe("provider_refusal");
+
+		const report = inspectRunJournal(journal.toBytes(), testHash);
+		expect(report.ok).toBe(true);
+		expect(report.records).toHaveLength(2);
+	});
+
+	it("accepts every termination kind the classifier can produce (validator drift lock)", () => {
+		const causes: readonly SessionTerminationCause[] = [
+			{ area: "completed" },
+			{ area: "user", code: "abort" },
+			{ area: "provider", code: "abort" },
+			{ area: "provider", code: "auth" },
+			{ area: "provider", code: "rate_limit" },
+			{ area: "provider", code: "network" },
+			{ area: "provider", code: "protocol" },
+			{ area: "provider", code: "refusal" },
+			{ area: "provider", code: "context_overflow" },
+			{ area: "transcript", code: "missing_result" },
+			{ area: "tool", code: "timeout" },
+			{ area: "tool", code: "fatal" },
+			{ area: "compaction", code: "failed" },
+			{ area: "persistence", code: "append_failed" },
+			{ area: "process", code: "signal", signal: "SIGTERM" },
+			{ area: "process", code: "crash" },
+			{ area: "configuration", code: "invalid" },
+			{ area: "internal", code: "unclassified" },
+		];
+		const producedKinds = new Set<string>();
+		for (const [index, cause] of causes.entries()) {
+			const runId = `run-${index}`;
+			const source = cause.area === "process" && cause.code === "crash" ? "inferred_on_resume" : "observed";
+			const termination = classifySessionTermination({
+				sessionId: SESSION,
+				runId,
+				timestamp: NOW2,
+				source,
+				message: "drift lock probe",
+				cause,
+				sideEffects: "none",
+			});
+			producedKinds.add(termination.kind);
+			const journal = new RunJournal({
+				hashFn: testHash,
+				sessionId: SESSION,
+				runId,
+				sessionRevision: 0,
+				timestamp: NOW,
+			});
+			if (termination.kind === "process_crash") {
+				journal.recover({ termination, sessionRevision: 0, timestamp: NOW2 });
+			} else {
+				journal.finish({ termination, sessionRevision: 0, timestamp: NOW2 });
+			}
+			expect(inspectRunJournal(journal.toBytes(), testHash).ok).toBe(true);
+		}
+		for (const kind of SESSION_TERMINATION_KIND_VALUES) {
+			expect(producedKinds.has(kind), `classifier must be able to produce kind ${kind}`).toBe(true);
+		}
 	});
 
 	it("supports recovered and abandoned terminations", () => {
@@ -844,7 +933,7 @@ describe("P73 hardening regressions", () => {
 				timestamp: NOW2,
 			}),
 		).toThrow("transcriptIssue");
-		// safeToAutoRetry must be true only for observed + sideEffects none + provider rate_limit/network.
+		// safeToAutoRetry: observed + sideEffects none + provider rate_limit/network/refusal.
 		expect(() =>
 			journal.finish({
 				termination: rateLimitTermination("run-1", SESSION, NOW2),

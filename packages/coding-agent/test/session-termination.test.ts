@@ -42,6 +42,7 @@ describe("classifySessionTermination", () => {
 		{ cause: { area: "provider", code: "rate_limit" }, kind: "provider_rate_limit" },
 		{ cause: { area: "provider", code: "network" }, kind: "provider_network" },
 		{ cause: { area: "provider", code: "protocol" }, kind: "provider_protocol" },
+		{ cause: { area: "provider", code: "refusal" }, kind: "provider_refusal" },
 		{ cause: { area: "provider", code: "context_overflow" }, kind: "context_overflow" },
 		{ cause: { area: "tool", code: "timeout" }, kind: "tool_timeout" },
 		{ cause: { area: "tool", code: "fatal" }, kind: "tool_fatal" },
@@ -101,6 +102,38 @@ describe("classifySessionTermination", () => {
 		expect(classify({ area: "process", code: "crash" }, { source: "inferred_on_resume" }).safeToAutoRetry).toBe(
 			false,
 		);
+	});
+
+	it("Given a provider refusal stop, When classified, Then it is honest, retryable, and never auto-retried", () => {
+		const termination = classifySessionTermination({
+			sessionId: "session-1",
+			runId: "run-refusal",
+			timestamp: NOW,
+			source: "observed",
+			message:
+				"Model ended the turn with a content/safety stop (stop_reason=refusal); the response was not completed. Often a false positive on benign input — rephrase or retry.",
+			cause: { area: "provider", code: "refusal" },
+			sideEffects: "none",
+			provider: "anthropic",
+			model: "claude-fable-5",
+		});
+
+		const rendered = formatSessionTermination(termination);
+
+		expect(termination).toMatchObject({
+			kind: "provider_refusal",
+			phase: "provider",
+			causeCode: "provider.refusal",
+			retryable: true,
+		});
+		// A refusal must be distinguished from a transport/protocol error...
+		expect(termination.kind).not.toBe("provider_protocol");
+		// Benign Fable false-positives may auto-retry once when sideEffects=none.
+		expect(termination.safeToAutoRetry).toBe(true);
+		expect(rendered).toContain("kind=provider_refusal");
+		expect(rendered).toContain("cause=provider.refusal");
+		expect(rendered).toContain("stop_reason=refusal");
+		expect(termination.nextAction).toMatch(/false positive|rephrase|retry|switch model/i);
 	});
 
 	it("preserves only bounded structured metadata", () => {
