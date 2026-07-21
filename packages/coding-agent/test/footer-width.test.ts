@@ -85,6 +85,9 @@ function createFooterData(providerCount: number): ReadonlyFooterDataProvider {
 		getAvailableProviderCount: () => providerCount,
 		getCpuPercent: () => null,
 		getMemoryRssBytes: () => null,
+		getSystemCpuPercent: () => null,
+		getSystemMemoryUsedBytes: () => null,
+		getSystemMemoryTotalBytes: () => null,
 		getPackageIntakeSummary: () => packageIntakeSummary,
 		onBranchChange: (callback: () => void) => {
 			void callback;
