@@ -41,6 +41,8 @@ On first run, omk detects your terminal background and defaults to `omk-control-
 
 The bundled Tinted themes are generated from [`tinted-theming/schemes`](https://github.com/tinted-theming/schemes) Base24 palettes (MIT): Catppuccin Mocha, Tokyo Night Storm, Kanagawa Dragon, Gruvbox Dark, and Dracula.
 
+The Aurora pair (`omk-aurora-dark`, `omk-aurora-light`; aliases `aurora`, `aurora-dark`, `aurora-light`) ships a WCAG-verified palette: body text ≥14:1 contrast, muted ≥5.7:1, and semantic colors (success/error/warning/accent) ≥4.5:1 against their backgrounds, with a stepped thinking-level color ramp (dim → muted → accent → accentSoft → magenta). Both variants share the same 51-token map so light/dark switching stays visually consistent.
+
 ## Creating a Custom Theme
 
 1. Create a theme file:
