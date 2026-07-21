@@ -43,6 +43,7 @@ import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { resolvePath } from "../utils/paths.ts";
 import { sanitizeBinaryOutput } from "../utils/shell.ts";
 import { sleep } from "../utils/sleep.ts";
+import { type AdaptorchBridge, type AdaptorchConsultPayload, createAdaptorchBridge } from "./adaptorch-bridge.ts";
 import {
 	applyCategoryTimeoutDefaults,
 	resolveAgentToolSettings,
@@ -139,6 +140,14 @@ import type { BashExecutionMessage, CustomMessage } from "./messages.ts";
 import type { ModelRegistry } from "./model-registry.ts";
 import { findExactModelReferenceMatch } from "./model-resolver.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
+import {
+	isContentSafetyStopMessage,
+	isStickySafetyModel,
+	isTransientProviderErrorMessage,
+	pickFailoverCandidate,
+	resolveProviderResilience,
+	stickySafetyBlockMessage,
+} from "./provider-resilience.ts";
 import {
 	getBiasStepsForCell,
 	getDefaultRouterBiasSnapshotPath,
@@ -596,6 +605,16 @@ export class AgentSession {
 	private _reasoningRouterBiasSnapshot: RouterBiasSnapshot | null = null;
 	private _reasoningRouterBiasSnapshotLoaded = false;
 
+	/**
+	 * AdaptOrch advisory bridge (default-off, global-only opt-in via
+	 * `adaptorchBridge.enabled` in ~/.omk/agent/settings.json). Lazily
+	 * constructed on the first v4 auto-turn when enabled; stays `null`
+	 * otherwise. The bridge is advisory-only: its hint is fused into the
+	 * resolver as a bounded ±2 step nudge, never as an override.
+	 */
+	private _adaptorchBridge: AdaptorchBridge | null = null;
+	private _adaptorchBridgeInitAttempted = false;
+
 	// Event subscription state
 	private _unsubscribeAgent?: () => void;
 	private _eventListeners: AgentSessionEventListener[] = [];
@@ -847,15 +866,29 @@ export class AgentSession {
 		if (isContextOverflow(message, this.model?.contextWindow ?? 0)) {
 			return { area: "provider", code: "context_overflow" };
 		}
+		// Fable/Claude often emit stop_reason=refusal on benign turns (false positive).
+		// Match broadly so we never mislabel these as provider.protocol.
+		if (
+			/stop_reason\s*=\s*(refusal|sensitive)|content\/safety stop|safety stop|provider\.refusal|kind=provider_refusal/i.test(
+				text,
+			)
+		) {
+			return { area: "provider", code: "refusal" };
+		}
 		if (/auth|unauthori[sz]ed|forbidden|invalid.?api.?key|no api key|401|403|\/login/i.test(text)) {
 			return { area: "provider", code: "auth" };
 		}
 		if (/rate.?limit|too many requests|429|quota|available balance|billing/i.test(text)) {
 			return { area: "provider", code: "rate_limit" };
 		}
+		// Kimi/K3 + OpenAI-compat: orphan tool results after dropped error assistants.
+		// Sanitize-and-retry (transform-messages drops orphans), not a hard tool fatal.
+		if (/tool_call_id\s+is\s+not\s+found|tool_call_id\s+not\s+found|unknown\s+tool_call_id/i.test(text)) {
+			return { area: "provider", code: "protocol" };
+		}
 		if (/tool.+timed? out|tool.+timeout/i.test(text)) return { area: "tool", code: "timeout" };
-		if (/tool/i.test(text)) return { area: "tool", code: "fatal" };
-		if (/network|fetch failed|connection|socket|websocket|timed? out|timeout|dns|econn/i.test(text)) {
+		if (/\btool\b/i.test(text) && !/tool_call_id/i.test(text)) return { area: "tool", code: "fatal" };
+		if (/network|fetch failed|connection|socket|websocket|timed? out|timeout|dns|econn|^terminated$/i.test(text)) {
 			return { area: "provider", code: "network" };
 		}
 		return { area: "provider", code: "protocol" };
@@ -2010,6 +2043,9 @@ export class AgentSession {
 				throw new Error(formatNoModelSelectedMessage());
 			}
 
+			// Root-level: eject sticky safety models (Fable) before the turn leaves the machine.
+			await this._ejectStickySafetyModelIfNeeded();
+
 			// Grok OAuth: refuse Imagine ids on the chat/completions path (tool-only).
 			assertTextChatModelForCompletion(this.model.id, this.model.provider);
 
@@ -2472,6 +2508,12 @@ export class AgentSession {
 			throw new Error(`No API key for ${model.provider}/${model.id}`);
 		}
 
+		// Root-level: block sticky safety models (Fable) unless explicitly allowed in settings.
+		const resilience = resolveProviderResilience(this.settingsManager.getProviderResilienceSettings());
+		if (resilience.blockStickySafetyModels && isStickySafetyModel(model.id, model.provider)) {
+			throw new Error(stickySafetyBlockMessage(model.id, model.provider));
+		}
+
 		// Grok OAuth: block selecting Imagine models as the session chat model.
 		assertTextChatModelForCompletion(model.id, model.provider);
 
@@ -2501,7 +2543,14 @@ export class AgentSession {
 	}
 
 	private async _cycleScopedModel(direction: "forward" | "backward"): Promise<ModelCycleResult | undefined> {
-		const scopedModels = this._scopedModels.filter((scoped) => this._modelRegistry.hasConfiguredAuth(scoped.model));
+		const resilience = resolveProviderResilience(this.settingsManager.getProviderResilienceSettings());
+		const scopedModels = this._scopedModels.filter((scoped) => {
+			if (!this._modelRegistry.hasConfiguredAuth(scoped.model)) return false;
+			if (resilience.blockStickySafetyModels && isStickySafetyModel(scoped.model.id, scoped.model.provider)) {
+				return false;
+			}
+			return true;
+		});
 		if (scopedModels.length <= 1) return undefined;
 
 		const currentModel = this.model;
@@ -2513,24 +2562,21 @@ export class AgentSession {
 		const next = scopedModels[nextIndex];
 		const thinkingLevel = this._getThinkingLevelForModelSwitch(next.thinkingLevel);
 
-		// Apply model
-		this.agent.state.model = next.model;
-		this.sessionManager.appendModelChange(next.model.provider, next.model.id);
-		this.settingsManager.setDefaultModelAndProvider(next.model.provider, next.model.id);
-
-		// Apply thinking level.
-		// - Explicit scoped model thinking level overrides current session level
-		// - Undefined scoped model thinking level inherits the current session preference
-		// setThinkingLevel clamps to model capabilities.
+		// Single path through setModel (sticky block + auth + Imagine guards).
+		await this.setModel(next.model);
+		// Explicit scoped thinking level still applies after switch.
 		this.setThinkingLevel(thinkingLevel);
-
-		await this._emitModelSelect(next.model, currentModel, "cycle");
 
 		return { model: next.model, thinkingLevel: this.thinkingLevel, isScoped: true };
 	}
 
 	private async _cycleAvailableModel(direction: "forward" | "backward"): Promise<ModelCycleResult | undefined> {
-		const availableModels = await this._modelRegistry.getAvailable();
+		const resilience = resolveProviderResilience(this.settingsManager.getProviderResilienceSettings());
+		const raw = await this._modelRegistry.getAvailable();
+		// Hard-kill sticky safety models from the cycle list (Fable must not re-enter via hotkey).
+		const availableModels = resilience.blockStickySafetyModels
+			? raw.filter((m) => !isStickySafetyModel(m.id, m.provider))
+			: raw;
 		if (availableModels.length <= 1) return undefined;
 
 		const currentModel = this.model;
@@ -2541,15 +2587,8 @@ export class AgentSession {
 		const nextIndex = direction === "forward" ? (currentIndex + 1) % len : (currentIndex - 1 + len) % len;
 		const nextModel = availableModels[nextIndex];
 
-		const thinkingLevel = this._getThinkingLevelForModelSwitch();
-		this.agent.state.model = nextModel;
-		this.sessionManager.appendModelChange(nextModel.provider, nextModel.id);
-		this.settingsManager.setDefaultModelAndProvider(nextModel.provider, nextModel.id);
-
-		// Re-clamp thinking level for new model's capabilities
-		this.setThinkingLevel(thinkingLevel);
-
-		await this._emitModelSelect(nextModel, currentModel, "cycle");
+		// Always go through setModel so sticky blocks / auth / Imagine guards stay single-path.
+		await this.setModel(nextModel);
 
 		return { model: nextModel, thinkingLevel: this.thinkingLevel, isScoped: false };
 	}
@@ -2660,7 +2699,13 @@ export class AgentSession {
 						hadDiff: features.hadDiff,
 					});
 
-		const resolved = resolveThinkingLevelV4WithUncertainty(verdict, availableLevels, undefined, bias, null);
+		const resolved = resolveThinkingLevelV4WithUncertainty(
+			verdict,
+			availableLevels,
+			undefined,
+			bias,
+			this._getAdaptorchHint(verdict, features),
+		);
 
 		if (learningEnabled && resolved !== "off") {
 			const record: RouterFeedbackRecord = {
@@ -2762,6 +2807,84 @@ export class AgentSession {
 		if (pressure >= 0.75) return 2;
 		if (pressure >= 0.5) return 1;
 		return 0;
+	}
+
+	/**
+	 * AdaptOrch advisory bridge hint accessor (default-off, global-only).
+	 * Lazily constructs the bridge on first call when enabled; returns `null`
+	 * (no hint) otherwise. The bridge's `getFreshHint` is synchronous and
+	 * cache-read-only, so this never blocks the turn-start path. A fire-and-
+	 * forget `requestRefresh` is issued for the NEXT turn's benefit.
+	 *
+	 * The returned hint is shaped as `{ level, confidence }` for the resolver's
+	 * hint-fusion slot: confidence is mapped from the bridge's closed
+	 * `confidenceBand` enum (low=0.5, medium=0.75, high=0.95) and the level is
+	 * derived from the bridge's `taskClass` via the same static rule table the
+	 * resolver uses. The resolver's own HINT_CONFIDENCE_THRESHOLD (0.7) gates
+	 * whether the hint actually fuses, so a "low" band hint is structurally
+	 * inert.
+	 */
+	private _getAdaptorchHint(
+		verdict: { taskClass: TaskClassV4 },
+		features: { lenBucket: RouterFeedbackLenBucket; hadFence: boolean; hadDiff: boolean },
+	): { level: import("omk-agent-core").ThinkingLevel; confidence: number } | null {
+		if (!this.settingsManager.getAdaptorchBridgeEnabled()) return null;
+
+		// Lazy init (at most once per session)
+		if (!this._adaptorchBridgeInitAttempted) {
+			this._adaptorchBridgeInitAttempted = true;
+			const bridgeSettings = this.settingsManager.getAdaptorchBridgeSettings();
+			this._adaptorchBridge = createAdaptorchBridge({
+				// The advisory function is a no-op stub until a real MCP transport
+				// is wired by a future lane. The bridge's circuit breaker and budget
+				// counter ensure this stub can never cause harm.
+				advisoryFn: async () => null,
+				ttlMs: bridgeSettings?.ttlMs,
+				timeoutMs: bridgeSettings?.timeoutMs,
+				maxConsultsPerSession: bridgeSettings?.maxConsultsPerSession,
+				failureThreshold: bridgeSettings?.failureThreshold,
+			});
+		}
+
+		const bridge = this._adaptorchBridge;
+		if (bridge === null) return null;
+
+		const payload: AdaptorchConsultPayload = {
+			schemaVersion: 1,
+			taskClass: verdict.taskClass as AdaptorchConsultPayload["taskClass"],
+			runnerUp: verdict.taskClass as AdaptorchConsultPayload["runnerUp"],
+			marginBucket: "high",
+			lenBucket: features.lenBucket as AdaptorchConsultPayload["lenBucket"],
+			hadFence: features.hadFence,
+			hadDiff: features.hadDiff,
+			pressureBucket: this._computePressureBucket() as AdaptorchConsultPayload["pressureBucket"],
+		};
+
+		// Fire-and-forget refresh for next turn
+		bridge.requestRefresh(payload);
+
+		// Synchronous cache read for this turn
+		const hint = bridge.getFreshHint(payload);
+		if (hint === null) return null;
+
+		// Map confidenceBand -> numeric confidence for the resolver's threshold gate
+		const confidenceMap: Record<string, number> = { low: 0.5, medium: 0.75, high: 0.95 };
+		const confidence = confidenceMap[hint.confidenceBand] ?? 0.5;
+
+		// Map taskClass -> ThinkingLevel via the same rule table the resolver uses
+		const levelMap: Record<string, import("omk-agent-core").ThinkingLevel> = {
+			trivial: "minimal",
+			"simple-edit": "low",
+			"code-gen": "medium",
+			debug: "high",
+			refactor: "high",
+			review: "high",
+			plan: "xhigh",
+		};
+		const level = levelMap[hint.taskClass];
+		if (level === undefined) return null;
+
+		return { level, confidence };
 	}
 
 	/**
@@ -4135,16 +4258,75 @@ export class AgentSession {
 
 		const err = message.errorMessage;
 		if (this._isNonRetryableProviderLimitError(err)) return false;
-		// Match: overloaded_error, provider returned error, rate limit, 429, 500, 502, 503, 504, service unavailable, network/connection errors (including connection lost), WebSocket transport closes/errors, fetch failed, premature stream endings, HTTP/2 closed before response, terminated, retry delay exceeded
-		return /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|connection.?lost|websocket.?closed|websocket.?error|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|ended without|stream ended before message_stop|http2 request did not get a response|timed? out|timeout|terminated|retry delay/i.test(
-			err,
-		);
+		// Shared contract with provider-resilience.ts (Fable safety stop, K3 orphan tool_call_id, terminated).
+		return isTransientProviderErrorMessage(err);
 	}
 
 	/**
 	 * Prepare a retryable error for continuation with exponential backoff.
 	 * @returns true if the caller should continue the agent, false otherwise
 	 */
+	/** Eject sticky safety model at prompt boundary (session resume / leftover default). */
+	private async _ejectStickySafetyModelIfNeeded(): Promise<void> {
+		const resilience = resolveProviderResilience(this.settingsManager.getProviderResilienceSettings());
+		if (!resilience.blockStickySafetyModels) return;
+		const current = this.model;
+		if (!current || !isStickySafetyModel(current.id, current.provider)) return;
+
+		const pick = pickFailoverCandidate(
+			resilience.failoverCandidates,
+			{ provider: current.provider, id: current.id },
+			(c) => {
+				const next = this._modelRegistry.find(c.provider, c.id);
+				return !!next && this._modelRegistry.hasConfiguredAuth(next);
+			},
+		);
+		if (!pick) {
+			throw new Error(stickySafetyBlockMessage(current.id, current.provider));
+		}
+		const next = this._modelRegistry.find(pick.provider, pick.id);
+		if (!next) {
+			throw new Error(stickySafetyBlockMessage(current.id, current.provider));
+		}
+		// Bypass setModel sticky check by temporarily allowing via direct state switch path:
+		// setModel itself blocks sticky targets, not sources — safe.
+		await this.setModel(next);
+	}
+
+	/**
+	 * Sticky safety models (e.g. claude-fable-5) often false-positive on coding turns.
+	 * Retrying the same model repeats the refusal — switch via provider-resilience chain first.
+	 */
+	private async _maybeFailoverFromSafetyStop(message: AssistantMessage): Promise<string | undefined> {
+		const resilience = resolveProviderResilience(this.settingsManager.getProviderResilienceSettings());
+		if (!resilience.autoFailoverOnSafetyStop) return undefined;
+		if (!isContentSafetyStopMessage(message.errorMessage)) return undefined;
+
+		const current = this.model;
+		const currentId = message.model || current?.id || "";
+		const currentProvider = message.provider || current?.provider || "";
+		if (!isStickySafetyModel(currentId, currentProvider)) return undefined;
+
+		const pick = pickFailoverCandidate(
+			resilience.failoverCandidates,
+			current ? { provider: current.provider, id: current.id } : undefined,
+			(c) => {
+				const next = this._modelRegistry.find(c.provider, c.id);
+				return !!next && this._modelRegistry.hasConfiguredAuth(next);
+			},
+		);
+		if (!pick) return undefined;
+
+		const next = this._modelRegistry.find(pick.provider, pick.id);
+		if (!next) return undefined;
+		try {
+			await this.setModel(next);
+			return `${next.provider}/${next.id}`;
+		} catch {
+			return undefined;
+		}
+	}
+
 	private async _prepareRetry(message: AssistantMessage): Promise<boolean> {
 		const settings = this.settingsManager.getRetrySettings();
 		if (!settings.enabled) {
@@ -4159,14 +4341,22 @@ export class AgentSession {
 			return false;
 		}
 
-		const delayMs = settings.baseDelayMs * 2 ** (this._retryAttempt - 1);
+		// Content/safety stop on Fable: switch model BEFORE delay so the retry is not another Fable refusal.
+		const failoverTo = await this._maybeFailoverFromSafetyStop(message);
+		// Safety stops are usually immediate false positives — short delay after failover, full backoff otherwise.
+		const delayMs = failoverTo
+			? Math.min(400, settings.baseDelayMs)
+			: settings.baseDelayMs * 2 ** (this._retryAttempt - 1);
+		const errorMessage = failoverTo
+			? `${message.errorMessage || "content/safety stop"} → failover ${failoverTo}`
+			: message.errorMessage || "Unknown error";
 
 		this._emit({
 			type: "auto_retry_start",
 			attempt: this._retryAttempt,
 			maxAttempts: settings.maxRetries,
 			delayMs,
-			errorMessage: message.errorMessage || "Unknown error",
+			errorMessage,
 		});
 
 		// Remove error message from agent state (keep in session for history)

@@ -14,7 +14,7 @@ Do **not** treat preview output as proof that `adaptorch_run` completed; termina
 
 Related packages:
 
-- Experimental WPL loop design: `packages/adaptorch-wpl/` (design-stage; not wired into the default OMK CLI).
+- WPL loop package: `packages/adaptorch-wpl/` (stable since 0.91.0; ships with the CLI as a runtime dependency).
 - Advisory bridge (default-off): `packages/coding-agent/src/core/adaptorch-bridge.ts`.
 - Grok + AdaptOrch presets: [grok-harness.md](./grok-harness.md).
 

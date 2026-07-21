@@ -1,8 +1,8 @@
-# omk-adaptorch-wpl (experimental, design-stage)
+# omk-adaptorch-wpl
 
-> **Status**: Experimental. Not wired into the `open-multi-agent-kit` CLI. Not published. This
-> package implements the AdaptOrch-native Work Packet Loop (WPL) design, an original execution
-> loop whose only work-producing action is AdaptOrch's `adaptorch_run` tool. See
+> **Status**: Stable (v0.90.9). Wired into `open-multi-agent-kit` as a workspace dependency.
+> This package implements the AdaptOrch-native Work Packet Loop (WPL) design, an original
+> execution loop whose only work-producing action is AdaptOrch's `adaptorch_run` tool. See
 > [AdaptOrch](https://adaptorch.com) for the backend product this integrates with; AdaptOrch is
 > still under active development and this integration currently targets its free **Start** tier.
 
@@ -23,6 +23,19 @@ review that shaped the safety gates below) lives outside this package at
 - `src/adaptorch-client.ts` — thin typed wrapper around AdaptOrch's 10 MCP tools
 - `src/adjudicator.ts` + `src/adjudicator-registry.ts` — the Outcome Adjudicator and its per-`kind` registry
 - `src/loop.ts` — the integration layer wiring the state machine, AdaptOrch client, and adjudicator together
+- `src/b2c-mapper.ts` — B2C (Bridge-to-Code) mapping for patch-apply safety
+- `src/b2c-verdict.ts` — Verdict card schema for correctness wall decisions
+- `src/deep-wall.ts` — Deep verification wall for multi-runner evidence gating
+- `src/receipt-signature.ts` — Cryptographic receipt signing for verification evidence
+
+## Integration
+
+The coding-agent consumes this package via:
+
+- `packages/coding-agent/src/core/adaptorch-bridge.ts` — advisory-only bridge (default-off,
+  circuit-breaker protected, TTL-cached). Provides `getFreshHint` (sync, cache-read-only) and
+  `requestRefresh` (fire-and-forget) for the reasoning router's turn-start path.
+- `packages/coding-agent/docs/adaptorch-preview.md` — read-first planning pipeline spec.
 
 ## Safety notes (do not remove without updating the design docs)
 
