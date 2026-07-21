@@ -35,9 +35,11 @@ if [ $RUN_BROWSER_SMOKE -eq 1 ]; then
   fi
 fi
 
-# Restage files that were previously staged and may have been modified by formatting
+# Restage files that were previously staged and may have been modified by formatting.
+# Skip gitignored paths (e.g. intentionally untracked-but-kept local assets);
+# re-adding them would fail and their staged deletion is already correct.
 for file in $STAGED_FILES; do
-  if [ -f "$file" ]; then
+  if [ -f "$file" ] && ! git check-ignore -q "$file"; then
     git add "$file"
   fi
 done
