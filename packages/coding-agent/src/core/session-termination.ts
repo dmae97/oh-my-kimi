@@ -1,24 +1,33 @@
 export const SESSION_TERMINATION_SCHEMA_VERSION = 1 as const;
 export const MAX_SESSION_TERMINATION_MESSAGE_LENGTH = 512;
 
-export type SessionTerminationKind =
-	| "completed"
-	| "user_abort"
-	| "provider_abort"
-	| "provider_auth"
-	| "provider_rate_limit"
-	| "provider_network"
-	| "provider_protocol"
-	| "context_overflow"
-	| "transcript_invalid"
-	| "tool_timeout"
-	| "tool_fatal"
-	| "compaction"
-	| "persistence"
-	| "process_signal"
-	| "process_crash"
-	| "configuration"
-	| "internal_error";
+/**
+ * Canonical list of termination kinds. The run-journal validator derives its
+ * runtime bounds from this tuple so a newly added kind can never crash
+ * journaling with "termination kind is out of bounds" again.
+ */
+export const SESSION_TERMINATION_KIND_VALUES = [
+	"completed",
+	"user_abort",
+	"provider_abort",
+	"provider_auth",
+	"provider_rate_limit",
+	"provider_network",
+	"provider_protocol",
+	"provider_refusal",
+	"context_overflow",
+	"transcript_invalid",
+	"tool_timeout",
+	"tool_fatal",
+	"compaction",
+	"persistence",
+	"process_signal",
+	"process_crash",
+	"configuration",
+	"internal_error",
+] as const;
+
+export type SessionTerminationKind = (typeof SESSION_TERMINATION_KIND_VALUES)[number];
 
 export type SessionTerminationPhase =
 	| "completed"
@@ -41,6 +50,7 @@ export type ProviderTerminationCauseCode =
 	| "rate_limit"
 	| "network"
 	| "protocol"
+	| "refusal"
 	| "context_overflow";
 export type ToolTerminationCauseCode = "timeout" | "fatal";
 export type CompactionTerminationCauseCode = "aborted" | "failed" | "stale";
@@ -174,6 +184,7 @@ const PROVIDER_CAUSE_CODES = new Set<ProviderTerminationCauseCode>([
 	"rate_limit",
 	"network",
 	"protocol",
+	"refusal",
 	"context_overflow",
 ]);
 const TOOL_CAUSE_CODES = new Set<ToolTerminationCauseCode>(["timeout", "fatal"]);
@@ -349,17 +360,27 @@ function classifyProvider(code: ProviderTerminationCauseCode): Classification {
 				retryable: true,
 			};
 		case "protocol":
+			// Many "protocol" stops are sticky transcript shape bugs (orphan tool_call_id)
+			// that succeed after transform-messages sanitizes and the turn is retried.
+			// Mark retryable so auto-retry can heal; safeToAutoRetry stays false (needs sanitize path).
 			return {
 				kind: "provider_protocol",
 				phase: "provider",
 				causeCode: "provider.protocol",
-				retryable: false,
+				retryable: true,
 			};
 		case "context_overflow":
 			return {
 				kind: "context_overflow",
 				phase: "provider",
 				causeCode: "provider.context_overflow",
+				retryable: true,
+			};
+		case "refusal":
+			return {
+				kind: "provider_refusal",
+				phase: "provider",
+				causeCode: "provider.refusal",
 				retryable: true,
 			};
 	}
@@ -443,11 +464,15 @@ function classifyCause(cause: SessionTerminationCause, source: SessionTerminatio
 }
 
 function isSafeToAutoRetry(classification: Classification, input: ClassifySessionTerminationInput): boolean {
+	// provider_refusal: Fable/Claude often false-positive on benign turns. Safe to auto-retry once
+	// when no tool side effects occurred (same class of recovery as rate_limit/network).
 	return (
 		classification.retryable &&
 		input.source === "observed" &&
 		input.sideEffects === "none" &&
-		(classification.kind === "provider_rate_limit" || classification.kind === "provider_network")
+		(classification.kind === "provider_rate_limit" ||
+			classification.kind === "provider_network" ||
+			classification.kind === "provider_refusal")
 	);
 }
 
@@ -466,7 +491,9 @@ function nextActionFor(classification: Classification, input: ClassifySessionTer
 		case "provider_network":
 			return "Check network and provider connectivity, then retry.";
 		case "provider_protocol":
-			return "Check provider compatibility and response diagnostics before retrying.";
+			return "Often an orphan tool_call_id / sticky transcript after a dropped error turn — auto-retry after sanitize, or /new session if it persists.";
+		case "provider_refusal":
+			return "Model declined this turn (content/safety stop). Usually a false positive on Fable/Claude — auto-retry once, or switch model (k3/grok-4.5/deepseek) / rephrase as a pure coding task.";
 		case "context_overflow":
 			return "Compact or reduce context, or switch to a larger-context model.";
 		case "tool_timeout":

@@ -106,6 +106,21 @@ export {
 	type WorkingIndicatorOptions,
 } from "./extensions/index.ts";
 export {
+	DEFAULT_PROVIDER_RESILIENCE,
+	DEFAULT_SAFETY_FAILOVER_CANDIDATES,
+	type FailoverCandidate,
+	isContentSafetyStopMessage,
+	isOrphanToolCallIdError,
+	isStickySafetyModel,
+	isTransientProviderErrorMessage,
+	type ProviderResilienceSettings,
+	pickFailoverCandidate,
+	resolveFailoverCandidates,
+	resolveProviderResilience,
+	STICKY_SAFETY_MODEL_RE,
+	stickySafetyBlockMessage,
+} from "./provider-resilience.ts";
+export {
 	appendRunJournalRecordDurably,
 	type OpenRunJournalStoreOptions,
 	type RunJournalQuarantineReport,

@@ -9,6 +9,7 @@ import { type Api, type KnownProvider, type Model, modelsAreEqual } from "omk-ai
 import { isValidThinkingLevel } from "../cli/args.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
 import type { ModelRegistry } from "./model-registry.ts";
+import { DEFAULT_SAFETY_FAILOVER_CANDIDATES, isStickySafetyModel } from "./provider-resilience.ts";
 
 /** Default model IDs for each known provider */
 export const defaultModelPerProvider: Record<KnownProvider, string> = {
@@ -533,10 +534,10 @@ export async function findInitialModel(options: {
 		};
 	}
 
-	// 3. Try saved default from settings
+	// 3. Try saved default from settings (skip sticky safety models like claude-fable-5)
 	if (defaultProvider && defaultModelId) {
 		const found = modelRegistry.find(defaultProvider, defaultModelId);
-		if (found) {
+		if (found && !isStickySafetyModel(found.id, found.provider)) {
 			model = found;
 			if (defaultThinkingLevel) {
 				thinkingLevel = defaultThinkingLevel;
@@ -547,19 +548,28 @@ export async function findInitialModel(options: {
 
 	// 4. Try first available model with valid API key
 	const availableModels = await modelRegistry.getAvailable();
+	const usable = availableModels.filter((m) => !isStickySafetyModel(m.id, m.provider));
 
-	if (availableModels.length > 0) {
-		// Try to find a default model from known providers
-		for (const provider of Object.keys(defaultModelPerProvider) as KnownProvider[]) {
-			const defaultId = defaultModelPerProvider[provider];
-			const match = availableModels.find((m) => m.provider === provider && m.id === defaultId);
+	if (usable.length > 0) {
+		// Prefer resilience failover chain (k3 → grok → deepseek) before generic defaults
+		for (const c of DEFAULT_SAFETY_FAILOVER_CANDIDATES) {
+			const match = usable.find((m) => m.provider === c.provider && m.id === c.id);
 			if (match) {
 				return { model: match, thinkingLevel: DEFAULT_THINKING_LEVEL, fallbackMessage: undefined };
 			}
 		}
 
-		// If no default found, use first available
-		return { model: availableModels[0], thinkingLevel: DEFAULT_THINKING_LEVEL, fallbackMessage: undefined };
+		// Try to find a default model from known providers
+		for (const provider of Object.keys(defaultModelPerProvider) as KnownProvider[]) {
+			const defaultId = defaultModelPerProvider[provider];
+			const match = usable.find((m) => m.provider === provider && m.id === defaultId);
+			if (match) {
+				return { model: match, thinkingLevel: DEFAULT_THINKING_LEVEL, fallbackMessage: undefined };
+			}
+		}
+
+		// If no default found, use first usable (non-sticky)
+		return { model: usable[0], thinkingLevel: DEFAULT_THINKING_LEVEL, fallbackMessage: undefined };
 	}
 
 	// 5. No model found
