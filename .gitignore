@@ -24,6 +24,13 @@ packages/*/dist-firefox/
 !.omk/prompts/**
 !.omk/skills/
 !.omk/skills/**
+# Sensitive core: leaked vendor prompt corpus + liberation prompt-engineering
+# research. Never committed; integrity manifest kept locally (also ignored).
+.omk/skills/system-prompts-leaks/
+.omk/skills/system-prompts-leaks/**
+.omk/skills/omk-godmod/
+.omk/skills/omk-godmod/**
+.omk/.sha256-sensitive
 packages/coding-agent/omk-session-*.html
 /GOAL-GJC-OMK-CONTROL-PORT.md
 
