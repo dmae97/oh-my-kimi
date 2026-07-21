@@ -8,6 +8,7 @@ const packages = [
 	{ directory: "packages/ai", name: "omk-ai" },
 	{ directory: "packages/tui", name: "omk-tui" },
 	{ directory: "packages/agent", name: "omk-agent-core" },
+	{ directory: "packages/adaptorch-wpl", name: "omk-adaptorch-wpl" },
 	{ directory: "packages/coding-agent", name: "open-multi-agent-kit" },
 ];
 
