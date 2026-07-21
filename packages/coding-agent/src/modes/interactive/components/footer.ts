@@ -82,25 +82,28 @@ export class FooterComponent implements Component {
 	}
 
 	/**
-	 * Build a compact CPU/memory metrics segment for the footer.
+	 * Build a compact system-wide CPU/memory metrics segment for the footer.
 	 * Degrades gracefully to shorter forms (or is omitted entirely) when the
 	 * terminal is very narrow so the rest of the footer can still render.
 	 */
 	private buildMetricsSegment(width: number): string | undefined {
-		const cpu = this.footerData.getCpuPercent();
-		const mem = this.footerData.getMemoryRssBytes();
-		if (cpu === null || mem === null) {
+		const cpu = this.footerData.getSystemCpuPercent();
+		const memUsed = this.footerData.getSystemMemoryUsedBytes();
+		const memTotal = this.footerData.getSystemMemoryTotalBytes();
+		if (cpu === null || memUsed === null || memTotal === null || memTotal <= 0) {
 			return undefined;
 		}
 
-		const memWarningThreshold = 1024 * 1024 * 1024; // 1 GiB
-		const memErrorThreshold = 1.5 * 1024 * 1024 * 1024; // 1.5 GiB
+		const memPercent = (memUsed / memTotal) * 100;
 		const color: "error" | "warning" | "dim" =
-			cpu >= 90 || mem >= memErrorThreshold ? "error" : cpu >= 70 || mem >= memWarningThreshold ? "warning" : "dim";
+			cpu >= 90 || memPercent >= 95 ? "error" : cpu >= 70 || memPercent >= 85 ? "warning" : "dim";
 
 		const cpuStr = `${Math.round(cpu)}%`;
-		const memStr = formatBytes(mem);
+		const memStr = `${Math.round(memPercent)}%`;
 
+		if (width >= 56) {
+			return theme.fg(color, `CPU ${cpuStr} MEM ${memStr} (${formatBytes(memUsed)}/${formatBytes(memTotal)})`);
+		}
 		if (width >= 48) {
 			return theme.fg(color, `CPU ${cpuStr} MEM ${memStr}`);
 		}

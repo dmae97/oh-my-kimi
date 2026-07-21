@@ -176,6 +176,21 @@ export class FooterDataProvider {
 		return this.metricsSampler.getMemoryRssBytes();
 	}
 
+	/** System-wide CPU busy percent (0-100), or `null` if not yet sampled. */
+	getSystemCpuPercent(): number | null {
+		return this.metricsSampler.getSystemCpuPercent();
+	}
+
+	/** System-wide used memory in bytes, or `null` if not yet sampled. */
+	getSystemMemoryUsedBytes(): number | null {
+		return this.metricsSampler.getSystemMemoryUsedBytes();
+	}
+
+	/** System total physical memory in bytes, or `null` if not yet sampled. */
+	getSystemMemoryTotalBytes(): number | null {
+		return this.metricsSampler.getSystemMemoryTotalBytes();
+	}
+
 	getPackageIntakeSummary(): PiPackageIntakeSummary {
 		return evaluatePiPackageIntake().summary;
 	}
@@ -410,5 +425,8 @@ export type ReadonlyFooterDataProvider = Pick<
 	| "onBranchChange"
 	| "getCpuPercent"
 	| "getMemoryRssBytes"
+	| "getSystemCpuPercent"
+	| "getSystemMemoryUsedBytes"
+	| "getSystemMemoryTotalBytes"
 	| "getPackageIntakeSummary"
 >;
