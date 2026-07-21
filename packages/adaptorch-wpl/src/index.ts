@@ -1,8 +1,9 @@
 /**
- * Public entry point for `omk-adaptorch-wpl` (experimental, design-stage).
+ * Public entry point for `omk-adaptorch-wpl` (stable since 0.91.0).
  *
  * See README.md and `.omk/runs/adaptorch-native-loop-algorithm-20260701/final-part{1,2,3}-*.md`
- * for the design this package implements. Not wired into the `open-multi-agent-kit` CLI yet.
+ * for the design this package implements. Ships as a runtime dependency of the
+ * `open-multi-agent-kit` CLI.
  */
 
 export type { AdaptOrchTransport } from "./adaptorch-client.ts";

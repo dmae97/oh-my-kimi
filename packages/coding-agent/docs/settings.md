@@ -20,6 +20,8 @@ Edit directly or use `/settings` for common options.
 | `defaultThinkingLevel` | string | - | `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"` |
 | `hideThinkingBlock` | boolean | `false` | Hide thinking blocks in output |
 | `thinkingBudgets` | object | - | Custom token budgets per thinking level |
+| `reasoningRouterLearning` | object | - | Opt-in v4 router learning bias (global settings file only) |
+| `adaptorchBridge` | object | - | Opt-in AdaptOrch advisory bridge for the auto thinking-level resolver (global settings file only) |
 
 #### thinkingBudgets
 
@@ -30,6 +32,34 @@ Edit directly or use `/settings` for common options.
     "low": 4096,
     "medium": 10240,
     "high": 32768
+  }
+}
+```
+
+#### reasoningRouterLearning
+
+```json
+{
+  "reasoningRouterLearning": {
+    "enabled": false,
+    "biasSnapshotPath": "~/.omk/agent/router-bias.json",
+    "feedbackLedgerPath": "~/.omk/agent/router-feedback.jsonl"
+  }
+}
+```
+
+#### adaptorchBridge
+
+Advisory-only hint source for the v4 auto thinking-level resolver. Read from the **global** settings file only — a project-scope `.omk/settings.json` value is ignored by design. Default is fully off; the bridge is circuit-breaker protected and TTL-cached, and its hint can only nudge the resolved level by a bounded ±2 steps.
+
+```json
+{
+  "adaptorchBridge": {
+    "enabled": false,
+    "ttlMs": 300000,
+    "timeoutMs": 1500,
+    "maxConsultsPerSession": 5,
+    "failureThreshold": 3
   }
 }
 ```

@@ -89,6 +89,26 @@ export interface ReasoningRouterLearningSettings {
 	feedbackLedgerPath?: string;
 }
 
+/**
+ * AdaptOrch advisory bridge settings (global-only, default off).
+ * When enabled, the reasoning router consults the AdaptOrch advisory bridge
+ * for task-class hints via a circuit-breaker-protected, TTL-cached channel.
+ * The bridge is advisory-only: it can never override the resolver's own
+ * confidence-band/fallback-reason escalation.
+ */
+export interface AdaptorchBridgeSettings {
+	/** default: false — master switch for the advisory bridge */
+	enabled?: boolean;
+	/** Cache TTL in ms; clamped to [30000, 300000]. Default 300000 (5min). */
+	ttlMs?: number;
+	/** Per-attempt timeout in ms; clamped to [1, 30000]. Default 1500. */
+	timeoutMs?: number;
+	/** Max advisory attempts per session. Default 5. */
+	maxConsultsPerSession?: number;
+	/** Consecutive failures before circuit opens. Default 3. */
+	failureThreshold?: number;
+}
+
 export interface MarkdownSettings {
 	codeBlockIndent?: string; // default: "  "
 }
@@ -128,6 +148,8 @@ export interface Settings {
 	agent?: AgentRuntimeSettings;
 	branchSummary?: BranchSummarySettings;
 	retry?: RetrySettings;
+	/** Root-level recovery: block sticky safety models, auto-failover on content/safety stop. */
+	providerResilience?: import("./provider-resilience.ts").ProviderResilienceSettings;
 	hideThinkingBlock?: boolean;
 	shellPath?: string; // Custom shell path (e.g., for Cygwin users on Windows)
 	quietStartup?: boolean;
@@ -148,6 +170,7 @@ export interface Settings {
 	treeFilterMode?: "default" | "no-tools" | "user-only" | "labeled-only" | "all"; // Default filter when opening /tree
 	thinkingBudgets?: ThinkingBudgetsSettings; // Custom token budgets for thinking levels
 	reasoningRouterLearning?: ReasoningRouterLearningSettings; // Opt-in v4 learning bias (default off; global-only, see SettingsManager getters)
+	adaptorchBridge?: AdaptorchBridgeSettings; // Opt-in AdaptOrch advisory bridge (default off; global-only)
 	editorPaddingX?: number; // Horizontal padding for input editor (default: 0)
 	autocompleteMaxVisible?: number; // Max visible items in autocomplete dropdown (default: 5)
 	showHardwareCursor?: boolean; // Show terminal cursor while still positioning it for IME
@@ -846,6 +869,12 @@ export class SettingsManager {
 		};
 	}
 
+	getProviderResilienceSettings(): import("./provider-resilience.ts").ProviderResilienceSettings {
+		const raw = this.settings.providerResilience;
+		if (!raw || typeof raw !== "object") return {};
+		return raw;
+	}
+
 	getHttpIdleTimeoutMs(): number {
 		return parseTimeoutSetting(this.settings.httpIdleTimeoutMs, "httpIdleTimeoutMs") ?? DEFAULT_HTTP_IDLE_TIMEOUT_MS;
 	}
@@ -1057,6 +1086,19 @@ export class SettingsManager {
 	/** Global-only override path for the reasoning-router feedback ledger; undefined uses the default. */
 	getReasoningRouterLearningFeedbackLedgerPath(): string | undefined {
 		return this.globalSettings.reasoningRouterLearning?.feedbackLedgerPath;
+	}
+
+	/**
+	 * AdaptOrch advisory bridge opt-in. Default off. Read directly from
+	 * `globalSettings`, never the merged `settings` view, so a project-scope
+	 * `.omk/settings.json` value can never turn this on.
+	 */
+	getAdaptorchBridgeEnabled(): boolean {
+		return this.globalSettings.adaptorchBridge?.enabled === true;
+	}
+
+	getAdaptorchBridgeSettings(): AdaptorchBridgeSettings | undefined {
+		return this.globalSettings.adaptorchBridge;
 	}
 
 	getShowImages(): boolean {
