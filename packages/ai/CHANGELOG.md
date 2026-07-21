@@ -2,9 +2,15 @@
 
 ## [Unreleased]
 
+## [0.91.0] - 2026-07-21
+
 ### Added
 
 - Added two built-in subscription (OAuth) providers to `/login` → "Use a subscription": **Qwen (Qwen Code Subscription)** via the RFC 8628 device-authorization + PKCE flow (client id, endpoints and scopes mirror the open-source qwen-code CLI; the token `resource_url` is used to expose `qwen3-coder-plus`/`qwen3-coder-flash` through the `openai-completions` API) and **Grok (xAI OAuth Proxy)**, whose login verifies the local `grok-oauth-proxy` (`/health`) instead of running a competing xAI refresher and exposes `grok-4.5`/`grok-4.3` against the proxy base URL (`OMK_GROK_PROXY_BASE_URL` / `OMK_GROK_PROXY_API_KEY` overridable).
+
+### Fixed
+
+- Corrected `kimi-coding` model IDs used by the provider integration tests to the registered `kimi-for-coding` identifier, restoring a clean `tsgo --noEmit` across the workspace.
 
 ## [0.90.8] - 2026-07-13
 

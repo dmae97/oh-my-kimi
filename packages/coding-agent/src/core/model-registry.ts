@@ -477,7 +477,10 @@ export class ModelRegistry {
 			}
 		}
 
-		this.models = combined;
+		// Root-level: never expose sticky safety models (claude-fable-5) in the catalog/picker.
+		// Override via OMK_ALLOW_STICKY_SAFETY_MODELS=1 only for deliberate experiments.
+		const allowSticky = process.env.OMK_ALLOW_STICKY_SAFETY_MODELS === "1";
+		this.models = allowSticky ? combined : combined.filter((m) => !/fable/i.test(m.id));
 	}
 
 	/** Load built-in models and apply provider/model overrides */

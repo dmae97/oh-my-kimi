@@ -15,7 +15,7 @@
 <p align="center">
   <a href="https://discord.com/invite/3cU7Bz4UPx"><img alt="Discord" src="https://img.shields.io/badge/discord-community-5865F2?style=flat-square&logo=discord&logoColor=white" /></a>
   <a href="https://www.npmjs.com/package/open-multi-agent-kit"><img alt="npm" src="https://img.shields.io/npm/v/open-multi-agent-kit?style=flat-square" /></a>
-  <a href="https://github.com/dmae97/omk/releases/tag/v0.90.8"><img alt="Release" src="https://img.shields.io/badge/release-v0.90.8-00d7ff?style=flat-square" /></a>
+  <a href="https://github.com/dmae97/omk/releases/tag/v0.91.0"><img alt="Release" src="https://img.shields.io/badge/release-v0.91.0-00d7ff?style=flat-square" /></a>
 </p>
 
 > New issues and PRs from new contributors are auto-closed by default. Maintainers review auto-closed issues daily. See [CONTRIBUTING.md](https://github.com/dmae97/open-multi-agent-kit/blob/v0.90.4/CONTRIBUTING.md).
@@ -31,6 +31,19 @@
 The OMK//CONTROL startup surface is the default operator view. The header reads `omk v<package.version> · OMK//CONTROL`, using the published `open-multi-agent-kit` package version as the single source of truth.
 
 The default dark TUI theme uses the `omk-control-grid-dark` Night City palette and keeps the control sidebar focused on route, evidence, loop, MCP, runtime, skills, and context budget state.
+
+## Release v0.91.0
+
+This feature release moves footer resource metrics to whole-machine telemetry, ships the WCAG-verified Aurora theme pair, stabilizes the AdaptOrch Work Packet Loop package as a CLI runtime dependency, and adds two built-in subscription providers (Qwen, Grok).
+
+| Area | What changed |
+|------|--------------|
+| Footer metrics | CPU/MEM now reflect the whole machine (`os.cpus()` busy %, `totalmem - freemem`) instead of the OMK process, with percentage-based warning/error thresholds. |
+| Themes | `omk-aurora-dark` / `omk-aurora-light`: WCAG-verified contrast (body ≥14:1, semantic ≥4.5:1), stepped thinking-level ramp, aliases `aurora` / `aurora-dark` / `aurora-light`. |
+| AdaptOrch | `omk-adaptorch-wpl` promoted to stable as a CLI runtime dependency; opt-in global-only `adaptorchBridge` advisory hints for the auto thinking-level resolver (default off). |
+| Providers | New built-in subscription providers under `/login`: Qwen (Qwen Code Subscription) and Grok (xAI OAuth Proxy). |
+
+GitHub-focused release notes live in [RELEASE_NOTES_v0.91.0.md](https://github.com/dmae97/omk/blob/v0.91.0/.github/RELEASE_NOTES_v0.91.0.md). The GitHub release workflow also extracts the canonical release body from [packages/coding-agent/CHANGELOG.md](https://github.com/dmae97/omk/blob/v0.91.0/packages/coding-agent/CHANGELOG.md).
 
 ## Release v0.90.8
 
