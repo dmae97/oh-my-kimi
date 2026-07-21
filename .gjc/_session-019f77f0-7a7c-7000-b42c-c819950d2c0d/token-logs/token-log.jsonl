@@ -1,3 +1,0 @@
-{"subagentId":"root","agent":"main","turn":1,"at":"2026-07-19T01:15:05.426Z","input":16816,"output":463,"cacheRead":0,"cacheWrite":0,"totalTokens":17279,"model":"deepseek-v4-pro"}
-{"subagentId":"root","agent":"main","turn":2,"at":"2026-07-19T01:15:47.212Z","input":8559,"output":711,"cacheRead":16768,"cacheWrite":0,"totalTokens":26038,"model":"deepseek-v4-pro"}
-{"subagentId":"root","agent":"main","turn":3,"at":"2026-07-19T01:17:20.652Z","input":75483,"output":1041,"cacheRead":25216,"cacheWrite":0,"totalTokens":101740,"model":"deepseek-v4-pro"}
