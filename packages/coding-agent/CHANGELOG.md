@@ -2,9 +2,28 @@
 
 ## [Unreleased]
 
+## [0.91.0] - 2026-07-21
+
+### Added
+
+- **System-wide resource metrics in the footer** — the footer CPU/MEM segment now reports whole-machine utilization (aggregate `os.cpus()` busy percentage and `totalmem - freemem`) instead of process-scoped usage. Wide terminals show `CPU 42% MEM 35% (18.0GB/50.5GB)`; thresholds are percentage-based (warning ≥70% CPU or ≥85% MEM, error ≥90%/95%). Process-scoped getters remain available on the sampler for diagnostics.
+- **Aurora theme pair** — new built-in `omk-aurora-dark` and `omk-aurora-light` themes with WCAG-verified contrast (body text ≥14:1, muted ≥5.7:1, semantic colors ≥4.5:1), a full 51-token color map, and a stepped thinking-level color ramp. Aliases: `aurora`, `aurora-dark`, `aurora-light`.
+- **AdaptOrch advisory bridge wiring** — opt-in, global-only `adaptorchBridge` settings block (`enabled`, `ttlMs`, `timeoutMs`, `maxConsultsPerSession`, `failureThreshold`). When enabled, the v4 auto thinking-level resolver consults the circuit-breaker-protected, TTL-cached advisory bridge and fuses the returned hint as a bounded ±2-step nudge; the resolver's own confidence escalation still applies on top. Default remains fully off, and a project-scope settings file can never enable it.
+
+### Changed
+
+- **`omk-adaptorch-wpl` promoted to stable** and added as a runtime dependency of `open-multi-agent-kit` (lockstep `0.91.0`). The Work Packet Loop state machine, outcome adjudicator, and verification-wall modules now ship with the CLI package.
+- Repository hygiene: local-only research corpora and audit artifacts are no longer tracked in git (they remain on disk, with a local SHA-256 integrity manifest for the project-owned subset).
+
 ### Fixed
 
 - Masked API-key-like values in newly submitted user chat before extensions, models, event streams, and session persistence.
+- Restored `omk-adaptorch-wpl` handling in the coding-agent shrinkwrap generator so internal workspace packaging stays reproducible.
+
+### Notes
+
+- Published to npm as `open-multi-agent-kit@0.91.0` (lockstep with `omk-ai`, `omk-agent-core`, `omk-tui`, and `omk-adaptorch-wpl` at `0.91.0`).
+- Verification boundary: `tsgo --noEmit` clean; adaptorch-wpl suite 73/73, coding-agent regression suite 784/784, theme suites green. Live-provider coverage remains outside this release.
 
 ## [0.90.9] - 2026-07-19
 

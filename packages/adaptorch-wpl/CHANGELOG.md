@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.91.0] - 2026-07-21
+
+### Changed
+
+- Promoted from experimental design-stage to stable and wired as a runtime dependency of `open-multi-agent-kit` (lockstep `0.91.0`). The package now ships the Work Packet Loop state machine, outcome adjudicator, B2C correctness-wall mapping, deep verification wall, and receipt signing as part of the CLI distribution.
+
 ## [0.90.8] - 2026-07-13
 
 ## [0.90.7] - 2026-07-11

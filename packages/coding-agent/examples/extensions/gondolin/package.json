@@ -1,7 +1,7 @@
 {
 	"name": "omk-extension-gondolin",
 	"private": true,
-	"version": "0.90.9",
+	"version": "0.91.0",
 	"type": "module",
 	"scripts": {
 		"clean": "echo 'nothing to clean'",

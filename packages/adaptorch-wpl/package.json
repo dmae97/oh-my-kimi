@@ -1,8 +1,7 @@
 {
 	"name": "omk-adaptorch-wpl",
-	"version": "0.90.9",
-	"private": true,
-	"description": "Experimental, design-stage AdaptOrch-native Work Packet Loop (WPL). Not wired into the coding-agent CLI yet.",
+	"version": "0.91.0",
+	"description": "AdaptOrch-native Work Packet Loop (WPL) — state machine, verification layer, and integration bridge for OMK orchestration.",
 	"type": "module",
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",

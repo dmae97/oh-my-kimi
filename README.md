@@ -19,7 +19,7 @@
 <p align="center">
   <a href="https://discord.com/invite/3cU7Bz4UPx"><img alt="Discord" src="https://img.shields.io/badge/discord-community-5865F2?style=flat-square&logo=discord&logoColor=white" /></a>
   <a href="https://www.npmjs.com/package/open-multi-agent-kit"><img alt="npm" src="https://img.shields.io/npm/v/open-multi-agent-kit?style=flat-square" /></a>
-  <a href="https://github.com/dmae97/omk/releases/tag/v0.90.9"><img alt="Release" src="https://img.shields.io/badge/release-v0.90.9-00d7ff?style=flat-square" /></a>
+  <a href="https://github.com/dmae97/omk/releases/tag/v0.91.0"><img alt="Release" src="https://img.shields.io/badge/release-v0.91.0-00d7ff?style=flat-square" /></a>
 </p>
 
 > New issues and PRs from new contributors are auto-closed by default. Maintainers review auto-closed issues daily. See [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -87,10 +87,10 @@ OMK is not another model shell. It is the control plane around the models you al
 
 ```bash
 # Global, pinned OMK package
-omk install npm:open-multi-agent-kit@0.90.9
+omk install npm:open-multi-agent-kit@0.91.0
 
 # Project-local, pinned Git package
-omk install -l git:github.com/dmae97/open-multi-agent-kit@v0.90.9
+omk install -l git:github.com/dmae97/open-multi-agent-kit@v0.91.0
 
 # Inspect and control the installed resources
 omk list
@@ -129,6 +129,18 @@ Use the minimum necessary skills per turn—usually one to three. A skill is loa
 - **Extensibility without a fork.** Ship skills, extensions, prompts, and themes as OMK packages instead of teaching every contributor a separate runtime.
 
 The proof standard is operational: evaluate OMK against your own task completion, verification coverage, setup time, and recovery behavior. We do not claim an unmeasured benchmark win over another harness.
+
+## Release v0.91.0
+
+This feature release moves footer resource metrics to whole-machine telemetry, ships the WCAG-verified Aurora theme pair, stabilizes the AdaptOrch Work Packet Loop package as a CLI runtime dependency, and adds an opt-in advisory bridge for the auto thinking-level resolver.
+
+| Area | What changed |
+| Footer metrics | CPU/MEM now reflect the whole machine (`os.cpus()` busy %, `totalmem - freemem`) instead of the OMK process; percentage-based warning/error thresholds. |
+| Themes | `omk-aurora-dark` / `omk-aurora-light` with verified contrast (body ≥14:1, semantic ≥4.5:1) and a stepped thinking-level ramp; aliases `aurora`, `aurora-dark`, `aurora-light`. |
+| AdaptOrch | `omk-adaptorch-wpl` promoted to stable and shipped as a CLI runtime dependency; opt-in global-only `adaptorchBridge` settings fuse advisory hints as bounded ±2-step nudges behind a circuit breaker. |
+| Providers | New built-in subscription providers: Qwen (Qwen Code Subscription) and Grok (xAI OAuth Proxy) under `/login`. |
+
+Release notes live in [.github/RELEASE_NOTES_v0.91.0.md](.github/RELEASE_NOTES_v0.91.0.md). The GitHub release workflow also extracts the canonical release body from [packages/coding-agent/CHANGELOG.md](packages/coding-agent/CHANGELOG.md).
 
 ## Release v0.90.9
 

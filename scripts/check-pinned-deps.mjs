@@ -8,7 +8,7 @@ const ignoredDirectories = new Set([".git", "dist", "node_modules"]);
 const ignoredDirectoryPaths = new Set([".omk/git", ".omk/goals", ".omk/npm", join("vendor", "oh-my-pi")]);
 // The pre-existing third-party scratch tree is only the exact `~` child of the scan root.
 const rootScratchDirectory = "~";
-const internalWorkspaceDependencies = new Set(["omk-agent-core", "omk-ai", "omk-tui"]);
+const internalWorkspaceDependencies = new Set(["omk-adaptorch-wpl", "omk-agent-core", "omk-ai", "omk-tui"]);
 const packageJsonFiles = [];
 const scanRoot = process.argv[2] ?? ".";
 

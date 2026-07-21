@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.91.0] - 2026-07-21
+
+### Notes
+
+- Version lockstep with `open-multi-agent-kit@0.91.0`; no functional changes in this package.
+
 ## [0.90.8] - 2026-07-13
 
 ## [0.90.7] - 2026-07-11
