@@ -59,7 +59,7 @@ When in doubt, cite an evidence class from `AGENTS.md` (read, diff, test output,
 
 The canonical stage breakdown (Inputs, Stages A–F, Algorithms 1–3 as pseudocode) lives in the goal artifact:
 
-**[laneF-preview-spec.md](../../../.omk/goals/adaptorch-preview-omk-plan-2026-07-08/laneF-preview-spec.md)**
+**[adaptorch-preview-spec.md](./adaptorch-preview-spec.md)**
 
 Use that file for implementation planning; this page is the operator-facing intro and claim boundary.
 
