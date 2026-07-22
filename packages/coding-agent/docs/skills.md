@@ -4,6 +4,8 @@
 
 Skills are self-contained capability packages that the agent loads on-demand. A skill provides specialized workflows, setup instructions, helper scripts, and reference documentation for specific tasks.
 
+OMK ships with **no built-in skills** — every skill is user-installed via the locations below, an OMK package, or `--skill`. The default session has zero skills and zero MCP servers configured.
+
 OMK implements the [Agent Skills standard](https://agentskills.io/specification), warning about most violations but remaining lenient. OMK allows skill names to differ from their parent directory even though the standard disallows it; that rule is suboptimal for shared skill directories used across multiple agent harnesses.
 
 ## Table of Contents

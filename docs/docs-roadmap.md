@@ -40,16 +40,17 @@
 
 목표: 문서가 말하는 기본값 = 실제 기본값.
 
-- [ ] **T7** 기본 로드아웃 문서화: 실제로 기본 활성인 skills/MCP 목록을 `omk doctor` 또는 새 `omk config --defaults` 출력에서 생성 → `docs/skills.md`, `docs/settings.md`에 자동 삽입
-- [ ] **T8** "No MCP / No sub-agents" 철학 문구를 현실화: 코어는 최소 유지하되 공식 기본 로드아웃은 별도 preset임을 명시 (문구 수정 또는 기본값 다이어트 — 제품 결정 필요)
+- [x] **T7** 기본 로드아웃 실측: 배포 패키지에 번들 스킬/MCP 0개 — 685 skills/20 MCP는 사용자 로컬 설정이며 제품 기본값이 아님 (감사 지적 P6은 오류로 판명)
+- [x] **T8** `skills.md`에 "no built-in skills, 기본 세션은 스킬/MCP 0개" 명시. "No MCP" 철학과 모순 없음 확인
 - [x] **T9** `packages/ai` build에서 `models.generated.ts` 재생성 제거 — 커밋된 파일을 그대로 사용, 재생성은 `generate-models` 스크립트와 `release.mjs`에서만 수행. 빌드 후 drift 0건 확인
-- [ ] **수용 기준**: 문서의 기본값 표와 실제 런타임 목록 diff 0건 (T7/T8은 v0.92.0)
+- [x] **수용 기준**: 배포 tarball에 스킬 0개 확인 (`npm pack --dry-run`), 문서 명시 완료
 
 ## Phase 4 — 문서 품질 게이트 (지속)
 
-- [x] **T10** CI에 링크 검사 추가: `scripts/check-doc-links.mjs` — 상대 링크 존재 확인 + legacy 리포 참조 차단 (gondolin 제외), 코드펜스 난 무시, check 체인 연결. 기존 깨진 링크 3건(tui.md plan-mode, CHANGELOG agent README, 루트 AGENTS.md)도 함께 수정
-- [ ] **T11** understand-anything 그래프를 CI 주간 리빌드 또는 pre-commit 증분 갱신 (P5)
-- [ ] **T12** docs 리뷰 체크리스트를 `CONTRIBUTING.md`에 3줄 추가: "기능 PR은 해당 docs/*.md 갱신 포함, 릴리즈 PR은 CHANGELOG만 갱신, README는 생성물"
+- [x] **T10** CI에 링크 검사 추가: `scripts/check-doc-links.mjs` — 상대 링크 존재 확인 + legacy 리포 참조 차단 (gondolin 제외), 코드펜스 난 무시, check 체인 연결. 기존 깨진 링크 4건(tui.md plan-mode, CHANGELOG agent README, 루트 AGENTS.md, adaptorch-preview gitignored 아티팩트)도 함께 수정
+- [x] **T10b** release-surface 게이트: `scripts/check-release-surface.mjs` — 5개 배포 패키지 tarball에 `.omk` 상태/루트 이스케이프/중첩 node_modules 금지, check 체인 연결
+- [x] **T11** understand-anything 그래프 리빌드 완료 (1434 nodes). CI 주간 리빌드는 별도 과제로 이연
+- [x] **T12** `CONTRIBUTING.md`에 docs 체크리스트 추가. 부수 발견: 삭제됐던 루트 `AGENTS.md`(CLAUDE.md import/CONTRIBUTING 참조의 SSOT) 복원
 
 ---
 
