@@ -1,11 +1,11 @@
 # Development
 
-See [AGENTS.md](https://github.com/earendil-works/omk-mono/blob/main/AGENTS.md) for additional guidelines.
+See [AGENTS.md](https://github.com/dmae97/omk/blob/main/AGENTS.md) for additional guidelines.
 
 ## Setup
 
 ```bash
-git clone https://github.com/earendil-works/omk-mono
+git clone https://github.com/dmae97/omk
 cd omk-mono
 npm install
 npm run build

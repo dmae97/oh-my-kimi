@@ -130,45 +130,84 @@ Use the minimum necessary skills per turn—usually one to three. A skill is loa
 
 The proof standard is operational: evaluate OMK against your own task completion, verification coverage, setup time, and recovery behavior. We do not claim an unmeasured benchmark win over another harness.
 
+<!-- releases:start -->
+
 ## Release v0.91.0
 
-This feature release moves footer resource metrics to whole-machine telemetry, ships the WCAG-verified Aurora theme pair, stabilizes the AdaptOrch Work Packet Loop package as a CLI runtime dependency, and adds an opt-in advisory bridge for the auto thinking-level resolver.
+### Added
 
-| Area | What changed |
-| Footer metrics | CPU/MEM now reflect the whole machine (`os.cpus()` busy %, `totalmem - freemem`) instead of the OMK process; percentage-based warning/error thresholds. |
-| Themes | `omk-aurora-dark` / `omk-aurora-light` with verified contrast (body ≥14:1, semantic ≥4.5:1) and a stepped thinking-level ramp; aliases `aurora`, `aurora-dark`, `aurora-light`. |
-| AdaptOrch | `omk-adaptorch-wpl` promoted to stable and shipped as a CLI runtime dependency; opt-in global-only `adaptorchBridge` settings fuse advisory hints as bounded ±2-step nudges behind a circuit breaker. |
-| Providers | New built-in subscription providers: Qwen (Qwen Code Subscription) and Grok (xAI OAuth Proxy) under `/login`. |
+- **System-wide resource metrics in the footer** — the footer CPU/MEM segment now reports whole-machine utilization (aggregate `os.cpus()` busy percentage and `totalmem - freemem`) instead of process-scoped usage. Wide terminals show `CPU 42% MEM 35% (18.0GB/50.5GB)`; thresholds are percentage-based (warning ≥70% CPU or ≥85% MEM, error ≥90%/95%). Process-scoped getters remain available on the sampler for diagnostics.
+- **Aurora theme pair** — new built-in `omk-aurora-dark` and `omk-aurora-light` themes with WCAG-verified contrast (body text ≥14:1, muted ≥5.7:1, semantic colors ≥4.5:1), a full 51-token color map, and a stepped thinking-level color ramp. Aliases: `aurora`, `aurora-dark`, `aurora-light`.
+- **AdaptOrch advisory bridge wiring** — opt-in, global-only `adaptorchBridge` settings block (`enabled`, `ttlMs`, `timeoutMs`, `maxConsultsPerSession`, `failureThreshold`). When enabled, the v4 auto thinking-level resolver consults the circuit-breaker-protected, TTL-cached advisory bridge and fuses the returned hint as a bounded ±2-step nudge; the resolver's own confidence escalation still applies on top. Default remains fully off, and a project-scope settings file can never enable it.
 
-Release notes live in [.github/RELEASE_NOTES_v0.91.0.md](.github/RELEASE_NOTES_v0.91.0.md). The GitHub release workflow also extracts the canonical release body from [packages/coding-agent/CHANGELOG.md](packages/coding-agent/CHANGELOG.md).
+### Changed
+
+- **`omk-adaptorch-wpl` promoted to stable** and added as a runtime dependency of `open-multi-agent-kit` (lockstep `0.91.0`). The Work Packet Loop state machine, outcome adjudicator, and verification-wall modules now ship with the CLI package.
+- Repository hygiene: local-only research corpora and audit artifacts are no longer tracked in git (they remain on disk, with a local SHA-256 integrity manifest for the project-owned subset).
+
+### Fixed
+
+- Masked API-key-like values in newly submitted user chat before extensions, models, event streams, and session persistence.
+- Restored `omk-adaptorch-wpl` handling in the coding-agent shrinkwrap generator so internal workspace packaging stays reproducible.
+
+### Notes
+
+- Published to npm as `open-multi-agent-kit@0.91.0` (lockstep with `omk-ai`, `omk-agent-core`, `omk-tui`, and `omk-adaptorch-wpl` at `0.91.0`).
+- Verification boundary: `tsgo --noEmit` clean; adaptorch-wpl suite 73/73, coding-agent regression suite 784/784, theme suites green. Live-provider coverage remains outside this release.
+
+Release notes live in [RELEASE_NOTES_v0.91.0.md](.github/RELEASE_NOTES_v0.91.0.md).
 
 ## Release v0.90.9
 
-This patch release closes every tool turn with exactly one terminal result, adds the deterministic `dag-v2` resource-claim scheduler, execution-bound evidence receipts, transactional compaction, session recovery, and provider diagnostics.
+### Added
 
-| Area | What changed |
-| Tool turns | Every emitted tool call closes with one terminal result across normal, blocked, aborted, timed-out, failed, and resume paths; missing-result repair is idempotent and duplicate/orphan results fail closed. |
-| Agent loop | The deterministic resource-claim DAG scheduler (`dag-v2`) preserves source-order result artifacts; keep `waves-v1` (or set `OMK_TOOL_SCHEDULER=waves-v1`) as the rollback path. |
-| Evidence | Optional execution-bound evidence receipts bind normalized local command outcomes, workspace/artifact fingerprints, redacted output digests, and replay-ledger state. |
-| Sessions | Transactional compaction behind closed tool turns, typed termination, incomplete-run recovery, and `omk session doctor --session <path\|id> --repair --dry-run`. |
-| Providers | `omk provider doctor <provider-id> --level 0` reports sanitized Level 0–2 diagnostics for native, custom OpenAI-compatible, and local-proxy origins. |
+- Closed every emitted tool turn with one terminal result across normal, blocked, aborted, timed-out, failed, and resume paths; missing-result repair remains idempotent and duplicate/orphan results fail closed.
+- Added a deterministic resource-claim DAG scheduler that preserves source-order artifacts, keeps unknown, `bash`, and unclaimed extension tools exclusive, and retains `waves-v1` as the compatibility rollback path.
+- Added execution-bound evidence receipts that bind normalized local command outcomes, artifact/workspace fingerprints, redacted output digests, and replay-ledger state; the built-in CLI and `AgentSession` bash paths remain outside this optional evidence executor.
+- Made compaction transactional behind closed tool turns, revision compare-and-swap, and stale-summary discard.
+- Added typed termination, incomplete-run recovery, and `omk session doctor`, including dry-run repair for unambiguous recoverable state only.
+- Added provider-origin-aware `omk provider doctor` diagnostics with sanitized Level 0–2 probes for native, custom OpenAI-compatible, and local-proxy endpoints.
 
-Release notes live in [.github/RELEASE_NOTES_v0.90.9.md](.github/RELEASE_NOTES_v0.90.9.md). The GitHub release workflow also extracts the canonical release body from [packages/coding-agent/CHANGELOG.md](packages/coding-agent/CHANGELOG.md).
+### Notes
+
+- Published to npm as `open-multi-agent-kit@0.90.9` (lockstep with `omk-ai`, `omk-agent-core`, and `omk-tui` at `0.90.9`); prebuilt binaries are attached to the GitHub release.
+- Verification boundary: build/check and the keyless workspace suite passed; live-provider and other-OS coverage remain outside this release. Validate existing integrations against your workload.
+
+Release notes live in [RELEASE_NOTES_v0.90.9.md](.github/RELEASE_NOTES_v0.90.9.md).
 
 ## Release v0.90.8
 
-This patch release adds the tool-free GPT-5.6 MoA model, ordered path-safe tool-batch waves, global context-budget controls, and evidence-gated computer-use integrations.
+### New Features
 
-| Area | What changed |
-|------|--------------|
-| Models | Added `openai-codex/gpt-5.6-moa`: bounded concurrent Sol/Terra analysis with a single Sol synthesis, plus hardened Codex terminal and cancellation handling. |
-| Agent loop | Ordered `partitionToolBatchWaves` preserve safe parallel reads while path conflicts and unknown calls remain sequential. |
-| Context control | Added global `contextBudget.enabled` and `compaction.model`; planner cache selection stays within the remaining tier budget. |
-| Evidence / verification | Correctness Wall fixtureless live OA now requires a bound MCP handler and otherwise stays preview-only; the evidence ledger is tamper-evident. |
-| Computer use | Added a project-local Stagehand extension and `omk-computeruse` skill with explicit operator approval and redacted results. |
-| Release safety | Nested extension `node_modules` are excluded from release staging while extension source and lockfiles remain versioned. |
+- **GPT-5.6 MoA virtual model** — `openai-codex/gpt-5.6-moa` combines bounded concurrent Sol and Terra analysis into one Sol-synthesized response. See [provider setup](packages/coding-agent/docs/providers.md).
+- **Path-safe parallel tool-batch waves** — independent tool calls run in ordered waves while conflicts and unknown operations remain sequential. See [the agent runtime](packages/agent/README.md).
+- **Context-budget v2 controls** — enable the global budget with `contextBudget.enabled` and select an authenticated compaction model with `compaction.model`. See [settings](packages/coding-agent/docs/settings.md) and [compaction](packages/coding-agent/docs/compaction.md).
+- **Evidence-gated Correctness Wall** — fixtureless live OA uses a bound MCP handler only and otherwise remains preview-only. See the [Correctness Wall example](packages/coding-agent/examples/extensions/correctness-wall/README.md).
+- **Project-local computer use** — the Stagehand extension and `omk-computeruse` skill add bounded, approval-gated browser workflows. See [the extension](.omk/extensions/omk-computeruse-stagehand/README.md).
 
-GitHub-focused release notes live in [.github/RELEASE_NOTES_v0.90.8.md](.github/RELEASE_NOTES_v0.90.8.md). The GitHub release workflow also extracts the canonical release body from [packages/coding-agent/CHANGELOG.md](packages/coding-agent/CHANGELOG.md).
+### Added
+
+- Added the tool-free `openai-codex/gpt-5.6-moa` virtual model, which combines bounded, concurrent GPT-5.6 Sol and Terra analyses into one Sol-synthesized response for analysis and review tasks.
+- Added `partitionToolBatchWaves` to run ordered, contiguous safe tool-call waves instead of serializing an entire batch when one call conflicts or is unknown.
+- Added `compaction.model`, allowing auto-compaction and `/compact` to use an authenticated model such as `zai/glm-5.2` without changing the active session model.
+- Added the project-local Stagehand computer-use extension and `omk-computeruse` skill for bounded browser observation, approval-gated actions, and redacted extraction.
+
+### Changed
+
+- Added global-only `contextBudget.enabled` to activate context-budget v2 for every OMK session; `OMK_CONTEXT_GOVERNOR=1`/`0` remain per-process on/off overrides. Each enabled `AgentSession` reuses an in-memory plan and representation cache without disk or cross-session sharing.
+
+### Fixed
+
+- Fixed the CLI help omitting the accepted `max` and `ultra` thinking levels, and fixed GPT-5.6 Codex `ultra` requests failing with an invalid-enum HTTP 400.
+- Fixed loop write-scope validation to collapse `.`/`..` path segments, so traversal like `src/../package.json` can no longer slip past `allowedWriteScopes`, `deniedWriteScopes`, or changed-file checks.
+- Fixed the context-budget v2 representation chooser to respect the remaining tier budget: it now falls back to a smaller representation (e.g. summary) instead of over-selecting full text and dropping the whole item at the tier ceiling.
+- Hardened the guardrails evidence ledger: replay events now carry a `prevHash`/`eventHash` tamper-evident chain verified on load (edited, deleted, or reordered ledger lines fail closed), `TaskContractBuilder.fromJSON` validates the contract shape instead of blindly casting, `build()`/`getEvents()`/`getLedger()` return deep copies, and verification-report table cells escape pipes/newlines from untrusted claim or command text.
+- Fixed the footer `PKG` counter and control-panel `ports:` label dropping accepted advisory/report-only package ports from every bucket (`PKG 12/16 R0 B0` for 16 accepted candidates); the intake summary now counts them via `acceptedAdvisory`, so all accepted ports read as connected (`PKG 16/16`).
+- Fixed Correctness Wall edit/write hooks to use fixtureless live OA only with non-empty run IDs, explicit MCP transport, and a bound MCP handler; unbound handlers fall back to preview-only evaluation.
+
+Release notes live in [RELEASE_NOTES_v0.90.8.md](.github/RELEASE_NOTES_v0.90.8.md).
+
+<!-- releases:end -->
 
 ## Share your OSS coding agent sessions
 
@@ -201,9 +240,9 @@ default session without extra setup. Actually invoking AdaptOrch (e.g. `adaptorc
 `ADAPTORCH_CONTROL_PLANE_TOKEN` (a dev token is auto-set for a local control plane at `127.0.0.1:8000`) and
 follows normal task-routing rules rather than firing on every message.
 
-This is distinct from `packages/adaptorch-wpl` in this monorepo, an experimental, design-stage Work Packet
-Loop package that is not yet wired into the `open-multi-agent-kit` CLI — see that package's own README for its
-current status.
+This is distinct from `packages/adaptorch-wpl` in this monorepo, the stable Work Packet
+Loop package shipped as a runtime dependency of `open-multi-agent-kit` since v0.91.0 — see that package's own
+README for details.
 
 ## Permissions & Containerization
 
@@ -217,7 +256,7 @@ If you need stronger boundaries, containerize or sandbox OMK. See [packages/codi
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and [AGENTS.md](AGENTS.md) for project-specific rules (for both humans and agents).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and [development.md](packages/coding-agent/docs/development.md) for project setup.
 
 ## Development
 

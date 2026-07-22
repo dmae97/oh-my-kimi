@@ -46,7 +46,7 @@
 ### New Features
 
 - **GPT-5.6 MoA virtual model** — `openai-codex/gpt-5.6-moa` combines bounded concurrent Sol and Terra analysis into one Sol-synthesized response. See [provider setup](docs/providers.md).
-- **Path-safe parallel tool-batch waves** — independent tool calls run in ordered waves while conflicts and unknown operations remain sequential. See [the agent runtime](../../agent/README.md).
+- **Path-safe parallel tool-batch waves** — independent tool calls run in ordered waves while conflicts and unknown operations remain sequential. See [the agent runtime](../agent/README.md).
 - **Context-budget v2 controls** — enable the global budget with `contextBudget.enabled` and select an authenticated compaction model with `compaction.model`. See [settings](docs/settings.md) and [compaction](docs/compaction.md).
 - **Evidence-gated Correctness Wall** — fixtureless live OA uses a bound MCP handler only and otherwise remains preview-only. See the [Correctness Wall example](examples/extensions/correctness-wall/README.md).
 - **Project-local computer use** — the Stagehand extension and `omk-computeruse` skill add bounded, approval-gated browser workflows. See [the extension](../../.omk/extensions/omk-computeruse-stagehand/README.md).
