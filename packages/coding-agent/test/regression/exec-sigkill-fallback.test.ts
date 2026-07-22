@@ -25,10 +25,10 @@ describeUnix("execCommand SIGKILL fallback (regression)", () => {
 	});
 
 	it("terminates a SIGTERM-responsive process at the timeout without waiting for the force-kill window", async () => {
-		const start = Date.now();
+		const start = performance.now();
 		const result = await execCommand("sleep", ["30"], process.cwd(), { timeout: 200 });
 		expect(result.killed).toBe(true);
-		expect(Date.now() - start).toBeLessThan(3000);
+		expect(performance.now() - start).toBeLessThan(3000);
 	});
 
 	it("escalates to SIGKILL when the process traps SIGTERM, so the timeout still terminates it", async () => {
@@ -36,11 +36,11 @@ describeUnix("execCommand SIGKILL fallback (regression)", () => {
 		// becomes true as soon as SIGTERM is successfully SENT, so the SIGKILL escalation
 		// never fired and this promise hung until `sleep 30` finished (or forever for a
 		// process that never exits), defeating both timeout and abort.
-		const start = Date.now();
+		const start = performance.now();
 		const result = await execCommand("bash", ["-c", 'trap "" TERM; sleep 30'], process.cwd(), {
 			timeout: 200,
 		});
-		const elapsed = Date.now() - start;
+		const elapsed = performance.now() - start;
 		expect(result.killed).toBe(true);
 		// timeout (200ms) + force-kill fallback window (5s) + settle grace — far below `sleep 30`.
 		expect(elapsed).toBeGreaterThanOrEqual(5000);

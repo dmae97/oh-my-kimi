@@ -12,7 +12,7 @@ const shrinkwrapPath = join(codingAgentDir, "npm-shrinkwrap.json");
 const internalPackageNames = new Set(["omk-adaptorch-wpl", "omk-agent-core", "omk-ai", "omk-tui"]);
 const allowedInstallScriptPackages = new Map([
 	["@google/genai@1.52.0", "runtime dependency of omk-ai; postinstall validates optional transports"],
-	["protobufjs@7.6.4", "runtime dependency pulled by @google/genai; postinstall prepares protobuf helpers"],
+	["protobufjs@7.6.5", "runtime dependency pulled by @google/genai; postinstall prepares protobuf helpers"],
 ]);
 
 const args = new Set(process.argv.slice(2));

@@ -200,6 +200,23 @@ describe("bedrock convertMessages skips unknown content types", () => {
 	it("replaces blank tool result content with a placeholder", async () => {
 		const messages: Message[] = [
 			{
+				role: "assistant",
+				content: [{ type: "toolCall", id: "tool-1", name: "tool", arguments: {} }],
+				api: "bedrock-converse-stream",
+				provider: "amazon-bedrock",
+				model: baseModel.id,
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "toolUse",
+				timestamp: Date.now(),
+			},
+			{
 				role: "toolResult",
 				toolCallId: "tool-1",
 				toolName: "tool",
@@ -213,8 +230,8 @@ describe("bedrock convertMessages skips unknown content types", () => {
 		const p = payload as {
 			messages: Array<{ role: string; content: Array<{ toolResult: { content: unknown[] } }> }>;
 		};
-		expect(p.messages).toHaveLength(1);
-		expect(p.messages[0].content[0].toolResult.content).toEqual([{ text: "<empty>" }]);
+		expect(p.messages).toHaveLength(2);
+		expect(p.messages[1].content[0].toolResult.content).toEqual([{ text: "<empty>" }]);
 	});
 
 	it("skips assistant messages with only unknown content blocks", async () => {
