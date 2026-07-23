@@ -1,6 +1,6 @@
 {
 	"name": "omk-adaptorch-wpl",
-	"version": "0.91.0",
+	"version": "0.92.0",
 	"description": "AdaptOrch-native Work Packet Loop (WPL) — state machine, verification layer, and integration bridge for OMK orchestration.",
 	"type": "module",
 	"main": "./dist/index.js",

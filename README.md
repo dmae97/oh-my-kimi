@@ -27,7 +27,7 @@
   <a href="https://www.npmjs.com/package/open-multi-agent-kit"><img alt="npm version" src="https://img.shields.io/npm/v/open-multi-agent-kit?style=flat-square&label=npm" /></a>
   <a href="https://www.npmjs.com/package/open-multi-agent-kit"><img alt="npm downloads / month" src="https://img.shields.io/npm/dm/open-multi-agent-kit?style=flat-square" /></a>
   <a href="https://www.npmjs.com/package/open-multi-agent-kit"><img alt="npm total downloads" src="https://img.shields.io/npm/dt/open-multi-agent-kit?style=flat-square&label=total%20dl" /></a>
-  <a href="https://github.com/dmae97/omk/releases/tag/v0.91.0"><img alt="Release" src="https://img.shields.io/badge/release-v0.91.0-00d7ff?style=flat-square" /></a>
+  <a href="https://github.com/dmae97/omk/releases/tag/v0.92.0"><img alt="Release" src="https://img.shields.io/badge/release-v0.92.0-00d7ff?style=flat-square" /></a>
   <a href="LICENSE"><img alt="License MIT" src="https://img.shields.io/npm/l/open-multi-agent-kit?style=flat-square" /></a>
   <img alt="Node version" src="https://img.shields.io/node/v/open-multi-agent-kit?style=flat-square" />
 </p>
@@ -274,10 +274,10 @@ OMK is not another model shell. It is the control plane around the models you al
 
 ```bash
 # Global, pinned OMK package
-omk install npm:open-multi-agent-kit@0.91.0
+omk install npm:open-multi-agent-kit@0.92.0
 
 # Project-local, pinned Git package
-omk install -l git:github.com/dmae97/open-multi-agent-kit@v0.91.0
+omk install -l git:github.com/dmae97/open-multi-agent-kit@v0.92.0
 
 # Inspect and control the installed resources
 omk list
@@ -318,6 +318,24 @@ Use the minimum necessary skills per turn—usually one to three. A skill is loa
 The proof standard is operational: evaluate OMK against your own task completion, verification coverage, setup time, and recovery behavior. We do not claim an unmeasured benchmark win over another harness.
 
 <!-- releases:start -->
+
+## Release v0.92.0
+
+### Added
+
+- Subagent managed-process runtime under `examples/extensions/subagent`: a deadline-budgeted, checkpointed, adaptive subagent executor with process-group lifecycle management (SIGTERM→SIGKILL escalation and resistant-descendant reaping) plus an extension smoke path that runs a registered tool through the managed-process boundary without a provider API.
+- Print mode now reports a clear usage message and exits with code 2 when invoked with no prompt (bare `omk -p`) instead of exiting silently.
+
+### Changed
+
+- Simplified the built-in loadout authority model: every loadout (`inspect`, `plan`, `architect`, `review`, `critic`, `security`, `test`, `visual-qa`) now resolves to `write-scoped` authority with a unified `read/grep/find/ls/edit/write/bash` tool grant and `scoped-shell` command mode, replacing the previous per-loadout read-only / advisory / review-only tiers and their filesystem-MCP downgrade and write-skill stripping. Lane write scope remains gated by the scheduler write-set.
+- Removed the headless credential/secret-file command-safety guard: `classifySecretAccess` and the `secret.read_path` confirm tier are gone, and the agent session no longer applies the safety-floor block for `secret.*` verdicts before spawning a shell. Commands referencing `.env`, `.npmrc`, `.netrc`, `.aws/credentials`, `auth.json`, SSH private keys, `*.pem`/`*.key`, and similar are no longer gated for headless/RPC/LLM bash callers.
+
+### Notes
+
+- Local-only scratch scripts and operator protocol notes are now gitignored and excluded from the release surface.
+
+Release notes live in [RELEASE_NOTES_v0.92.0.md](.github/RELEASE_NOTES_v0.92.0.md).
 
 ## Release v0.91.0
 
@@ -361,38 +379,6 @@ Release notes live in [RELEASE_NOTES_v0.91.0.md](.github/RELEASE_NOTES_v0.91.0.m
 - Verification boundary: build/check and the keyless workspace suite passed; live-provider and other-OS coverage remain outside this release. Validate existing integrations against your workload.
 
 Release notes live in [RELEASE_NOTES_v0.90.9.md](.github/RELEASE_NOTES_v0.90.9.md).
-
-## Release v0.90.8
-
-### New Features
-
-- **GPT-5.6 MoA virtual model** — `openai-codex/gpt-5.6-moa` combines bounded concurrent Sol and Terra analysis into one Sol-synthesized response. See [provider setup](packages/coding-agent/docs/providers.md).
-- **Path-safe parallel tool-batch waves** — independent tool calls run in ordered waves while conflicts and unknown operations remain sequential. See [the agent runtime](packages/agent/README.md).
-- **Context-budget v2 controls** — enable the global budget with `contextBudget.enabled` and select an authenticated compaction model with `compaction.model`. See [settings](packages/coding-agent/docs/settings.md) and [compaction](packages/coding-agent/docs/compaction.md).
-- **Evidence-gated Correctness Wall** — fixtureless live OA uses a bound MCP handler only and otherwise remains preview-only. See the [Correctness Wall example](packages/coding-agent/examples/extensions/correctness-wall/README.md).
-- **Project-local computer use** — the Stagehand extension and `omk-computeruse` skill add bounded, approval-gated browser workflows. See [the extension](.omk/extensions/omk-computeruse-stagehand/README.md).
-
-### Added
-
-- Added the tool-free `openai-codex/gpt-5.6-moa` virtual model, which combines bounded, concurrent GPT-5.6 Sol and Terra analyses into one Sol-synthesized response for analysis and review tasks.
-- Added `partitionToolBatchWaves` to run ordered, contiguous safe tool-call waves instead of serializing an entire batch when one call conflicts or is unknown.
-- Added `compaction.model`, allowing auto-compaction and `/compact` to use an authenticated model such as `zai/glm-5.2` without changing the active session model.
-- Added the project-local Stagehand computer-use extension and `omk-computeruse` skill for bounded browser observation, approval-gated actions, and redacted extraction.
-
-### Changed
-
-- Added global-only `contextBudget.enabled` to activate context-budget v2 for every OMK session; `OMK_CONTEXT_GOVERNOR=1`/`0` remain per-process on/off overrides. Each enabled `AgentSession` reuses an in-memory plan and representation cache without disk or cross-session sharing.
-
-### Fixed
-
-- Fixed the CLI help omitting the accepted `max` and `ultra` thinking levels, and fixed GPT-5.6 Codex `ultra` requests failing with an invalid-enum HTTP 400.
-- Fixed loop write-scope validation to collapse `.`/`..` path segments, so traversal like `src/../package.json` can no longer slip past `allowedWriteScopes`, `deniedWriteScopes`, or changed-file checks.
-- Fixed the context-budget v2 representation chooser to respect the remaining tier budget: it now falls back to a smaller representation (e.g. summary) instead of over-selecting full text and dropping the whole item at the tier ceiling.
-- Hardened the guardrails evidence ledger: replay events now carry a `prevHash`/`eventHash` tamper-evident chain verified on load (edited, deleted, or reordered ledger lines fail closed), `TaskContractBuilder.fromJSON` validates the contract shape instead of blindly casting, `build()`/`getEvents()`/`getLedger()` return deep copies, and verification-report table cells escape pipes/newlines from untrusted claim or command text.
-- Fixed the footer `PKG` counter and control-panel `ports:` label dropping accepted advisory/report-only package ports from every bucket (`PKG 12/16 R0 B0` for 16 accepted candidates); the intake summary now counts them via `acceptedAdvisory`, so all accepted ports read as connected (`PKG 16/16`).
-- Fixed Correctness Wall edit/write hooks to use fixtureless live OA only with non-empty run IDs, explicit MCP transport, and a bound MCP handler; unbound handlers fall back to preview-only evaluation.
-
-Release notes live in [RELEASE_NOTES_v0.90.8.md](.github/RELEASE_NOTES_v0.90.8.md).
 
 <!-- releases:end -->
 

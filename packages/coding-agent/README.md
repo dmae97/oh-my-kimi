@@ -15,7 +15,7 @@
 <p align="center">
   <a href="https://discord.com/invite/3cU7Bz4UPx"><img alt="Discord" src="https://img.shields.io/badge/discord-community-5865F2?style=flat-square&logo=discord&logoColor=white" /></a>
   <a href="https://www.npmjs.com/package/open-multi-agent-kit"><img alt="npm" src="https://img.shields.io/npm/v/open-multi-agent-kit?style=flat-square" /></a>
-  <a href="https://github.com/dmae97/omk/releases/tag/v0.91.0"><img alt="Release" src="https://img.shields.io/badge/release-v0.91.0-00d7ff?style=flat-square" /></a>
+  <a href="https://github.com/dmae97/omk/releases/tag/v0.92.0"><img alt="Release" src="https://img.shields.io/badge/release-v0.92.0-00d7ff?style=flat-square" /></a>
 </p>
 
 > New issues and PRs from new contributors are auto-closed by default. Maintainers review auto-closed issues daily. See [CONTRIBUTING.md](https://github.com/dmae97/open-multi-agent-kit/blob/v0.90.4/CONTRIBUTING.md).
@@ -43,7 +43,7 @@ This feature release moves footer resource metrics to whole-machine telemetry, s
 | AdaptOrch | `omk-adaptorch-wpl` promoted to stable as a CLI runtime dependency; opt-in global-only `adaptorchBridge` advisory hints for the auto thinking-level resolver (default off). |
 | Providers | New built-in subscription providers under `/login`: Qwen (Qwen Code Subscription) and Grok (xAI OAuth Proxy). |
 
-GitHub-focused release notes live in [RELEASE_NOTES_v0.91.0.md](https://github.com/dmae97/omk/blob/v0.91.0/.github/RELEASE_NOTES_v0.91.0.md). The GitHub release workflow also extracts the canonical release body from [packages/coding-agent/CHANGELOG.md](https://github.com/dmae97/omk/blob/v0.91.0/packages/coding-agent/CHANGELOG.md).
+GitHub-focused release notes live in [RELEASE_NOTES_v0.92.0.md](https://github.com/dmae97/omk/blob/v0.92.0/.github/RELEASE_NOTES_v0.92.0.md). The GitHub release workflow also extracts the canonical release body from [packages/coding-agent/CHANGELOG.md](https://github.com/dmae97/omk/blob/v0.92.0/packages/coding-agent/CHANGELOG.md).
 
 ## Release v0.90.8
 

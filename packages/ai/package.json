@@ -1,6 +1,6 @@
 {
 	"name": "omk-ai",
-	"version": "0.91.0",
+	"version": "0.92.0",
 	"description": "Unified LLM API with automatic model discovery and provider configuration",
 	"type": "module",
 	"main": "./dist/index.js",
