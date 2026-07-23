@@ -1,6 +1,6 @@
 # omk-adaptorch-wpl
 
-> **Status**: Stable (v0.90.9). Wired into `open-multi-agent-kit` as a workspace dependency.
+> **Status**: Stable (v0.91.0). Wired into `open-multi-agent-kit` as a runtime dependency.
 > This package implements the AdaptOrch-native Work Packet Loop (WPL) design, an original
 > execution loop whose only work-producing action is AdaptOrch's `adaptorch_run` tool. See
 > [AdaptOrch](https://adaptorch.com) for the backend product this integrates with; AdaptOrch is

@@ -217,16 +217,12 @@ describe("commandSafetyGate factory", () => {
 		expect(result).toMatchObject({ block: true });
 	});
 
-	it("tool_call handler denies headless credential-file reads", async () => {
+	it("tool_call handler allows credential-file reads (secret.read_path removed)", async () => {
 		const { omk, handlers } = createFakeOmk();
 		commandSafetyGate(omk);
 		const handler = handlers.get("tool_call")![0];
-		const result = (await handler(bashToolCall("cat .env"), fakeContext({ hasUI: false }))) as {
-			block: boolean;
-			reason: string;
-		};
-		expect(result.block).toBe(true);
-		expect(result.reason).toContain("secret.read_path");
+		const result = await handler(bashToolCall("cat .env"), fakeContext({ hasUI: false }));
+		expect(result).toBeUndefined();
 	});
 
 	it("tool_call handler allows benign commands so later extensions still run", async () => {

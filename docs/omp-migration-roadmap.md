@@ -144,7 +144,7 @@ Do not put AgentHarness migration on the OMP critical path. Current OMK tool fac
 2. Add only exact-prefix scanner exclusions, provenance, decision documentation, and their guard tests.
 3. The bounded I1 unit is `COMPLETE` and G3-verified ([ADR-OMP-007](adr/ADR-OMP-007.md)); keep the flag-gated loader default-off and the vendor tree inert.
 4. Continue the optional parallel upstream work — push candidate `b6e75dbbc545c815786ecc15d155a332c21cad2b` to a named branch in `https://github.com/dmae97/oh-my-pi` and open a can1357 pull request — without treating it as a gate or making unevidenced acceptance claims.
-5. Specify the hashline source-binding contract: output shape, hash algorithm, line-ending and Unicode normalization, duplicate-anchor behavior, and mismatch semantics (proposal-only until a separately reviewed source-validation write path exists).
+5. ~~Specify the hashline source-binding contract~~ — **DONE 2026-07-22:** [omp-hashline-source-binding-contract.md](adr/omp-hashline-source-binding-contract.md) freezes output shape, SHA-256 domain-separated digests, LF/Unicode normalization, duplicate-anchor/`hash-conflict`/`overlap` rules, and proposal-only mismatch semantics (write path still requires a separate ADR).
 6. Continue OMP-independent AgentHarness work without presenting it as OMP gate progress.
 
 ## Work not allowed now
@@ -241,7 +241,7 @@ ADR-OMP-003 resolves source presence. [ADR-OMP-005](adr/ADR-OMP-005.md) (`ACCEPT
 | Upstream public-seam acceptance | can1357 upstream maintainer | Not locally assignable | Optional parallel work; not gating under ADR-OMP-005; not evidenced |
 | Closure, source, license, and supply-chain audit | Independent reviewer | `compliance-auditor` | G1/H1 evidence reviewed; required again for G3 |
 | Node runtime verification | Runtime/test maintainer | `qa-engineer` | G1/H1 completed on Node 22.19.0 and 24.13.0 |
-| Coding-agent integration | Coding-agent tool/runtime maintainer | `omk-coder` | I1 in progress on isolated branch `yu/omp-migrate-39c95e5e` |
+| Coding-agent integration | Coding-agent tool/runtime maintainer | `omk-coder` | I1 `COMPLETE` + I2 `DEFAULT-ON` (ADR-OMP-008/009); owner main merge recorded; publication still disabled |
 | Independent regression and rollback | Reviewer who did not author I1 | omk-loop coordinator (substitute lane, operator-accepted) | G3 satisfied 2026-07-21 ([report](adr/evidence/omp-g3-verification.json)) |
 | Product acceptance | Product owner | `operator:user` | R1 decided 2026-07-21: publication disabled (ADR-OMP-007) |
 | Publication | Release owner | `operator:user` | R1 decided 2026-07-21: publication/release remain disabled (ADR-OMP-007) |
@@ -295,6 +295,7 @@ Before sharing a roadmap update, parse the JSON evidence and verify all relative
 
 | Date | Change |
 | --- | --- |
+| 2026-07-22 | Specified the hashline source-binding contract ([omp-hashline-source-binding-contract.md](adr/omp-hashline-source-binding-contract.md)) from qualified vendor `proposal.ts` / `proposal-types.ts` (tree `296cfdbb…`): output shape, domain-separated SHA-256, LF/Unicode normalization, duplicate-anchor and conflict codes, proposal-only mismatch semantics for a future write path. Marked work-allowed item 5 done. No write path, no publication, no vendor change. |
 | 2026-07-21 | Recorded ADR-OMP-009 (`ACCEPTED`, operator instruction with benchmark data visible): seams `DEFAULT-ON` for `read` (text) and `grep` (context=0) with byte-identical opt-out (`OMK_OMP_SEAMS=0`); supersedes the default-off boundary of ADR-OMP-006/007/008; `test/tools.test.ts` pins the legacy path; operator accepts the recorded provenance-hash cost as the default experience. Publication remains disabled. |
 | 2026-07-21 | Recorded ADR-OMP-008 (`ACCEPTED`, operator instruction): I2 `COMPLETE` — flag-gated (`OMK_OMP_SEAMS=1`, default off) wiring of the `read`/`grep` tools to the OMP pure seams via a memoized typed facade; 11 new tests pass; full-suite regression parity with the pre-I2 baseline (same 18 LLM-auth e2e failures); benchmark evidence ([evidence](adr/evidence/omp-i2-benchmark.json)) records the seam is not faster (read 1.07→88.96 ms mean; grep +16%) — its value is deterministic source-bound presentation. Publication remains disabled. |
 | 2026-07-21 | Recorded ADR-OMP-007 (`ACCEPTED`, operator request `REQ-OMP-G3-R1-001`): G3 `PASS` on fresh evidence ([evidence](adr/evidence/omp-g3-verification.json)) with operator-accepted substitution review lanes; I1 marked `COMPLETE`; F1 owner-checkout main state acknowledged as-is (no publication; local `main` 13,716 ahead of `origin/main`); R1 `DECIDED` — publication/release/tags/branch pushes/fork PR remain disabled, reopening requires fresh explicit operator decision. |

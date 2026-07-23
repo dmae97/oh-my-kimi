@@ -62,7 +62,7 @@ rl.on("line", (line) => {
   if (message.method === "tools/call") {
     callCount += 1;
     if (mode === "slow-call" && callCount === 1) {
-      setTimeout(() => send(message.id, { content: [{ type: "text", text: "late" }] }), 100);
+      setTimeout(() => send(message.id, { content: [{ type: "text", text: "late" }] }), 1500);
       return;
     }
     send(message.id, { content: [{ type: "text", text: "called:" + message.params.name }] });
@@ -132,7 +132,9 @@ describe("AsideMcpClient", () => {
 		const client = new AsideMcpClient({
 			executable: process.execPath,
 			args: [server.scriptPath],
-			requestTimeoutMs: 75,
+			// Timeout must clear the (startup-sensitive) initialize/tools-list handshake
+			// yet stay below the slow-call delay (1500ms) so open_page still times out.
+			requestTimeoutMs: 750,
 		});
 		try {
 			await client.listTools();

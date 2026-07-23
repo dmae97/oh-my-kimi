@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ContextBudgetItemV2 } from "../src/core/context-budget-governor-v2.ts";
-import { chooseHeadroomRepresentation, getHeadroomRuntimeStatus } from "../src/core/context-budget-headroom.ts";
+import {
+	chooseHeadroomRepresentation,
+	deriveRepresentationCandidates,
+	getHeadroomRuntimeStatus,
+	heuristicTokenCount,
+} from "../src/core/context-budget-headroom.ts";
 
 function item(
 	over: Partial<ContextBudgetItemV2> & Pick<ContextBudgetItemV2, "id" | "tier" | "text">,
@@ -23,6 +28,34 @@ describe("context budget headroom v2", () => {
 		);
 
 		expect(chosen.kind).toBe("full");
+	});
+
+	it("quotes and escapes generated pointer metadata", () => {
+		const uri = `file:///repo/A&B"notes<draft>.md`;
+		const candidates = deriveRepresentationCandidates(
+			item({
+				id: "metadata",
+				tier: "current-files",
+				text: "safe context ".repeat(400),
+				tokenEstimate: 1000,
+				sourceRef: {
+					uri,
+					symbol: `section&"<draft>`,
+					contentHash: `h&"<>`,
+					retrievable: true,
+				},
+			}),
+		);
+		const pointer = candidates.find((candidate) => candidate.kind === "pointer");
+		const compressed = candidates.find((candidate) => candidate.kind === "headroom-compressed");
+
+		expect(pointer?.text).toBe(
+			'<pointer uri="file:///repo/A&amp;B&quot;notes&lt;draft&gt;.md" symbol="section&amp;&quot;&lt;draft&gt;" hash="h&amp;&quot;&lt;&gt;" />',
+		);
+		expect(pointer?.text).not.toContain(uri);
+		expect(pointer?.estimatedTokens).toBe(heuristicTokenCount(pointer?.text ?? ""));
+		expect(compressed?.text).toContain('uri="file:///repo/A&amp;B&quot;notes&lt;draft&gt;.md" hash="');
+		expect(compressed?.estimatedTokens).toBeGreaterThanOrEqual(heuristicTokenCount(compressed?.text ?? ""));
 	});
 
 	it("exposes runtime status for the TUI control panel", () => {

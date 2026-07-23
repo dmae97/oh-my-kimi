@@ -1048,6 +1048,48 @@ describe("createCompactionEnvelope", () => {
 		).toThrow(/credential/);
 	});
 
+	it("accepts a redacted credential placeholder in a summary", () => {
+		const txn = minimalTransaction();
+		const decision: CompactionCommitDecision = {
+			decision: "commit",
+			reason: "exact_match",
+			transactionId: txn.transactionId,
+			revision: txn.baseRevision,
+			source: txn.source,
+		};
+		const summary = 'api_key = "[REDACTED]"';
+
+		const envelope = createCompactionEnvelope({
+			transaction: txn,
+			decision,
+			summary,
+			summarySha256: validSummarySha256(),
+		});
+
+		expect(envelope.summary).toBe(summary);
+	});
+
+	it("rejects text appended to a redacted credential placeholder", () => {
+		const txn = minimalTransaction();
+		const decision: CompactionCommitDecision = {
+			decision: "commit",
+			reason: "exact_match",
+			transactionId: txn.transactionId,
+			revision: txn.baseRevision,
+			source: txn.source,
+		};
+		for (const summary of ['api_key = "[REDACTED]"synthetic', "api_key = [REDACTED]-synthetic"]) {
+			expect(() =>
+				createCompactionEnvelope({
+					transaction: txn,
+					decision,
+					summary,
+					summarySha256: validSummarySha256(),
+				}),
+			).toThrow(/credential/);
+		}
+	});
+
 	it("rejects oversized summary", () => {
 		const txn = minimalTransaction();
 		const decision: CompactionCommitDecision = {

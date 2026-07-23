@@ -158,6 +158,9 @@ describe("runPrintMode", () => {
 
 		const exitCode = await runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], {
 			mode: "text",
+			// Image-only prompt: satisfies the no-prompt guard while keeping promptStarted
+			// false so the startup lastTermination is rendered (typed-termination path).
+			initialImages: [{ type: "image", mimeType: "image/png", data: "abc" }],
 		});
 
 		expect(exitCode).toBe(1);
@@ -215,7 +218,12 @@ describe("runPrintMode", () => {
 		);
 		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-		await runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], { mode: "text" });
+		await runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], {
+			mode: "text",
+			// Image-only prompt: satisfies the no-prompt guard while keeping promptStarted
+			// false so the startup lastTermination is rendered (typed-termination path).
+			initialImages: [{ type: "image", mimeType: "image/png", data: "abc" }],
+		});
 
 		expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(`kind=${kind}`));
 		expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(`message=Diagnostic for ${kind}.`));
@@ -251,6 +259,7 @@ describe("runPrintMode", () => {
 
 		const exitCode = await runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], {
 			mode: "text",
+			initialMessage: "trigger the assistant error",
 		});
 
 		expect(exitCode).toBe(1);

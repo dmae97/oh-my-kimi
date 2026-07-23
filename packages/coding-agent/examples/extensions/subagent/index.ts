@@ -12,7 +12,6 @@
  * Uses JSON mode to capture structured output from subagents.
  */
 
-import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -22,6 +21,7 @@ import { StringEnum } from "omk-ai";
 import { Container, Markdown, Spacer, Text } from "omk-tui";
 import { type ExtensionAPI, getAgentDir, getMarkdownTheme, withFileMutationQueue } from "open-multi-agent-kit";
 import { Type } from "typebox";
+import { type RunAttemptInput, runAdaptiveAgent } from "./adaptive-agent-runtime.ts";
 import { deriveCapabilities } from "./agent-capability-router.ts";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.ts";
 import {
@@ -33,21 +33,42 @@ import {
 	parseEmbeddedCapabilities,
 	validateCapabilities,
 } from "./capabilities.ts";
+import { createExecutionBudget, type ExecutionBudget, remainingExecutionMs } from "./deadline-budget.ts";
+import { DeadlineProfileStore } from "./deadline-profile-store.ts";
+import { runManagedProcess } from "./managed-process.ts";
+import { emptyUsage, type SingleResult, type SubagentAttemptResult } from "./subagent-runtime-types.ts";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
 const COLLAPSED_ITEM_COUNT = 10;
 const PER_TASK_OUTPUT_CAP = 50 * 1024;
+const DEFAULT_EXECUTION_BUDGET_MS = 840_000;
+const MAX_EXECUTION_BUDGET_MS = 840_000;
+const EXECUTION_CLEANUP_RESERVE_MS = 15_000;
+const DEFAULT_ATTEMPT_CUTOFF_MS = 600_000;
+const MINIMUM_ATTEMPT_MS = 30_000;
+const MAX_TASK_SHARDS = 3;
+const MAX_TOKENS_PER_TASK_SHARD = 6_000;
 
 // Capability catalog is expensive to build (scans every SKILL.md on disk); memoize
 // once per dispatcher process.
 let cachedCapabilityCatalog: CapabilityCatalog | null = null;
+let cachedDeadlineProfileStore: DeadlineProfileStore | null = null;
 
 function getCapabilityCatalog(): CapabilityCatalog {
 	if (!cachedCapabilityCatalog) {
 		cachedCapabilityCatalog = buildCapabilityCatalog({ agentDir: getAgentDir() });
 	}
 	return cachedCapabilityCatalog;
+}
+
+function getDeadlineProfileStore(): DeadlineProfileStore {
+	if (!cachedDeadlineProfileStore) {
+		cachedDeadlineProfileStore = new DeadlineProfileStore(
+			path.join(getAgentDir(), "state", "subagent-deadline-profiles.json"),
+		);
+	}
+	return cachedDeadlineProfileStore;
 }
 
 function formatTokens(count: number): string {
@@ -151,28 +172,14 @@ function formatToolCall(
 	}
 }
 
-interface UsageStats {
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
-	cost: number;
-	contextTokens: number;
-	turns: number;
-}
-
-interface SingleResult {
-	agent: string;
-	agentSource: "user" | "project" | "unknown";
-	task: string;
-	exitCode: number;
-	messages: Message[];
-	stderr: string;
-	usage: UsageStats;
-	model?: string;
-	stopReason?: string;
-	errorMessage?: string;
-	step?: number;
+interface ExecutionBudgetDetails {
+	hardDeadlineMs: number;
+	elapsedMs: number;
+	remainingMs: number;
+	estimatedTokens: number;
+	plannedShards: number;
+	completedShards: number;
+	resumeCount: number;
 }
 
 interface SubagentDetails {
@@ -180,6 +187,19 @@ interface SubagentDetails {
 	agentScope: AgentScope;
 	projectAgentsDir: string | null;
 	results: SingleResult[];
+	executionBudget: ExecutionBudgetDetails;
+}
+
+function summarizeExecutionBudget(budget: ExecutionBudget, results: readonly SingleResult[]): ExecutionBudgetDetails {
+	return {
+		hardDeadlineMs: budget.hardDeadlineMs,
+		elapsedMs: Date.now() - budget.startedAtMs,
+		remainingMs: remainingExecutionMs(budget),
+		estimatedTokens: results.reduce((sum, result) => sum + (result.deadline?.estimatedTokens ?? 0), 0),
+		plannedShards: results.reduce((sum, result) => sum + (result.deadline?.plannedShardIds.length ?? 0), 0),
+		completedShards: results.reduce((sum, result) => sum + (result.deadline?.completedShardIds.length ?? 0), 0),
+		resumeCount: results.reduce((sum, result) => sum + (result.deadline?.resumeCount ?? 0), 0),
+	};
 }
 
 function getFinalOutput(messages: Message[]): string {
@@ -199,10 +219,15 @@ function isFailedResult(result: SingleResult): boolean {
 }
 
 function getResultOutput(result: SingleResult): string {
+	const partialOutput = result.output || getFinalOutput(result.messages);
 	if (isFailedResult(result)) {
-		return result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
+		const diagnostic = result.errorMessage || result.stderr;
+		if (diagnostic && partialOutput && !diagnostic.includes(partialOutput)) {
+			return `${diagnostic}\n\nCheckpointed partial output:\n${partialOutput}`;
+		}
+		return diagnostic || partialOutput || "(no output)";
 	}
-	return getFinalOutput(result.messages) || "(no output)";
+	return partialOutput || "(no output)";
 }
 
 function truncateParallelOutput(output: string): string {
@@ -278,33 +303,22 @@ function getOmkInvocation(args: string[]): { command: string; args: string[] } {
 }
 
 type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
+type ResultUpdateCallback = (partial: SingleResult) => void;
 
-async function runSingleAgent(
+async function runSingleAgentAttempt(
 	defaultCwd: string,
 	agents: AgentConfig[],
 	agentName: string,
+	logicalTask: string,
 	task: string,
 	cwd: string | undefined,
 	step: number | undefined,
+	cutoffMs: number,
 	signal: AbortSignal | undefined,
-	onUpdate: OnUpdateCallback | undefined,
-	makeDetails: (results: SingleResult[]) => SubagentDetails,
-): Promise<SingleResult> {
-	const agent = agents.find((a) => a.name === agentName);
-
-	if (!agent) {
-		const available = agents.map((a) => `"${a.name}"`).join(", ") || "none";
-		return {
-			agent: agentName,
-			agentSource: "unknown",
-			task,
-			exitCode: 1,
-			messages: [],
-			stderr: `Unknown agent: "${agentName}". Available agents: ${available}.`,
-			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
-			step,
-		};
-	}
+	onUpdate: ResultUpdateCallback | undefined,
+): Promise<SubagentAttemptResult> {
+	const agent = agents.find((candidate) => candidate.name === agentName);
+	if (!agent) throw new Error(`Unknown agent: ${agentName}`);
 
 	const args: string[] = ["--mode", "json", "-p", "--no-session"];
 	if (agent.model) args.push("--model", agent.model);
@@ -353,22 +367,17 @@ async function runSingleAgent(
 	const currentResult: SingleResult = {
 		agent: agentName,
 		agentSource: agent.source,
-		task,
+		task: logicalTask,
 		exitCode: 0,
 		messages: [],
 		stderr: "",
-		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+		usage: emptyUsage(),
 		model: agent.model,
 		step,
 	};
 
 	const emitUpdate = () => {
-		if (onUpdate) {
-			onUpdate({
-				content: [{ type: "text", text: getFinalOutput(currentResult.messages) || "(running...)" }],
-				details: makeDetails([currentResult]),
-			});
-		}
+		onUpdate?.({ ...currentResult, messages: [...currentResult.messages], usage: { ...currentResult.usage } });
 	};
 
 	try {
@@ -390,90 +399,72 @@ async function runSingleAgent(
 		}
 
 		args.push(`Task: ${task}`);
-		let wasAborted = false;
-
-		const exitCode = await new Promise<number>((resolve) => {
-			const invocation = getOmkInvocation(args);
-			const proc = spawn(invocation.command, invocation.args, {
-				cwd: cwd ?? defaultCwd,
-				shell: false,
-				stdio: ["ignore", "pipe", "pipe"],
-			});
-			let buffer = "";
-
-			const processLine = (line: string) => {
-				if (!line.trim()) return;
-				let event: any;
-				try {
-					event = JSON.parse(line);
-				} catch {
-					return;
-				}
-
-				if (event.type === "message_end" && event.message) {
-					const msg = event.message as Message;
-					currentResult.messages.push(msg);
-
-					if (msg.role === "assistant") {
-						currentResult.usage.turns++;
-						const usage = msg.usage;
-						if (usage) {
-							currentResult.usage.input += usage.input || 0;
-							currentResult.usage.output += usage.output || 0;
-							currentResult.usage.cacheRead += usage.cacheRead || 0;
-							currentResult.usage.cacheWrite += usage.cacheWrite || 0;
-							currentResult.usage.cost += usage.cost?.total || 0;
-							currentResult.usage.contextTokens = usage.totalTokens || 0;
-						}
-						if (!currentResult.model && msg.model) currentResult.model = msg.model;
-						if (msg.stopReason) currentResult.stopReason = msg.stopReason;
-						if (msg.errorMessage) currentResult.errorMessage = msg.errorMessage;
+		let buffer = "";
+		const processLine = (line: string) => {
+			const event = parseSubagentEvent(line);
+			if (event === undefined) return;
+			if (event.type === "message_end" && event.message !== undefined) {
+				const msg = event.message;
+				currentResult.messages.push(msg);
+				if (msg.role === "assistant") {
+					currentResult.usage.turns += 1;
+					const usage = msg.usage;
+					if (usage) {
+						currentResult.usage.input += usage.input || 0;
+						currentResult.usage.output += usage.output || 0;
+						currentResult.usage.cacheRead += usage.cacheRead || 0;
+						currentResult.usage.cacheWrite += usage.cacheWrite || 0;
+						currentResult.usage.cost += usage.cost?.total || 0;
+						currentResult.usage.contextTokens = Math.max(
+							currentResult.usage.contextTokens,
+							usage.totalTokens || 0,
+						);
 					}
-					emitUpdate();
+					if (!currentResult.model && msg.model) currentResult.model = msg.model;
+					if (msg.stopReason) currentResult.stopReason = msg.stopReason;
+					if (msg.errorMessage) currentResult.errorMessage = msg.errorMessage;
 				}
-
-				if (event.type === "tool_result_end" && event.message) {
-					currentResult.messages.push(event.message as Message);
-					emitUpdate();
-				}
-			};
-
-			proc.stdout.on("data", (data) => {
-				buffer += data.toString();
+				emitUpdate();
+			}
+			if (event.type === "tool_result_end" && event.message !== undefined) {
+				currentResult.messages.push(event.message);
+				emitUpdate();
+			}
+		};
+		const invocation = getOmkInvocation(args);
+		const processResult = await runManagedProcess({
+			command: invocation.command,
+			args: invocation.args,
+			cwd: cwd ?? defaultCwd,
+			cutoffMs,
+			signal,
+			onStdout: (chunk) => {
+				buffer += chunk;
 				const lines = buffer.split("\n");
 				buffer = lines.pop() || "";
 				for (const line of lines) processLine(line);
-			});
-
-			proc.stderr.on("data", (data) => {
-				currentResult.stderr += data.toString();
-			});
-
-			proc.on("close", (code) => {
-				if (buffer.trim()) processLine(buffer);
-				resolve(code ?? 0);
-			});
-
-			proc.on("error", () => {
-				resolve(1);
-			});
-
-			if (signal) {
-				const killProc = () => {
-					wasAborted = true;
-					proc.kill("SIGTERM");
-					setTimeout(() => {
-						if (!proc.killed) proc.kill("SIGKILL");
-					}, 5000);
-				};
-				if (signal.aborted) killProc();
-				else signal.addEventListener("abort", killProc, { once: true });
-			}
+			},
+			onStderr: (chunk) => {
+				currentResult.stderr += chunk;
+			},
 		});
-
-		currentResult.exitCode = exitCode;
-		if (wasAborted) throw new Error("Subagent was aborted");
-		return currentResult;
+		if (buffer.trim()) processLine(buffer);
+		currentResult.exitCode = processResult.exitCode;
+		currentResult.output = getFinalOutput(currentResult.messages);
+		if (processResult.reason === "cutoff") {
+			currentResult.exitCode = 124;
+			currentResult.stopReason = "deadline";
+			currentResult.errorMessage = `Subagent attempt exceeded ${cutoffMs}ms cutoff`;
+		} else if (processResult.reason === "aborted") {
+			currentResult.exitCode = 130;
+			currentResult.stopReason = "aborted";
+			currentResult.errorMessage = "Subagent was aborted";
+		} else if (processResult.reason === "spawn-error") {
+			currentResult.exitCode = 1;
+			currentResult.stopReason = "error";
+			currentResult.errorMessage = processResult.errorMessage ?? "Unable to spawn subagent";
+		}
+		return { result: currentResult, process: processResult };
 	} finally {
 		if (tmpPromptPath)
 			try {
@@ -488,6 +479,96 @@ async function runSingleAgent(
 				/* ignore */
 			}
 	}
+}
+
+interface SubagentJsonEvent {
+	readonly type: string;
+	readonly message?: Message;
+}
+
+function parseSubagentEvent(line: string): SubagentJsonEvent | undefined {
+	if (line.trim() === "") return undefined;
+	let value: unknown;
+	try {
+		value = JSON.parse(line);
+	} catch {
+		return undefined;
+	}
+	if (!isRecord(value) || typeof value.type !== "string") return undefined;
+	const message = value.message;
+	if (message === undefined) return { type: value.type };
+	if (!isRecord(message) || typeof message.role !== "string" || !Array.isArray(message.content)) return undefined;
+	return { type: value.type, message: message as unknown as Message };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function runSingleAgent(
+	defaultCwd: string,
+	agents: AgentConfig[],
+	agentName: string,
+	task: string,
+	cwd: string | undefined,
+	step: number | undefined,
+	signal: AbortSignal | undefined,
+	onUpdate: OnUpdateCallback | undefined,
+	makeDetails: (results: SingleResult[]) => SubagentDetails,
+	budget: ExecutionBudget,
+	profileStore: DeadlineProfileStore,
+	pendingSequentialTasks: number,
+): Promise<SingleResult> {
+	const agent = agents.find((candidate) => candidate.name === agentName);
+	if (!agent) {
+		const available = agents.map((candidate) => `"${candidate.name}"`).join(", ") || "none";
+		return {
+			agent: agentName,
+			agentSource: "unknown",
+			task,
+			exitCode: 1,
+			messages: [],
+			stderr: `Unknown agent: "${agentName}". Available agents: ${available}.`,
+			usage: emptyUsage(),
+			step,
+		};
+	}
+	return await runAdaptiveAgent({
+		agentName,
+		agentSource: agent.source,
+		logicalTask: task,
+		model: agent.model,
+		step,
+		signal,
+		budget,
+		pendingSequentialTasks,
+		profileStore,
+		policy: {
+			fallbackAttemptMs: DEFAULT_ATTEMPT_CUTOFF_MS,
+			minimumAttemptMs: MINIMUM_ATTEMPT_MS,
+			maxTokensPerShard: MAX_TOKENS_PER_TASK_SHARD,
+		},
+		onUpdate: onUpdate
+			? (partial) =>
+					onUpdate({
+						content: [{ type: "text", text: getResultOutput(partial) || "(running...)" }],
+						details: makeDetails([partial]),
+					})
+			: undefined,
+		runAttempt: async (input: RunAttemptInput) =>
+			await runSingleAgentAttempt(
+				defaultCwd,
+				agents,
+				agentName,
+				input.logicalTask,
+				input.task,
+				cwd,
+				step,
+				input.cutoffMs,
+				signal,
+				input.onUpdate,
+			),
+	});
 }
 
 const TaskItem = Type.Object({
@@ -516,6 +597,23 @@ const SubagentParams = Type.Object({
 	confirmProjectAgents: Type.Optional(
 		Type.Boolean({ description: "Prompt before running project-local agents. Default: true.", default: true }),
 	),
+	executionBudgetMs: Type.Optional(
+		Type.Integer({
+			description:
+				"Internal wall-clock budget. Defaults to 840000ms, leaving cleanup time before the 900000ms tool timeout.",
+			minimum: 60_000,
+			maximum: MAX_EXECUTION_BUDGET_MS,
+			default: DEFAULT_EXECUTION_BUDGET_MS,
+		}),
+	),
+	maxResumeAttempts: Type.Optional(
+		Type.Integer({
+			description: "Bounded retries for only the unfinished shard. Default: 1.",
+			minimum: 0,
+			maximum: 2,
+			default: 1,
+		}),
+	),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process (single mode)" })),
 });
 
@@ -526,6 +624,7 @@ export default function (omk: ExtensionAPI) {
 		description: [
 			"Delegate tasks to specialized subagents with isolated context.",
 			"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
+			"Long work is predictively sharded by token and wall-clock demand, checkpointed, and resumed only from unfinished work.",
 			'Default agent scope is "user" (from ~/.omk/agent/agents).',
 			'To enable project-local agents in .omk/agents, set agentScope: "both" (or "project").',
 		].join(" "),
@@ -536,6 +635,13 @@ export default function (omk: ExtensionAPI) {
 			const discovery = discoverAgents(ctx.cwd, agentScope);
 			const agents = discovery.agents;
 			const confirmProjectAgents = params.confirmProjectAgents ?? true;
+			const executionBudget = createExecutionBudget({
+				hardDeadlineMs: params.executionBudgetMs ?? DEFAULT_EXECUTION_BUDGET_MS,
+				cleanupReserveMs: EXECUTION_CLEANUP_RESERVE_MS,
+				maxResumeAttempts: params.maxResumeAttempts ?? 1,
+				maxTaskShards: MAX_TASK_SHARDS,
+			});
+			const profileStore = getDeadlineProfileStore();
 
 			const hasChain = (params.chain?.length ?? 0) > 0;
 			const hasTasks = (params.tasks?.length ?? 0) > 0;
@@ -549,6 +655,7 @@ export default function (omk: ExtensionAPI) {
 					agentScope,
 					projectAgentsDir: discovery.projectAgentsDir,
 					results,
+					executionBudget: summarizeExecutionBudget(executionBudget, results),
 				});
 
 			if (modeCount !== 1) {
@@ -622,6 +729,9 @@ export default function (omk: ExtensionAPI) {
 						signal,
 						chainUpdate,
 						makeDetails("chain"),
+						executionBudget,
+						profileStore,
+						params.chain.length - i,
 					);
 					results.push(result);
 
@@ -634,10 +744,10 @@ export default function (omk: ExtensionAPI) {
 							isError: true,
 						};
 					}
-					previousOutput = getFinalOutput(result.messages);
+					previousOutput = getResultOutput(result);
 				}
 				return {
-					content: [{ type: "text", text: getFinalOutput(results[results.length - 1].messages) || "(no output)" }],
+					content: [{ type: "text", text: getResultOutput(results[results.length - 1]) }],
 					details: makeDetails("chain")(results),
 				};
 			}
@@ -666,7 +776,7 @@ export default function (omk: ExtensionAPI) {
 						exitCode: -1, // -1 = still running
 						messages: [],
 						stderr: "",
-						usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+						usage: emptyUsage(),
 					};
 				}
 
@@ -700,6 +810,9 @@ export default function (omk: ExtensionAPI) {
 							}
 						},
 						makeDetails("parallel"),
+						executionBudget,
+						profileStore,
+						1,
 					);
 					allResults[index] = result;
 					emitParallelUpdate();
@@ -736,6 +849,9 @@ export default function (omk: ExtensionAPI) {
 					signal,
 					onUpdate,
 					makeDetails("single"),
+					executionBudget,
+					profileStore,
+					1,
 				);
 				const isError = isFailedResult(result);
 				if (isError) {
@@ -747,7 +863,7 @@ export default function (omk: ExtensionAPI) {
 					};
 				}
 				return {
-					content: [{ type: "text", text: getFinalOutput(result.messages) || "(no output)" }],
+					content: [{ type: "text", text: getResultOutput(result) }],
 					details: makeDetails("single")([result]),
 				};
 			}
@@ -833,7 +949,7 @@ export default function (omk: ExtensionAPI) {
 				const isError = isFailedResult(r);
 				const icon = isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
 				const displayItems = getDisplayItems(r.messages);
-				const finalOutput = getFinalOutput(r.messages);
+				const finalOutput = r.output || getFinalOutput(r.messages);
 
 				if (expanded) {
 					const container = new Container();
@@ -919,7 +1035,7 @@ export default function (omk: ExtensionAPI) {
 					for (const r of details.results) {
 						const rIcon = r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
 						const displayItems = getDisplayItems(r.messages);
-						const finalOutput = getFinalOutput(r.messages);
+						const finalOutput = r.output || getFinalOutput(r.messages);
 
 						container.addChild(new Spacer(1));
 						container.addChild(
@@ -1008,7 +1124,7 @@ export default function (omk: ExtensionAPI) {
 					for (const r of details.results) {
 						const rIcon = isFailedResult(r) ? theme.fg("error", "✗") : theme.fg("success", "✓");
 						const displayItems = getDisplayItems(r.messages);
-						const finalOutput = getFinalOutput(r.messages);
+						const finalOutput = r.output || getFinalOutput(r.messages);
 
 						container.addChild(new Spacer(1));
 						container.addChild(

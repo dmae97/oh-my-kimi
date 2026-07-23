@@ -79,6 +79,32 @@ describe("buildSystemPrompt context budget", () => {
 		expect(prompt).toContain("Current working directory: /repo");
 	});
 
+	it("escapes budgeted full context before prompt assembly", () => {
+		const prompt = buildSystemPrompt({
+			selectedTools: ["read"],
+			toolSnippets: { read: "Read files" },
+			contextFiles: [
+				{
+					path: `/repo/A&B"'.md`,
+					content: "Markup: <example>fish & chips</example>.",
+					isGlobal: false,
+				},
+			],
+			skills: [],
+			cwd: "/repo",
+			contextBudget: {
+				maxPromptTokens: 6000,
+				includeFullContextFiles: true,
+			},
+		});
+
+		expect(prompt).toContain(
+			'<project_instructions path="/repo/A&amp;B&quot;&apos;.md">\nMarkup: &lt;example&gt;fish &amp; chips&lt;/example&gt;.\n</project_instructions>',
+		);
+		expect(prompt).not.toContain("Markup: <example>");
+		expect(prompt.indexOf("<runtime_trust_boundary>")).toBeLessThan(prompt.indexOf("<project_instructions"));
+	});
+
 	it("renders bounded cache decision observability without cached raw text", () => {
 		const cacheProvider = createMemoryContextBudgetCacheProviderV2();
 		const budget = {

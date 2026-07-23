@@ -8,11 +8,35 @@
  * - OpenAI Codex (ChatGPT Plus/Pro)
  * - Qwen (Qwen Code subscription)
  * - Grok (xAI, via the local grok-oauth-proxy)
+ * - xAI (native Grok OAuth, SuperGrok or X Premium+)
+ * - Cursor (Claude, GPT, etc. via Cursor subscription)
+ * - GitLab Duo (Code Suggestions, Chat)
+ * - Kimi Code (Moonshot AI)
+ * - Perplexity (Pro/Max)
+ * - Google Cloud Code Assist (Gemini CLI)
+ * - Google Antigravity (Gemini 3, Claude, GPT-OSS)
+ * - OpenCode Zen / Go
+ * - Devin (Cognition AI)
  */
 
 // Anthropic
 export { anthropicOAuthProvider, loginAnthropic, refreshAnthropicToken } from "./anthropic.ts";
+// Cursor
+export {
+	CURSOR_OAUTH_PROVIDER_ID,
+	cursorOAuthProvider,
+	generateCursorAuthParams,
+	isCursorTokenExpiringSoon,
+	loginCursor,
+	refreshCursorToken,
+} from "./cursor.ts";
 export * from "./device-code.ts";
+// Devin
+export {
+	DEVIN_OAUTH_PROVIDER_ID,
+	devinOAuthProvider,
+	loginDevin,
+} from "./devin.ts";
 // GitHub Copilot
 export {
 	getGitHubCopilotBaseUrl,
@@ -21,8 +45,36 @@ export {
 	normalizeDomain,
 	refreshGitHubCopilotToken,
 } from "./github-copilot.ts";
+// GitLab Duo
+export {
+	GITLAB_DUO_OAUTH_PROVIDER_ID,
+	gitlabDuoOAuthProvider,
+	loginGitLabDuo,
+	refreshGitLabDuoToken,
+} from "./gitlab-duo.ts";
+// Google Antigravity
+export {
+	GOOGLE_ANTIGRAVITY_PROVIDER_ID,
+	googleAntigravityOAuthProvider,
+	loginAntigravity,
+	refreshAntigravityToken,
+} from "./google-antigravity.ts";
+// Google Cloud Code Assist (Gemini CLI)
+export {
+	GOOGLE_GEMINI_CLI_PROVIDER_ID,
+	googleGeminiCliOAuthProvider,
+	loginGeminiCli,
+	refreshGeminiCliToken,
+} from "./google-gemini-cli.ts";
 // Grok (xAI OAuth proxy)
 export { GROK_PROXY_PROVIDER_ID, grokProxyOAuthProvider, loginGrokProxy } from "./grok-proxy.ts";
+// Kimi Code (Moonshot AI)
+export {
+	KIMI_CODE_OAUTH_PROVIDER_ID,
+	kimiCodeOAuthProvider,
+	loginKimiCode,
+	refreshKimiToken,
+} from "./kimi.ts";
 // OpenAI Codex (ChatGPT OAuth)
 export {
 	loginOpenAICodex,
@@ -32,6 +84,19 @@ export {
 	openaiCodexOAuthProvider,
 	refreshOpenAICodexToken,
 } from "./openai-codex.ts";
+// OpenCode Zen / Go
+export {
+	OPENCODE_GO_PROVIDER_ID,
+	OPENCODE_ZEN_PROVIDER_ID,
+	opencodeGoOAuthProvider,
+	opencodeZenOAuthProvider,
+} from "./opencode.ts";
+// Perplexity
+export {
+	loginPerplexity,
+	PERPLEXITY_OAUTH_PROVIDER_ID,
+	perplexityOAuthProvider,
+} from "./perplexity.ts";
 // Qwen (Qwen Code subscription)
 export {
 	loginQwen,
@@ -40,26 +105,60 @@ export {
 	qwenOAuthProvider,
 	refreshQwenToken,
 } from "./qwen.ts";
-
 export * from "./types.ts";
+// xAI (native Grok OAuth)
+export {
+	isXAIAccessTokenExpiring,
+	loginXAI,
+	refreshXAIToken,
+	XAI_OAUTH_PROVIDER_ID,
+	xaiOAuthProvider,
+} from "./xai.ts";
+// Zhipu Coding Plan (智谱)
+export {
+	loginZhipuCodingPlan,
+	ZHIPU_CODING_PLAN_PROVIDER_ID,
+	zhipuCodingPlanOAuthProvider,
+} from "./zhipu-coding-plan.ts";
 
 // ============================================================================
 // Provider Registry
 // ============================================================================
 
 import { anthropicOAuthProvider } from "./anthropic.ts";
+import { cursorOAuthProvider } from "./cursor.ts";
+import { devinOAuthProvider } from "./devin.ts";
 import { githubCopilotOAuthProvider } from "./github-copilot.ts";
+import { gitlabDuoOAuthProvider } from "./gitlab-duo.ts";
+import { googleAntigravityOAuthProvider } from "./google-antigravity.ts";
+import { googleGeminiCliOAuthProvider } from "./google-gemini-cli.ts";
 import { grokProxyOAuthProvider } from "./grok-proxy.ts";
+import { kimiCodeOAuthProvider } from "./kimi.ts";
 import { openaiCodexOAuthProvider } from "./openai-codex.ts";
+import { opencodeGoOAuthProvider, opencodeZenOAuthProvider } from "./opencode.ts";
+import { perplexityOAuthProvider } from "./perplexity.ts";
 import { qwenOAuthProvider } from "./qwen.ts";
 import type { OAuthCredentials, OAuthProviderId, OAuthProviderInfo, OAuthProviderInterface } from "./types.ts";
+import { xaiOAuthProvider } from "./xai.ts";
+import { zhipuCodingPlanOAuthProvider } from "./zhipu-coding-plan.ts";
 
 const BUILT_IN_OAUTH_PROVIDERS: OAuthProviderInterface[] = [
 	anthropicOAuthProvider,
+	cursorOAuthProvider,
+	devinOAuthProvider,
 	githubCopilotOAuthProvider,
-	openaiCodexOAuthProvider,
-	qwenOAuthProvider,
+	gitlabDuoOAuthProvider,
+	googleAntigravityOAuthProvider,
+	googleGeminiCliOAuthProvider,
 	grokProxyOAuthProvider,
+	kimiCodeOAuthProvider,
+	openaiCodexOAuthProvider,
+	opencodeGoOAuthProvider,
+	opencodeZenOAuthProvider,
+	perplexityOAuthProvider,
+	qwenOAuthProvider,
+	xaiOAuthProvider,
+	zhipuCodingPlanOAuthProvider,
 ];
 
 const oauthProviderRegistry = new Map<string, OAuthProviderInterface>(

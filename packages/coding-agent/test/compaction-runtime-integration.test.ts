@@ -95,7 +95,7 @@ function appendDuplicateResultCorruption(harness: Harness): void {
 	harness.session.agent.state.messages = harness.sessionManager.buildSessionContext().messages;
 }
 
-function injectSummaryStream(harness: Harness, onStart?: () => void): () => number {
+function injectSummaryStream(harness: Harness, onStart?: () => void, summary = "transactional summary"): () => number {
 	let calls = 0;
 	let started = false;
 	harness.session.agent.streamFn = (model) => {
@@ -107,7 +107,7 @@ function injectSummaryStream(harness: Harness, onStart?: () => void): () => numb
 		const stream = createAssistantMessageEventStream();
 		queueMicrotask(() => {
 			const message: AssistantMessage = {
-				...fauxAssistantMessage("transactional summary"),
+				...fauxAssistantMessage(summary),
 				api: model.api,
 				provider: model.provider,
 				model: model.id,
@@ -217,6 +217,36 @@ describe("compaction runtime transaction integration", () => {
 		});
 		expect(envelope?.summarySha256).toMatch(/^[a-f0-9]{64}$/u);
 		expect(envelope?.preserved.latestIntent).toBe("user-1");
+	});
+
+	it("redacts credential-shaped generated summaries before committing them", async () => {
+		const harness = await createHarness({ settings: { compaction: { keepRecentTokens: 1 } } });
+		harnesses.push(harness);
+		seedClosedTranscript(harness);
+		const credential = "synthetic-compaction-secret";
+		injectSummaryStream(harness, undefined, `api_key = "${credential}"`);
+
+		const result = await harness.session.compact();
+
+		expect(result.summary).toContain('api_key = "[REDACTED]"');
+		expect(result.summary).not.toContain(credential);
+		const entry = harness.sessionManager.getEntries().find((candidate) => candidate.type === "compaction");
+		expect(entry?.type === "compaction" ? entry.summary : undefined).toBe(result.summary);
+		expect(JSON.stringify(entry)).not.toContain(credential);
+	});
+
+	it("redacts credential-shaped summaries during auto-compaction", async () => {
+		const harness = await createHarness({ settings: { compaction: { keepRecentTokens: 1 } } });
+		harnesses.push(harness);
+		seedClosedTranscript(harness);
+		const credential = "synthetic-auto-compaction-secret";
+		injectSummaryStream(harness, undefined, `api_key = "${credential}"`);
+
+		await harness.session["_runAutoCompaction"]("threshold", false);
+
+		const entry = harness.sessionManager.getEntries().find((candidate) => candidate.type === "compaction");
+		expect(entry?.type === "compaction" ? entry.summary : undefined).toContain("[REDACTED]");
+		expect(JSON.stringify(entry)).not.toContain(credential);
 	});
 
 	it("validates a persisted envelope binding when the session reloads", async () => {

@@ -98,29 +98,6 @@ const XARGS_OPTIONS_WITH_VALUE = new Set([
 	"--replace",
 ]);
 
-/**
- * Credential / secret file patterns. A bash argv token matching one of these is
- * treated as a `confirm`-tier access: headless callers (LLM tool calls, RPC bash)
- * deny by default, while an interactive user can still approve reading their own
- * files. These complement the §0.1 freedom safety floor, which hard-denies the
- * same paths on the entry points it guards.
- */
-const SECRET_FILE_STRICT_PATTERNS: readonly RegExp[] = [
-	/(^|\/)\.env(\.|$)/i,
-	/(^|\/)\.npmrc$/i,
-	/(^|\/)\.netrc$/i,
-	/(^|\/)\.pgpass$/i,
-	/(^|\/)\.aws\/credentials$/i,
-	/(^|\/)credentials$/i,
-	/(^|\/)auth\.json$/i,
-	/(^|\/)id_(rsa|dsa|ecdsa|ed25519)$/i,
-	/\.(pem|key|p12|pfx|keystore|jks)$/i,
-	/(^|\/)secrets?(\.[^/]+)?$/i,
-];
-
-/** Benign sibling files that look secret-ish but never hold credentials. */
-const SECRET_FILE_ALLOW_PATTERNS: readonly RegExp[] = [/(^|\/)\.env\.(example|sample|template|dist|defaults?)$/i];
-const SEARCH_COMMANDS = new Set(["grep", "egrep", "fgrep", "rg"]);
 const HOME_VARIABLE_RM_TARGETS = new Set(["$home", "$" + "{home}", "$home/", "$" + "{home}/"]);
 
 function verdict(risk: CommandRisk, rule: string, reason: string): CommandVerdict {
@@ -587,28 +564,6 @@ function classifyWrappedCommand(command: string, depth: number): CommandVerdict 
 	return null;
 }
 
-function isSearchPatternArgument(tokens: readonly string[], index: number): boolean {
-	const executable = tokens[0]?.toLowerCase();
-	return SEARCH_COMMANDS.has(executable ?? "") && tokens[index - 1] === "--";
-}
-
-/** Flag commands that read, copy, or transmit a credential / secret file path. */
-function classifySecretAccess(command: string): CommandVerdict | null {
-	const { tokens } = stripCommandPrefixes(tokenizeShellSegment(command));
-	if (tokens.length === 0) return null;
-	for (let index = 1; index < tokens.length; index += 1) {
-		const token = tokens[index];
-		if (!token || token.startsWith("-")) continue;
-		if (isSearchPatternArgument(tokens, index)) continue;
-		if (/\s/.test(token)) continue;
-		if (SECRET_FILE_ALLOW_PATTERNS.some((pattern) => pattern.test(token))) continue;
-		if (SECRET_FILE_STRICT_PATTERNS.some((pattern) => pattern.test(token))) {
-			return verdict("confirm", "secret.read_path", "Command references a credential or secret file path.");
-		}
-	}
-	return null;
-}
-
 function classifySingleCommand(command: string, depth: number): CommandVerdict {
 	const trimmed = command.trim();
 	if (!trimmed) return allowVerdict();
@@ -624,9 +579,6 @@ function classifySingleCommand(command: string, depth: number): CommandVerdict {
 
 	const privilege = classifyPrivilegeCommand(trimmed);
 	if (privilege) return privilege;
-
-	const secret = classifySecretAccess(trimmed);
-	if (secret) return secret;
 
 	if (wrapped && RISK_RANK[wrapped.risk] > RISK_RANK.allow) return wrapped;
 

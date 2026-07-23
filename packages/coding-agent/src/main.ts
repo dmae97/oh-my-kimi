@@ -5,6 +5,8 @@
  * createAgentSession() options. The SDK does the heavy lifting.
  */
 
+import * as fs from "node:fs";
+import * as net from "node:net";
 import { createInterface } from "node:readline";
 import chalk from "chalk";
 import { type ImageContent, modelsAreEqual } from "omk-ai";
@@ -54,6 +56,10 @@ import { cleanupWindowsSelfUpdateQuarantine } from "./utils/windows-self-update.
 /**
  * Read all content from piped stdin.
  * Returns undefined if stdin is a TTY (interactive terminal).
+ *
+ * Non-TTY stdin that never ends (some IDE/terminal hosts keep fd0 open) used to
+ * hang forever here — that looked like "omk" with no response. Bound the wait:
+ * if no bytes arrive quickly and nothing is buffered, treat as empty.
  */
 async function readPipedStdin(): Promise<string | undefined> {
 	// If stdin is a TTY, we're running interactively - don't read stdin
@@ -61,15 +67,36 @@ async function readPipedStdin(): Promise<string | undefined> {
 		return undefined;
 	}
 
+	// Already drained
+	if (process.stdin.readableEnded) {
+		return undefined;
+	}
+
+	const idleMs = Number(process.env.OMK_STDIN_IDLE_MS || 50);
 	return new Promise((resolve) => {
 		let data = "";
-		process.stdin.setEncoding("utf8");
-		process.stdin.on("data", (chunk) => {
-			data += chunk;
-		});
-		process.stdin.on("end", () => {
+		let settled = false;
+		const finish = () => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			process.stdin.off("data", onData);
+			process.stdin.off("end", onEnd);
+			process.stdin.off("error", onEnd);
 			resolve(data.trim() || undefined);
-		});
+		};
+		const onData = (chunk: string | Buffer) => {
+			data += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+			// Once data starts flowing, wait for natural end (or a long idle).
+			clearTimeout(timer);
+			timer = setTimeout(finish, Math.max(idleMs * 20, 1000));
+		};
+		const onEnd = () => finish();
+		let timer = setTimeout(finish, Number.isFinite(idleMs) ? Math.max(0, idleMs) : 50);
+		process.stdin.setEncoding("utf8");
+		process.stdin.on("data", onData);
+		process.stdin.on("end", onEnd);
+		process.stdin.on("error", onEnd);
 		process.stdin.resume();
 	});
 }
@@ -99,14 +126,79 @@ function isTruthyEnvFlag(value: string | undefined): boolean {
 
 type AppMode = "interactive" | "print" | "json" | "rpc";
 
-function resolveAppMode(parsed: Args, stdinIsTTY: boolean): AppMode {
+function hasPromptIntent(parsed: Args): boolean {
+	return (
+		parsed.print === true ||
+		parsed.messages.length > 0 ||
+		parsed.fileArgs.length > 0 ||
+		parsed.mode === "json" ||
+		parsed.mode === "rpc"
+	);
+}
+
+/** True when a controlling terminal is available (stdin/out/err or /dev/tty). */
+function _hasControllingTerminal(): boolean {
+	if (process.stdin.isTTY || process.stdout.isTTY || process.stderr.isTTY) return true;
+	try {
+		const fd = fs.openSync("/dev/tty", "r+");
+		fs.closeSync(fd);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * When stdin/stdout were detached from the TTY (some IDE hosts / wrappers),
+ * rebind them to /dev/tty so InteractiveMode/ProcessTerminal can run.
+ * No-op if already a TTY or /dev/tty is unavailable.
+ */
+function attachStdioToControllingTty(): boolean {
+	if (process.stdin.isTTY && process.stdout.isTTY) return true;
+	try {
+		// Prefer reopening stdio FDs against the controlling terminal.
+		// Socket-over-/dev/tty is enough for isTTY detection + raw mode shim.
+		const fd = fs.openSync("/dev/tty", "r+");
+		const sock = new net.Socket({ fd, readable: true, writable: true });
+		Object.defineProperty(sock, "isTTY", { value: true, configurable: true });
+		Object.defineProperty(sock, "isRaw", { value: false, writable: true, configurable: true });
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		(sock as any).setRawMode = (mode: boolean) => {
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			(sock as any).isRaw = !!mode;
+			return sock;
+		};
+		if (!process.stdin.isTTY) {
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			(process as any).stdin = sock;
+		}
+		if (!process.stdout.isTTY) {
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			(process as any).stdout = sock;
+		}
+		return !!(process.stdin.isTTY && process.stdout.isTTY);
+	} catch {
+		return !!(process.stdin.isTTY && process.stdout.isTTY);
+	}
+}
+
+function resolveAppMode(parsed: Args, stdinIsTTY: boolean, stdoutIsTTY: boolean = !!process.stdout.isTTY): AppMode {
 	if (parsed.mode === "rpc") {
 		return "rpc";
 	}
 	if (parsed.mode === "json") {
 		return "json";
 	}
-	if (parsed.print || !stdinIsTTY) {
+	// Explicit single-shot (-p / --print)
+	if (parsed.print) {
+		return "print";
+	}
+	// Bare `omk` (no prompt args) must open the TUI. Never fall into silent/empty print.
+	if (!hasPromptIntent(parsed)) {
+		return "interactive";
+	}
+	// Piped automation: non-tty stdin with a prompt → print mode
+	if (!stdinIsTTY || !stdoutIsTTY) {
 		return "print";
 	}
 	return "interactive";
@@ -524,7 +616,16 @@ export async function main(args: string[], options?: MainOptions) {
 		}
 	}
 	time("parseArgs");
-	let appMode = resolveAppMode(parsed, process.stdin.isTTY);
+	let appMode = resolveAppMode(parsed, !!process.stdin.isTTY, !!process.stdout.isTTY);
+	// Bare interactive launch: try to reclaim the controlling TTY when a host
+	// detached stdio. Launcher may already have re-exec'd under `script`.
+	if (appMode === "interactive" && !hasPromptIntent(parsed)) {
+		if (!process.stdin.isTTY || !process.stdout.isTTY) {
+			attachStdioToControllingTty();
+		}
+		// Do not hard-exit here — ProcessTerminal still works on many WSL/Windows
+		// hosts even when Node's isTTY is false after a PTY re-exec race.
+	}
 	const shouldTakeOverStdout = appMode !== "interactive";
 	if (shouldTakeOverStdout) {
 		takeOverStdout();
@@ -716,9 +817,10 @@ export async function main(args: string[], options?: MainOptions) {
 		process.exit(0);
 	}
 
-	// Read piped stdin content (if any) - skip for RPC mode which uses stdin for JSON-RPC
+	// Read piped stdin content (if any) - skip for RPC mode which uses stdin for JSON-RPC.
+	// Also skip on bare interactive launches so a stuck/non-tty stdin cannot force print mode.
 	let stdinContent: string | undefined;
-	if (appMode !== "rpc") {
+	if (appMode !== "rpc" && !(appMode === "interactive" && !hasPromptIntent(parsed))) {
 		stdinContent = await readPipedStdin();
 		if (stdinContent !== undefined && appMode === "interactive") {
 			appMode = "print";

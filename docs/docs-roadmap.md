@@ -66,3 +66,11 @@
 - 문서 번역 체계 — 요청 없음
 - 별도 docs 사이트 빌드 도구 교체 — omk.dev가 이미 docs.json으로 서빙 중
 - JSDoc/TSDoc 전면 도입 — 31만 라인에 사후 적용 비용 대비 효과 낮음
+
+---
+
+## 검증 로그
+
+- **2026-07-22 재검증**: Phase 1–4 수용 기준 실측 재확인. 3개 문서 게이트 그린(`check:readme-releases`·`check:doc-links`·`check:release-surface` 모두 EXIT 0). T1(gondolin 외 earendil-works 0건)·T11(그래프 1449 nodes, 1시간 전 분석)·T12(루트 AGENTS.md 존재) 재확인.
+  - **잔여 T2 드리프트 수정**: `packages/adaptorch-wpl/README.md` L3가 "Stable (v0.90.9) … workspace dependency"로 정체 — 코드(`package.json` 0.91.0, coding-agent `^0.91.0` 런타임 의존)·루트 README와 모순. → "Stable (v0.91.0) … runtime dependency"로 동기화(SSOT 복원).
+  - **유일 이연 항목**: T11의 "CI 주간 그래프 리빌드"는 별도 과제로 유지(그래프 자체는 최신).

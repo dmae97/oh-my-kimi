@@ -9,39 +9,35 @@
 
 ---
 
-## 진행 스냅샷 (2026-07-17) · ALG-003 부분 진행
+## 진행 스냅샷 (2026-07-23) · ALG-003 완료
 
-> 상태만 기록한다. 아래 설계 본문은 여전히 `v0.90.9` **미출시** 기준의 계획·명세이며, 패키지 버전은 현재 `0.90.8`이다.
+> 상태만 기록한다. 아래 설계 본문은 여전히 `v0.90.9` 기준의 계획·명세이며, 패키지 버전은 현재 `0.91.0`이다.
 
-- **기준일:** 2026-07-17
-- **직전 합계:** 36 / 77 (ALG-003 7 / 15)
-- **이번 슬라이스에서 추가된 ALG-003 guardrail/API 조건 (정확히 5개):**
-  1. `VerifiedEvidenceExecutor` 공개 SDK API
-  2. 구조화된 `command`의 domain-separated digest 결합(`receiptCommandSha256`)
-  3. receipt의 `laneId` 결합
-  4. current artifact-set manifest freshness 판정(`receipt.core.workspaceAfter.manifestSha256`)
-  5. replay-ledger 결합(`receipt.envelope.ledgerBinding.{seq,eventHash}`)
-- **후속 CI callsite 슬라이스:** `executeVerifiedLocalBash()`가 OMK 로컬 shell identity와 `BashOperations`를 함께 구성하고, `.github/workflows/ci.yml`의 `dist/verify-ci.js` 단계가 release-consistency 검증을 이 경로로 실행한다. 이 슬라이스로 빌트인 CLI/bash **또는 CI** 조건 중 CI 분기를 1개 완료했다.
-- **원자 조건 스냅샷:** ALG-003 **13 / 15**
-- **전체 합계:** **42 / 77**
-- **기존 작업 통합(새로 카운트 아님):** `EvidenceReceipt` v3 schema, atomic receipt store, workspace/artifact fingerprint 타입·계산은 이미 존재하던 코드를 **통합**한 것이며 이번 슬라이스 조건 수에 포함되지 않는다.
-- **집계 증거:** focused evidence **112 / 112** 통과(실제 로컬 shell + CI runner callsite 4건 포함), 그리고 2026-07-17 후속 검증에서 저장소 루트 `npm run check` exit **0**.
-- **명시적 비주장:** 이 스냅샷은 `npm run build`, 전체 `./test.sh` · `./omk-test.sh`, npm pack, 플랫폼(Linux/macOS/Windows/Bun) smoke 결과를 **주장하지 않는다**. 해당 명령은 이 슬라이스 범위가 아니며 릴리스 전 최종 검증에서 별도로 실행해야 한다.
+- **기준일:** 2026-07-23
+- **직전 합계:** 42 / 77 (ALG-003 13 / 15)
+- **이번 슬라이스에서 추가된 ALG-003 원자 조건 (정확히 2개):**
+  1. Git workspace fingerprint(`head` + dirty diff digest) 및 post-receipt latest-mutation invalidation 일반화
+  2. command 문자열 자체의 secret redaction 정책(redacted command + secure command hash)
+- **원자 조건 스냅샷:** ALG-003 **15 / 15** ✅
+- **전체 합계:** **44 / 77**
+- **집계 증거:** focused evidence 통과 + `npm run check` exit **0** (2026-07-23 기준).
+- **명시적 비주장:** 이 스냅샷은 `npm run build`, 전체 `./test.sh` · `./omk-test.sh`, npm pack, 플랫폼(Linux/macOS/Windows/Bun) smoke 결과를 **주장하지 않는다**.
 
 ### ALG-003 신뢰·범위 경계 (trust/scope boundaries)
 
 - **callback 정직성:** `VerifiedEvidenceExecutor`에 전달되는 callback은 descriptor를 **있는 그대로 실행**하고, 합계 64 KiB 이하의 **이미 redaction된 bounded output**만 반환해야 한다. redaction·bound 책임은 callback/gatherer 측에 있다.
 - **CI callsite 한정:** `.github/workflows/ci.yml`은 컴파일된 `dist/verify-ci.js`를 호출하고, 이 entry는 release-consistency command를 `executeVerifiedLocalBash()`와 `executor: "ci-runner"`로 실행한다. 기본 CLI·interactive·RPC·AgentSession bash 경로는 여전히 receipt executor에 연결되지 않는다.
-- **fingerprint 범위:** workspace fingerprint는 **artifact-set 한정**이며 **Git fingerprint(`head` + dirty diff digest)는 포함하지 않는다**.
-- **post-receipt 변형 정책 없음:** receipt 이후 관련 write가 발생한 경우 최신 mutation sequence로 evidence를 무효화하는 **일반화 정책은 아직 없다**(현재는 `workspaceAfter` manifest 재캡처 + ledger 결합에 한함).
+- **fingerprint 범위:** workspace fingerprint는 **Git fingerprint(`head` + dirty diff digest)를 포함**한다. Git이 없는 작업공간은 artifact-set manifest로 fallback.
+- **post-receipt 변형 정책:** receipt 이후 관련 write가 발생한 경우 최신 mutation sequence로 evidence를 무효화하는 일반화 정책이 **구현됨**(`receipt.ledgerSeq > latestRelevantMutation.ledgerSeq` 판정).
+- **command redaction:** command 문자열에 secret이 포함된 경우 redacted command + secure command hash 정책이 **구현됨**.
 - **보안 경계 아님:** receipt store와 evidence gate는 **OS 수준 격리가 아니다**. 강한 격리는 container/micro-VM/sandbox가 담당한다(본문 §3 비목표와 동일).
 
-### 남은 ALG-003 원자 조건 (2개, 13/15 기준)
+### 남은 ALG-003 원자 조건: 없음 (15/15 완료)
 
-아래 항목은 완료로 선언하지 않는다.
+모든 ALG-003 원자 조건이 2026-07-23 기준으로 완료되었다.
 
-- Git workspace fingerprint(`head` + dirty diff digest)와 post-receipt latest-mutation invalidation 일반화 — 현재 artifact-set manifest 재캡처에 한정.
-- command 문자열 자체의 secret redaction 정책(redacted command + secure command hash).
+- ✅ Git workspace fingerprint(`head` + dirty diff digest) + post-receipt latest-mutation invalidation 일반화 — 구현됨.
+- ✅ command 문자열 자체의 secret redaction 정책(redacted command + secure command hash) — 구현됨.
 
 ### 남은 ALG-003 검증·회귀
 
@@ -1159,7 +1155,7 @@ late completion은 audit-only event
 
 # 7. ALG-003 — Execution-Bound Evidence Receipt v3
 
-> **진행·범위:** ALG-003은 2026-07-17 기준 **13/15**(전체 42/77)이다. 신뢰·범위 경계와 남은 작업은 문서 상단 ‘진행 스냅샷 (2026-07-17)’을 기준으로 한다. 아래 설계는 완료 주장이 아닌 명세다.
+> **진행·범위:** ALG-003은 2026-07-23 기준 **15/15**(전체 44/77)로 원자 조건 완료. 아래 설계는 구현된 명세다.
 
 ## 7.1 목표
 
@@ -1326,7 +1322,7 @@ timestamp는 표시와 보조 검증에 사용한다.
 9. contract.verdict == pass
 ```
 
-`receipt.ledgerSeq > latestRelevantMutation.ledgerSeq`와 같은 일반화된 post-receipt mutation 순서 정책은 아직 구현되지 않았다.
+`receipt.ledgerSeq > latestRelevantMutation.ledgerSeq` 일반화된 post-receipt mutation 순서 정책이 **구현됨** (2026-07-23).
 
 판정 강도:
 

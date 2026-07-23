@@ -1,3 +1,4 @@
+import { pathToFileURL } from "node:url";
 import { type ContextBudgetItemV2, fnv1aHex } from "./context-budget-governor-v2.ts";
 import { scoreContextFileRelevance, scoreSkillRelevance } from "./context-budget-relevance.ts";
 import type { ContextFile } from "./resource-loader.ts";
@@ -69,7 +70,7 @@ function pushContextItems(
 		relevance: (contextFile.isGlobal ? 0.9 : 0.6) * 0.4 + queryScore * 0.6,
 		redundancyKey: contextFile.path,
 		sourceRef: {
-			uri: `file://${contextFile.path}`,
+			uri: pathToFileURL(contextFile.path).href,
 			contentHash: fnv1aHex(contextFile.content),
 			retrievable: true,
 		},
@@ -140,7 +141,7 @@ function renderContextFull(contextFile: ContextFile, tagName: string, excerptCha
 			? boundedExcerpt(contextFile.content, excerptChars)
 			: contextFile.content;
 	const truncated = content.length < contextFile.content.length ? " truncated=true" : "";
-	return `<${tagName} path="${escapeXml(contextFile.path)}"${truncated}>\n${content}\n</${tagName}>`;
+	return `<${tagName} path="${escapeXml(contextFile.path)}"${truncated}>\n${escapeXmlText(content)}\n</${tagName}>`;
 }
 
 function boundedExcerpt(content: string, excerptChars = CONTEXT_EXCERPT_CHARS): string {
@@ -179,11 +180,10 @@ function renderSkillEntry(skill: Skill): string {
 	].join("\n");
 }
 
+export function escapeXmlText(str: string): string {
+	return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 export function escapeXml(str: string): string {
-	return str
-		.replace(/&/g, "&amp;")
-		.replace(/</g, "&lt;")
-		.replace(/>/g, "&gt;")
-		.replace(/"/g, "&quot;")
-		.replace(/'/g, "&apos;");
+	return escapeXmlText(str).replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 }

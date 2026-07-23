@@ -28,7 +28,7 @@ Structured next steps on the verdict card: **Apply**, **Deep Check**, **Regenera
 ## Fast wall vs deep wall
 
 - **Fast wall (default):** Pure policy — diff paths, scope globs, secret-shaped lines, preview-only limits (`BATCH1_NO_DOCKER_RUNNER`). No Docker runner in batch 1.
-- **Deep wall (Pro / future):** Hermetic paired base/patch replay. Today `deepWall: true` returns **unavailable** with the same batch-1 limit code.
+- **Deep wall (Pro / future):** Hermetic paired base/patch replay. Today `deepWall: true` returns **unavailable** (evidence-gated: requires a valid execution receipt per ALG-003 strict mode; no Docker runner wired in batch 1).
 
 ## Relationship to Adaptorch
 
@@ -74,7 +74,7 @@ The correctness wall is **not** part of the default `omk-core-verified` preset o
 | **Role loadouts** | `code` / `executor` lanes still get `pre-shell-guard`, `protect-secrets`, and `typecheck-after-edit`; the wall **adds** a pre-apply policy gate on `edit` / `write` only when the extension is loaded |
 | **Domain router** | No dedicated domain profile today; patch-safety work may route to [`ai-agent-ops`](./loadout-domains/ai-agent-ops.md) for harness/eval discipline, but that does **not** auto-load this extension |
 
-**Future hook (code, not batch-1):** `packages/coding-agent/src/core/domain-loadouts.ts` could gain triggers (e.g. `patch safety`, `correctness wall`) and a curated extension entry pointing at the correctness-wall example. Until then, document-only reference — do not hand-edit auto-generated files under `docs/loadout-domains/`.
+**Domain router triggers (implemented):** `packages/coding-agent/src/core/domain-loadouts.ts` already contains keyword triggers (`correctness wall`, `patch safety`) and a path trigger (`correctness-wall`) that route to the PATCH SAFETY domain profile. The profile instructs operators to load the correctness-wall extension explicitly (not in default preset) and follow the shadow → soft → hard rollout. Auto-generated docs under `docs/loadout-domains/` should be regenerated via `gen-domain-docs.mjs`, not hand-edited.
 
 Regression coverage for the wall library surface lives in `packages/coding-agent/test/suite/regressions/018-b2c-correctness-wall.test.ts` (imports `omk-adaptorch-wpl` the same way the extension does).
 
@@ -105,9 +105,17 @@ Goal orchestration v2 artifacts (planner P3) live beside batch-1 plan files:
 | Three-wave execution DAG (JSON) | `.omk/goals/b2c-correctness-wall-2026-07-08/dag-v2.json` |
 | Explorer: browser-smoke vs extension load + loadout gaps | `.omk/goals/b2c-correctness-wall-2026-07-08/laneE-explorer.md` |
 
-**Wave 2 (prove / integrate):** wire `AdaptOrchClient` on hooks when session has run context; lift `BATCH1_NO_DOCKER_RUNNER` for non-preview deep wall; optional preset documentation in `~/.omk/runtime-preset.json` comments only (no default-on extension).
+**Wave 2 (prove / integrate) — Partial:**
+- ✅ `domain-loadouts.ts` triggers for `correctness wall` / `patch safety` shipped (keyword + path patterns, PATCH SAFETY domain profile).
+- ✅ Evidence receipt v3 (ALG-003 15/15) gates deep-wall availability on valid execution receipts.
+- ⬜ `AdaptOrchClient` hook wiring when session has run context — not yet connected.
+- ⬜ Lift `BATCH1_NO_DOCKER_RUNNER` for non-preview deep wall — still stub.
+- ⬜ Preset documentation in `~/.omk/runtime-preset.json` — deferred.
 
-**Wave 3 (productize):** publish `omk-adaptorch-wpl` from `dist/` for out-of-monorepo extensions; optional `domain-loadouts.ts` profile + `gen-domain-docs.mjs` regen; default **soft** for internal dogfood presets after Wave 2 evidence.
+**Wave 3 (productize) — Not started:**
+- ⬜ Publish `omk-adaptorch-wpl` from `dist/` for out-of-monorepo extensions.
+- ✅ `domain-loadouts.ts` profile exists; `gen-domain-docs.mjs` regen pending.
+- ⬜ Default **soft** for internal dogfood presets after Wave 2 evidence.
 
 ## See also
 

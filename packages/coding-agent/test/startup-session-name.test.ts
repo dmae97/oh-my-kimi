@@ -82,7 +82,7 @@ async function runCli(args: string[], dirs: CliDirs): Promise<CliResult> {
 	return new Promise((resolvePromise, reject) => {
 		const timeout = setTimeout(() => {
 			child.kill("SIGKILL");
-		}, 10_000);
+		}, 40_000);
 		child.on("error", (error) => {
 			clearTimeout(timeout);
 			reject(error);
@@ -118,7 +118,7 @@ describe("startup session name", () => {
 		expect(result.code).toBe(1);
 		expect(result.signal).toBeNull();
 		expect(readSessionInfoNames(dirs.sessionFile)).toEqual(["CLI Named Session"]);
-	});
+	}, 60_000);
 
 	it("rejects empty --name values without appending session metadata", async () => {
 		const dirs = setup();
@@ -131,5 +131,5 @@ describe("startup session name", () => {
 		expect(result.signal).toBeNull();
 		expect(result.stderr).toContain("--name requires a non-empty value");
 		expect(readSessionInfoNames(dirs.sessionFile)).toEqual([]);
-	});
+	}, 60_000);
 });

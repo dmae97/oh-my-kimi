@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- New OAuth provider integrations: Cursor, Devin, GitLab Duo, Google Antigravity, Google Gemini CLI, Kimi, OpenCode, Perplexity, xAI, and Zhipu coding-plan flows, with shared Google OAuth helpers.
+
+### Fixed
+
+- The local-LLM (Ollama) E2E suite now honors `OMK_NO_LOCAL_LLM` (it previously checked the wrong `PI_NO_LOCAL_LLM` variable), so credential-less test runs skip local-provider tests instead of timing out.
+
 ## [0.91.0] - 2026-07-21
 
 ### Added

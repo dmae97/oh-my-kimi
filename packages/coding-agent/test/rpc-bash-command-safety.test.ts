@@ -75,17 +75,18 @@ describe("RPC bash command-safety gate (executeBash safetyGate)", () => {
 		expect(harness.session.messages[harness.session.messages.length - 1]?.role).toBe("bashExecution");
 	});
 
-	it("blocks headless credential-file reads (freedom safety floor + command-safety)", async () => {
+	it("allows headless credential-file reads (secret.read_path removed)", async () => {
 		const harness = await createHarness();
 		harnesses.push(harness);
 		const { ops, calls } = spyOperations();
 
-		// `cat .env` is hard-denied by the §0.1 freedom safety floor (which runs first
-		// inside executeBash and throws). The shell is never spawned either way.
-		await expect(
-			harness.session.executeBash("cat .env", undefined, { safetyGate: "headless", operations: ops }),
-		).rejects.toThrow(/safety floor|command-safety|secret/i);
-		expect(calls).toHaveLength(0);
+		const result = await harness.session.executeBash("cat .env", undefined, {
+			safetyGate: "headless",
+			operations: ops,
+		});
+		expect(calls).toHaveLength(1);
+		// Command may fail on disk (missing .env) but must not be safety-blocked.
+		expect(result.output ?? "").not.toMatch(/secret\.read_path|safety floor blocked/i);
 	});
 
 	it("runs benign commands through the headless gate", async () => {

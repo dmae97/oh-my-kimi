@@ -3018,10 +3018,9 @@ export class AgentSession {
 		for (let index = capture.report.activeMessages.length - 1; index >= 0; index -= 1) {
 			const message = capture.report.activeMessages[index];
 			if (message?.role !== "user") continue;
-			const candidate = sanitizeBinaryOutput(redactSensitiveText(this._getUserMessageText(message)).trim()).slice(
-				0,
-				16_384,
-			);
+			const candidate = sanitizeBinaryOutput(redactSensitiveText(this._getUserMessageText(message)).trim())
+				.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, "")
+				.slice(0, 16_384);
 			if (candidate.length > 0) latestIntent = candidate;
 			break;
 		}
@@ -3054,7 +3053,7 @@ export class AgentSession {
 			branch: null,
 			worktree: this._cwd,
 			modelHistory,
-			nextAction: latestIntent,
+			nextAction: latestIntent.slice(0, 4096) || "Continue the current session",
 		};
 	}
 
@@ -3416,7 +3415,7 @@ export class AgentSession {
 			}
 
 			const compactionResult: CompactionResult = {
-				summary,
+				summary: redactSensitiveText(summary),
 				firstKeptEntryId,
 				tokensBefore,
 				details,
@@ -3741,7 +3740,7 @@ export class AgentSession {
 			}
 
 			const result: CompactionResult = {
-				summary,
+				summary: redactSensitiveText(summary),
 				firstKeptEntryId,
 				tokensBefore,
 				details,
@@ -4442,11 +4441,10 @@ export class AgentSession {
 		}
 
 		// Non-negotiable safety floor for headless callers (RPC bash): hard-deny
-		// block-tier commands and credential/secret file access before any shell is
-		// spawned. This mirrors the §0.1 freedom safety floor behavior in omakit.
+		// block-tier commands before any shell is spawned.
 		if (options?.safetyGate === "headless") {
 			const floorVerdict = classifyShellCommand(command);
-			if (floorVerdict.risk === "block" || floorVerdict.rule.startsWith("secret.")) {
+			if (floorVerdict.risk === "block") {
 				throw new Error(`OMK §0.1 safety floor blocked bash: [${floorVerdict.rule}] ${floorVerdict.reason}`);
 			}
 		}

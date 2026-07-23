@@ -151,6 +151,8 @@ OMK loads `AGENTS.md` or `CLAUDE.md` at startup from:
 
 Use context files for project conventions, commands, safety rules, and preferences. Disable loading with `--no-context-files` or `-nc`.
 
+The core prompt builder places a fixed runtime trust boundary before loaded context and skill metadata. Global context can constrain project context, but loaded resources cannot expand user authorization or override active runtime/security controls. Context paths and text are XML-escaped before prompt assembly so resource content cannot break out of its structural envelope. This is defense in depth, not a code sandbox: extensions are executable trusted code and can explicitly rewrite the system prompt or final provider payload.
+
 ### System Prompt Files
 
 Replace the default system prompt with:
@@ -159,6 +161,8 @@ Replace the default system prompt with:
 - `~/.omk/agent/SYSTEM.md` globally
 
 Append to the default prompt without replacing it with `APPEND_SYSTEM.md` in either location.
+
+Replacing or appending the default prompt does not remove the core runtime trust boundary; OMK inserts it after custom prompt text and before context files and skills.
 
 ## Exporting and Sharing Sessions
 

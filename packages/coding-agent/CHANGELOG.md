@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Added
+
+- Subagent managed-process runtime under `examples/extensions/subagent`: a deadline-budgeted, checkpointed, adaptive subagent executor with process-group lifecycle management (SIGTERM→SIGKILL escalation and resistant-descendant reaping) plus an extension smoke path that runs a registered tool through the managed-process boundary without a provider API.
+- Print mode now reports a clear usage message and exits with code 2 when invoked with no prompt (bare `omk -p`) instead of exiting silently.
+
+### Changed
+
+- Simplified the built-in loadout authority model: every loadout (`inspect`, `plan`, `architect`, `review`, `critic`, `security`, `test`, `visual-qa`) now resolves to `write-scoped` authority with a unified `read/grep/find/ls/edit/write/bash` tool grant and `scoped-shell` command mode, replacing the previous per-loadout read-only / advisory / review-only tiers and their filesystem-MCP downgrade and write-skill stripping. Lane write scope remains gated by the scheduler write-set.
+- Removed the headless credential/secret-file command-safety guard: `classifySecretAccess` and the `secret.read_path` confirm tier are gone, and the agent session no longer applies the safety-floor block for `secret.*` verdicts before spawning a shell. Commands referencing `.env`, `.npmrc`, `.netrc`, `.aws/credentials`, `auth.json`, SSH private keys, `*.pem`/`*.key`, and similar are no longer gated for headless/RPC/LLM bash callers.
+
+### Notes
+
+- Local-only scratch scripts and operator protocol notes are now gitignored and excluded from the release surface.
+
 ## [0.91.0] - 2026-07-21
 
 ### Added

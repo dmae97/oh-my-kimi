@@ -67,7 +67,7 @@ By default, compaction uses the active session model. Set `compaction.model` to 
 1. **Find cut point**: Walk backwards from newest message, accumulating token estimates until `keepRecentTokens` (default 20k, configurable in `~/.omk/agent/settings.json` or `<project-dir>/.omk/settings.json`) is reached
 2. **Extract messages**: Collect messages from the previous kept boundary (or session start) up to the cut point
 3. **Generate summary**: Call LLM to summarize with structured format, passing the previous summary as iterative context when present
-4. **Append entry**: Save `CompactionEntry` with summary and `firstKeptEntryId`
+4. **Sanitize and append**: Deterministically redact sensitive values, then save the `CompactionEntry` with its summary and `firstKeptEntryId`. Exact `[REDACTED]` assignment placeholders are valid; appended data and unredacted credential-shaped literals remain rejected.
 5. **Reload**: Session reloads, using summary + messages from `firstKeptEntryId` onwards
 
 ```

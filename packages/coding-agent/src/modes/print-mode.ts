@@ -157,6 +157,17 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 
 		await rebindSession();
 
+		const hasPrompt =
+			!!initialMessage?.trim() ||
+			messages.some((m) => typeof m === "string" && m.trim().length > 0) ||
+			!!(initialImages && initialImages.length > 0);
+		if (!hasPrompt) {
+			// Bare `omk` with no prompt used to exit silently in print mode.
+			console.error('No prompt provided. Use: omk -p "..."  or run `omk` in an interactive terminal.');
+			exitCode = 2;
+			return exitCode;
+		}
+
 		if (initialMessage) {
 			promptStarted = true;
 			await session.prompt(initialMessage, { images: initialImages });

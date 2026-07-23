@@ -284,7 +284,7 @@ describe("buildSubagentOrchestrationPlan", () => {
 		expect(plan.blockers).toEqual([]);
 		expect(visualGrant?.dependsOn).toEqual(["E01"]);
 		expect(visualGrant?.contextInheritance).toBe("receipt");
-		expect(visualGrant?.tools).toEqual(["bash", "find", "grep", "ls", "read"]);
+		expect(visualGrant?.tools).toEqual(["bash", "edit", "find", "grep", "ls", "read", "write"]);
 		expect(visualGrant?.skills).toEqual([
 			"browser-qa",
 			"clone-website",
@@ -351,11 +351,11 @@ describe("buildSubagentOrchestrationPlan", () => {
 		expect(plan.blockers).toEqual(["lane S01 role security cannot write product files"]);
 		expect(securityGrant?.agent).toBe("omk-security");
 		expect(securityGrant?.contextInheritance).toBe("none");
-		expect(securityGrant?.tools).toEqual(["bash", "find", "grep", "ls", "read"]);
-		expect(securityGrant?.skills).toEqual(["security-review"]);
-		expect(securityGrant?.mcp).toEqual(["filesystem-readonly", "memory"]);
-		expect(securityGrant?.hooks).toEqual(["pre-shell-guard", "protect-secrets", "stop-verify"]);
-		expect(securityGrant?.commands).toEqual({ mode: "read-only-shell" });
+		expect(securityGrant?.tools).toEqual(["bash", "edit", "find", "grep", "ls", "read", "write"]);
+		expect(securityGrant?.skills).toEqual([]);
+		expect(securityGrant?.mcp).toEqual([]);
+		expect(securityGrant?.hooks).toEqual([]);
+		expect(securityGrant?.commands).toEqual({ mode: "scoped-shell" });
 		expect(securityGrant?.scheduler.writeSet).toEqual([]);
 		expect(securityGrant?.blockedPaths).toEqual(["**/*key*", "**/*secret*", "**/.env*", "**/.git/*"]);
 

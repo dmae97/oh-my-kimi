@@ -9,15 +9,25 @@ Delegate tasks to specialized subagents with isolated context windows.
 - **Parallel streaming**: All parallel tasks stream updates simultaneously
 - **Markdown rendering**: Final output rendered with proper formatting (expanded view)
 - **Usage tracking**: Shows turns, tokens, cost, and context usage per agent
-- **Abort support**: Ctrl+C propagates to kill subagent processes
+- **Abort support**: Ctrl+C propagates to the entire detached subagent process tree
+- **Dual-budget planning**: Predictive sharding uses both estimated tokens and learned wall-clock demand
+- **Checkpoint resume**: A cutoff resumes only the unfinished shard with bounded prior evidence
+- **Cutoff learning**: Completion/cutoff history is persisted per provider and model under the agent state directory
+- **Bounded cost**: At most 3 semantic shards and 1 resume across the whole logical task by default
 
 ## Structure
 
 ```
 subagent/
 ├── README.md            # This file
-├── index.ts             # The extension (entry point)
-├── agents.ts            # Agent discovery logic
+├── index.ts                    # The extension entry point
+├── adaptive-agent-runtime.ts   # Shard/checkpoint/resume coordinator
+├── checkpoint-runtime.ts       # Bounded checkpoint protocol
+├── deadline-budget.ts          # Token + wall-clock planning and cutoff learning
+├── deadline-profile-store.ts   # Persistent provider/model profiles
+├── managed-process.ts          # Process-tree termination and cleanup
+├── subagent-runtime-types.ts   # Typed result/deadline metadata
+├── agents.ts                   # Agent discovery logic
 ├── agents/              # Sample agent definitions
 │   ├── scout.md         # Fast recon, returns compressed context
 │   ├── planner.md       # Creates implementation plans
@@ -36,8 +46,12 @@ From the repository root, symlink the files:
 ```bash
 # Symlink the extension (must be in a subdirectory with index.ts)
 mkdir -p ~/.omk/agent/extensions/subagent
-ln -sf "$(pwd)/packages/coding-agent/examples/extensions/subagent/index.ts" ~/.omk/agent/extensions/subagent/index.ts
-ln -sf "$(pwd)/packages/coding-agent/examples/extensions/subagent/agents.ts" ~/.omk/agent/extensions/subagent/agents.ts
+src="$(pwd)/packages/coding-agent/examples/extensions/subagent"
+for f in index.ts agents.ts agent-capability-router.ts capabilities.ts domain-profiles.ts \
+  adaptive-agent-runtime.ts adaptive-result.ts checkpoint-runtime.ts deadline-budget.ts \
+  deadline-profile-store.ts managed-process.ts subagent-runtime-types.ts; do
+  ln -sf "$src/$f" ~/.omk/agent/extensions/subagent/$f
+done
 
 # Symlink agents
 mkdir -p ~/.omk/agent/agents
@@ -92,9 +106,16 @@ Use a chain: first have scout find the read tool, then have planner suggest impr
 
 | Mode | Parameter | Description |
 |------|-----------|-------------|
-| Single | `{ agent, task }` | One agent, one task |
-| Parallel | `{ tasks: [...] }` | Multiple agents run concurrently (max 8, 4 concurrent) |
-| Chain | `{ chain: [...] }` | Sequential with `{previous}` placeholder |
+| Single | `{ agent, task }` | One logical task; the runtime may split it into bounded semantic shards |
+| Parallel | `{ tasks: [...] }` | Multiple logical tasks run concurrently (max 8, 4 concurrent) |
+| Chain | `{ chain: [...] }` | Sequential with `{previous}` placeholder and a fair deadline share per remaining step |
+
+Optional execution controls:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `executionBudgetMs` | `840000` | Internal hard budget, leaving 60 seconds before a configured 900000 ms tool timeout |
+| `maxResumeAttempts` | `1` | Retries only the active unfinished shard; accepted range is 0-2 |
 
 ## Output Display
 
@@ -164,8 +185,10 @@ Project agents override user agents with the same name when `agentScope: "both"`
 
 - **Exit code != 0**: Tool returns error with stderr/output
 - **stopReason "error"**: LLM error propagated with error message
-- **stopReason "aborted"**: User abort (Ctrl+C) kills subprocess, throws error
-- **Chain mode**: Stops at first failing step, reports which step failed
+- **stopReason "aborted"**: User abort (Ctrl+C) terminates and reaps the subprocess tree
+- **stopReason "deadline"**: Internal cutoff returns elapsed/deadline/checkpoint/resume metadata instead of reaching the outer tool timeout
+- **Chain mode**: Stops at first failing step, reports which step failed, and preserves completed earlier steps
+- **Duplicate prevention**: A cutoff with no new checkpoint or streamed evidence is not retried
 
 ## Limitations
 
@@ -173,3 +196,5 @@ Project agents override user agents with the same name when `agentScope: "both"`
 - Parallel model-visible output is capped at 50 KB per task; full results remain in tool details
 - Agents discovered fresh on each invocation (allows editing mid-session)
 - Parallel mode limited to 8 tasks, 4 concurrent
+- Automatic semantic pre-sharding requires an explicit numbered/checklist action list; indivisible prose is checkpointed and resumed as one shard
+- Checkpoints are best-effort child artifacts plus runtime-captured stream evidence; workspace side effects remain the source of truth after a cutoff

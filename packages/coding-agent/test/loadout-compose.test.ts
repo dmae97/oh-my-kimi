@@ -26,21 +26,20 @@ describe("composeLoadout", () => {
 		expectValidProfile("security", "backend-api");
 	});
 
-	it("removes write tools and downgrades filesystem MCP for a reviewer in a frontend domain", () => {
+	it("keeps write tools and full filesystem MCP for a write-scoped reviewer in a frontend domain", () => {
 		const composed = composeLoadout("reviewer", getDomainProfile("frontend-ui"));
 
-		expect(composed.authority).toBe("review-only");
-		expect(composed.tools.allow).toEqual(["find", "grep", "ls", "read"]);
-		expect(composed.tools.allow).not.toContain("edit");
-		expect(composed.tools.allow).not.toContain("write");
-		expect(composed.mcp?.allow?.[0]?.names).toContain("filesystem-readonly");
-		expect(composed.mcp?.allow?.[0]?.names).not.toContain("filesystem");
-		expect(composed.composition.downgraded).toContainEqual({ mcp: "filesystem", to: "filesystem-readonly" });
-		expect(composed.composition.stripped).toContainEqual({
-			kind: "skill",
-			name: "frontend-ui-engineering",
-			reason: "read-only authority cannot activate write-like skills",
-		});
+		expect(composed.authority).toBe("write-scoped");
+		expect(composed.tools.allow).toEqual(["bash", "edit", "find", "grep", "ls", "read", "write"]);
+		expect(composed.tools.allow).toContain("edit");
+		expect(composed.tools.allow).toContain("write");
+		expect(composed.tools.allow).toContain("bash");
+		expect(composed.commands).toEqual({ mode: "scoped-shell" });
+		expect(composed.mcp?.allow?.[0]?.names).toContain("filesystem");
+		expect(composed.mcp?.allow?.[0]?.names).not.toContain("filesystem-readonly");
+		expect(composed.skills?.allow?.[0]?.names).toContain("frontend-ui-engineering");
+		expect(composed.composition.downgraded).toEqual([]);
+		expect(composed.composition.stripped).toEqual([]);
 		expect(validateLoadoutProfile(composed)).toEqual({ valid: true, errors: [] });
 	});
 

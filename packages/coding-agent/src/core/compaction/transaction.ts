@@ -27,6 +27,12 @@ const METADATA_CONTROL_PATTERN = /[\u0000-\u001f\u007f]/u;
 const CONTENT_CONTROL_PATTERN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u;
 const CREDENTIAL_SHAPE_PATTERN =
 	/-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:^|[\s"'`:])bearer\s+[A-Za-z0-9._~+/-]{8,}|(?:api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|password|passwd|client[-_ ]?secret|secret[-_ ]?(?:key|token))\s*[:=]\s*["']?[^\s"',;]{3,}|(?:sk|ghp|gho|ghu|ghs|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{8,}/iu;
+const REDACTED_ASSIGNMENT_PATTERN =
+	/\s*[:=]\s*(?:"\[REDACTED\]"(?![A-Za-z0-9_+/-])|'\[REDACTED\]'(?![A-Za-z0-9_+/-])|\[REDACTED\](?![A-Za-z0-9._~+/-]))/giu;
+
+function containsCredentialShape(value: string): boolean {
+	return CREDENTIAL_SHAPE_PATTERN.test(value.replace(REDACTED_ASSIGNMENT_PATTERN, ""));
+}
 
 export interface SessionFileIdentity {
 	readonly dev: string;
@@ -236,7 +242,7 @@ function assertMetadataText(value: unknown, field: string, maxLength = MAX_METAD
 	) {
 		throw new TypeError(`${field} must be non-empty bounded metadata without control characters`);
 	}
-	if (CREDENTIAL_SHAPE_PATTERN.test(value)) {
+	if (containsCredentialShape(value)) {
 		throw new TypeError(`${field} must not contain credential-shaped metadata`);
 	}
 }
@@ -250,7 +256,7 @@ function assertContentText(value: unknown, field: string, maxLength: number): as
 	) {
 		throw new TypeError(`${field} must be non-empty bounded text without unsafe control characters`);
 	}
-	if (CREDENTIAL_SHAPE_PATTERN.test(value)) {
+	if (containsCredentialShape(value)) {
 		throw new TypeError(`${field} must not contain credential-shaped content`);
 	}
 }
@@ -311,7 +317,7 @@ function assertProvenanceText(value: unknown, field: string, maxLength: number):
 	) {
 		throw new TypeError(`${field} must be non-empty bounded text without unsafe control characters`);
 	}
-	if (CREDENTIAL_SHAPE_PATTERN.test(value)) {
+	if (containsCredentialShape(value)) {
 		throw new TypeError(`${field} must not contain credential-shaped content`);
 	}
 }

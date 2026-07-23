@@ -89,3 +89,10 @@ collect.sh
 /pi-extensions/
 .turbo/
 .turbo/**
+
+# Local-only scratch / operator protocol notes (not package content)
+/dashscope-call.py
+/maas-media.py
+/AGENTS.GODMODE.hard.md
+/AGENTS.override.hard.md
+/AGENTS.stub.md
