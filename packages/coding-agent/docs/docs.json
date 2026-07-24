@@ -28,6 +28,10 @@
           "path": "settings.md"
         },
         {
+          "title": "Environment Variables",
+          "path": "environment-variables.md"
+        },
+        {
           "title": "Keybindings",
           "path": "keybindings.md"
         },

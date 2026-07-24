@@ -62,6 +62,13 @@ You can also trigger manually with `/compact [instructions]`, where optional ins
 
 By default, compaction uses the active session model. Set `compaction.model` to an authenticated canonical `provider/model` reference when summaries should use a different model. For example, `zai/glm-5.2` keeps an interactive Claude session while using GLM only for auto-compaction and `/compact`.
 
+### Summarization Requests
+
+Every compaction and branch-summary LLM call flows through one choke point (`completeSummarization`):
+
+- **Retries**: transient stream drops (`terminated`, socket close, 5xx, DNS/transport errors) follow the configured `retry` settings (`enabled`, `maxRetries`, `baseDelayMs`) with exponential backoff instead of failing the whole operation on the first attempt. Quota/billing errors fail fast, and aborts are never retried. Retry progress is emitted as `summarization_retry_scheduled` / `summarization_retry_attempt_start` / `summarization_retry_finished` session events (surfaced in the TUI and RPC stream).
+- **Isolation**: each summarization request runs with prompt caching disabled (`cacheRetention: "none"`) and a fresh routing `sessionId`, so summaries never write unusable provider cache entries or inherit interactive session affinity.
+
 ### How It Works
 
 1. **Find cut point**: Walk backwards from newest message, accumulating token estimates until `keepRecentTokens` (default 20k, configurable in `~/.omk/agent/settings.json` or `<project-dir>/.omk/settings.json`) is reached

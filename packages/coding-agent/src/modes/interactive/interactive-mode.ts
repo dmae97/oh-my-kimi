@@ -1909,6 +1909,7 @@ export class InteractiveMode {
 			sessionManager: this.sessionManager,
 			modelRegistry: this.session.modelRegistry,
 			model: this.session.model,
+			thinkingLevel: this.session.thinkingLevel,
 			isIdle: () => !this.session.isStreaming,
 			signal: this.session.agent.signal,
 			abort: () => {
@@ -3296,6 +3297,54 @@ export class InteractiveMode {
 				this.ui.requestRender();
 				break;
 			}
+
+			case "summarization_retry_scheduled": {
+				this.showError(event.errorMessage);
+				this.statusContainer.clear();
+				this.retryCountdown?.dispose();
+				const retryMessage = (seconds: number) =>
+					`Retrying summarization (${event.attempt}/${event.maxAttempts}) in ${seconds}s...`;
+				this.retryLoader = new Loader(
+					this.ui,
+					(spinner) => theme.fg("warning", spinner),
+					(text) => theme.fg("muted", text),
+					retryMessage(Math.ceil(event.delayMs / 1000)),
+				);
+				this.retryCountdown = new CountdownTimer(
+					event.delayMs,
+					this.ui,
+					(seconds) => {
+						this.retryLoader?.setMessage(retryMessage(seconds));
+					},
+					() => {
+						this.retryCountdown = undefined;
+					},
+				);
+				this.statusContainer.addChild(this.retryLoader);
+				this.ui.requestRender();
+				break;
+			}
+
+			case "summarization_retry_attempt_start":
+			case "summarization_retry_finished": {
+				// Attempt underway or retry loop settled: clear the retry indicator.
+				// The compaction/branch-summary flow owns its own progress display.
+				if (this.retryCountdown) {
+					this.retryCountdown.dispose();
+					this.retryCountdown = undefined;
+				}
+				if (this.retryLoader) {
+					this.retryLoader.stop();
+					this.retryLoader = undefined;
+					this.statusContainer.clear();
+				}
+				this.ui.requestRender();
+				break;
+			}
+
+			case "bash_execution_update":
+				// The bash execution callback handles TUI output rendering.
+				break;
 		}
 	}
 

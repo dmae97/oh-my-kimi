@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+
+- Ported upstream Pi 0.82.0 bash session environment: the LLM-callable bash tool now receives `PI_SESSION_ID`, `PI_SESSION_FILE`, `PI_PROVIDER`, `PI_MODEL`, and `PI_REASONING_LEVEL` (parent-env spoofing is stripped; disable per tool via `createBashTool(cwd, { exposeSessionEnvironment: false })`). See [Environment Variables](docs/environment-variables.md).
+- Ported upstream Pi 0.82.0 `bash_execution_update` session events: direct RPC `bash` commands stream output chunks correlated with the command `id`. See [RPC](docs/rpc.md).
+- Ported upstream Pi 0.81.1/0.82.0 summarization resilience: compaction and branch-summary calls now follow `retry` settings with exponential backoff (new `summarization_retry_scheduled` / `summarization_retry_attempt_start` / `summarization_retry_finished` session events, surfaced in TUI and RPC), run with prompt caching disabled, and use fresh routing session IDs. See [Compaction](docs/compaction.md).
+- Ported upstream Pi 0.82.0 abortable provider retries in `omk-ai`: SDK-level retries are replaced by `retryProviderRequest` with abortable backoff sleeps, retry-after caps now fail fast instead of clamping, and transient DNS/transport errors are classified retryable.
+
+### Fixed
+
+- Ported upstream Pi 0.82.0 clipboard fix: await `wl-copy` exit status and fall through to xclip/OSC 52 on failure instead of claiming success fire-and-forget.
+
 ## [0.92.0] - 2026-07-23
 
 ### Added

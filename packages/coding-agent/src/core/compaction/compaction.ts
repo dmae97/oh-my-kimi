@@ -6,8 +6,9 @@
  */
 
 import type { AgentMessage, StreamFn, ThinkingLevel } from "omk-agent-core";
+import { uuidv7 } from "omk-agent-core";
 import type { AssistantMessage, Context, Model, SimpleStreamOptions, Usage } from "omk-ai";
-import { completeSimple } from "omk-ai";
+import { completeSimple, type RetryCallbacks, type RetryPolicy, retryAssistantCall } from "omk-ai";
 import { computeReservedTokenBudget } from "../context-budget-reserved-tokens.ts";
 import {
 	convertToLlm,
@@ -607,17 +608,32 @@ function createSummarizationOptions(
 	return options;
 }
 
-async function completeSummarization(
+/**
+ * Shared choke point for every compaction/branch-summary summarization call. Wraps the
+ * single LLM call in {@link retryAssistantCall} so transient stream drops (e.g.
+ * `terminated`, socket close) honor the configured retry policy instead of failing
+ * the whole compaction on the first attempt. Deterministic errors and aborts return
+ * immediately (see {@link retryAssistantCall}).
+ */
+export async function completeSummarization(
 	model: Model<any>,
 	context: Context,
 	options: SimpleStreamOptions,
 	streamFn?: StreamFn,
+	retry?: RetryPolicy,
+	callbacks?: RetryCallbacks,
 ): Promise<AssistantMessage> {
-	if (!streamFn) {
-		return completeSimple(model, context, options);
-	}
-	const stream = await streamFn(model, context, options);
-	return stream.result();
+	// Summaries are standalone requests, so isolate routing and avoid cache writes that cannot be reused.
+	const requestOptions: SimpleStreamOptions = {
+		...options,
+		cacheRetention: "none",
+		sessionId: uuidv7(),
+	};
+	const produce = async (): Promise<AssistantMessage> =>
+		streamFn
+			? (await streamFn(model, context, requestOptions)).result()
+			: completeSimple(model, context, requestOptions);
+	return retryAssistantCall(produce, retry, requestOptions.signal, callbacks);
 }
 
 /**
@@ -635,6 +651,8 @@ export async function generateSummary(
 	previousSummary?: string,
 	thinkingLevel?: ThinkingLevel,
 	streamFn?: StreamFn,
+	retry?: RetryPolicy,
+	callbacks?: RetryCallbacks,
 ): Promise<string> {
 	const maxTokens = Math.min(
 		Math.floor(0.8 * reserveTokens),
@@ -674,6 +692,8 @@ export async function generateSummary(
 		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
 		completionOptions,
 		streamFn,
+		retry,
+		callbacks,
 	);
 
 	if (response.stopReason === "error") {
@@ -822,6 +842,8 @@ export async function compact(
 	signal?: AbortSignal,
 	thinkingLevel?: ThinkingLevel,
 	streamFn?: StreamFn,
+	retry?: RetryPolicy,
+	callbacks?: RetryCallbacks,
 ): Promise<CompactionResult> {
 	const {
 		firstKeptEntryId,
@@ -852,6 +874,8 @@ export async function compact(
 						previousSummary,
 						thinkingLevel,
 						streamFn,
+						retry,
+						callbacks,
 					)
 				: Promise.resolve("No prior history."),
 			generateTurnPrefixSummary(
@@ -863,6 +887,8 @@ export async function compact(
 				signal,
 				thinkingLevel,
 				streamFn,
+				retry,
+				callbacks,
 			),
 		]);
 		// Merge into single summary
@@ -880,6 +906,8 @@ export async function compact(
 			previousSummary,
 			thinkingLevel,
 			streamFn,
+			retry,
+			callbacks,
 		);
 	}
 
@@ -911,6 +939,8 @@ async function generateTurnPrefixSummary(
 	signal?: AbortSignal,
 	thinkingLevel?: ThinkingLevel,
 	streamFn?: StreamFn,
+	retry?: RetryPolicy,
+	callbacks?: RetryCallbacks,
 ): Promise<string> {
 	const maxTokens = Math.min(
 		Math.floor(0.5 * reserveTokens),
@@ -932,6 +962,8 @@ async function generateTurnPrefixSummary(
 		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
 		createSummarizationOptions(model, maxTokens, apiKey, headers, signal, thinkingLevel),
 		streamFn,
+		retry,
+		callbacks,
 	);
 
 	if (response.stopReason === "error") {

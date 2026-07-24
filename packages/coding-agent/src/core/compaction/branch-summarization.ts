@@ -6,8 +6,7 @@
  */
 
 import type { AgentMessage, StreamFn } from "omk-agent-core";
-import type { Model, SimpleStreamOptions } from "omk-ai";
-import { completeSimple } from "omk-ai";
+import type { Model, RetryCallbacks, RetryPolicy, SimpleStreamOptions } from "omk-ai";
 import {
 	convertToLlm,
 	createBranchSummaryMessage,
@@ -15,7 +14,7 @@ import {
 	createCustomMessage,
 } from "../messages.ts";
 import type { ReadonlySessionManager, SessionEntry } from "../session-manager.ts";
-import { estimateTokens } from "./compaction.ts";
+import { completeSummarization, estimateTokens } from "./compaction.ts";
 import {
 	computeFileLists,
 	createFileOps,
@@ -79,6 +78,10 @@ export interface GenerateBranchSummaryOptions {
 	reserveTokens?: number;
 	/** Optional session stream function. Used to preserve SDK request behavior without mutating agent state. */
 	streamFn?: StreamFn;
+	/** Retry policy for transient summarization errors. Reuses coding-agent's `settings.retry`. */
+	retry?: RetryPolicy;
+	/** Optional callbacks for retry reporting (e.g. TUI retry indicators). */
+	callbacks?: RetryCallbacks;
 }
 
 // ============================================================================
@@ -294,6 +297,8 @@ export async function generateBranchSummary(
 		replaceInstructions,
 		reserveTokens = 16384,
 		streamFn,
+		retry,
+		callbacks,
 	} = options;
 
 	// Token budget = context window minus reserved space for prompt + response
@@ -332,12 +337,11 @@ export async function generateBranchSummary(
 
 	// Call LLM for summarization. Prefer the session stream function so SDK
 	// request behavior (timeouts, retries, attribution headers) stays consistent
-	// without running through agent state/events.
+	// without running through agent state/events. Retried via completeSummarization
+	// so transient stream drops reuse the configured retry policy.
 	const context = { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages };
 	const requestOptions: SimpleStreamOptions = { apiKey, headers, signal, maxTokens: 2048 };
-	const response = streamFn
-		? await (await streamFn(model, context, requestOptions)).result()
-		: await completeSimple(model, context, requestOptions);
+	const response = await completeSummarization(model, context, requestOptions, streamFn, retry, callbacks);
 
 	// Check if aborted or errored
 	if (response.stopReason === "aborted") {

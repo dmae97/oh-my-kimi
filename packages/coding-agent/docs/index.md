@@ -37,6 +37,7 @@ For the full first-run flow, see [Quickstart](quickstart.md).
 - [Providers](providers.md) - subscription and API-key setup for built-in providers.
 - [Containerization](containerization.md) - sandbox omk with OpenShell, Gondolin, or Docker.
 - [Settings](settings.md) - global and project settings.
+- [Environment Variables](environment-variables.md) - process configuration and bash-tool session environment.
 - [Keybindings](keybindings.md) - default shortcuts and custom keybindings.
 - [Sessions](sessions.md) - session management, branching, and tree navigation.
 - [Compaction](compaction.md) - context compaction and branch summarization.

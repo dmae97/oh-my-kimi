@@ -424,11 +424,13 @@ Response:
 
 #### bash
 
-Execute a shell command and add output to conversation context.
+Execute a shell command and add output to conversation context. Output streams as `bash_execution_update` events while the command runs; the response contains the final result.
 
 ```json
-{"type": "bash", "command": "ls -la"}
+{"id": "req-1", "type": "bash", "command": "ls -la"}
 ```
+
+Include an `id` to associate streamed `bash_execution_update` events with this command.
 
 Response:
 ```json
@@ -753,6 +755,7 @@ Events are streamed to stdout as JSON lines during agent operation. Events do NO
 | `message_start` | Message begins |
 | `message_update` | Streaming update (text/thinking/toolcall deltas) |
 | `message_end` | Message completes |
+| `bash_execution_update` | Direct RPC bash command output chunk (includes originating command `id`) |
 | `tool_execution_start` | Tool begins execution |
 | `tool_execution_update` | Tool execution progress (streaming output) |
 | `tool_execution_end` | Tool completes |
