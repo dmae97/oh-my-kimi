@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `utils/retry.ts` (ported from upstream Pi 0.82.0): `retryAssistantCall`, `isRetryableAssistantError`, `RetryPolicy`, and `RetryCallbacks` with abortable backoff sleeps and quota/billing fail-fast classification, including DNS/transport (`getaddrinfo`, `ENOTFOUND`, `EAI_AGAIN`) and premature-stream patterns.
+- Added `utils/provider-retry.ts` (ported from upstream Pi 0.82.0): `retryProviderRequest` reproduces the OpenAI/Anthropic SDK retry policy with abortable sleeps; anthropic, openai-responses, azure-openai-responses, openai-completions, and openrouter-images providers now call SDKs with `maxRetries: 0` and wrap requests so retries honor the caller AbortSignal.
+
+### Changed
+
+- openai-codex-responses: provider-requested retry delays above `maxRetryDelayMs` now fail fast (`RetryDelayExceededError`) instead of being silently clamped, matching upstream Pi 0.82.0.
+
 ## [0.92.0] - 2026-07-23
 
 ### Added
