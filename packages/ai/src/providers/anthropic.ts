@@ -699,11 +699,23 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 			}
 
 			if (output.stopReason === "aborted" || output.stopReason === "error") {
-				throw new Error(
-					output.stopReason === "error"
-						? `Model ended the turn with a content/safety stop (stop_reason=${rawStopReason ?? "refusal"}); the response was not completed. Often a false positive on benign input — rephrase or retry.`
-						: "An unknown error occurred",
+				// Salvage: a refusal/sensitive stop that arrives after real text is
+				// almost always a false positive on an otherwise finished turn —
+				// deliver the partial answer instead of cancelling it. Only safety-
+				// derived errors qualify; transport/API errors still throw.
+				const isSafetyStop = rawStopReason === "refusal" || rawStopReason === "sensitive";
+				const hasDeliverableText = output.content.some(
+					(block) => block.type === "text" && block.text.trim().length > 0,
 				);
+				if (output.stopReason === "error" && isSafetyStop && hasDeliverableText) {
+					output.stopReason = "stop";
+				} else {
+					throw new Error(
+						output.stopReason === "error"
+							? `Model ended the turn with a content/safety stop (stop_reason=${rawStopReason ?? "refusal"}); the response was not completed. Often a false positive on benign input — rephrase or retry.`
+							: "An unknown error occurred",
+					);
+				}
 			}
 
 			stream.push({ type: "done", reason: output.stopReason, message: output });

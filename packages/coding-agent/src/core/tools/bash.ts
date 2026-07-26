@@ -200,7 +200,7 @@ function resolveSpawnContext(
 	const env = { ...getShellEnv() };
 	// Anti-spoof: never inherit PI_* session metadata from the parent environment.
 	for (const key of SESSION_ENV_KEYS) delete env[key];
-	if (exposeSessionEnvironment && ctx) {
+	if (exposeSessionEnvironment && ctx?.sessionManager) {
 		const model = ctx.model;
 		env.PI_SESSION_ID = ctx.sessionManager.getSessionId();
 		const sessionFile = ctx.sessionManager.getSessionFile();
