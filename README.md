@@ -27,7 +27,7 @@
   <a href="https://www.npmjs.com/package/open-multi-agent-kit"><img alt="npm version" src="https://img.shields.io/npm/v/open-multi-agent-kit?style=flat-square&label=npm" /></a>
   <a href="https://www.npmjs.com/package/open-multi-agent-kit"><img alt="npm downloads / month" src="https://img.shields.io/npm/dm/open-multi-agent-kit?style=flat-square" /></a>
   <a href="https://www.npmjs.com/package/open-multi-agent-kit"><img alt="npm total downloads" src="https://img.shields.io/npm/dt/open-multi-agent-kit?style=flat-square&label=total%20dl" /></a>
-  <a href="https://github.com/dmae97/omk/releases/tag/v0.92.0"><img alt="Release" src="https://img.shields.io/badge/release-v0.92.0-00d7ff?style=flat-square" /></a>
+  <a href="https://github.com/dmae97/omk/releases/tag/v0.93.0"><img alt="Release" src="https://img.shields.io/badge/release-v0.93.0-00d7ff?style=flat-square" /></a>
   <a href="LICENSE"><img alt="License MIT" src="https://img.shields.io/npm/l/open-multi-agent-kit?style=flat-square" /></a>
   <img alt="Node version" src="https://img.shields.io/node/v/open-multi-agent-kit?style=flat-square" />
 </p>
@@ -319,6 +319,23 @@ The proof standard is operational: evaluate OMK against your own task completion
 
 <!-- releases:start -->
 
+## Release v0.93.0
+
+### Added
+
+- Ported upstream Pi 0.82.0 bash session environment: the LLM-callable bash tool now receives `PI_SESSION_ID`, `PI_SESSION_FILE`, `PI_PROVIDER`, `PI_MODEL`, and `PI_REASONING_LEVEL` (parent-env spoofing is stripped; disable per tool via `createBashTool(cwd, { exposeSessionEnvironment: false })`). See [Environment Variables](packages/coding-agent/docs/environment-variables.md).
+- Ported upstream Pi 0.82.0 `bash_execution_update` session events: direct RPC `bash` commands stream output chunks correlated with the command `id`. See [RPC](packages/coding-agent/docs/rpc.md).
+- Ported upstream Pi 0.81.1/0.82.0 summarization resilience: compaction and branch-summary calls now follow `retry` settings with exponential backoff (new `summarization_retry_scheduled` / `summarization_retry_attempt_start` / `summarization_retry_finished` session events, surfaced in TUI and RPC), run with prompt caching disabled, and use fresh routing session IDs. See [Compaction](packages/coding-agent/docs/compaction.md).
+- Ported upstream Pi 0.82.0 abortable provider retries in `omk-ai`: SDK-level retries are replaced by `retryProviderRequest` with abortable backoff sleeps, retry-after caps now fail fast instead of clamping, and transient DNS/transport errors are classified retryable.
+- Subagent capability enforcement: agent frontmatter may declare `skills`/`mcp`/`hooks` plus `enforceCapabilities: true` to spawn with `--no-skills` + resolved `--skill` paths; `enforceCapabilities` now correctly parses YAML booleans/numbers/strings (`parseEnforceFlag`), the skill catalog scan skips archived corpus trees (e.g. `system-prompts-leaks`) so real skill names resolve to their real paths, and the MCP allowlist is synced to the live configured server set. Includes deterministic OMK-native domain profiles for the capability router and 16 coercion unit tests (`examples/extensions/subagent/agents.test.ts`).
+
+### Fixed
+
+- Fixed persisted compaction envelope validation rejecting every session compacted two or more times: the writer attests the kept-window slice from the previous compaction's `firstKeptEntryId`, but reopen validation required the full parent branch, so any twice-compacted session crashed on open with `Invalid compaction envelope source`. Validation now accepts either exact form (tamper-evidence unchanged); regression tests in `test/session-file-compaction-window.test.ts`.
+- Ported upstream Pi 0.82.0 clipboard fix: await `wl-copy` exit status and fall through to xclip/OSC 52 on failure instead of claiming success fire-and-forget.
+
+Release notes live in [RELEASE_NOTES_v0.93.0.md](.github/RELEASE_NOTES_v0.93.0.md).
+
 ## Release v0.92.0
 
 ### Added
@@ -361,24 +378,6 @@ Release notes live in [RELEASE_NOTES_v0.92.0.md](.github/RELEASE_NOTES_v0.92.0.m
 - Verification boundary: `tsgo --noEmit` clean; adaptorch-wpl suite 73/73, coding-agent regression suite 784/784, theme suites green. Live-provider coverage remains outside this release.
 
 Release notes live in [RELEASE_NOTES_v0.91.0.md](.github/RELEASE_NOTES_v0.91.0.md).
-
-## Release v0.90.9
-
-### Added
-
-- Closed every emitted tool turn with one terminal result across normal, blocked, aborted, timed-out, failed, and resume paths; missing-result repair remains idempotent and duplicate/orphan results fail closed.
-- Added a deterministic resource-claim DAG scheduler that preserves source-order artifacts, keeps unknown, `bash`, and unclaimed extension tools exclusive, and retains `waves-v1` as the compatibility rollback path.
-- Added execution-bound evidence receipts that bind normalized local command outcomes, artifact/workspace fingerprints, redacted output digests, and replay-ledger state; the built-in CLI and `AgentSession` bash paths remain outside this optional evidence executor.
-- Made compaction transactional behind closed tool turns, revision compare-and-swap, and stale-summary discard.
-- Added typed termination, incomplete-run recovery, and `omk session doctor`, including dry-run repair for unambiguous recoverable state only.
-- Added provider-origin-aware `omk provider doctor` diagnostics with sanitized Level 0–2 probes for native, custom OpenAI-compatible, and local-proxy endpoints.
-
-### Notes
-
-- Published to npm as `open-multi-agent-kit@0.90.9` (lockstep with `omk-ai`, `omk-agent-core`, and `omk-tui` at `0.90.9`); prebuilt binaries are attached to the GitHub release.
-- Verification boundary: build/check and the keyless workspace suite passed; live-provider and other-OS coverage remain outside this release. Validate existing integrations against your workload.
-
-Release notes live in [RELEASE_NOTES_v0.90.9.md](.github/RELEASE_NOTES_v0.90.9.md).
 
 <!-- releases:end -->
 
