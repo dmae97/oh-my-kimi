@@ -29,6 +29,23 @@ export interface AgentDiscoveryResult {
 	projectAgentsDir: string | null;
 }
 
+/** Coerce frontmatter enforceCapabilities (boolean | string | unknown) to boolean|undefined. */
+function parseEnforceFlag(value: unknown): boolean | undefined {
+	if (typeof value === "boolean") return value;
+	if (typeof value === "number") {
+		if (value === 1) return true;
+		if (value === 0) return false;
+		return undefined;
+	}
+	if (typeof value === "string") {
+		const v = value.trim().toLowerCase();
+		if (v === "true" || v === "1" || v === "yes" || v === "on") return true;
+		if (v === "false" || v === "0" || v === "no" || v === "off") return false;
+		return undefined;
+	}
+	return undefined;
+}
+
 function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig[] {
 	const agents: AgentConfig[] = [];
 
@@ -67,10 +84,7 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 			.filter(Boolean);
 
 		const capabilities = parseCapabilities(frontmatter);
-		const enforceCapabilities =
-			typeof frontmatter.enforceCapabilities === "string"
-				? frontmatter.enforceCapabilities.trim().toLowerCase() === "true"
-				: undefined;
+		const enforceCapabilities = parseEnforceFlag(frontmatter.enforceCapabilities);
 
 		agents.push({
 			name: frontmatter.name,

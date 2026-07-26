@@ -69,16 +69,19 @@ export const VALID_HOOKS: readonly string[] = [
 ];
 
 /**
- * Compiled-in MCP server set — the 18 configured servers sourced from the MCP
+ * Compiled-in MCP server set — live OMK MCP ids (mcp.json + known optional servers) sourced from the MCP
  * configuration. This list MUST be updated if the runtime MCP set changes.
  */
 export const VALID_MCP: readonly string[] = [
 	"adaptorch",
+	"adaptorch-mcp",
+	"blender-mcp",
 	"chrome-devtools",
 	"context7",
 	"fetch",
 	"filesystem",
 	"firecrawl",
+	"ghidra",
 	"github",
 	"lean-ctx",
 	"memory",
@@ -88,6 +91,7 @@ export const VALID_MCP: readonly string[] = [
 	"serena",
 	"supermemory",
 	"understand-anything",
+	"unity-mcp",
 	"zai-reader",
 	"zai-vision",
 	"zai-zread",
@@ -180,6 +184,16 @@ function addSkillsFromRoot(root: string, skills: Map<string, string>): void {
 	entries.sort();
 	for (const rel of entries) {
 		if (path.basename(rel) !== SKILL_FILE_NAME) continue;
+		// Skip archived/corpus trees — they collide with real skill names (e.g. code-review).
+		const relPosix = rel.split(path.sep).join("/");
+		if (
+			relPosix.includes("system-prompts-leaks/") ||
+			relPosix.includes("/corpus/") ||
+			relPosix.includes("node_modules/") ||
+			relPosix.includes("/.git/")
+		) {
+			continue;
+		}
 		const abs = path.resolve(root, rel);
 		let stat: fs.Stats;
 		try {
