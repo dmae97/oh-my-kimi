@@ -26,7 +26,7 @@ for (const [name, dir] of LINKS) {
   const target = join(packagesRoot, dir);
   const linkPath = join(nm, name);
   if (!existsSync(target)) {
-    console.warn(`[link-workspace-deps] skip ${name}: missing ${target}`);
+    console.error(`[link-workspace-deps] skip ${name}: missing ${target}`);
     continue;
   }
   const rel = relative(nm, target);
@@ -35,7 +35,7 @@ for (const [name, dir] of LINKS) {
       try {
         const cur = readlinkSync(linkPath);
         if (cur === rel || resolve(nm, cur) === target) {
-          console.log(`[link-workspace-deps] ok ${name} -> ${rel}`);
+          console.error(`[link-workspace-deps] ok ${name} -> ${rel}`);
           continue;
         }
       } catch {
@@ -47,5 +47,5 @@ for (const [name, dir] of LINKS) {
     try { rmSync(linkPath, { recursive: true, force: true }); } catch { /* */ }
   }
   symlinkSync(rel, linkPath);
-  console.log(`[link-workspace-deps] linked ${name} -> ${rel}`);
+  console.error(`[link-workspace-deps] linked ${name} -> ${rel}`);
 }

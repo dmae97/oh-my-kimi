@@ -41,7 +41,10 @@ for (const pkg of packages) {
 		failures.push(`${pkg}: npm pack --dry-run failed\n${result.stderr}`);
 		continue;
 	}
-	const packed = JSON.parse(result.stdout)[0];
+	// npm lifecycle output (prepare/postinstall logs) can precede the JSON payload
+	// on some npm versions; slice from the first JSON array token.
+	const jsonStart = result.stdout.indexOf("[{");
+	const packed = JSON.parse(jsonStart > 0 ? result.stdout.slice(jsonStart) : result.stdout)[0];
 	for (const file of packed.files) {
 		for (const rule of forbidden) {
 			if (rule.test(file.path)) {
