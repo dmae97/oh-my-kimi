@@ -63,14 +63,42 @@ function assertSourceMatches(
 	envelope: CompactionEnvelope,
 	source: readonly SessionEntry[],
 ): void {
-	if (
-		envelope.source.sessionId === "" ||
-		!sameOrderedIds(envelope.source.entryIds, source) ||
-		envelope.source.sourceSha256 !== sourceSha256(source) ||
-		envelope.source.activeLeafId !== entry.parentId
-	) {
+	if (!matchesSource(entry, envelope, source)) {
 		throw new Error(`Invalid compaction envelope source in entry ${entry.id}. Run the session doctor.`);
 	}
+}
+
+function matchesSource(entry: CompactionEntry, envelope: CompactionEnvelope, source: readonly SessionEntry[]): boolean {
+	return (
+		envelope.source.sessionId !== "" &&
+		sameOrderedIds(envelope.source.entryIds, source) &&
+		envelope.source.sourceSha256 === sourceSha256(source) &&
+		envelope.source.activeLeafId === entry.parentId
+	);
+}
+
+/**
+ * Writer-mirrored source window. The compaction writer (agent-session.ts) attests
+ * the slice of the active branch from the previous compaction's firstKeptEntryId
+ * onward — the summary covers the kept window plus earlier summaries, not the
+ * full parent branch. For the second and later compactions this window is
+ * strictly smaller than the full branch, so validating persisted envelopes
+ * against the full branch alone makes every twice-compacted session unopenable.
+ */
+function windowedSourceFromPrefix(prefix: readonly FileEntry[], leafId: string): SessionEntry[] {
+	const branch = branchFromPrefix(prefix, leafId);
+	let latestCompactionIndex = -1;
+	for (let index = branch.length - 1; index >= 0; index -= 1) {
+		if (branch[index]?.type === "compaction") {
+			latestCompactionIndex = index;
+			break;
+		}
+	}
+	if (latestCompactionIndex < 0) return branch;
+	const latestCompaction = branch[latestCompactionIndex];
+	if (latestCompaction?.type !== "compaction") return branch;
+	const firstKeptIndex = branch.findIndex((entry) => entry.id === latestCompaction.firstKeptEntryId);
+	return branch.slice(firstKeptIndex < 0 ? latestCompactionIndex : firstKeptIndex);
 }
 
 function persistedRecordStarts(bytes: Uint8Array): number[] {
@@ -125,7 +153,15 @@ export function validatePersistedCompactionEnvelopes(
 		) {
 			throw new Error(`Invalid compaction envelope binding in entry ${entry.id}. Run the session doctor.`);
 		}
-		assertSourceMatches(entry, envelope, source);
+		// The writer attests either the full parent branch or its kept-window
+		// slice since the previous compaction (both are exact matches, so
+		// tamper-evidence is preserved; see windowedSourceFromPrefix).
+		if (
+			!matchesSource(entry, envelope, source) &&
+			!matchesSource(entry, envelope, windowedSourceFromPrefix(prefix, entry.parentId))
+		) {
+			throw new Error(`Invalid compaction envelope source in entry ${entry.id}. Run the session doctor.`);
+		}
 	}
 }
 
