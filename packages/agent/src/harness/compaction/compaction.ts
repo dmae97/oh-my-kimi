@@ -1,4 +1,4 @@
-import type { AssistantMessage, ImageContent, Model, TextContent, Usage } from "omk-ai";
+import type { AssistantMessage, ImageContent, Message, Model, TextContent, Usage } from "omk-ai";
 import { completeSimple } from "omk-ai";
 import type { AgentMessage, ThinkingLevel } from "../../types.ts";
 import {
@@ -538,7 +538,7 @@ export async function generateSummary(
 		basePrompt = `${basePrompt}\n\nAdditional focus: ${customInstructions}`;
 	}
 	const llmMessages = convertToLlm(currentMessages);
-	const conversationText = serializeConversation(llmMessages);
+	const conversationText = serializeConversationBounded(llmMessages, model, maxTokens);
 	let promptText = `<conversation>\n${conversationText}\n</conversation>\n\n`;
 	if (previousSummary) {
 		promptText += `<previous-summary>\n${previousSummary}\n</previous-summary>\n\n`;
@@ -696,6 +696,64 @@ Be concise. Focus on what's needed to understand the kept suffix.`;
 
 export { serializeConversation } from "./utils.ts";
 
+/**
+ * Rough chars-per-token estimate for bounding summarization input.
+ * Conservative on purpose: serialized code/JSON runs below 4 chars/token.
+ */
+const SUMMARY_CHARS_PER_TOKEN = 3.5;
+/**
+ * Headroom subtracted on top of the output reserve: the summarization system
+ * prompt, the <conversation>/prompt wrapper, and tokenizer drift between the
+ * chars-per-token estimate and the real tokenizer.
+ */
+const SUMMARY_INPUT_SAFETY_TOKENS = 2048;
+
+function summaryElisionMessage(omittedCount: number): Message {
+	return {
+		role: "user",
+		content: `[... ${omittedCount} earlier message(s) omitted to fit the summarization context window ...]`,
+		timestamp: Date.now(),
+	} as Message;
+}
+
+/**
+ * Serialize a conversation for summarization, bounded to the model's context
+ * window. When the full serialization would exceed the window, middle
+ * messages are dropped (keeping the goal-bearing head and the recent-work
+ * tail) with an explicit elision marker; oversized single messages fall back
+ * to hard text truncation keeping both ends.
+ *
+ * Without this bound, a session that already overflows the model cannot be
+ * compacted: the summarization request itself exceeds the window, the
+ * provider rejects it (e.g. Codex context_length_exceeded), and overflow
+ * recovery is stuck permanently.
+ */
+export function serializeConversationBounded(messages: Message[], model: Model<any>, maxOutputTokens: number): string {
+	const serialized = serializeConversation(messages);
+	const contextWindow = model.contextWindow ?? 0;
+	if (contextWindow <= 0) return serialized;
+	const budgetTokens = contextWindow - maxOutputTokens - SUMMARY_INPUT_SAFETY_TOKENS;
+	const budgetChars = Math.floor(Math.max(0, budgetTokens) * SUMMARY_CHARS_PER_TOKEN);
+	if (serialized.length <= budgetChars) return serialized;
+	// Window too small to bound meaningfully; leave it to the provider error path.
+	if (budgetChars < 4096) return serialized;
+
+	// Halve the kept head/tail spans until the elided conversation fits.
+	for (let keep = Math.floor(messages.length / 2); keep >= 1; keep = Math.floor(keep / 2)) {
+		const head = messages.slice(0, keep);
+		const tail = messages.slice(messages.length - keep);
+		const omitted = messages.length - head.length - tail.length;
+		if (omitted <= 0) continue;
+		const bounded = serializeConversation([...head, summaryElisionMessage(omitted), ...tail]);
+		if (bounded.length <= budgetChars) return bounded;
+	}
+
+	// Single oversized message(s): truncate the text itself, keeping both ends.
+	const headChars = Math.floor(budgetChars / 2);
+	const tailChars = Math.max(0, budgetChars - headChars - 128);
+	return `${serialized.slice(0, headChars)}\n[... middle omitted to fit the summarization context window ...]\n${serialized.slice(serialized.length - tailChars)}`;
+}
+
 /** Generate compaction summary data from prepared session history. */
 export async function compact(
 	preparation: CompactionPreparation,
@@ -791,7 +849,7 @@ async function generateTurnPrefixSummary(
 		model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
 	);
 	const llmMessages = convertToLlm(messages);
-	const conversationText = serializeConversation(llmMessages);
+	const conversationText = serializeConversationBounded(llmMessages, model, maxTokens);
 	const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`;
 	const summarizationMessages = [
 		{

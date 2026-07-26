@@ -632,9 +632,16 @@ async function* mapCodexEvents(events: AsyncIterable<Record<string, unknown>>): 
 		if (!type) continue;
 
 		if (type === "error") {
-			const code = (event as { code?: string }).code || "";
-			const message = (event as { message?: string }).message || "";
-			throw new CodexApiError(`Codex error: ${message || code || JSON.stringify(event)}`, {
+			// Codex nests the real fields under `error` (e.g. context_length_exceeded);
+			// older events carry them at the top level. Prefer the nested values.
+			const nested = (event as { error?: { code?: string; message?: string } }).error;
+			const code = (event as { code?: string }).code || nested?.code || "";
+			const message = (event as { message?: string }).message || nested?.message || "";
+			const detail =
+				message && code && !message.includes(code)
+					? `${message} (${code})`
+					: message || code || JSON.stringify(event);
+			throw new CodexApiError(`Codex error: ${detail}`, {
 				code: code || undefined,
 				payload: event,
 			});

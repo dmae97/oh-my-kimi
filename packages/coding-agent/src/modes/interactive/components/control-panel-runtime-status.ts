@@ -50,17 +50,27 @@ export function countRoutableNonHubSkills(skills: readonly { readonly name: stri
 }
 
 export function countStableMcpServers(entries: readonly McpStabilityInput[]): number {
-	return entries.filter(isStableMcpEntry).length;
+	return entries.filter((entry) => classifyMcpStability(entry) === "stable").length;
 }
 
-function isStableMcpEntry(entry: McpStabilityInput): boolean {
-	if (entry.overriddenBy) return false;
-	if (entry.commandSummary === "<unknown>") return false;
-	if (entry.authDecision.rule === "mcp.auth.invalid") return false;
-	if (INVALID_MCP_NETWORK_RULES.has(entry.networkDecision.rule)) return false;
-	if (entry.capabilityDecision.malformed || entry.capabilityDecision.unknownCapabilities.length > 0) return false;
+/**
+ * Classify a single MCP server entry for status display.
+ *
+ * - `stable`: configured, healthy, and safe to surface as an active server.
+ * - `overridden`: a higher-precedence source replaced this entry.
+ * - `unstable`: malformed, privileged, or blocked by an auth/network policy.
+ */
+export type McpStability = "stable" | "overridden" | "unstable";
+
+export function classifyMcpStability(entry: McpStabilityInput): McpStability {
+	if (entry.overriddenBy) return "overridden";
+	if (entry.commandSummary === "<unknown>") return "unstable";
+	if (entry.authDecision.rule === "mcp.auth.invalid") return "unstable";
+	if (INVALID_MCP_NETWORK_RULES.has(entry.networkDecision.rule)) return "unstable";
+	if (entry.capabilityDecision.malformed || entry.capabilityDecision.unknownCapabilities.length > 0) return "unstable";
 	const command = entry.commandSummary.split(/\s+/, 1)[0] ?? "";
-	return !PRIVILEGED_MCP_COMMANDS.has(command);
+	if (PRIVILEGED_MCP_COMMANDS.has(command)) return "unstable";
+	return "stable";
 }
 
 function getInstalledHeadroomVersion(): string | null {

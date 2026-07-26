@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	classifyMcpStability,
 	countRoutableNonHubSkills,
 	countStableMcpServers,
 	parseHeadroomVersionOutput,
@@ -41,6 +42,17 @@ describe("control panel runtime status helpers", () => {
 				mcpEntry({ overriddenBy: "/tmp/other-mcp.json" }),
 			]),
 		).toBe(1);
+	});
+
+	it("classifies MCP entries into stable / overridden / unstable for the rail dots", () => {
+		expect(classifyMcpStability(mcpEntry())).toBe("stable");
+		expect(classifyMcpStability(mcpEntry({ overriddenBy: "/tmp/other-mcp.json" }))).toBe("overridden");
+		expect(classifyMcpStability(mcpEntry({ commandSummary: "<unknown>" }))).toBe("unstable");
+		expect(classifyMcpStability(mcpEntry({ commandSummary: "sudo npx risky-mcp" }))).toBe("unstable");
+		expect(classifyMcpStability(mcpEntry({ authRule: "mcp.auth.invalid" }))).toBe("unstable");
+		expect(classifyMcpStability(mcpEntry({ networkRule: "mcp.network.invalid_mode" }))).toBe("unstable");
+		expect(classifyMcpStability(mcpEntry({ malformed: true }))).toBe("unstable");
+		expect(classifyMcpStability(mcpEntry({ unknownCapabilities: ["root"] }))).toBe("unstable");
 	});
 
 	it("parses Headroom 3.0 and legacy version outputs", () => {

@@ -123,6 +123,12 @@ import { ScopedModelsSelectorComponent } from "./components/scoped-models-select
 import { SessionSelectorComponent } from "./components/session-selector.ts";
 import { SettingsSelectorComponent, ThinkingSelectorComponent } from "./components/settings-selector.ts";
 import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.ts";
+import {
+	STATUS_SIDEBAR_GUTTER_GAP,
+	STATUS_SIDEBAR_MIN_WIDTH,
+	StatusSidebarComponent,
+	statusSidebarWidth,
+} from "./components/status-sidebar.ts";
 import { ToolExecutionComponent } from "./components/tool-execution.ts";
 import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
@@ -429,6 +435,21 @@ export class InteractiveMode {
 
 	// Custom footer from extension (undefined = use built-in footer)
 	private customFooter: (Component & { dispose?(): void }) | undefined = undefined;
+
+	// Pinned status sidebar (Ctrl+Q): bottom bar data as a fixed right rail
+	private statusSidebar: StatusSidebarComponent | undefined;
+	private statusSidebarPinned = false;
+	// Footer slot: always mounted. It hides the bottom bar only while the pinned
+	// rail is actually visible, so narrow terminals never lose the status line.
+	private footerSlot: Component = {
+		render: (width: number): string[] => {
+			if (this.isStatusSidebarVisible(this.ui.terminal.columns, this.ui.terminal.rows)) return [];
+			return (this.customFooter ?? this.footer).render(width);
+		},
+		invalidate: (): void => {
+			(this.customFooter ?? this.footer).invalidate?.();
+		},
+	};
 
 	// Header container that holds the built-in or custom header
 	private headerContainer: Container;
@@ -814,7 +835,7 @@ export class InteractiveMode {
 				isReducedMotion: () => process.env.OMK_REDUCED_MOTION === "1" || process.env.OMK_REDUCE_MOTION === "1",
 				isIdleDriftEnabled: () => process.env.OMK_CONTROL_IDLE_DRIFT !== "0",
 				isHeaderVisibleHint: () => this.customHeader === undefined,
-				getRenderWidth: () => this.ui.terminal.columns,
+				getRenderWidth: () => this.ui.contentWidth,
 			});
 			controlPanel.setExpanded(this.getStartupExpansionState());
 			this.builtInHeader = controlPanel;
@@ -826,6 +847,7 @@ export class InteractiveMode {
 				visible: (termWidth, termHeight) =>
 					this.customHeader === undefined &&
 					this.toolOutputExpanded &&
+					!this.statusSidebarPinned &&
 					termWidth >= CONTROL_PANEL_OVERLAY_MIN_WIDTH &&
 					termHeight >= 12,
 			});
@@ -847,7 +869,36 @@ export class InteractiveMode {
 		this.ui.addChild(this.widgetContainerAbove);
 		this.ui.addChild(this.editorContainer);
 		this.ui.addChild(this.widgetContainerBelow);
-		this.ui.addChild(this.footer);
+
+		// Pinned status sidebar: renders footer data as a fixed right rail (Ctrl+Q).
+		// Pinned by default via the pinStatusSidebar setting / OMK_PIN_STATUS_SIDEBAR=1.
+		// The footer slot below stays mounted and yields to the rail only while the
+		// rail is actually visible, so the same data is never rendered twice.
+		this.statusSidebarPinned = this.settingsManager.getPinStatusSidebar();
+		this.ui.addChild(this.footerSlot);
+		this.statusSidebar = new StatusSidebarComponent(
+			() => this.session,
+			this.footerDataProvider,
+			() => this.session.autoCompactionEnabled,
+			() => this.ui.terminal.rows,
+		);
+		this.ui.showOverlay(this.statusSidebar, {
+			anchor: "top-right",
+			// Responsive: ~26% of the terminal, clamped — grows on fullscreen.
+			width: (termWidth) => statusSidebarWidth(termWidth),
+			maxHeight: "100%",
+			nonCapturing: true,
+			visible: (termWidth, termHeight) => this.isStatusSidebarVisible(termWidth, termHeight),
+		});
+		// Reserve real layout space for the rail: chat, editor, and widgets render
+		// at (terminal - rail) width, so the prompt is never covered by the sidebar.
+		// Must stay in lockstep with the overlay width above.
+		this.ui.setRightGutter((termWidth, termHeight) =>
+			this.isStatusSidebarVisible(termWidth, termHeight)
+				? statusSidebarWidth(termWidth) + STATUS_SIDEBAR_GUTTER_GAP
+				: 0,
+		);
+
 		this.ui.setFocus(this.editor);
 
 		this.setupKeyHandlers();
@@ -2085,7 +2136,9 @@ export class InteractiveMode {
 		if (this.extensionEditor) {
 			this.hideExtensionEditor();
 		}
-		this.ui.hideOverlay();
+		// Clear transient extension overlays without evicting pinned chrome:
+		// a blind ui.hideOverlay() pops the status rail on session resume/new/fork/reload.
+		this.ui.hideOverlaysExcept(this.statusSidebar);
 		this.clearExtensionTerminalInputListeners();
 		this.setExtensionFooter(undefined);
 		this.setExtensionHeader(undefined);
@@ -2142,6 +2195,21 @@ export class InteractiveMode {
 		}
 	}
 
+	/** The pinned rail is only shown (and its gutter reserved) when the terminal is large enough. */
+	private isStatusSidebarVisible(termWidth: number, termHeight: number): boolean {
+		return this.statusSidebarPinned && termWidth >= STATUS_SIDEBAR_MIN_WIDTH && termHeight >= 16;
+	}
+
+	/**
+	 * Toggle the pinned status sidebar: bottom bar data moves to a fixed right rail.
+	 */
+	private toggleStatusSidebar(): void {
+		this.statusSidebarPinned = !this.statusSidebarPinned;
+		// The footer slot and the right gutter both key off isStatusSidebarVisible,
+		// so flipping the flag is enough — no child add/remove bookkeeping.
+		this.ui.requestRender();
+	}
+
 	/**
 	 * Set a custom footer component, or restore the built-in footer.
 	 */
@@ -2155,22 +2223,9 @@ export class InteractiveMode {
 			this.customFooter.dispose();
 		}
 
-		// Remove current footer from UI
-		if (this.customFooter) {
-			this.ui.removeChild(this.customFooter);
-		} else {
-			this.ui.removeChild(this.footer);
-		}
-
-		if (factory) {
-			// Create and add custom footer, passing the data provider
-			this.customFooter = factory(this.ui, theme, this.footerDataProvider);
-			this.ui.addChild(this.customFooter);
-		} else {
-			// Restore built-in footer
-			this.customFooter = undefined;
-			this.ui.addChild(this.footer);
-		}
+		// The footer slot stays mounted and renders whichever footer is active,
+		// so swapping footers requires no child add/remove bookkeeping.
+		this.customFooter = factory ? factory(this.ui, theme, this.footerDataProvider) : undefined;
 
 		this.ui.requestRender();
 	}
@@ -2695,6 +2750,7 @@ export class InteractiveMode {
 		this.ui.onDebug = () => this.handleDebugCommand();
 		this.defaultEditor.onAction("app.model.select", () => this.showModelSelector());
 		this.defaultEditor.onAction("app.tools.expand", () => this.toggleToolOutputExpansion());
+		this.defaultEditor.onAction("app.sidebar.toggle", () => this.toggleStatusSidebar());
 		this.defaultEditor.onAction("app.thinking.toggle", () => this.toggleThinkingBlockVisibility());
 		this.defaultEditor.onAction("app.editor.external", () => this.openExternalEditor());
 		this.defaultEditor.onAction("app.message.followUp", () => this.handleFollowUp());

@@ -20,7 +20,7 @@ function sanitizeStatusText(text: string): string {
 /**
  * Format token counts for compact footer display.
  */
-function formatTokens(count: number): string {
+export function formatTokens(count: number): string {
 	if (count < 1000) return count.toString();
 	if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
 	if (count < 1000000) return `${Math.round(count / 1000)}k`;
@@ -31,14 +31,14 @@ function formatTokens(count: number): string {
 /**
  * Format byte counts for compact footer display.
  */
-function formatBytes(bytes: number): string {
+export function formatBytes(bytes: number): string {
 	if (bytes < 1024) return `${bytes}B`;
 	if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)}K`;
 	if (bytes < 1024 * 1024 * 1024) return `${Math.round(bytes / (1024 * 1024))}M`;
 	return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)}G`;
 }
 
-function formatPackageIntake(summary: PiPackageIntakeSummary): string {
+export function formatPackageIntake(summary: PiPackageIntakeSummary): string {
 	const ready =
 		summary.acceptedNative + summary.acceptedReference + summary.acceptedMeasurement + summary.acceptedAdvisory;
 	const review = summary.deferred + summary.reject;

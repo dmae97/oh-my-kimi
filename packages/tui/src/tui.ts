@@ -140,8 +140,12 @@ function isTermuxSession(): boolean {
  */
 export interface OverlayOptions {
 	// === Sizing ===
-	/** Width in columns, or percentage of terminal width (e.g., "50%") */
-	width?: SizeValue;
+	/**
+	 * Width in columns, percentage of terminal width (e.g., "50%"), or a
+	 * callback re-evaluated each render with the terminal size (for responsive
+	 * overlays that must stay in lockstep with a reserved gutter).
+	 */
+	width?: SizeValue | ((termWidth: number, termHeight: number) => number);
 	/** Minimum width in columns */
 	minWidth?: number;
 	/** Maximum height in rows, or percentage of terminal height (e.g., "50%") */
@@ -281,6 +285,9 @@ export class TUI extends Container {
 	private hardwareCursorRow = 0; // Actual terminal cursor row (may differ due to IME positioning)
 	private showHardwareCursor = process.env.OMK_HARDWARE_CURSOR === "1";
 	private clearOnShrink = process.env.OMK_CLEAR_ON_SHRINK === "1"; // Clear empty rows when content shrinks (default: off)
+	/** Columns reserved on the right edge for pinned rails; children render at columns - gutter. */
+	private rightGutter: number | ((termWidth: number, termHeight: number) => number) = 0;
+	private static readonly MIN_CONTENT_COLUMNS = 20;
 	private maxLinesRendered = 0; // Track terminal's working area (max lines ever rendered)
 	private previousViewportTop = 0; // Track previous viewport top for resize-aware cursor moves
 	private fullRedrawCount = 0;
@@ -327,6 +334,33 @@ export class TUI extends Container {
 	 */
 	setClearOnShrink(enabled: boolean): void {
 		this.clearOnShrink = enabled;
+	}
+
+	/**
+	 * Reserve a gutter of columns on the right edge of the terminal.
+	 * Children render at `columns - gutter` while overlays keep full-terminal
+	 * coordinates, so a pinned side rail can live in the gutter without covering
+	 * content (a real split layout instead of an overlay on top of it).
+	 *
+	 * Accepts a number or a callback re-evaluated on every render with the
+	 * current terminal size, so callers can tie the gutter to the same
+	 * visibility rules as the overlay that occupies it. The gutter is clamped
+	 * so content always keeps at least a minimal readable width.
+	 */
+	setRightGutter(gutter: number | ((termWidth: number, termHeight: number) => number)): void {
+		this.rightGutter = gutter;
+		this.requestRender();
+	}
+
+	/** Content width after the right gutter is reserved for the current terminal size. */
+	get contentWidth(): number {
+		return this.terminal.columns - this.resolveRightGutter(this.terminal.columns, this.terminal.rows);
+	}
+
+	private resolveRightGutter(termWidth: number, termHeight: number): number {
+		const raw = typeof this.rightGutter === "function" ? this.rightGutter(termWidth, termHeight) : this.rightGutter;
+		if (!Number.isFinite(raw) || raw <= 0) return 0;
+		return Math.min(Math.floor(raw), Math.max(0, termWidth - TUI.MIN_CONTENT_COLUMNS));
 	}
 
 	setFocus(component: Component | null): void {
@@ -565,6 +599,19 @@ export class TUI extends Container {
 		}
 		if (this.overlayStack.length === 0) this.terminal.hideCursor();
 		this.requestRender();
+	}
+
+	/**
+	 * Pop overlays from the top until `keep` is topmost (or the stack empties).
+	 * Session-switch and reload reset paths use this to clear transient dialog
+	 * overlays without evicting pinned chrome such as the status rail.
+	 */
+	hideOverlaysExcept(keep?: Component): void {
+		while (this.overlayStack.length > 0) {
+			const top = this.overlayStack[this.overlayStack.length - 1];
+			if (keep !== undefined && top.component === keep) return;
+			this.hideOverlay();
+		}
 	}
 
 	/** Check if there are any visible overlays */
@@ -817,7 +864,13 @@ export class TUI extends Container {
 		const availHeight = Math.max(1, termHeight - marginTop - marginBottom);
 
 		// === Resolve width ===
-		let width = parseSizeValue(opt.width, termWidth) ?? Math.min(80, availWidth);
+		let width: number;
+		if (typeof opt.width === "function") {
+			const resolved = opt.width(termWidth, termHeight);
+			width = Number.isFinite(resolved) ? Math.floor(resolved) : Math.min(80, availWidth);
+		} else {
+			width = parseSizeValue(opt.width, termWidth) ?? Math.min(80, availWidth);
+		}
 		// Apply minWidth
 		if (opt.minWidth !== undefined) {
 			width = Math.max(width, opt.minWidth);
@@ -1140,8 +1193,10 @@ export class TUI extends Container {
 			return targetScreenRow - currentScreenRow;
 		};
 
-		// Render all components to get new lines
-		let newLines = this.render(width);
+		// Render all components to get new lines. Children render at the content
+		// width (terminal minus the reserved right gutter); overlays composite at
+		// full-terminal coordinates below, so pinned rails own the gutter columns.
+		let newLines = this.render(width - this.resolveRightGutter(width, height));
 
 		// Composite overlays into the rendered lines (before differential compare)
 		if (this.overlayStack.length > 0) {

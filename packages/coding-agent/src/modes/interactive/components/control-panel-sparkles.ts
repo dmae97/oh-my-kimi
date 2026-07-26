@@ -46,17 +46,22 @@ export function sparkleRow(innerWidth: number, anchors: readonly SparkleAnchor[]
 	return cells.join("");
 }
 
+/**
+ * The starfield is deliberately monochrome: `dim` and `muted` ink with a single
+ * accent star per row. Multi-hue confetti competed with the wordmark once the
+ * frames were reduced to hairlines.
+ */
 export const SPARKLE_ROW_TOP: readonly SparkleAnchor[] = [
-	{ frac: 0.1, glyph: "·", color: "muted", phase: 0 },
-	{ frac: 0.28, glyph: "•", color: "warning", phase: 1 },
-	{ frac: 0.73, glyph: "✦", color: "mdCode", phase: 2 },
-	{ frac: 0.9, glyph: "◆", color: "mdCode", phase: 0 },
+	{ frac: 0.1, glyph: "·", color: "dim", phase: 0 },
+	{ frac: 0.28, glyph: "·", color: "muted", phase: 1 },
+	{ frac: 0.73, glyph: "✦", color: "dim", phase: 2 },
+	{ frac: 0.9, glyph: "·", color: "accent", phase: 0 },
 ];
 
 export const SPARKLE_ROW_BOTTOM: readonly SparkleAnchor[] = [
-	{ frac: 0.06, glyph: "·", color: "muted", phase: 2 },
-	{ frac: 0.21, glyph: "◆", color: "mdCode", phase: 1 },
-	{ frac: 0.55, glyph: "·", color: "success", phase: 0 },
-	{ frac: 0.82, glyph: "✦", color: "warning", phase: 1 },
-	{ frac: 0.96, glyph: "◆", color: "accent", phase: 2 },
+	{ frac: 0.06, glyph: "·", color: "dim", phase: 2 },
+	{ frac: 0.21, glyph: "·", color: "muted", phase: 1 },
+	{ frac: 0.55, glyph: "✦", color: "dim", phase: 0 },
+	{ frac: 0.82, glyph: "·", color: "muted", phase: 1 },
+	{ frac: 0.96, glyph: "·", color: "accent", phase: 2 },
 ];

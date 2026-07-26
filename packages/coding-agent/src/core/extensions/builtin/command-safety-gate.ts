@@ -144,7 +144,27 @@ export const evaluateUserBash = evaluateCommandGate;
 export function isCommandSafetyAssumeYesEnabled(
 	env: NodeJS.ProcessEnv | Readonly<Record<string, string | undefined>> = process.env,
 ): boolean {
+	// YOLO implies assume-yes for any residual confirm-tier paths.
+	if (isCommandSafetyDisabled(env)) return true;
 	return env.OMK_COMMAND_SAFETY_ASSUME_YES === "1" || env.OMK_COMMAND_SAFETY_ASSUME_YES === "true";
+}
+
+/**
+ * Full disable of the command-safety gate (YOLO mode).
+ * Env (any one):
+ *   OMK_YOLO=1|true
+ *   OMK_COMMAND_SAFETY=0|false|off|disable
+ *   OMK_DISABLE_COMMAND_SAFETY=1|true
+ */
+export function isCommandSafetyDisabled(
+	env: NodeJS.ProcessEnv | Readonly<Record<string, string | undefined>> = process.env,
+): boolean {
+	const yolo = env.OMK_YOLO;
+	if (yolo === "1" || yolo === "true" || yolo === "yes" || yolo === "on") return true;
+	const cs = String(env.OMK_COMMAND_SAFETY ?? "").toLowerCase();
+	if (cs === "0" || cs === "false" || cs === "off" || cs === "disable" || cs === "disabled") return true;
+	const d = env.OMK_DISABLE_COMMAND_SAFETY;
+	return d === "1" || d === "true" || d === "yes" || d === "on";
 }
 
 function getAssumeYesConfirmPolicies(): Pick<CommandGateOptions, "interactiveConfirmPolicy" | "headlessConfirmPolicy"> {
@@ -170,6 +190,9 @@ export function buildBlockedBashResult(reason: string): BashResult {
  * `user_bash` short-circuits on first truthy result).
  */
 export default function commandSafetyGate(omk: ExtensionAPI): void {
+	// YOLO / disabled: register no handlers — gate is a no-op extension.
+	if (isCommandSafetyDisabled()) return;
+
 	omk.on("tool_call", async (event, ctx) => {
 		if (!isToolCallEventType("bash", event)) return undefined;
 		const decision = await evaluateCommandGate(event.input.command, {

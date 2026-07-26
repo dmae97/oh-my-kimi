@@ -11,8 +11,8 @@ import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
 import type { ModelRegistry } from "./model-registry.ts";
 import { DEFAULT_SAFETY_FAILOVER_CANDIDATES, isStickySafetyModel } from "./provider-resilience.ts";
 
-/** Default model IDs for each known provider */
-export const defaultModelPerProvider: Record<KnownProvider, string> = {
+/** Default model IDs for every built-in provider. */
+const builtInDefaultModelPerProvider = {
 	"amazon-bedrock": "us.anthropic.claude-opus-4-6-v1",
 	"ant-ling": "Ring-2.6-1T",
 	anthropic: "claude-opus-4-8",
@@ -41,7 +41,7 @@ export const defaultModelPerProvider: Record<KnownProvider, string> = {
 	together: "moonshotai/Kimi-K2.6",
 	opencode: "kimi-k2.6",
 	"opencode-go": "kimi-k2.6",
-	"kimi-coding": "k2p7",
+	"kimi-coding": "k3",
 	"cloudflare-workers-ai": "@cf/moonshotai/kimi-k2.6",
 	"cloudflare-ai-gateway": "workers-ai/@cf/moonshotai/kimi-k2.6",
 	xiaomi: "mimo-v2.5-pro",
@@ -49,7 +49,20 @@ export const defaultModelPerProvider: Record<KnownProvider, string> = {
 	"xiaomi-token-plan-ams": "mimo-v2.5-pro",
 	"xiaomi-token-plan-sgp": "mimo-v2.5-pro",
 	zyloo: "claude-opus-4-7",
-};
+} satisfies Record<KnownProvider, string>;
+
+/** Recommended defaults for providers supplied through models.json or extensions. */
+const customDefaultModelPerProvider = {
+	"modelstudio-maas": "qwen3.8-max-preview",
+} as const satisfies Readonly<Record<string, string>>;
+
+/** Default model IDs for built-in and recommended custom providers. */
+export const defaultModelPerProvider = {
+	...builtInDefaultModelPerProvider,
+	...customDefaultModelPerProvider,
+} as const;
+
+const defaultModelLookup: Readonly<Record<string, string>> = defaultModelPerProvider;
 
 export interface ScopedModel {
 	model: Model<Api>;
@@ -166,7 +179,7 @@ function buildFallbackModel(provider: string, modelId: string, availableModels: 
 	const providerModels = availableModels.filter((m) => m.provider === provider);
 	if (providerModels.length === 0) return undefined;
 
-	const defaultId = defaultModelPerProvider[provider as KnownProvider];
+	const defaultId = defaultModelLookup[provider];
 	const baseModel = defaultId
 		? (providerModels.find((m) => m.id === defaultId) ?? providerModels[0])
 		: providerModels[0];
@@ -551,7 +564,7 @@ export async function findInitialModel(options: {
 	const usable = availableModels.filter((m) => !isStickySafetyModel(m.id, m.provider));
 
 	if (usable.length > 0) {
-		// Prefer resilience failover chain (k3 → grok → deepseek) before generic defaults
+		// Prefer resilience failover chain (k3 → qwen3.8-max → grok → deepseek) before generic defaults
 		for (const c of DEFAULT_SAFETY_FAILOVER_CANDIDATES) {
 			const match = usable.find((m) => m.provider === c.provider && m.id === c.id);
 			if (match) {
@@ -560,8 +573,7 @@ export async function findInitialModel(options: {
 		}
 
 		// Try to find a default model from known providers
-		for (const provider of Object.keys(defaultModelPerProvider) as KnownProvider[]) {
-			const defaultId = defaultModelPerProvider[provider];
+		for (const [provider, defaultId] of Object.entries(defaultModelPerProvider)) {
 			const match = usable.find((m) => m.provider === provider && m.id === defaultId);
 			if (match) {
 				return { model: match, thinkingLevel: DEFAULT_THINKING_LEVEL, fallbackMessage: undefined };
@@ -622,8 +634,7 @@ export async function restoreModelFromSession(
 	if (availableModels.length > 0) {
 		// Try to find a default model from known providers
 		let fallbackModel: Model<Api> | undefined;
-		for (const provider of Object.keys(defaultModelPerProvider) as KnownProvider[]) {
-			const defaultId = defaultModelPerProvider[provider];
+		for (const [provider, defaultId] of Object.entries(defaultModelPerProvider)) {
 			const match = availableModels.find((m) => m.provider === provider && m.id === defaultId);
 			if (match) {
 				fallbackModel = match;

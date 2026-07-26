@@ -174,6 +174,7 @@ export interface Settings {
 	editorPaddingX?: number; // Horizontal padding for input editor (default: 0)
 	autocompleteMaxVisible?: number; // Max visible items in autocomplete dropdown (default: 5)
 	showHardwareCursor?: boolean; // Show terminal cursor while still positioning it for IME
+	pinStatusSidebar?: boolean; // Pin the bottom-bar status as a fixed right sidebar (opencode-style rail with MCP list)
 	markdown?: MarkdownSettings;
 	warnings?: WarningSettings;
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
@@ -1226,6 +1227,16 @@ export class SettingsManager {
 	setShowHardwareCursor(enabled: boolean): void {
 		this.globalSettings.showHardwareCursor = enabled;
 		this.markModified("showHardwareCursor");
+		this.save();
+	}
+
+	getPinStatusSidebar(): boolean {
+		return this.settings.pinStatusSidebar ?? process.env.OMK_PIN_STATUS_SIDEBAR === "1";
+	}
+
+	setPinStatusSidebar(pinned: boolean): void {
+		this.globalSettings.pinStatusSidebar = pinned;
+		this.markModified("pinStatusSidebar");
 		this.save();
 	}
 

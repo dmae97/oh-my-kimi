@@ -52,6 +52,25 @@ describe("provider-resilience (root-level)", () => {
 		expect(pick).toEqual({ provider: "kimi-coding", id: "k3" });
 	});
 
+	it("opus-5 is NOT sticky-blocked (selectable) but still a safety-stop failover SOURCE", () => {
+		// Regression lock for v10.0-Ω: failover source gate must NOT require isStickySafetyModel.
+		// claude-opus-5 emits stop_reason=refusal FPs; blockSticky must stay fable-only so
+		// users can still deliberately select opus, while autoFailover runs for any safety stop.
+		expect(isStickySafetyModel("claude-opus-5", "anthropic")).toBe(false);
+		expect(isStickySafetyModel("claude-sonnet-4-5", "anthropic")).toBe(false);
+		expect(
+			isContentSafetyStopMessage(
+				"Error: kind=provider_refusal provider/model=anthropic/claude-opus-5 message=content/safety stop",
+			),
+		).toBe(true);
+		const pick = pickFailoverCandidate(
+			DEFAULT_SAFETY_FAILOVER_CANDIDATES,
+			{ provider: "anthropic", id: "claude-opus-5" },
+			(c) => c.provider === "kimi-coding" && c.id === "k3",
+		);
+		expect(pick).toEqual({ provider: "kimi-coding", id: "k3" });
+	});
+
 	it("skips current model and sticky candidates", () => {
 		const pick = pickFailoverCandidate(
 			[
@@ -65,15 +84,52 @@ describe("provider-resilience (root-level)", () => {
 		expect(pick).toBeUndefined();
 	});
 
+	it("v10.3-Ω: advances the chain when prior candidates already refused (blacklist)", () => {
+		// Regression lock: failover must NOT re-pick the same candidate every retry.
+		// agent-session keeps a _refusedModels set and excludes them via isAllowed.
+		const candidates = [
+			{ provider: "grok-oauth-proxy", id: "grok-4.5" },
+			{ provider: "deepseek", id: "deepseek-v4-pro" },
+			{ provider: "deepseek", id: "deepseek-v4-flash" },
+		];
+		const refused = new Set<string>();
+		const isAllowed = (c: { provider: string; id: string }) => !refused.has(`${c.provider}/${c.id}`);
+
+		// 1st refusal: claude-opus-5 → grok-4.5
+		let pick = pickFailoverCandidate(candidates, { provider: "anthropic", id: "claude-opus-5" }, isAllowed);
+		expect(pick).toEqual({ provider: "grok-oauth-proxy", id: "grok-4.5" });
+
+		// grok also refuses → blacklist it, advance to deepseek-v4-pro
+		refused.add("grok-oauth-proxy/grok-4.5");
+		pick = pickFailoverCandidate(candidates, { provider: "grok-oauth-proxy", id: "grok-4.5" }, isAllowed);
+		expect(pick).toEqual({ provider: "deepseek", id: "deepseek-v4-pro" });
+
+		// deepseek-pro refuses → advance to deepseek-v4-flash
+		refused.add("deepseek/deepseek-v4-pro");
+		pick = pickFailoverCandidate(candidates, { provider: "deepseek", id: "deepseek-v4-pro" }, isAllowed);
+		expect(pick).toEqual({ provider: "deepseek", id: "deepseek-v4-flash" });
+
+		// all refused → undefined (no infinite same-model loop)
+		refused.add("deepseek/deepseek-v4-flash");
+		pick = pickFailoverCandidate(candidates, { provider: "deepseek", id: "deepseek-v4-flash" }, isAllowed);
+		expect(pick).toBeUndefined();
+	});
+
 	it("resolves defaults with block + autoFailover on", () => {
 		const r = resolveProviderResilience(undefined);
 		expect(r.blockStickySafetyModels).toBe(true);
 		expect(r.autoFailoverOnSafetyStop).toBe(true);
-		expect(r.failoverCandidates[0]).toEqual({ provider: "kimi-coding", id: "k3" });
+		expect(r.failoverCandidates.slice(0, 2)).toEqual([
+			{ provider: "kimi-coding", id: "k3" },
+			{ provider: "modelstudio-maas", id: "qwen3.8-max-preview" },
+		]);
 	});
 
-	it("block message names model", () => {
-		expect(stickySafetyBlockMessage("claude-fable-5", "anthropic")).toMatch(/claude-fable-5/);
-		expect(stickySafetyBlockMessage("claude-fable-5", "anthropic")).toMatch(/blockStickySafetyModels/);
+	it("block message names model and recommended fallbacks", () => {
+		const message = stickySafetyBlockMessage("claude-fable-5", "anthropic");
+		expect(message).toMatch(/claude-fable-5/);
+		expect(message).toMatch(/blockStickySafetyModels/);
+		expect(message).toMatch(/kimi-coding\/k3/);
+		expect(message).toMatch(/modelstudio-maas\/qwen3\.8-max-preview/);
 	});
 });

@@ -183,8 +183,10 @@ describe("reasoning-router v4 accuracy + confidence-metadata suite", () => {
 			{ prompt: "오류 고쳐줘", expectedClass: "debug" as const },
 			{ prompt: "테스트 실패 원인 분석해줘", expectedClass: "debug" as const },
 			{ prompt: "디버깅해줘", expectedClass: "debug" as const },
-			{ prompt: "안 쓰는 코드 삭제해줘", expectedClass: "code-gen" as const },
-			{ prompt: "버튼 색 바꿔줘", expectedClass: "code-gen" as const },
+			// 016: modification verbs (삭제/바꿔/수정/고쳐) are simple-edit, not code-gen —
+			// creation-vs-modification split matches the English verb semantics.
+			{ prompt: "안 쓰는 코드 삭제해줘", expectedClass: "simple-edit" as const },
+			{ prompt: "버튼 색 바꿔줘", expectedClass: "simple-edit" as const },
 		])("routes short zero-score Korean task signal $prompt via bounded fallback", ({ prompt, expectedClass }) => {
 			const verdict = classifyTaskV4({ prompt });
 			expect(verdict.taskClass).toBe(expectedClass);

@@ -248,8 +248,29 @@ const INTENT_LEXEME_CLUSTERS_V4: readonly IntentLexemeClusterV4[] = [
 		id: "korean-simple-edit-morphology",
 		taskClass: "simple-edit",
 		role: "korean-morphology",
-		surfaces: ["오타", "맞춤법", "띄어쓰기", "문구", "제목"],
-		phrases: [/오타|맞춤법|띄어쓰기|문구|제목/i],
+		surfaces: [
+			"오타",
+			"맞춤법",
+			"띄어쓰기",
+			"문구",
+			"제목",
+			"바꿔",
+			"바꾸",
+			"수정",
+			"변경",
+			"고쳐",
+			"고치",
+			"삭제",
+			"제거",
+			"옮겨",
+			"옮기",
+		],
+		phrases: [
+			// Typo/copy nouns plus modification verbs. Creation verbs live in
+			// korean-code-gen-morphology; modifying an existing artifact is an edit,
+			// not a generation. (016: moved from code-gen after hard-negative mining.)
+			/오타|맞춤법|띄어쓰기|문구|제목|바꿔|바꾸|수정|변경|고쳐|고치|삭제|지워|지우|제거|옮겨|옮기|넣어/i,
+		],
 		negativeControlIds: ["korean-feature-edit"],
 	},
 	{
@@ -280,8 +301,8 @@ const INTENT_LEXEME_CLUSTERS_V4: readonly IntentLexemeClusterV4[] = [
 		id: "korean-code-gen-morphology",
 		taskClass: "code-gen",
 		role: "korean-morphology",
-		surfaces: ["구현", "만들", "생성", "작성", "추가", "테스트", "수정", "변경", "바꿔"],
-		phrases: [/구현|만들|생성|작성|추가|테스트|삭제|지워|지우|제거|고쳐|고치|수정|변경|바꿔|바꾸|옮겨|옮기|넣어/i],
+		surfaces: ["구현", "만들", "생성", "작성", "추가", "테스트"],
+		phrases: [/구현|만들|생성|작성|추가|테스트/i],
 		negativeControlIds: ["korean-greeting", "korean-codegen-negated"],
 	},
 ] as const;
@@ -367,9 +388,28 @@ function hasDiffMarkers(text: string): boolean {
 }
 
 /** First line (after stripping one polite prefix), capped at 180 chars. */
+// Non-imperative preamble shapes stripped before ^-anchored intent tests
+// (goal 016/M3+M5): quoted-speech attribution (my teammate said "..." but
+// actually: ...) and labeled filler lines (background:/context:/note:).
+// Bounded to 3 repetitions so a wall of filler cannot loop the classifier.
+const QUOTED_SPEECH_PREFIX_V4 = /^.{0,60}?\bsaid\s+"[^"]*"[,.]?\s*(?:but\s+actually[,:]?\s*)?/i;
+const LABELED_FILLER_PREFIX_V4 = /^(?:background|context|note)\s*:[^.!?\n]*[.!?]?\s*/i;
+
+function stripNonImperativePrefixV4(text: string): string {
+	let result = text;
+	for (let i = 0; i < 3; i++) {
+		const stripped = result.replace(QUOTED_SPEECH_PREFIX_V4, "").replace(LABELED_FILLER_PREFIX_V4, "");
+		if (stripped === result) break;
+		result = stripped;
+	}
+	return result;
+}
+
 function firstClause(prompt: string): string {
 	const firstLine =
-		prompt.replace(/^(?:please|pls|can you|could you|would you|help me|i need you to)\s+/i, "").split("\n")[0] ?? "";
+		stripNonImperativePrefixV4(
+			prompt.replace(/^(?:please|pls|can you|could you|would you|help me|i need you to)\s+/i, ""),
+		).split("\n")[0] ?? "";
 	return firstLine.slice(0, 180);
 }
 
@@ -400,6 +440,32 @@ function hasLeadingCodeGenIntent(text: string): boolean {
 
 function hasLeadingSimpleEditIntent(text: string): boolean {
 	return clusterMatchesRoleV4(text, "simple-edit", "leading-intent");
+}
+
+// --- Quoted-speech masking (goal 016/M3) ---------------------------------
+// A double-quoted span that itself reads as an imperative ("my teammate said
+// 'implement it'") is reported speech, not the requester's intent: mask it so
+// it cannot fire whole-prompt evidence. Quoted nouns/objects are preserved
+// ("fix the 'undefined' error" keeps its debug signal).
+
+const QUOTED_SPAN_PATTERN_V4 = /"([^"\n]{1,80})"/g;
+
+function quotedSpanIsImperativeV4(span: string): boolean {
+	const text = span.trim();
+	return (
+		hasLeadingDebugAction(text) ||
+		hasLeadingReviewIntent(text) ||
+		hasLeadingPlanIntent(text) ||
+		hasLeadingRefactorIntent(text) ||
+		hasLeadingCodeGenIntent(text) ||
+		hasLeadingSimpleEditIntent(text)
+	);
+}
+
+function maskQuotedImperativesV4(text: string): string {
+	return text.replace(QUOTED_SPAN_PATTERN_V4, (whole: string, inner: string) =>
+		quotedSpanIsImperativeV4(inner) ? " ".repeat(whole.length) : whole,
+	);
 }
 
 // ============================================================================
@@ -684,10 +750,11 @@ function extractFeaturesV4(prompt: string, weights: RouterWeightsV4, suppressed:
 	const leading = firstClause(prompt);
 	const window = weights.negationWindowChars;
 	const secondClause = splitCompoundClauseV4(prompt);
-	const agentSignalPrompt =
+	const agentSignalPrompt = maskQuotedImperativesV4(
 		secondClause !== null && hasFutureSelfClauseV4(secondClause.text)
 			? prompt.slice(0, secondClause.startIndex).trim()
-			: prompt;
+			: prompt,
+	);
 	const generalizedEvidence = extractGeneralizedIntentEvidenceV4(agentSignalPrompt);
 	const shortKoreanPrompt = prompt.length < TRIVIAL_MAX_CHARS_V4 && /[가-힣]/.test(prompt);
 	const shortKoreanDebugFallbackOnly =
@@ -886,6 +953,15 @@ function applyExtensionSignalsV4(
 	input: TaskClassifierInputV4,
 	weights: RouterWeightsV4,
 ): void {
+	// Gate (goal 016/L2): extension votes apply only when a real signal already
+	// exists. On a zero-score state the fallback cascade (trivial-length,
+	// ko-short, long-prose, lane) owns the verdict — a stray history/judge vote
+	// must not hijack it (measured: any weight >= 1 flips gold-0001 "hi" to the
+	// voted class otherwise). With the gate, inert weights can be nonzero safely.
+	let topScore = 0;
+	for (const c of TASK_CLASSES_V4) topScore = Math.max(topScore, scores[c]);
+	if (topScore <= 0) return;
+
 	const priorClass = input.history !== undefined && input.history.length > 0 ? input.history[0] : null;
 	if (priorClass !== null && weights.multiTurnPrior !== 0) scores[priorClass] += weights.multiTurnPrior;
 
@@ -1034,24 +1110,29 @@ export function classifyTaskV4(
 		if (features.codeFence || features.diffHunk) {
 			taskClass = "code-gen";
 			fallbackReason = "code-fence-or-diff";
-		} else if (prompt.length < TRIVIAL_MAX_CHARS_V4) {
-			const shortKoreanTaskClass = classifyShortKoreanZeroScoreTaskV4(prompt, weights.negationWindowChars);
-			if (shortKoreanTaskClass !== null) {
-				taskClass = shortKoreanTaskClass;
+		} else {
+			// Hangul zero-score prompts route by morphology at ANY length, not just
+			// short ones: previously a >40-char Korean edit request fell through to
+			// the code-gen default even when a morphology cluster matched. (016)
+			const koreanTaskClass = /[가-힣]/.test(prompt)
+				? classifyShortKoreanZeroScoreTaskV4(prompt, weights.negationWindowChars)
+				: null;
+			if (koreanTaskClass !== null) {
+				taskClass = koreanTaskClass;
 				fallbackReason = "ko-short-task-signal";
-			} else {
+			} else if (prompt.length < TRIVIAL_MAX_CHARS_V4) {
 				taskClass = "trivial";
 				fallbackReason = "trivial-length";
+			} else if (prompt.length >= COMPLEX_PROSE_MIN_CHARS_V4) {
+				taskClass = "plan";
+				fallbackReason = "long-prose";
+			} else if (input.laneType !== undefined) {
+				taskClass = LANE_FALLBACK_CLASS_V4[input.laneType];
+				fallbackReason = "lane-fallback";
+			} else {
+				taskClass = "code-gen";
+				fallbackReason = "default";
 			}
-		} else if (prompt.length >= COMPLEX_PROSE_MIN_CHARS_V4) {
-			taskClass = "plan";
-			fallbackReason = "long-prose";
-		} else if (input.laneType !== undefined) {
-			taskClass = LANE_FALLBACK_CLASS_V4[input.laneType];
-			fallbackReason = "lane-fallback";
-		} else {
-			taskClass = "code-gen";
-			fallbackReason = "default";
 		}
 	}
 

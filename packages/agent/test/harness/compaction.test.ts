@@ -23,6 +23,7 @@ import {
 	getLastAssistantUsage,
 	prepareCompaction,
 	serializeConversation,
+	serializeConversationBounded,
 	shouldCompact,
 } from "../../src/harness/compaction/compaction.ts";
 import { buildSessionContext } from "../../src/harness/session/session.ts";
@@ -729,3 +730,46 @@ describe("harness compaction", () => {
 function convertMessages(messages: Message[]): Message[] {
 	return messages;
 }
+
+describe("serializeConversationBounded", () => {
+	const modelStub = (contextWindow: number) => ({ contextWindow }) as unknown as Model<string>;
+	const bigUser = (text: string): Message => ({ role: "user", content: text, timestamp: 0 });
+
+	it("returns the full serialization when it fits the window", () => {
+		const messages = [bigUser("hello"), bigUser("world")];
+		const bounded = serializeConversationBounded(messages, modelStub(200000), 8192);
+		expect(bounded).toBe(serializeConversation(messages));
+		expect(bounded).not.toContain("omitted");
+	});
+
+	it("prunes middle messages with an elision marker when over the window", () => {
+		// contextWindow 10_000 → budgetChars = (10_000 - 1000 - 2048) * 3.5 = 24_332
+		const messages = Array.from({ length: 40 }, (_, i) =>
+			bigUser(`msg-${String(i).padStart(3, "0")} ${"x".repeat(2000)}`),
+		);
+		const bounded = serializeConversationBounded(messages, modelStub(10000), 1000);
+
+		expect(bounded.length).toBeLessThanOrEqual(24332);
+		expect(bounded).toContain("omitted to fit the summarization context window");
+		expect(bounded).toContain("msg-000"); // goal-bearing head survives
+		expect(bounded).toContain("msg-039"); // recent-work tail survives
+		expect(bounded).not.toContain("msg-020"); // middle dropped
+	});
+
+	it("passes through unchanged when the model has no known context window", () => {
+		const messages = [bigUser("x".repeat(100000))];
+		expect(serializeConversationBounded(messages, modelStub(0), 1000)).toBe(serializeConversation(messages));
+	});
+
+	it("hard-truncates a single oversized message, keeping both ends", () => {
+		const head = "HEAD-START";
+		const tail = "TAIL-END";
+		const messages = [bigUser(head + "y".repeat(50000) + tail)];
+		const bounded = serializeConversationBounded(messages, modelStub(10000), 1000);
+
+		expect(bounded).toContain("middle omitted to fit the summarization context window");
+		expect(bounded.startsWith("[User]: HEAD-START")).toBe(true);
+		expect(bounded.endsWith("TAIL-END")).toBe(true);
+		expect(bounded.length).toBeLessThan(serializeConversation(messages).length / 2);
+	});
+});

@@ -478,17 +478,26 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.disposeExtensionEventSubscriptions();
 
 		const extensionsResult = await loadExtensions(extensionPaths, this.cwd, this.eventBus);
-		// Built-in command-safety gate runs FIRST: tool_call block short-circuits on
-		// first block and user_bash short-circuits on first truthy result, so this
-		// fail-closed gate must precede every discovered and inline extension.
-		const commandSafetyExtension = await loadExtensionFromFactory(
-			commandSafetyGate,
-			this.cwd,
-			this.eventBus,
-			extensionsResult.runtime,
-			"<builtin:command-safety>",
-		);
-		extensionsResult.extensions.unshift(commandSafetyExtension);
+		// Built-in command-safety gate runs FIRST (unless YOLO / OMK_COMMAND_SAFETY=0).
+		// tool_call block short-circuits on first block; user_bash on first truthy result.
+		const yoloOff =
+			process.env.OMK_YOLO === "1" ||
+			process.env.OMK_YOLO === "true" ||
+			process.env.OMK_DISABLE_COMMAND_SAFETY === "1" ||
+			process.env.OMK_DISABLE_COMMAND_SAFETY === "true" ||
+			["0", "false", "off", "disable", "disabled"].includes(
+				String(process.env.OMK_COMMAND_SAFETY ?? "").toLowerCase(),
+			);
+		if (!yoloOff) {
+			const commandSafetyExtension = await loadExtensionFromFactory(
+				commandSafetyGate,
+				this.cwd,
+				this.eventBus,
+				extensionsResult.runtime,
+				"<builtin:command-safety>",
+			);
+			extensionsResult.extensions.unshift(commandSafetyExtension);
+		}
 
 		const inlineExtensions = await this.loadExtensionFactories(extensionsResult.runtime);
 		extensionsResult.extensions.push(...inlineExtensions.extensions);

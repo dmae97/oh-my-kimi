@@ -658,6 +658,9 @@ export class AgentSession {
 	// Retry state
 	private _retryAbortController: AbortController | undefined = undefined;
 	private _retryAttempt = 0;
+	// v10.3-Ω: models that already refused/failed this turn — failover must advance,
+	// not re-pick the same candidate (claude-opus-5 → grok → grok → grok loop fix).
+	private _refusedModels = new Set<string>();
 
 	// Bash execution state
 	private _bashAbortController: AbortController | undefined = undefined;
@@ -1369,6 +1372,7 @@ export class AgentSession {
 						attempt: this._retryAttempt,
 					});
 					this._retryAttempt = 0;
+					this._refusedModels.clear();
 				}
 			}
 		}
@@ -1953,6 +1957,7 @@ export class AgentSession {
 				finalError: msg.errorMessage,
 			});
 			this._retryAttempt = 0;
+			this._refusedModels.clear();
 		}
 
 		if (await this._checkCompaction(msg)) {
@@ -3777,7 +3782,21 @@ export class AgentSession {
 					fromExtension,
 				});
 			}
-			const emitWillRetry = compactionEmitWillRetry(willRetry, this.agent.hasQueuedMessages());
+			// Whether the agent loop will resume after this compaction. Shared by
+			// the compaction_end event (so the TUI flushes its queued messages
+			// correctly) and the return value below.
+			const resumeMessages = this.agent.state.messages;
+			let lastAssistantMsg: AssistantMessage | undefined;
+			for (let i = resumeMessages.length - 1; i >= 0; i--) {
+				const candidate = resumeMessages[i];
+				if (candidate.role === "assistant") {
+					lastAssistantMsg = candidate as AssistantMessage;
+					break;
+				}
+			}
+			const endedCleanly = lastAssistantMsg?.stopReason === "stop";
+			const willResume = this.agent.hasQueuedMessages() || !endedCleanly;
+			const emitWillRetry = compactionEmitWillRetry(willRetry, willResume);
 			this._emit({ type: "compaction_end", reason, result, aborted: false, willRetry: emitWillRetry });
 
 			if (willRetry) {
@@ -3789,9 +3808,16 @@ export class AgentSession {
 				return true;
 			}
 
-			// Auto-compaction can complete while follow-up/steering/custom messages are waiting.
-			// Continue once so queued messages are delivered.
-			return this.agent.hasQueuedMessages();
+			// Resume the agent loop after a successful auto-compaction unless the
+			// agent had already finished cleanly. Previously this returned
+			// `hasQueuedMessages()`, which made the agent stall right after the
+			// purple "Auto-compacting..." indicator whenever no steer/follow-up
+			// messages were queued — even when the last turn was cut off mid-task
+			// (stopReason toolUse/length/error/aborted). Continue in that case so
+			// the task runs to completion on the compacted context. Hysteresis
+			// (disarmed until context drops below rearmRatio) prevents an immediate
+			// re-trigger; a clean "stop" with nothing queued still ends the loop.
+			return willResume;
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : "compaction failed";
 			this._emit({
@@ -4346,8 +4372,9 @@ export class AgentSession {
 	}
 
 	/**
-	 * Sticky safety models (e.g. claude-fable-5) often false-positive on coding turns.
-	 * Retrying the same model repeats the refusal — switch via provider-resilience chain first.
+	 * Content/safety stops (stop_reason=refusal) are often false positives on coding turns
+	 * for Fable AND Claude Opus/Sonnet. Retrying the same model usually reprints the refusal —
+	 * switch via provider-resilience chain first. Failover targets still skip sticky models.
 	 */
 	private async _maybeFailoverFromSafetyStop(message: AssistantMessage): Promise<string | undefined> {
 		const resilience = resolveProviderResilience(this.settingsManager.getProviderResilienceSettings());
@@ -4355,14 +4382,18 @@ export class AgentSession {
 		if (!isContentSafetyStopMessage(message.errorMessage)) return undefined;
 
 		const current = this.model;
-		const currentId = message.model || current?.id || "";
-		const currentProvider = message.provider || current?.provider || "";
-		if (!isStickySafetyModel(currentId, currentProvider)) return undefined;
+		// v10.0-Ω: do NOT gate on isStickySafetyModel(source).
+		// claude-opus-5 emits the same stop_reason=refusal FP; same-model retry is useless.
+
+		// v10.3-Ω: mark the model that just refused so we never re-pick it this turn.
+		if (current) this._refusedModels.add(`${current.provider}/${current.id}`);
 
 		const pick = pickFailoverCandidate(
 			resilience.failoverCandidates,
 			current ? { provider: current.provider, id: current.id } : undefined,
 			(c) => {
+				// Skip any model that already refused/failed this turn → advance the chain.
+				if (this._refusedModels.has(`${c.provider}/${c.id}`)) return false;
 				const next = this._modelRegistry.find(c.provider, c.id);
 				return !!next && this._modelRegistry.hasConfiguredAuth(next);
 			},
@@ -4375,6 +4406,8 @@ export class AgentSession {
 			await this.setModel(next);
 			return `${next.provider}/${next.id}`;
 		} catch {
+			// setModel failed (auth/guard) — blacklist so next retry advances further.
+			this._refusedModels.add(`${pick.provider}/${pick.id}`);
 			return undefined;
 		}
 	}
@@ -4393,7 +4426,7 @@ export class AgentSession {
 			return false;
 		}
 
-		// Content/safety stop on Fable: switch model BEFORE delay so the retry is not another Fable refusal.
+		// Content/safety stop (Fable/Opus/Sonnet): switch model BEFORE delay so retry is not same-model refusal.
 		const failoverTo = await this._maybeFailoverFromSafetyStop(message);
 		// Safety stops are usually immediate false positives — short delay after failover, full backoff otherwise.
 		const delayMs = failoverTo
@@ -4425,6 +4458,7 @@ export class AgentSession {
 			// Aborted during sleep - emit end event so UI can clean up
 			const attempt = this._retryAttempt;
 			this._retryAttempt = 0;
+			this._refusedModels.clear();
 			this._emit({
 				type: "auto_retry_end",
 				success: false,

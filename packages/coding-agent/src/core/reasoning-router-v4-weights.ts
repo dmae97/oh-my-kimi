@@ -122,9 +122,15 @@ export const DEFAULT_WEIGHTS_V4: RouterWeightsV4 = {
 	normalizedIntentCluster: 4,
 	intentSkeleton: 5,
 	addKeyword: 1,
-	multiTurnPrior: 0,
-	pressureBucket: 0,
-	judgeVote: 0,
+	// Goal 016/L2 calibration (scripts/reasoning-router/calibrate-inert-weights.ts):
+	// adversarial bounds on the frozen gold set after the topScore>0 vote gate —
+	// multiTurnPrior/judgeVote flip at 4 (gold-0066), pressureBucket at 2.
+	// multiTurnPrior=2 / judgeVote=2 sit one step below the bound; pressureBucket=1
+	// is provably safe because the runtime bucket is hard-clamped to <= 3, so the
+	// max possible bump (+3) stays under the flip threshold (+6).
+	multiTurnPrior: 2,
+	pressureBucket: 1,
+	judgeVote: 2,
 	negationWindowChars: 24,
 	lowConfidenceThreshold: 0.35,
 	highConfidenceThreshold: 0.7,

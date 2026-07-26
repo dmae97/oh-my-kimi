@@ -134,6 +134,7 @@ describe("classifySessionTermination", () => {
 		expect(rendered).toContain("cause=provider.refusal");
 		expect(rendered).toContain("stop_reason=refusal");
 		expect(termination.nextAction).toMatch(/false positive|rephrase|retry|switch model/i);
+		expect(termination.nextAction).toContain("k3/qwen3.8-max/grok-4.5/deepseek");
 	});
 
 	it("preserves only bounded structured metadata", () => {

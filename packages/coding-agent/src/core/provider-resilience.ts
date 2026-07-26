@@ -17,6 +17,7 @@ export const STICKY_SAFETY_MODEL_RE = /fable/i;
 /** Default failover chain when a sticky safety model refuses a turn. */
 export const DEFAULT_SAFETY_FAILOVER_CANDIDATES: readonly FailoverCandidate[] = [
 	{ provider: "kimi-coding", id: "k3" },
+	{ provider: "modelstudio-maas", id: "qwen3.8-max-preview" },
 	{ provider: "grok-oauth-proxy", id: "grok-4.5" },
 	{ provider: "deepseek", id: "deepseek-v4-pro" },
 	{ provider: "deepseek", id: "deepseek-v4-flash" },
@@ -117,6 +118,7 @@ export function pickFailoverCandidate(
 export function stickySafetyBlockMessage(modelId: string, provider: string): string {
 	return (
 		`Blocked sticky safety model ${provider}/${modelId} (providerResilience.blockStickySafetyModels). ` +
-		`Use k3 / grok-4.5 / deepseek, or set providerResilience.blockStickySafetyModels=false.`
+		`Use kimi-coding/k3, modelstudio-maas/qwen3.8-max-preview, grok-4.5, or deepseek; ` +
+		`or set providerResilience.blockStickySafetyModels=false.`
 	);
 }

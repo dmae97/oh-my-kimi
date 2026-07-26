@@ -77,6 +77,7 @@ Advisory-only hint source for the v4 auto thinking-level resolver. Read from the
 | `editorPaddingX` | number | `0` | Horizontal padding for input editor (0-3) |
 | `autocompleteMaxVisible` | number | `5` | Max visible items in autocomplete dropdown (3-20) |
 | `showHardwareCursor` | boolean | `false` | Show the terminal cursor while TUI positions it for IME support |
+| `pinStatusSidebar` | boolean | `false` | Pin the bottom status bar as a responsive right rail (opencode-style): width scales with the terminal (~26%, 34–48 cols), the MCP roster grows on taller terminals, and the content column shrinks to match so the prompt is never covered. Toggle anytime with `Ctrl+Q`. Also enabled by `OMK_PIN_STATUS_SIDEBAR=1` |
 
 ### Telemetry and update checks
 

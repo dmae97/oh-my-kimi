@@ -382,13 +382,21 @@ export function createBashToolDefinition(
 				command: spawnContext.command,
 			});
 
-			// Non-negotiable safety floor: re-classify the EFFECTIVE command after
-			// commandPrefix and spawnHook have been applied, so a destructive command
-			// injected by a prefix/hook (or issued by an SDK consumer that bypasses the
-			// extension gate) is still hard-blocked. Only block-tier verdicts stop here.
-			const effectiveVerdict = classifyShellCommand(spawnContext.command);
-			if (effectiveVerdict.risk === "block") {
-				throw new Error(`command-safety: blocked\n[${effectiveVerdict.rule}] ${effectiveVerdict.reason}`);
+			// Safety floor: re-classify the EFFECTIVE command after commandPrefix/spawnHook.
+			// Skipped entirely in YOLO mode (OMK_YOLO=1 / OMK_COMMAND_SAFETY=0).
+			const yolo =
+				process.env.OMK_YOLO === "1" ||
+				process.env.OMK_YOLO === "true" ||
+				process.env.OMK_DISABLE_COMMAND_SAFETY === "1" ||
+				process.env.OMK_DISABLE_COMMAND_SAFETY === "true" ||
+				["0", "false", "off", "disable", "disabled"].includes(
+					String(process.env.OMK_COMMAND_SAFETY ?? "").toLowerCase(),
+				);
+			if (!yolo) {
+				const effectiveVerdict = classifyShellCommand(spawnContext.command);
+				if (effectiveVerdict.risk === "block") {
+					throw new Error(`command-safety: blocked\n[${effectiveVerdict.rule}] ${effectiveVerdict.reason}`);
+				}
 			}
 
 			const output = new OutputAccumulator({ tempFilePrefix: "omk-bash" });

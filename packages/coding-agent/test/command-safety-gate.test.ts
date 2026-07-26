@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import commandSafetyGate, {
 	evaluateBashToolCall,
 	evaluateUserBash,
+	isCommandSafetyAssumeYesEnabled,
+	isCommandSafetyDisabled,
 } from "../src/core/extensions/builtin/command-safety-gate.ts";
 import type { ExtensionAPI, ExtensionContext, ToolCallEvent, UserBashEvent } from "../src/core/extensions/types.ts";
 
@@ -266,5 +268,18 @@ describe("commandSafetyGate factory", () => {
 		expect(result.result.cancelled).toBe(false);
 		expect(result.result.truncated).toBe(false);
 		expect(result.result.output).toContain("fs.rm_rf_root");
+	});
+
+	describe("yolo / disable", () => {
+		it("OMK_YOLO disables command safety", () => {
+			expect(isCommandSafetyDisabled({ OMK_YOLO: "1" })).toBe(true);
+			expect(isCommandSafetyAssumeYesEnabled({ OMK_YOLO: "1" })).toBe(true);
+		});
+		it("OMK_COMMAND_SAFETY=0 disables", () => {
+			expect(isCommandSafetyDisabled({ OMK_COMMAND_SAFETY: "0" })).toBe(true);
+		});
+		it("default env keeps safety on", () => {
+			expect(isCommandSafetyDisabled({})).toBe(false);
+		});
 	});
 });

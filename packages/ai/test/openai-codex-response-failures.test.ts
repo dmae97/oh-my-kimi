@@ -260,4 +260,39 @@ describe("OpenAI Codex response failures", () => {
 		expect(requests).toBe(2);
 		expect(removeListener.mock.calls).toHaveLength(addListener.mock.calls.length);
 	});
+
+	it("extracts nested code/message from bare type=error events", async () => {
+		// Codex emits context_length_exceeded as a bare `type:"error"` SSE event
+		// with the real fields nested under `error` — not at the top level.
+		const errorEvent = {
+			type: "error",
+			error: {
+				type: "invalid_request_error",
+				code: "context_length_exceeded",
+				message: "Your input exceeds the context window of this model. Please adjust your input and try again.",
+				param: "input",
+			},
+			sequence_number: 2,
+		};
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async () =>
+					new Response(`data: ${JSON.stringify(errorEvent)}\n\n`, {
+						status: 200,
+						headers: { "content-type": "text/event-stream" },
+					}),
+			),
+		);
+
+		const result = await streamOpenAICodexResponses(model, context, {
+			apiKey: mockToken(),
+			transport: "sse",
+		}).result();
+
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("Your input exceeds the context window of this model.");
+		expect(result.errorMessage).toContain("context_length_exceeded");
+		expect(result.errorMessage).not.toContain('"type"');
+	});
 });

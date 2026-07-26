@@ -5,12 +5,15 @@ import { type ThemeColor, theme } from "../theme/theme.ts";
 import {
 	boxBottom,
 	boxCenteredLine,
+	boxRuleLine,
 	boxTextLine,
 	boxTop,
 	centerLine,
 	composeColumns,
 	divider,
 	fitLine,
+	labelCell,
+	padBoxColumn,
 	sidebarRule,
 	textLine,
 } from "./control-panel-box.ts";
@@ -104,10 +107,15 @@ function renderCompact(content: ControlPanelContent, width: number, bannerFrame?
 function renderDeck(content: ControlPanelContent, width: number, bannerFrame?: string[], sparkleMs = 0): string[] {
 	const { leftWidth, sidebarWidth } = deckWidths(width);
 	if (leftWidth < 72) return [];
+	const hero = heroPanel(content, leftWidth, bannerFrame, sparkleMs);
+	const rail = sidebarPanel(content, sidebarWidth);
+	// Both framed columns close on the same row so the deck reads as one block
+	// instead of a short hero beside a long ragged rail.
+	const deckHeight = Math.max(hero.length, rail.length);
 	const lines = composeColumns(
-		heroPanel(content, leftWidth, bannerFrame, sparkleMs),
+		padBoxColumn(hero, deckHeight, leftWidth, "center"),
 		leftWidth,
-		sidebarPanel(content, sidebarWidth),
+		padBoxColumn(rail, deckHeight, sidebarWidth),
 		sidebarWidth,
 		CONTROL_PANEL_GAP_WIDTH,
 		width,
@@ -126,26 +134,55 @@ function heroPanel(content: ControlPanelContent, width: number, bannerFrame?: st
 	const snapshot = statusSnapshot(content);
 	const innerWidth = Math.max(0, width - 4);
 	return [
+		// One wordmark only: the framed title chip carries the product name, so the
+		// hero body is the block mark plus live state, not a second text logotype.
 		boxTop(width, `omk v${content.version} · OMK://CONTROL`),
-		boxCenteredLine(width, theme.bold(theme.fg("accent", "OMK"))),
-		boxCenteredLine(width, theme.fg("muted", "route · verify · loop · control")),
 		boxTextLine(width, sparkleRow(innerWidth, SPARKLE_ROW_TOP, sparkleMs)),
-		...(bannerFrame ?? CONTROL_PANEL_ASCII_ART).map((line, index) => {
+		...(bannerFrame ?? CONTROL_PANEL_ASCII_ART).map((line, index, rows) => {
 			if (bannerFrame) return boxCenteredLine(width, line);
-			const color: ThemeColor = index < 2 ? "mdCode" : index < 4 ? "accent" : index < 6 ? "success" : "warning";
-			return boxCenteredLine(width, theme.fg(color, line));
+			// Single-tone wordmark: the top and bottom scanlines fall back to the
+			// dim ink so the mark reads as one lit object rather than a four-colour
+			// stack. Accent stays the only hue in the hero.
+			const isEdge = index === 0 || index === rows.length - 1;
+			const isCore = index === Math.floor(rows.length / 2);
+			const painted = theme.fg(isEdge ? "dim" : "accent", line);
+			return boxCenteredLine(width, isCore ? theme.bold(painted) : painted);
 		}),
 		boxTextLine(width, sparkleRow(innerWidth, SPARKLE_ROW_BOTTOM, sparkleMs)),
 		boxCenteredLine(
 			width,
-			`${theme.fg("warning", "●")} ${theme.bold("OMK")}  / ${theme.fg("success", heroModelLabel(snapshot))}`,
+			`${theme.fg("success", "●")} ${theme.fg("muted", "MODEL")} ${theme.fg("text", heroModelLabel(snapshot))}`,
 		),
 		boxCenteredLine(
 			width,
-			`${theme.fg("mdCode", "◇")} omk-control · ${theme.fg("accent", "route")} · ${theme.fg("warning", "verify")} · ${theme.fg("success", "loop")} · ${theme.fg("mdCode", "control")}`,
+			["route", "verify", "loop", "control"]
+				.map((stage) => theme.fg("dim", stage))
+				.join(theme.fg("borderMuted", " · ")),
 		),
+		boxTextLine(width, ""),
+		boxRuleLine(width, Math.max(4, Math.floor(innerWidth * 0.18))),
+		boxCenteredLine(width, heroMetaStrip(snapshot)),
 		boxBottom(width),
 	];
+}
+
+/**
+ * Compact meta strip under the wordmark: the same signals the narrow layout
+ * shows beside the banner, rendered as one centred row so the hero carries
+ * real state instead of empty deck height.
+ */
+function heroMetaStrip(snapshot: ControlPanelStatusSnapshot): string {
+	const rawThemeName = theme.name ?? "live";
+	const themeName = (rawThemeName.startsWith("omk-") ? rawThemeName.slice(4) : rawThemeName).toUpperCase();
+	const cells: Array<[string, string]> = [
+		["PANEL", snapshot.runtimeState ?? "unknown"],
+		["THEME", themeName],
+		["STARTUP", snapshot.startupState ?? "unknown"],
+		["LINK", snapshot.linkState ?? "unknown"],
+	];
+	return cells
+		.map(([label, value]) => `${theme.fg("muted", label)} ${coloredStatus(value)}`)
+		.join(theme.fg("borderMuted", "   ·   "));
 }
 
 function heroModelLabel(snapshot: ControlPanelStatusSnapshot): string {
@@ -153,6 +190,20 @@ function heroModelLabel(snapshot: ControlPanelStatusSnapshot): string {
 	const think = snapshot.thinkingLevel;
 	return think && think !== "off" ? `${snapshot.modelId}:${think}` : snapshot.modelId;
 }
+
+/**
+ * Label gutters are aligned per section rather than across the whole rail: a
+ * global gutter would indent short labels so far that long values (todo text,
+ * model ids) lose characters at rail widths of 34-38 columns.
+ */
+const RAIL_COLUMNS = {
+	status: 8,
+	todo: 4,
+	session: 3,
+	model: 5,
+	runtime: 8,
+	control: 7,
+} as const;
 
 function sidebarPanel(content: ControlPanelContent, width: number): string[] {
 	const snapshot = statusSnapshot(content);
@@ -165,38 +216,60 @@ function sidebarPanel(content: ControlPanelContent, width: number): string[] {
 	return [
 		sidebarTabs(width),
 		boxCenteredLine(width, theme.bold(theme.fg("accent", "OMK://CONTROL"))),
-		boxCenteredLine(width, theme.bold(theme.fg("warning", "CYBERPUNK OPS CORE"))),
-		boxCenteredLine(width, `${theme.fg("mdCode", "MATRIX RAIN")} // ${theme.fg("success", "NEON GRID ONLINE")}`),
-		boxCenteredLine(width, theme.fg("text", "NIGHT-CITY-MATRIX-V3")),
-		sidebarRule(width, "STATUS", "accent"),
-		boxTextLine(width, `${theme.fg("muted", "state:")} ${coloredStatus(snapshot.runtimeState ?? "unknown")}`),
-		boxTextLine(width, `${theme.fg("muted", "route:")} ${coloredStatus(snapshot.routeState ?? "unknown")}`),
-		boxTextLine(width, `${theme.fg("muted", "evidence:")} ${coloredStatus(snapshot.evidenceState ?? "unknown")}`),
-		sidebarRule(width, "TODO", "accent"),
-		...todoSidebarLines(snapshot.todoState, width),
-		sidebarRule(width, "SESSION", "accent"),
-		semanticBoxTextLine(width, "cwd", snapshot.cwdLabel ?? "?", "end"),
-		semanticBoxTextLine(width, "git", snapshot.gitBranch ?? "?", "start"),
-		sidebarRule(width, "MODEL / CTX", "accent"),
-		semanticBoxTextLine(width, "model", modelStatusLabel(snapshot), "end"),
-		semanticBoxTextLine(width, "think", snapshot.thinkingLevel ?? "off", "start"),
+		boxCenteredLine(width, theme.fg("dim", "CYBERPUNK OPS CORE")),
+		boxCenteredLine(
+			width,
+			`${theme.fg("muted", "MATRIX RAIN")}${theme.fg("borderMuted", " // ")}${theme.fg("muted", "NEON GRID ONLINE")}`,
+		),
+		boxCenteredLine(width, theme.fg("dim", "NIGHT-CITY-MATRIX-V3")),
+		sidebarRule(width, "STATUS"),
 		boxTextLine(
 			width,
-			`${theme.fg("muted", "ctx:")} ${theme.fg(statusColor(snapshot.contextPercent === undefined || snapshot.contextPercent === null ? "unknown" : "ready"), contextStatusLabel(snapshot))}`,
+			`${labelCell("state", RAIL_COLUMNS.status)} ${coloredStatus(snapshot.runtimeState ?? "unknown")}`,
 		),
-		boxTextLine(width, `${theme.fg("muted", "meter:")} ${contextMeter}`),
-		boxTextLine(width, `${theme.fg("muted", "pulse:")} ${activitySparkline}`),
-		sidebarRule(width, "RUNTIME / MCP / SKILLS", "accent"),
-		semanticBoxTextLine(width, "headroom", headroomLabel, "end"),
-		semanticBoxTextLine(width, "omk", snapshot.dagOrchestrationState ?? "unknown", "end"),
-		semanticBoxTextLine(width, "sidebar", snapshot.sidebarState ?? "unknown", "start"),
-		boxTextLine(width, `${theme.fg("muted", "res:")} MCP:${mcpCount ?? "?"} skills:${skillCount ?? "?"}`),
-		semanticBoxTextLine(width, "pkg", packageIntakeLabel, "end"),
-		sidebarRule(width, "CONTROL", "accent"),
-		boxTextLine(width, `${theme.fg("muted", "route:")} ${coloredStatus(snapshot.routeState ?? "unknown")}`),
-		boxTextLine(width, `${theme.fg("muted", "verify:")} ${coloredStatus(snapshot.evidenceState ?? "unknown")}`),
-		boxTextLine(width, `${theme.fg("muted", "control:")} ${coloredStatus(snapshot.controlState ?? "unknown")}`),
-		boxBottom(width, "accent"),
+		boxTextLine(
+			width,
+			`${labelCell("route", RAIL_COLUMNS.status)} ${coloredStatus(snapshot.routeState ?? "unknown")}`,
+		),
+		boxTextLine(
+			width,
+			`${labelCell("evidence", RAIL_COLUMNS.status)} ${coloredStatus(snapshot.evidenceState ?? "unknown")}`,
+		),
+		sidebarRule(width, "TODO"),
+		...todoSidebarLines(snapshot.todoState, width),
+		sidebarRule(width, "SESSION"),
+		semanticBoxTextLine(width, "cwd", snapshot.cwdLabel ?? "?", "end", RAIL_COLUMNS.session),
+		semanticBoxTextLine(width, "git", snapshot.gitBranch ?? "?", "start", RAIL_COLUMNS.session),
+		sidebarRule(width, "MODEL / CTX"),
+		semanticBoxTextLine(width, "model", modelStatusLabel(snapshot), "end", RAIL_COLUMNS.model),
+		semanticBoxTextLine(width, "think", snapshot.thinkingLevel ?? "off", "start", RAIL_COLUMNS.model),
+		boxTextLine(
+			width,
+			`${labelCell("ctx", RAIL_COLUMNS.model)} ${theme.fg(statusColor(snapshot.contextPercent === undefined || snapshot.contextPercent === null ? "unknown" : "ready"), contextStatusLabel(snapshot))}`,
+		),
+		boxTextLine(width, `${labelCell("meter", RAIL_COLUMNS.model)} ${contextMeter}`),
+		boxTextLine(width, `${labelCell("pulse", RAIL_COLUMNS.model)} ${activitySparkline}`),
+		sidebarRule(width, "RUNTIME / MCP / SKILLS"),
+		semanticBoxTextLine(width, "headroom", headroomLabel, "end", RAIL_COLUMNS.runtime),
+		semanticBoxTextLine(width, "omk", snapshot.dagOrchestrationState ?? "unknown", "end", RAIL_COLUMNS.runtime),
+		semanticBoxTextLine(width, "sidebar", snapshot.sidebarState ?? "unknown", "start", RAIL_COLUMNS.runtime),
+		boxTextLine(
+			width,
+			`${labelCell("res", RAIL_COLUMNS.runtime)} MCP:${mcpCount ?? "?"} skills:${skillCount ?? "?"}`,
+		),
+		semanticBoxTextLine(width, "pkg", packageIntakeLabel, "end", RAIL_COLUMNS.runtime),
+		// CONTROL previously repeated STATUS's route row verbatim; the rail now
+		// carries each signal exactly once.
+		sidebarRule(width, "CONTROL"),
+		boxTextLine(
+			width,
+			`${labelCell("verify", RAIL_COLUMNS.control)} ${coloredStatus(snapshot.evidenceState ?? "unknown")}`,
+		),
+		boxTextLine(
+			width,
+			`${labelCell("control", RAIL_COLUMNS.control)} ${coloredStatus(snapshot.controlState ?? "unknown")}`,
+		),
+		boxBottom(width),
 	];
 }
 
@@ -205,8 +278,14 @@ function semanticBoxTextLine(
 	label: string,
 	value: string,
 	preserve: "start" | "middle" | "end",
+	column?: number,
 ): string {
-	const prefix = `${theme.fg("muted", `${label}:`)} `;
+	// Alignment is a courtesy, not a cost: if the gutter indent would truncate the
+	// value, this row drops back to a flush label so the data survives intact.
+	const aligned = `${labelCell(label, column)} `;
+	const flush = `${labelCell(label, label.length)} `;
+	const alignedRoom = Math.max(0, width - 4 - visibleWidth(aligned));
+	const prefix = visibleWidth(value) <= alignedRoom ? aligned : flush;
 	const availableWidth = Math.max(0, width - 4 - visibleWidth(prefix));
 	return boxTextLine(width, `${prefix}${semanticTruncate(value, availableWidth, preserve)}`);
 }
@@ -263,15 +342,15 @@ function statusColor(value: string): ThemeColor {
 function todoSidebarLines(state: TodoState | undefined, width: number): string[] {
 	if (!state || state.items.length === 0) {
 		return [
-			boxTextLine(width, `${theme.fg("muted", "todo:")} empty`),
-			boxTextLine(width, `${theme.fg("muted", "next:")} no active todos`),
+			boxTextLine(width, `${labelCell("todo", RAIL_COLUMNS.todo)} ${theme.fg("dim", "empty")}`),
+			boxTextLine(width, `${labelCell("next", RAIL_COLUMNS.todo)} ${theme.fg("dim", "no active todos")}`),
 		];
 	}
 	const counts = todoSummary(state);
 	const next = nextActiveTodo(state);
 	return [
-		boxTextLine(width, `${theme.fg("muted", "todo:")} ${counts.done}/${counts.total} done`),
-		semanticBoxTextLine(width, "next", next?.label ?? "complete", "middle"),
+		boxTextLine(width, `${labelCell("todo", RAIL_COLUMNS.todo)} ${counts.done}/${counts.total} done`),
+		semanticBoxTextLine(width, "next", next?.label ?? "complete", "middle", RAIL_COLUMNS.todo),
 	];
 }
 
@@ -339,8 +418,11 @@ function activitySparklineLabel(snapshot: ControlPanelStatusSnapshot): string {
 	const glyphs = Array.from(SPARKLINE_GLYPHS);
 	const parts: string[] = [];
 	for (let index = 0; index < SPARKLINE_WIDTH; index++) {
-		const glyph = glyphs[(seed + index * 5 + index * index) % glyphs.length] ?? "▁";
-		const color: ThemeColor = index % 5 === 0 ? "accent" : index % 3 === 0 ? "warning" : "success";
+		const level = (seed + index * 5 + index * index) % glyphs.length;
+		const glyph = glyphs[level] ?? "▁";
+		// Colour follows amplitude instead of column index, so the pulse reads as
+		// one signal in the accent hue rather than a rotating three-colour pattern.
+		const color: ThemeColor = level >= glyphs.length - 2 ? "accent" : level >= 3 ? "muted" : "dim";
 		parts.push(theme.fg(color, glyph));
 	}
 	return parts.join("");

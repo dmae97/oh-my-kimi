@@ -493,7 +493,7 @@ function nextActionFor(classification: Classification, input: ClassifySessionTer
 		case "provider_protocol":
 			return "Often an orphan tool_call_id / sticky transcript after a dropped error turn — auto-retry after sanitize, or /new session if it persists.";
 		case "provider_refusal":
-			return "Model declined this turn (content/safety stop). Usually a false positive on Fable/Claude — auto-retry once, or switch model (k3/grok-4.5/deepseek) / rephrase as a pure coding task.";
+			return "Model declined this turn (content/safety stop). Usually a false positive on Fable/Claude — auto-retry once, or switch model (k3/qwen3.8-max/grok-4.5/deepseek) / rephrase as a pure coding task.";
 		case "context_overflow":
 			return "Compact or reduce context, or switch to a larger-context model.";
 		case "tool_timeout":

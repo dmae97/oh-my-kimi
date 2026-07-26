@@ -48,3 +48,4 @@ rules:
     toolName: bash
     pattern: "\\.env|auth\\.json|id_rsa|private.*key|SECRET|TOKEN"
     enabled: false
+

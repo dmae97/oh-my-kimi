@@ -186,4 +186,61 @@ describe("Anthropic raw SSE parsing", () => {
 		expect(result.errorMessage).toBeUndefined();
 		expect(result.content).toEqual([{ type: "text", text: "Hello" }]);
 	});
+
+	it("v10.3-Ω: salvages a refusal that already produced text (no cancelled turn)", async () => {
+		const model = getModel("anthropic", "claude-haiku-4-5");
+		const context: Context = {
+			messages: [{ role: "user", content: "benign coding question", timestamp: Date.now() }],
+		};
+		// Same stream as the happy path, but the model ends with stop_reason=refusal
+		// AFTER emitting "Hello" — a false-positive safety stop on benign input.
+		const events = minimalAnthropicEvents.map((e) => {
+			if (e.event !== "message_delta") return e;
+			const parsed = JSON.parse(e.data);
+			parsed.delta.stop_reason = "refusal";
+			return { event: e.event, data: JSON.stringify(parsed) };
+		});
+		const response = createSseResponse(events);
+		const stream = streamAnthropic(model, context, {
+			client: createFakeAnthropicClient(response),
+		});
+		const result = await stream.result();
+
+		// Partial answer is delivered, not thrown away as a cancelled turn.
+		expect(result.stopReason).toBe("stop");
+		expect(result.errorMessage).toBeUndefined();
+		expect(result.content).toEqual([{ type: "text", text: "Hello" }]);
+	});
+
+	it("v10.3-Ω: empty refusal still surfaces as error (triggers failover)", async () => {
+		const model = getModel("anthropic", "claude-haiku-4-5");
+		const context: Context = {
+			messages: [{ role: "user", content: "benign coding question", timestamp: Date.now() }],
+		};
+		// message_start + immediate refusal with NO content blocks.
+		const response = createSseResponse([
+			minimalAnthropicEvents[0],
+			{
+				event: "message_delta",
+				data: JSON.stringify({
+					type: "message_delta",
+					delta: { stop_reason: "refusal" },
+					usage: {
+						input_tokens: 12,
+						output_tokens: 0,
+						cache_read_input_tokens: 0,
+						cache_creation_input_tokens: 0,
+					},
+				}),
+			},
+			{ event: "message_stop", data: JSON.stringify({ type: "message_stop" }) },
+		]);
+		const stream = streamAnthropic(model, context, {
+			client: createFakeAnthropicClient(response),
+		});
+		const result = await stream.result();
+
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toMatch(/content\/safety stop/);
+	});
 });

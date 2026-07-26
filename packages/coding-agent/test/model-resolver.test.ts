@@ -390,6 +390,11 @@ describe("default model selection", () => {
 		expect(defaultModelPerProvider["vercel-ai-gateway"]).toBe("zai/glm-5.1");
 	});
 
+	test("K3 and ModelStudio defaults track the recommended readiness models", () => {
+		expect(defaultModelPerProvider["kimi-coding"]).toBe("k3");
+		expect(defaultModelPerProvider["modelstudio-maas"]).toBe("qwen3.8-max-preview");
+	});
+
 	test("findInitialModel accepts explicit provider custom model ids", async () => {
 		const registry = {
 			getAll: () => allModels,
@@ -405,6 +410,44 @@ describe("default model selection", () => {
 
 		expect(result.model?.provider).toBe("openrouter");
 		expect(result.model?.id).toBe("openai/ghost-model");
+	});
+
+	test("findInitialModel prefers K3, then qwen3.8-max, regardless of registry order", async () => {
+		const k3 = {
+			...mockModels[0],
+			provider: "kimi-coding",
+			id: "k3",
+			name: "Kimi K3",
+			baseUrl: "https://api.kimi.com/coding",
+		} satisfies Model<"anthropic-messages">;
+		const qwenMax = {
+			...mockModels[0],
+			provider: "modelstudio-maas",
+			id: "qwen3.8-max-preview",
+			name: "Qwen 3.8 Max Preview",
+			api: "openai-completions",
+			baseUrl: "https://modelstudio.example/v1",
+		} satisfies Model<"openai-completions">;
+		const registry = {
+			getAvailable: () => [qwenMax, k3],
+		} as unknown as Parameters<typeof findInitialModel>[0]["modelRegistry"];
+
+		const preferred = await findInitialModel({
+			scopedModels: [],
+			isContinuing: false,
+			modelRegistry: registry,
+		});
+		expect(preferred.model).toBe(k3);
+
+		const qwenOnlyRegistry = {
+			getAvailable: () => [qwenMax],
+		} as unknown as Parameters<typeof findInitialModel>[0]["modelRegistry"];
+		const fallback = await findInitialModel({
+			scopedModels: [],
+			isContinuing: false,
+			modelRegistry: qwenOnlyRegistry,
+		});
+		expect(fallback.model).toBe(qwenMax);
 	});
 
 	test("findInitialModel selects ai-gateway default when available", async () => {
