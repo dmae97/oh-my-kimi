@@ -27,7 +27,7 @@
   <a href="https://www.npmjs.com/package/open-multi-agent-kit"><img alt="npm version" src="https://img.shields.io/npm/v/open-multi-agent-kit?style=flat-square&label=npm" /></a>
   <a href="https://www.npmjs.com/package/open-multi-agent-kit"><img alt="npm downloads / month" src="https://img.shields.io/npm/dm/open-multi-agent-kit?style=flat-square" /></a>
   <a href="https://www.npmjs.com/package/open-multi-agent-kit"><img alt="npm total downloads" src="https://img.shields.io/npm/dt/open-multi-agent-kit?style=flat-square&label=total%20dl" /></a>
-  <a href="https://github.com/dmae97/omk/releases/tag/v0.93.0"><img alt="Release" src="https://img.shields.io/badge/release-v0.93.0-00d7ff?style=flat-square" /></a>
+  <a href="https://github.com/dmae97/omk/releases/tag/v0.94.0"><img alt="Release" src="https://img.shields.io/badge/release-v0.94.0-00d7ff?style=flat-square" /></a>
   <a href="LICENSE"><img alt="License MIT" src="https://img.shields.io/npm/l/open-multi-agent-kit?style=flat-square" /></a>
   <img alt="Node version" src="https://img.shields.io/node/v/open-multi-agent-kit?style=flat-square" />
 </p>
@@ -319,6 +319,32 @@ The proof standard is operational: evaluate OMK against your own task completion
 
 <!-- releases:start -->
 
+## Release v0.94.0
+
+### Added
+
+- **`diagnostics` is now a default-active tool** for new sessions (LLM-callable alongside `read`/`bash`/`edit`/`write`). It stays registered-but-inactive for sessions that pin their own tool list; opt out per session via `activeToolNames` or `excludedToolNames`.
+- **Persistent skill-catalog cache** (`src/core/skills-catalog-cache.ts`): per-dir fingerprint walk (readdir/stat only) gates a JSON catalog at `<agentDir>/cache/skill-catalog-v1.json`. Repeat session starts skip all SKILL.md reads on unchanged trees (measured on this host: 105 ms cold → 41 ms warm for the full scan). Any add/edit/delete under a scanned tree invalidates exactly that dir; corrupt cache degrades to a clean miss. Atomic tmp+rename writes.
+- **Hermetic test environment** (`test/setup-env.ts`): machine-level `OMK_*` and provider credential variables are scrubbed before every worker, so test results no longer depend on the developer shell (safety-gate suites saw env-disabled gates; live e2e suites ran against expired credentials instead of skipping). `LIVE_E2E=1` keeps provider keys when running the live suites on purpose.
+- **`diagnostics` tool** (`src/core/tools/diagnostics.ts`): compiler-backed diagnostics via the project's own checkers — `tsc --noEmit`, `pyright`/`ruff`, `go vet`, `cargo check` — normalized to `SEVERITY path:line:col message`, per-language fail-soft (`skipped` instead of tool errors), 5 s TTL cache, 50-item cap, path/language auto-detect. Registered in `createAllToolDefinitions` and exported from the SDK (`createDiagnosticsTool`, `createDiagnosticsToolDefinition`).
+- **Interactive sandbox promotion**: `session.setBashSandboxMode("audit" | "enforce" | "off")` switches the session sandbox at runtime (next spawn), with a `sandbox_audit` mode-change ledger entry; `session.bashSandboxMode` reads the effective mode. `SessionBashRuntime.setSandboxMode` backs it.
+- **Default-on bash sandbox (opt-out).** Session bash now carries a default `audit`-mode sandbox preflight (workspace-write rooted at the session cwd, OS temp dir as extra write target). Spawns stay unwrapped but every decision lands in the replay ledger as a `sandbox_audit` event — a tamper-evident trail no other harness ships. `OMK_BASH_SANDBOX=enforce` activates the real OS backend (macOS `sandbox-exec` / Linux `bwrap`, auto-detected) and fails closed when unavailable; `=0` disables. New `onSpawnDecision` observer on `BashSandboxPreflight`, plus `createWorkspaceSandboxPolicy()` / `resolveBashSandboxMode()` SDK exports.
+- **Git-aware verified-bash scope.** Session bash receipts now bind the git toplevel plus the sorted dirty set (staged/modified/untracked, capped at 32 paths, 1 s TTL cache) instead of an empty artifact set, so `captureWorkspaceFingerprint` records HEAD and a scope-limited dirty digest. Exported as `resolveSessionWorkspaceScope()`.
+
+### Fixed
+
+- **API provider registry is now a process-wide singleton** (`globalThis`-anchored in `omk-ai/api-registry`). Symlinked workspace dist copies consumed natively and the same files inlined by vite-node used to keep separate registries, so `registerFauxProvider` (and any runtime registration) was invisible to streamers resolving through the other copy — surfacing as "No API provider registered for api: ..." in agent loops. Also removed a stale nested `packages/agent/node_modules/omk-ai` copy (0.92.0) that shadowed the workspace build.
+
+### Changed
+
+- **Extracted `SessionCompactionService`** (`src/core/session-compaction-service.ts`): the compaction state machine — capture/lock, barrier evaluation, emergency tail repair, provenance capture, transaction begin, envelope commit — moved out of `AgentSession` (5,271 → 4,911 lines), which now delegates through thin one-line wrappers. Transaction symbols import from `compaction/transaction.ts` directly so the `compaction/index.js` vi.mock pattern in suites keeps working.
+- **Extracted `SessionBashService`** (`src/core/session-bash-service.ts`): the full bash surface — `executeBash` (prefix/loadout/safety-floor/headless gate), `recordBashResult` with the streaming-deferral queue, `abortBash`, `flushPending` — moved out of `AgentSession`, which now delegates one line each. Ordering contract (queue while streaming, flush on turn end) is pinned by the bash-persistence suite.
+- **Extracted `SessionBashRuntime`** (`src/core/session-bash-runtime.ts`) from `AgentSession`: verified-evidence executor, default sandbox preflight (audit/enforce), git-aware workspace scope, and the receipt-bound bash orchestration (`executeVerified`) now live in one lazily-initialized unit; the session delegates. No behavior change.
+
+- **Verified bash is default-on (opt-out).** When an AgentSession has a replay ledger, LLM-callable `bash` and interactive/RPC `executeBash` bind through `executeVerifiedBash` (`executor: "bash-tool"`, receipts under `<sessionFile>.evidence`). Set `OMK_VERIFIED_BASH=0` for the legacy unverified path. Adapter gains `env`/`onData` fan-out and `createVerifiedBashOperations()` so session PI_* env and live streaming stay intact without import cycles. See [SDK — Evidence](packages/coding-agent/docs/sdk.md#evidence-and-verification) and [Environment Variables](packages/coding-agent/docs/environment-variables.md).
+
+Release notes live in [RELEASE_NOTES_v0.94.0.md](.github/RELEASE_NOTES_v0.94.0.md).
+
 ## Release v0.93.0
 
 ### Added
@@ -353,31 +379,6 @@ Release notes live in [RELEASE_NOTES_v0.93.0.md](.github/RELEASE_NOTES_v0.93.0.m
 - Local-only scratch scripts and operator protocol notes are now gitignored and excluded from the release surface.
 
 Release notes live in [RELEASE_NOTES_v0.92.0.md](.github/RELEASE_NOTES_v0.92.0.md).
-
-## Release v0.91.0
-
-### Added
-
-- **System-wide resource metrics in the footer** — the footer CPU/MEM segment now reports whole-machine utilization (aggregate `os.cpus()` busy percentage and `totalmem - freemem`) instead of process-scoped usage. Wide terminals show `CPU 42% MEM 35% (18.0GB/50.5GB)`; thresholds are percentage-based (warning ≥70% CPU or ≥85% MEM, error ≥90%/95%). Process-scoped getters remain available on the sampler for diagnostics.
-- **Aurora theme pair** — new built-in `omk-aurora-dark` and `omk-aurora-light` themes with WCAG-verified contrast (body text ≥14:1, muted ≥5.7:1, semantic colors ≥4.5:1), a full 51-token color map, and a stepped thinking-level color ramp. Aliases: `aurora`, `aurora-dark`, `aurora-light`.
-- **AdaptOrch advisory bridge wiring** — opt-in, global-only `adaptorchBridge` settings block (`enabled`, `ttlMs`, `timeoutMs`, `maxConsultsPerSession`, `failureThreshold`). When enabled, the v4 auto thinking-level resolver consults the circuit-breaker-protected, TTL-cached advisory bridge and fuses the returned hint as a bounded ±2-step nudge; the resolver's own confidence escalation still applies on top. Default remains fully off, and a project-scope settings file can never enable it.
-
-### Changed
-
-- **`omk-adaptorch-wpl` promoted to stable** and added as a runtime dependency of `open-multi-agent-kit` (lockstep `0.91.0`). The Work Packet Loop state machine, outcome adjudicator, and verification-wall modules now ship with the CLI package.
-- Repository hygiene: local-only research corpora and audit artifacts are no longer tracked in git (they remain on disk, with a local SHA-256 integrity manifest for the project-owned subset).
-
-### Fixed
-
-- Masked API-key-like values in newly submitted user chat before extensions, models, event streams, and session persistence.
-- Restored `omk-adaptorch-wpl` handling in the coding-agent shrinkwrap generator so internal workspace packaging stays reproducible.
-
-### Notes
-
-- Published to npm as `open-multi-agent-kit@0.91.0` (lockstep with `omk-ai`, `omk-agent-core`, `omk-tui`, and `omk-adaptorch-wpl` at `0.91.0`).
-- Verification boundary: `tsgo --noEmit` clean; adaptorch-wpl suite 73/73, coding-agent regression suite 784/784, theme suites green. Live-provider coverage remains outside this release.
-
-Release notes live in [RELEASE_NOTES_v0.91.0.md](.github/RELEASE_NOTES_v0.91.0.md).
 
 <!-- releases:end -->
 
