@@ -72,7 +72,7 @@ describe("createAgentSession domain dispatch wiring", () => {
 			domainRoutingPrompt: "Implement a responsive frontend UI component",
 		});
 		try {
-			expect(session.getActiveToolNames()).toEqual(["read", "bash", "edit", "write"]);
+			expect(session.getActiveToolNames()).toEqual(["read", "bash", "edit", "write", "diagnostics"]);
 			expect(() => session.setActiveToolsByName(["read"])).not.toThrow();
 			expect(session.getActiveToolNames()).toEqual(["read"]);
 		} finally {
@@ -129,7 +129,7 @@ describe("createAgentSession domain dispatch wiring", () => {
 
 		const { session } = await createTestSdkSession();
 		try {
-			expect(session.getActiveToolNames()).toEqual(["read", "bash", "edit", "write"]);
+			expect(session.getActiveToolNames()).toEqual(["read", "bash", "edit", "write", "diagnostics"]);
 			expect(() => session.setActiveToolsByName(["read"])).not.toThrow();
 		} finally {
 			session.dispose();

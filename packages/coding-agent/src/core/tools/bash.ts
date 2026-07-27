@@ -18,8 +18,9 @@ import {
 import { classifyShellCommand } from "../command-safety.ts";
 import type { ExtensionContext, ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
 import { assertLoadoutAccess, type LoadoutAccessGuard } from "../loadout-access-policy.ts";
-import type { SandboxBackendStatus, SandboxPathResolver, SandboxPlatform, SandboxPolicy } from "../sandbox/policy.ts";
-import { buildSandboxedSpawnRequest } from "../sandbox/spawn.ts";
+import { detectSandboxBackend } from "../sandbox/backend.ts";
+import type { SandboxBackendStatus, SandboxPathResolver, SandboxPolicy } from "../sandbox/policy.ts";
+import { buildSandboxedSpawnRequest, type SandboxedSpawnRequest } from "../sandbox/spawn.ts";
 import { OutputAccumulator } from "./output-accumulator.ts";
 import { getTextOutput, invalidArgText, str } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -89,6 +90,7 @@ export function createLocalBashOperations(options?: {
 					backend,
 					resolver: sandbox.resolver,
 				});
+				sandbox.onSpawnDecision?.(request);
 				if (!request.allowed) {
 					throw new Error(`sandbox: shell denied\n[${request.rule}] ${request.reason}`);
 				}
@@ -172,12 +174,12 @@ export interface BashSandboxPreflight {
 	backend?: SandboxBackendStatus;
 	/** Optional resolver used to canonicalize the working directory before the root check. */
 	resolver?: SandboxPathResolver;
+	/** Observer for each sandbox spawn decision (audit/enforce ledger recording). */
+	onSpawnDecision?: (decision: SandboxedSpawnRequest) => void;
 }
 
 function defaultBashSandboxBackend(): SandboxBackendStatus {
-	const platform: SandboxPlatform =
-		process.platform === "linux" ? "linux" : process.platform === "darwin" ? "macos" : "unsupported";
-	return { platform, backendAvailable: false };
+	return detectSandboxBackend();
 }
 
 export interface BashSpawnContext {

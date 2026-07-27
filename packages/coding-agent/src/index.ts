@@ -275,6 +275,11 @@ export {
 	RunJournalStoreCorruptionError,
 	writeQuarantineBytesDurably,
 } from "./core/run-journal-store.ts";
+export {
+	type BashSandboxMode,
+	createWorkspaceSandboxPolicy,
+	resolveBashSandboxMode,
+} from "./core/sandbox/default-policy.ts";
 // SDK for programmatic usage
 export {
 	AgentSessionRuntime,
@@ -365,6 +370,8 @@ export {
 	type BashToolInput,
 	type BashToolOptions,
 	createBashToolDefinition,
+	createDiagnosticsTool,
+	createDiagnosticsToolDefinition,
 	createEditToolDefinition,
 	createFindToolDefinition,
 	createGrepToolDefinition,
@@ -374,6 +381,9 @@ export {
 	createWriteToolDefinition,
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
+	type DiagnosticLine,
+	type DiagnosticsToolDetails,
+	type DiagnosticsToolInput,
 	type EditOperations,
 	type EditToolDetails,
 	type EditToolInput,
@@ -407,13 +417,16 @@ export {
 	withFileMutationQueue,
 } from "./core/tools/index.ts";
 export {
+	createVerifiedBashOperations,
 	executeVerifiedBash,
 	executeVerifiedLocalBash,
 	VERIFIED_BASH_REDACTION_POLICY_ID,
 	VerifiedBashAdapterError,
 	type VerifiedBashExecutionRequest,
+	type VerifiedBashOperationsBinding,
 	type VerifiedLocalBashExecutionRequest,
 } from "./core/verified-bash-adapter.ts";
+export { isVerifiedBashEnabled, resolveSessionWorkspaceScope } from "./core/verified-bash-runtime.ts";
 // Execution-bound evidence
 export {
 	type CommandHmacBinder,

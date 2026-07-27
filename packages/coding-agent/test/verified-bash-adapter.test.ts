@@ -91,7 +91,7 @@ describe("executeVerifiedBash", () => {
 		};
 		const evidenceExecutor = createExecutor("verified-bash-pass");
 
-		// When: the opt-in adapter executes the runner.
+		// When: the default adapter executes the runner.
 		const result = await executeVerifiedBash(request(evidenceExecutor, operations));
 
 		// Then: the receipt binds exactly what reached the runner and only redacted combined bytes.
@@ -255,6 +255,32 @@ describe("executeVerifiedBash", () => {
 			"runner exploded",
 		);
 		expect(new ReplayLedgerManager(GOAL_ID, ledgerPath).getEvents()).toHaveLength(0);
+	});
+
+	it("forwards env and fans out onData while still binding the receipt", async () => {
+		// Given: a runner that records env and emits through onData.
+		let observedEnv: NodeJS.ProcessEnv | undefined;
+		const fanout: Buffer[] = [];
+		const operations: BashOperations = {
+			exec: async (_script, _cwd, options) => {
+				observedEnv = options.env;
+				options.onData(Buffer.from("hello-from-runner\n"));
+				return { exitCode: 0 };
+			},
+		};
+
+		// When: the adapter is called with env + onData.
+		const result = await executeVerifiedBash({
+			...request(createExecutor("verified-bash-env-ondata"), operations),
+			env: { PI_SESSION_ID: "sess-env-test" },
+			onData: (data) => fanout.push(Buffer.from(data)),
+		});
+
+		// Then: runner saw env, fan-out received bytes, and the receipt still passed.
+		expect(observedEnv?.PI_SESSION_ID).toBe("sess-env-test");
+		expect(Buffer.concat(fanout).toString("utf8")).toBe("hello-from-runner\n");
+		expect(result.receipt.core.status).toBe("passed");
+		expect(result.receipt.core.output.stdout.byteCount).toBeGreaterThan(0);
 	});
 
 	it("bounds redacted combined output to the receipt byte limit", async () => {

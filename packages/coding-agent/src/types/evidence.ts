@@ -86,7 +86,8 @@ export type ReplayEventType =
 	| "transcript_repaired"
 	| "tool_timeout"
 	| "tool_late_settlement"
-	| "workspace_mutation";
+	| "workspace_mutation"
+	| "sandbox_audit";
 
 /**
  * Payload contract for `workspace_mutation` replay events. Emitters live in the

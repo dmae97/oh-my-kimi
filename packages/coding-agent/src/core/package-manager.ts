@@ -342,6 +342,13 @@ function collectFiles(
 
 type SkillDiscoveryMode = "root" | "agents";
 
+/** Root-level docs that must never be treated as skills (mirrors skills.ts). */
+const ROOT_SKILL_DOC_FILE_RE = /^(readme|changelog|license|contributing|history)(\..+)?$/i;
+
+function isRootSkillDocumentationFile(name: string): boolean {
+	return ROOT_SKILL_DOC_FILE_RE.test(name);
+}
+
 function collectSkillEntries(
 	dir: string,
 	mode: SkillDiscoveryMode,
@@ -399,7 +406,14 @@ function collectSkillEntries(
 			}
 
 			const relPath = toPosixPath(relative(root, fullPath));
-			if (mode === "root" && dir === root && isFile && entry.name.endsWith(".md") && !ig.ignores(relPath)) {
+			if (
+				mode === "root" &&
+				dir === root &&
+				isFile &&
+				entry.name.endsWith(".md") &&
+				!isRootSkillDocumentationFile(entry.name) &&
+				!ig.ignores(relPath)
+			) {
 				entries.push(fullPath);
 				continue;
 			}

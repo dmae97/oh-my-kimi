@@ -37,7 +37,24 @@ type RegisteredApiProvider = {
 	sourceId?: string;
 };
 
-const apiProviderRegistry = new Map<string, RegisteredApiProvider>();
+/**
+ * The registry must be a process-wide singleton. In monorepo/dev setups the
+ * same `omk-ai` code can be loaded as multiple module instances (symlinked
+ * workspace dist consumed natively AND the same files inlined by vite-node),
+ * which used to split the registry so a provider registered through one
+ * instance was invisible to streamers resolving through another
+ * ("No API provider registered for api: ..."). Anchoring to globalThis makes
+ * registration visible across every copy.
+ */
+const REGISTRY_KEY = "__omkAiApiProviderRegistry_v1__";
+
+type RegistryStore = { map: Map<string, RegisteredApiProvider> };
+
+const globalStore = globalThis as { [REGISTRY_KEY]?: RegistryStore };
+if (!globalStore[REGISTRY_KEY]) {
+	globalStore[REGISTRY_KEY] = { map: new Map() };
+}
+const apiProviderRegistry: Map<string, RegisteredApiProvider> = globalStore[REGISTRY_KEY].map;
 
 function wrapStream<TApi extends Api, TOptions extends StreamOptions>(
 	api: TApi,

@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`diagnostics` is now a default-active tool** for new sessions (LLM-callable alongside `read`/`bash`/`edit`/`write`). It stays registered-but-inactive for sessions that pin their own tool list; opt out per session via `activeToolNames` or `excludedToolNames`.
+- **Persistent skill-catalog cache** (`src/core/skills-catalog-cache.ts`): per-dir fingerprint walk (readdir/stat only) gates a JSON catalog at `<agentDir>/cache/skill-catalog-v1.json`. Repeat session starts skip all SKILL.md reads on unchanged trees (measured on this host: 105 ms cold → 41 ms warm for the full scan). Any add/edit/delete under a scanned tree invalidates exactly that dir; corrupt cache degrades to a clean miss. Atomic tmp+rename writes.
+- **Hermetic test environment** (`test/setup-env.ts`): machine-level `OMK_*` and provider credential variables are scrubbed before every worker, so test results no longer depend on the developer shell (safety-gate suites saw env-disabled gates; live e2e suites ran against expired credentials instead of skipping). `LIVE_E2E=1` keeps provider keys when running the live suites on purpose.
+- **`diagnostics` tool** (`src/core/tools/diagnostics.ts`): compiler-backed diagnostics via the project's own checkers — `tsc --noEmit`, `pyright`/`ruff`, `go vet`, `cargo check` — normalized to `SEVERITY path:line:col message`, per-language fail-soft (`skipped` instead of tool errors), 5 s TTL cache, 50-item cap, path/language auto-detect. Registered in `createAllToolDefinitions` and exported from the SDK (`createDiagnosticsTool`, `createDiagnosticsToolDefinition`).
+- **Interactive sandbox promotion**: `session.setBashSandboxMode("audit" | "enforce" | "off")` switches the session sandbox at runtime (next spawn), with a `sandbox_audit` mode-change ledger entry; `session.bashSandboxMode` reads the effective mode. `SessionBashRuntime.setSandboxMode` backs it.
+- **Default-on bash sandbox (opt-out).** Session bash now carries a default `audit`-mode sandbox preflight (workspace-write rooted at the session cwd, OS temp dir as extra write target). Spawns stay unwrapped but every decision lands in the replay ledger as a `sandbox_audit` event — a tamper-evident trail no other harness ships. `OMK_BASH_SANDBOX=enforce` activates the real OS backend (macOS `sandbox-exec` / Linux `bwrap`, auto-detected) and fails closed when unavailable; `=0` disables. New `onSpawnDecision` observer on `BashSandboxPreflight`, plus `createWorkspaceSandboxPolicy()` / `resolveBashSandboxMode()` SDK exports.
+- **Git-aware verified-bash scope.** Session bash receipts now bind the git toplevel plus the sorted dirty set (staged/modified/untracked, capped at 32 paths, 1 s TTL cache) instead of an empty artifact set, so `captureWorkspaceFingerprint` records HEAD and a scope-limited dirty digest. Exported as `resolveSessionWorkspaceScope()`.
+
+### Fixed
+
+- **API provider registry is now a process-wide singleton** (`globalThis`-anchored in `omk-ai/api-registry`). Symlinked workspace dist copies consumed natively and the same files inlined by vite-node used to keep separate registries, so `registerFauxProvider` (and any runtime registration) was invisible to streamers resolving through the other copy — surfacing as "No API provider registered for api: ..." in agent loops. Also removed a stale nested `packages/agent/node_modules/omk-ai` copy (0.92.0) that shadowed the workspace build.
+
+### Changed
+
+- **Extracted `SessionCompactionService`** (`src/core/session-compaction-service.ts`): the compaction state machine — capture/lock, barrier evaluation, emergency tail repair, provenance capture, transaction begin, envelope commit — moved out of `AgentSession` (5,271 → 4,911 lines), which now delegates through thin one-line wrappers. Transaction symbols import from `compaction/transaction.ts` directly so the `compaction/index.js` vi.mock pattern in suites keeps working.
+- **Extracted `SessionBashService`** (`src/core/session-bash-service.ts`): the full bash surface — `executeBash` (prefix/loadout/safety-floor/headless gate), `recordBashResult` with the streaming-deferral queue, `abortBash`, `flushPending` — moved out of `AgentSession`, which now delegates one line each. Ordering contract (queue while streaming, flush on turn end) is pinned by the bash-persistence suite.
+- **Extracted `SessionBashRuntime`** (`src/core/session-bash-runtime.ts`) from `AgentSession`: verified-evidence executor, default sandbox preflight (audit/enforce), git-aware workspace scope, and the receipt-bound bash orchestration (`executeVerified`) now live in one lazily-initialized unit; the session delegates. No behavior change.
+
+- **Verified bash is default-on (opt-out).** When an AgentSession has a replay ledger, LLM-callable `bash` and interactive/RPC `executeBash` bind through `executeVerifiedBash` (`executor: "bash-tool"`, receipts under `<sessionFile>.evidence`). Set `OMK_VERIFIED_BASH=0` for the legacy unverified path. Adapter gains `env`/`onData` fan-out and `createVerifiedBashOperations()` so session PI_* env and live streaming stay intact without import cycles. See [SDK — Evidence](docs/sdk.md#evidence-and-verification) and [Environment Variables](docs/environment-variables.md).
+
 ## [0.93.0] - 2026-07-26
 
 ### Added

@@ -17,16 +17,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import {
-	type Agent,
-	type AgentEvent,
-	type AgentMessage,
-	type AgentState,
-	type AgentTool,
-	repairTranscriptIntegrity,
-	type ThinkingLevel,
-} from "omk-agent-core";
-import type { Api, AssistantMessage, ImageContent, Message, Model, TextContent, ToolResultMessage } from "omk-ai";
+import type { Agent, AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "omk-agent-core";
+import type { Api, AssistantMessage, ImageContent, Message, Model, TextContent } from "omk-ai";
 import {
 	clampThinkingLevel,
 	cleanupSessionResources,
@@ -38,11 +30,12 @@ import {
 	streamSimple,
 } from "omk-ai";
 import type { ReplayLedgerManager } from "../guardrails/evidence-system.ts";
+import type { VerifiedEvidenceExecutor } from "../guardrails/verified-executor.ts";
 import { theme } from "../modes/interactive/theme/theme.ts";
 import type { ReplayEventType } from "../types/evidence.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { resolvePath } from "../utils/paths.ts";
-import { sanitizeBinaryOutput } from "../utils/shell.ts";
+import { getShellConfig } from "../utils/shell.ts";
 import { sleep } from "../utils/sleep.ts";
 import { type AdaptorchBridge, type AdaptorchConsultPayload, createAdaptorchBridge } from "./adaptorch-bridge.ts";
 import {
@@ -52,8 +45,7 @@ import {
 } from "./agent-tool-settings.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
 import { parseBangInvocation } from "./bang-skill-invocation.ts";
-import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
-import { classifyShellCommand } from "./command-safety.ts";
+import type { BashResult } from "./bash-executor.ts";
 import { type CompactionSettings, getCompactionHeadroomThreshold } from "./compaction/compaction.ts";
 import {
 	type CompactionHysteresisState,
@@ -73,19 +65,7 @@ import {
 	resolveCompactionModel,
 } from "./compaction/index.ts";
 import { compactionEmitWillRetry } from "./compaction/resume-policy.ts";
-import {
-	type CompactionBarrierResult,
-	type CompactionEnvelope,
-	type CompactionPreservedProvenanceInput,
-	type CompactionSourceIdentity,
-	type CompactionTransaction,
-	createCompactionEnvelope,
-	createCompactionSourceIdentity,
-	createCompactionTransaction,
-	decideCompactionCommit,
-	evaluateCompactionBarrier,
-	validateCompactionEnvelope,
-} from "./compaction/transaction.ts";
+
 import {
 	estimateToolResultReserve,
 	type ToolResultClass,
@@ -102,11 +82,6 @@ import type { ContextBudgetCacheProviderV2 } from "./context-budget-v2-types.ts"
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.ts";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.ts";
-import {
-	buildBlockedBashResult,
-	evaluateCommandGate,
-	isCommandSafetyAssumeYesEnabled,
-} from "./extensions/builtin/command-safety-gate.ts";
 import {
 	type ContextUsage,
 	type ExtensionCommandContextActions,
@@ -136,8 +111,8 @@ import {
 import { emitSessionShutdownEvent } from "./extensions/runner.ts";
 import { assertTextChatModelForCompletion } from "./grok-harness.ts";
 import { grokPlaybookAppendForProvider } from "./grok-playbook.ts";
-import { assertLoadoutAccess, decideLoadoutAccess, type LoadoutAccessPolicy } from "./loadout-access-policy.ts";
-import type { BashExecutionMessage, CustomMessage } from "./messages.ts";
+import { decideLoadoutAccess, type LoadoutAccessPolicy } from "./loadout-access-policy.ts";
+import type { CustomMessage } from "./messages.ts";
 import type { ModelRegistry } from "./model-registry.ts";
 import { findExactModelReferenceMatch } from "./model-resolver.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
@@ -165,11 +140,10 @@ import {
 } from "./router-feedback-collector.ts";
 import type { RunJournalAuditDetails, RunJournalAuditEvent, RunJournalRecord } from "./run-journal.ts";
 import { type RunJournalQuarantineReport, RunJournalStore } from "./run-journal-store.ts";
-import { detectSandboxBackend } from "./sandbox/backend.ts";
-import type { SandboxBackendStatus } from "./sandbox/policy.ts";
-import type { SessionIntegrityReport } from "./session-integrity.ts";
-import { inspectSessionIntegrity } from "./session-integrity.ts";
-import type { BranchSummaryEntry, CompactionEntry, SessionEntry, SessionManager } from "./session-manager.ts";
+import { SessionBashRuntime } from "./session-bash-runtime.ts";
+import { SessionBashService } from "./session-bash-service.ts";
+import { SessionCompactionService } from "./session-compaction-service.ts";
+import type { BranchSummaryEntry, SessionManager } from "./session-manager.ts";
 import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.ts";
 import {
 	classifySessionTermination,
@@ -184,6 +158,8 @@ import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-promp
 import { type BashOperations, type BashSandboxPreflight, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
+import { createVerifiedBashOperations } from "./verified-bash-adapter.ts";
+import { resolveSessionWorkspaceScope } from "./verified-bash-runtime.ts";
 
 // ============================================================================
 // Skill Block Parsing
@@ -412,22 +388,8 @@ interface ToolDefinitionEntry {
 	sourceInfo: SourceInfo;
 }
 
-interface CapturedCompactionState {
-	readonly report: SessionIntegrityReport;
-	readonly branchEntries: readonly SessionEntry[];
-	readonly revision: CompactionTransaction["baseRevision"];
-	readonly source: CompactionSourceIdentity;
-}
-
-interface BegunCompaction {
-	readonly capture: CapturedCompactionState;
-	readonly transaction: CompactionTransaction;
-}
-
-interface CommittedCompaction {
-	readonly entry: CompactionEntry;
-	readonly envelope: CompactionEnvelope;
-}
+type BegunCompaction = import("./session-compaction-service.ts").BegunCompaction;
+type CommittedCompaction = import("./session-compaction-service.ts").CommittedCompaction;
 
 const PENDING_TOOL_RESULT_TOKENS = {
 	text: 1024,
@@ -471,18 +433,6 @@ function toolNameSetsEqual(left: readonly string[], right: readonly string[]): b
 	);
 }
 
-function isSandboxDeniedError(error: unknown): error is Error {
-	return error instanceof Error && error.message.startsWith("sandbox: shell denied");
-}
-
-function buildSandboxDeniedBashResult(reason: string): BashResult {
-	return {
-		output: reason,
-		exitCode: 1,
-		cancelled: false,
-		truncated: false,
-	};
-}
 function snapshotContractError(reason: string): Error {
 	return new Error(`Finalized message replacement must be a plain serializable snapshot: ${reason}`);
 }
@@ -663,10 +613,8 @@ export class AgentSession {
 	private _refusedModels = new Set<string>();
 
 	// Bash execution state
-	private _bashAbortController: AbortController | undefined = undefined;
-	private _pendingBashMessages: BashExecutionMessage[] = [];
-	private _configuredBashSandboxPreflight: BashSandboxPreflight | undefined = undefined;
-	private _detectedBashSandboxBackend: SandboxBackendStatus | undefined = undefined;
+	private readonly _bashService: SessionBashService;
+	private readonly _compactionService: SessionCompactionService;
 
 	// Extension system
 	private _extensionRunner!: ExtensionRunner;
@@ -703,6 +651,7 @@ export class AgentSession {
 	private readonly _replayLedger: ReplayLedgerManager | undefined;
 	private readonly _replayGoalId: string | undefined;
 	private readonly _replayLaneId: string | undefined;
+	private readonly _bashRuntime: SessionBashRuntime;
 	private _transcriptRepair: SessionTranscriptRepair | undefined;
 	private _sessionRiskLevel: "normal" | "elevated" = "normal";
 	private _workspaceMutationCount = 0;
@@ -745,7 +694,7 @@ export class AgentSession {
 		this._excludedToolNames = config.excludedToolNames ? new Set(config.excludedToolNames) : undefined;
 		this._baseToolsOverride = config.baseToolsOverride;
 		this._loadoutAccessPolicy = config.loadoutAccessPolicy;
-		this._configuredBashSandboxPreflight = config.bashSandboxPreflight;
+
 		this._sessionStartEvent = config.sessionStartEvent ?? { type: "session_start", reason: "startup" };
 		this._transcriptRepair = config.transcriptRepair;
 		this._replayLedger = config.replayLedger;
@@ -754,6 +703,37 @@ export class AgentSession {
 		if (this._replayLedger && this._replayGoalId !== this._replayLedger.getLedger().goalId) {
 			throw new Error("AgentSession replayGoalId does not match the replay ledger goal id");
 		}
+		this._bashRuntime = new SessionBashRuntime({
+			cwd: this._cwd,
+			getExecutionCwd: () => this.sessionManager.getCwd(),
+			getSessionFile: () => this.sessionManager.getSessionFile(),
+			replayLedger: this._replayLedger,
+			replayGoalId: this._replayGoalId,
+			replayLaneId: this._replayLaneId,
+			configuredSandboxPreflight: config.bashSandboxPreflight,
+			appendReplayEvent: (type, payload) => this._appendReplayEvent(type, payload),
+		});
+		this._bashService = new SessionBashService({
+			settings: this.settingsManager,
+			runtime: this._bashRuntime,
+			loadoutPolicy: this._loadoutAccessPolicy,
+			getCwd: () => this.sessionManager.getCwd(),
+			emit: (event) => this._emit(event),
+			isStreaming: () => this.isStreaming,
+			pushMessage: (message) => this.agent.state.messages.push(message),
+			appendMessage: (message) => this.sessionManager.appendMessage(message),
+		});
+		this._compactionService = new SessionCompactionService({
+			sessionManager: this.sessionManager,
+			pendingToolCallIds: () => this.agent.state.pendingToolCalls,
+			getUserMessageText: (message) => this._getUserMessageText(message),
+			cwd: this._cwd,
+			invalidateContextBudget: () => this._invalidateContextBudgetCache({ type: "transcriptRepair" }),
+			refreshAgentMessages: () => {
+				this.agent.state.messages = this.sessionManager.buildSessionContext().messages;
+			},
+			recordCommit: () => this._recordCompactionCommitForHysteresis(),
+		});
 		const sessionFile = this.sessionManager.getSessionFile();
 		this._runJournalStore = RunJournalStore.open({
 			...(sessionFile ? { journalPath: `${sessionFile}.runjournal` } : {}),
@@ -862,6 +842,11 @@ export class AgentSession {
 			payload,
 		});
 		this._replayLedger.persist();
+	}
+
+	/** Lazy verified-bash executor bound to this session's replay ledger (default-on path). */
+	private _getVerifiedEvidenceExecutor(): VerifiedEvidenceExecutor | undefined {
+		return this._bashRuntime.verifiedEvidenceExecutor();
 	}
 
 	/** Append one required durable audit record. Persistence failures propagate. */
@@ -1158,12 +1143,7 @@ export class AgentSession {
 	}
 
 	private _getBashSandboxPreflight(override?: BashSandboxPreflight): BashSandboxPreflight | undefined {
-		const preflight = override ?? this._configuredBashSandboxPreflight;
-		if (!preflight || preflight.policy.mode === "off" || preflight.backend) {
-			return preflight;
-		}
-		this._detectedBashSandboxBackend ??= detectSandboxBackend();
-		return { ...preflight, backend: this._detectedBashSandboxBackend };
+		return this._bashRuntime.sandboxPreflight(override);
 	}
 
 	private async _getRequiredRequestAuth(model: Model<any>): Promise<{
@@ -2982,208 +2962,8 @@ export class AgentSession {
 	// Compaction
 	// =========================================================================
 
-	private _captureCompactionState(): CapturedCompactionState {
-		return this.sessionManager.withCompactionCommitLock(() => this._captureCompactionStateLocked());
-	}
-
-	private _captureCompactionStateLocked(): CapturedCompactionState {
-		const sessionFile = this.sessionManager.getSessionFile();
-		const bytes =
-			sessionFile && existsSync(sessionFile)
-				? new Uint8Array(readFileSync(sessionFile))
-				: new TextEncoder().encode(
-						`${[this.sessionManager.getHeader(), ...this.sessionManager.getEntries()]
-							.filter((entry) => entry !== null)
-							.map((entry) => JSON.stringify(entry))
-							.join("\n")}\n`,
-					);
-		const report = inspectSessionIntegrity(bytes, { activeLeafId: this.sessionManager.getLeafId() });
-		const branchEntries = report.activeBranch;
-		let latestCompactionIndex = -1;
-		for (let index = branchEntries.length - 1; index >= 0; index -= 1) {
-			if (branchEntries[index]?.type === "compaction") {
-				latestCompactionIndex = index;
-				break;
-			}
-		}
-		const latestCompaction = branchEntries[latestCompactionIndex];
-		const firstKeptIndex =
-			latestCompaction?.type === "compaction"
-				? branchEntries.findIndex((entry) => entry.id === latestCompaction.firstKeptEntryId)
-				: -1;
-		const sourceEntries = branchEntries.slice(
-			latestCompactionIndex < 0 ? 0 : firstKeptIndex < 0 ? latestCompactionIndex : firstKeptIndex,
-		);
-		const firstEntry = sourceEntries[0];
-		const lastEntry = sourceEntries.at(-1);
-		if (!firstEntry || !lastEntry || report.activeLeafId === null) {
-			const barrier = evaluateCompactionBarrier(report, [...this.agent.state.pendingToolCalls]);
-			if (barrier.status !== "ready") throw this._barrierError(barrier);
-			throw new Error("Nothing to compact: the active session branch is empty");
-		}
-		const revision = this.sessionManager.getDurableHeadToken();
-		const source = createCompactionSourceIdentity({
-			sessionId: revision.sessionId,
-			entryIds: sourceEntries.map((entry) => entry.id),
-			firstEntryId: firstEntry.id,
-			lastEntryId: lastEntry.id,
-			sourceSha256: createHash("sha256")
-				.update(sourceEntries.map((entry) => JSON.stringify(entry)).join("\n"), "utf8")
-				.digest("hex"),
-			activeLeafId: report.activeLeafId,
-			messageCount: report.activeMessages.length,
-		});
-		return { report, branchEntries, revision, source };
-	}
-
-	private _captureCompactionProvenance(capture: CapturedCompactionState): CompactionPreservedProvenanceInput {
-		let latestIntent = "Continue the current session";
-		for (let index = capture.report.activeMessages.length - 1; index >= 0; index -= 1) {
-			const message = capture.report.activeMessages[index];
-			if (message?.role !== "user") continue;
-			const candidate = sanitizeBinaryOutput(redactSensitiveText(this._getUserMessageText(message)).trim())
-				.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, "")
-				.slice(0, 16_384);
-			if (candidate.length > 0) latestIntent = candidate;
-			break;
-		}
-		const modelHistory = capture.branchEntries
-			.flatMap((entry) => {
-				if (entry.type === "model_change") {
-					return [{ entryId: entry.id, provider: entry.provider, modelId: entry.modelId }];
-				}
-				if (entry.type === "message" && entry.message.role === "assistant") {
-					return [{ entryId: entry.id, provider: entry.message.provider, modelId: entry.message.model }];
-				}
-				return [];
-			})
-			.slice(-256);
-		const customEntryIds = (customType: string): string[] =>
-			capture.branchEntries
-				.filter((entry) => entry.type === "custom" && entry.customType === customType)
-				.map((entry) => entry.id);
-		return {
-			latestIntent,
-			openTasks: [],
-			laneIds: customEntryIds("lane"),
-			acceptancePredicateIds: customEntryIds("acceptance_predicate"),
-			evidenceReceiptIds: customEntryIds("evidence_receipt"),
-			blockerReasons: [],
-			repairEventIds: [
-				...customEntryIds("transcript_repaired"),
-				...customEntryIds("compaction_transcript_repaired"),
-			],
-			branch: null,
-			worktree: this._cwd,
-			modelHistory,
-			nextAction: latestIntent.slice(0, 4096) || "Continue the current session",
-		};
-	}
-
-	private _barrierError(barrier: CompactionBarrierResult): Error {
-		if (barrier.status === "defer") {
-			return new Error(`Compaction deferred until the transcript closes (${barrier.reason})`);
-		}
-		return new Error(
-			`Compaction failed closed on transcript integrity (${barrier.reason}). Run the session doctor before retrying.`,
-		);
-	}
-
-	private _evaluateCompactionBarrier(
-		capture: CapturedCompactionState,
-		includeMissingTailAsPending: boolean,
-		excludedPendingIds: ReadonlySet<string> = new Set(),
-	): CompactionBarrierResult {
-		const pending = new Set(
-			[...this.agent.state.pendingToolCalls].filter((toolCallId) => !excludedPendingIds.has(toolCallId)),
-		);
-		if (includeMissingTailAsPending) {
-			for (const issue of capture.report.transcript?.issues ?? []) {
-				if (issue.kind === "missing_result") pending.add(issue.toolCallId);
-			}
-		}
-		return evaluateCompactionBarrier(capture.report, [...pending]);
-	}
-
-	private _repairEmergencyCompactionTail(capture: CapturedCompactionState): {
-		readonly capture: CapturedCompactionState;
-		readonly repairedToolCallIds: ReadonlySet<string>;
-	} {
-		const barrier = this._evaluateCompactionBarrier(capture, true);
-		if (barrier.status !== "defer" || barrier.reason !== "missing_active_tail_results") {
-			if (barrier.status !== "ready") throw this._barrierError(barrier);
-			return { capture, repairedToolCallIds: new Set() };
-		}
-		const repairedMessages = repairTranscriptIntegrity(
-			[...capture.report.activeMessages],
-			"Tool result missing; synthesized to close an emergency compaction barrier",
-		);
-		const inserted = repairedMessages.slice(capture.report.activeMessages.length);
-		const repairedToolCallIds = new Set<string>();
-		for (const message of inserted) {
-			if (message.role !== "toolResult") {
-				throw new Error("Emergency compaction repair produced a non-tool result");
-			}
-			const toolResult: ToolResultMessage = message;
-			repairedToolCallIds.add(toolResult.toolCallId);
-			this.sessionManager.appendMessage(toolResult);
-		}
-		this.sessionManager.appendCustomEntry("compaction_transcript_repaired", {
-			insertedToolCallIds: [...repairedToolCallIds],
-			reason: "emergency_compaction",
-		});
-		this._invalidateContextBudgetCache({ type: "transcriptRepair" });
-		const closedCapture = this._captureCompactionState();
-		const closedBarrier = this._evaluateCompactionBarrier(closedCapture, false, repairedToolCallIds);
-		if (closedBarrier.status !== "ready") throw this._barrierError(closedBarrier);
-		this.agent.state.messages = this.sessionManager.buildSessionContext().messages;
-		return { capture: closedCapture, repairedToolCallIds };
-	}
-
-	private _priorCommittedCompactionSourceDigests(): string[] {
-		const digests: string[] = [];
-		for (const entry of this.sessionManager.getEntries()) {
-			if (entry.type !== "compaction" || typeof entry.details !== "object" || entry.details === null) continue;
-			if (!Object.hasOwn(entry.details, "compactionEnvelope")) continue;
-			const envelope = validateCompactionEnvelope(Reflect.get(entry.details, "compactionEnvelope"));
-			if (envelope.summary !== entry.summary) {
-				throw new Error(`Compaction entry ${entry.id} has invalid provenance. Run the session doctor.`);
-			}
-			digests.push(envelope.source.sourceSha256);
-		}
-		return digests;
-	}
-
 	private _beginCompactionTransaction(compactionModel: Model<Api>, emergency: boolean): BegunCompaction {
-		let capture = this._captureCompactionState();
-		if (emergency) {
-			capture = this._repairEmergencyCompactionTail(capture).capture;
-		} else {
-			const barrier = this._evaluateCompactionBarrier(capture, false);
-			if (barrier.status !== "ready") throw this._barrierError(barrier);
-		}
-		const transaction = createCompactionTransaction({
-			transactionId: randomUUID(),
-			baseRevision: capture.revision,
-			source: capture.source,
-			createdAt: new Date().toISOString(),
-			model: { provider: compactionModel.provider, id: compactionModel.id },
-			preserved: this._captureCompactionProvenance(capture),
-		});
-		if (this._priorCommittedCompactionSourceDigests().includes(transaction.source.sourceSha256)) {
-			throw new Error("This exact compaction source was already compacted");
-		}
-		return { capture, transaction };
-	}
-
-	private _detailsWithCompactionEnvelope(details: unknown, envelope: CompactionEnvelope): unknown {
-		if (typeof details === "object" && details !== null && !Array.isArray(details)) {
-			return { ...details, compactionEnvelope: envelope };
-		}
-		return {
-			compactionEnvelope: envelope,
-			...(details === undefined ? {} : { resultDetails: details }),
-		};
+		return this._compactionService.beginTransaction(compactionModel, emergency);
 	}
 
 	private _commitCompaction(
@@ -3191,53 +2971,7 @@ export class AgentSession {
 		result: CompactionResult,
 		fromExtension: boolean,
 	): CommittedCompaction {
-		if (!begun.transaction.source.entryIds.includes(result.firstKeptEntryId)) {
-			throw new Error("Compaction first-kept entry is outside the captured source");
-		}
-		const committed = this.sessionManager.withCompactionCommitLock(() => {
-			const current = this._captureCompactionState();
-			const barrier = this._evaluateCompactionBarrier(current, false);
-			const decision = decideCompactionCommit({
-				transaction: begun.transaction,
-				currentRevision: current.revision,
-				currentSource: current.source,
-				barrier,
-				priorCommittedSourceDigests: this._priorCommittedCompactionSourceDigests(),
-			});
-			switch (decision.decision) {
-				case "duplicate":
-					throw new Error("This exact compaction source was already compacted");
-				case "stale":
-					throw new Error(
-						`Session changed during compaction (${decision.reason}); generated summary was discarded`,
-					);
-				case "defer":
-				case "fail_closed":
-					throw this._barrierError(barrier);
-				case "commit": {
-					const envelope = createCompactionEnvelope({
-						transaction: begun.transaction,
-						decision,
-						summary: result.summary,
-						summarySha256: createHash("sha256").update(result.summary, "utf8").digest("hex"),
-					});
-					const entryId = this.sessionManager.appendCompaction(
-						result.summary,
-						result.firstKeptEntryId,
-						result.tokensBefore,
-						this._detailsWithCompactionEnvelope(result.details, envelope),
-						fromExtension,
-					);
-					const entry = this.sessionManager.getEntry(entryId);
-					if (!entry || entry.type !== "compaction") {
-						throw new Error("Compaction commit did not produce a compaction entry");
-					}
-					return { entry, envelope };
-				}
-			}
-		});
-		this._recordCompactionCommitForHysteresis();
-		return committed;
+		return this._compactionService.commit(begun, result, fromExtension);
 	}
 
 	private _pendingToolResultReserve(settings: CompactionSettings): number {
@@ -4219,6 +3953,28 @@ export class AgentSession {
 						commandPrefix: shellCommandPrefix,
 						shellPath,
 						...(loadoutAccessGuard ? { loadoutAccessGuard } : {}),
+						...(() => {
+							const sandboxPolicy = this._getBashSandboxPreflight();
+							return sandboxPolicy ? { sandboxPolicy } : {};
+						})(),
+						...(() => {
+							const evidenceExecutor = this._getVerifiedEvidenceExecutor();
+							if (!evidenceExecutor || !this._replayGoalId) return {};
+							const { shell } = getShellConfig(shellPath);
+							const inner = createLocalBashOperations({
+								...(shellPath !== undefined ? { shellPath } : {}),
+								sandboxPolicy: this._getBashSandboxPreflight(),
+							});
+							return {
+								operations: createVerifiedBashOperations(inner, {
+									evidenceExecutor,
+									goalId: this._replayGoalId,
+									...(this._replayLaneId !== undefined ? { laneId: this._replayLaneId } : {}),
+									shell,
+									workspaceScope: resolveSessionWorkspaceScope(this._cwd),
+								}),
+							};
+						})(),
 					},
 					edit: loadoutWriteOptions,
 					write: loadoutWriteOptions,
@@ -4250,7 +4006,7 @@ export class AgentSession {
 
 		const defaultActiveToolNames = this._baseToolsOverride
 			? Object.keys(this._baseToolsOverride)
-			: ["read", "bash", "edit", "write"];
+			: ["read", "bash", "edit", "write", "diagnostics"];
 		const baseActiveToolNames = options.activeToolNames ?? defaultActiveToolNames;
 		this._refreshToolRegistry({
 			activeToolNames: baseActiveToolNames,
@@ -4516,77 +4272,7 @@ export class AgentSession {
 		onChunk?: (chunk: string) => void,
 		options?: ExecuteBashOptions,
 	): Promise<BashResult> {
-		// Apply command prefix if configured (e.g., "shopt -s expand_aliases" for alias support)
-		const prefix = this.settingsManager.getShellCommandPrefix();
-		const shellPath = this.settingsManager.getShellPath();
-		const resolvedCommand = prefix ? `${prefix}\n${command}` : command;
-		if (this._loadoutAccessPolicy) {
-			assertLoadoutAccess(
-				(request) => decideLoadoutAccess(this._loadoutAccessPolicy as LoadoutAccessPolicy, request),
-				{ operation: "execute", toolName: "bash", command: resolvedCommand },
-			);
-		}
-
-		// Non-negotiable safety floor for headless callers (RPC bash): hard-deny
-		// block-tier commands before any shell is spawned.
-		if (options?.safetyGate === "headless") {
-			const floorVerdict = classifyShellCommand(command);
-			if (floorVerdict.risk === "block") {
-				throw new Error(`OMK §0.1 safety floor blocked bash: [${floorVerdict.rule}] ${floorVerdict.reason}`);
-			}
-		}
-
-		// Command-safety parity for non-interactive callers (RPC bash). Interactive
-		// `!`/`!!` bash is gated earlier through the user_bash extension event, which
-		// keeps its prompt-based approval semantics, so it does not pass safetyGate and
-		// is never double-prompted here. confirm/block-tier verdicts deny headlessly;
-		// the EFFECTIVE command (after the shell command prefix) is classified.
-		if (options?.safetyGate === "headless") {
-			const decision = await evaluateCommandGate(resolvedCommand, {
-				hasUI: false,
-				headlessConfirmPolicy: isCommandSafetyAssumeYesEnabled() ? "allow" : "deny",
-			});
-			if (decision?.deny) {
-				const blocked = buildBlockedBashResult(decision.reason);
-				this.recordBashResult(command, blocked, options);
-				return blocked;
-			}
-		}
-
-		this._bashAbortController = new AbortController();
-
-		try {
-			try {
-				const result = await executeBashWithOperations(
-					resolvedCommand,
-					this.sessionManager.getCwd(),
-					options?.operations ??
-						createLocalBashOperations({
-							shellPath,
-							sandboxPolicy: this._getBashSandboxPreflight(options?.sandboxPolicy),
-						}),
-					{
-						onChunk: (delta) => {
-							onChunk?.(delta);
-							this._emit({ type: "bash_execution_update", id: options?.id, delta });
-						},
-						signal: this._bashAbortController.signal,
-					},
-				);
-
-				this.recordBashResult(command, result, options);
-				return result;
-			} catch (error) {
-				if (!isSandboxDeniedError(error)) {
-					throw error;
-				}
-				const blocked = buildSandboxDeniedBashResult(error.message);
-				this.recordBashResult(command, blocked, options);
-				return blocked;
-			}
-		} finally {
-			this._bashAbortController = undefined;
-		}
+		return this._bashService.executeBash(command, onChunk, options);
 	}
 
 	/**
@@ -4594,46 +4280,24 @@ export class AgentSession {
 	 * Used by executeBash and by extensions that handle bash execution themselves.
 	 */
 	recordBashResult(command: string, result: BashResult, options?: { excludeFromContext?: boolean }): void {
-		const bashMessage: BashExecutionMessage = {
-			role: "bashExecution",
-			command,
-			output: result.output,
-			exitCode: result.exitCode,
-			cancelled: result.cancelled,
-			truncated: result.truncated,
-			fullOutputPath: result.fullOutputPath,
-			timestamp: Date.now(),
-			excludeFromContext: options?.excludeFromContext,
-		};
-
-		// If agent is streaming, defer adding to avoid breaking tool_use/tool_result ordering
-		if (this.isStreaming) {
-			// Queue for later - will be flushed on agent_end
-			this._pendingBashMessages.push(bashMessage);
-		} else {
-			// Add to agent state immediately
-			this.agent.state.messages.push(bashMessage);
-
-			// Save to session
-			this.sessionManager.appendMessage(bashMessage);
-		}
+		this._bashService.recordBashResult(command, result, options);
 	}
 
 	/**
 	 * Cancel running bash command.
 	 */
 	abortBash(): void {
-		this._bashAbortController?.abort();
+		this._bashService.abortBash();
 	}
 
 	/** Whether a bash command is currently running */
 	get isBashRunning(): boolean {
-		return this._bashAbortController !== undefined;
+		return this._bashService.isBashRunning;
 	}
 
 	/** Whether there are pending bash messages waiting to be flushed */
 	get hasPendingBashMessages(): boolean {
-		return this._pendingBashMessages.length > 0;
+		return this._bashService.hasPendingBashMessages;
 	}
 
 	/**
@@ -4641,17 +4305,7 @@ export class AgentSession {
 	 * Called after agent turn completes to maintain proper message ordering.
 	 */
 	private _flushPendingBashMessages(): void {
-		if (this._pendingBashMessages.length === 0) return;
-
-		for (const bashMessage of this._pendingBashMessages) {
-			// Add to agent state
-			this.agent.state.messages.push(bashMessage);
-
-			// Save to session
-			this.sessionManager.appendMessage(bashMessage);
-		}
-
-		this._pendingBashMessages = [];
+		this._bashService.flushPending();
 	}
 
 	// =========================================================================

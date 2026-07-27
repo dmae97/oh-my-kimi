@@ -152,6 +152,52 @@ A`,
 			expect(diagnostics).toHaveLength(0);
 		});
 
+		it("should load SKILL.md with story-comment preamble before frontmatter", () => {
+			const tempDir = mkdtempSync(join(tmpdir(), "skills-preamble-"));
+			try {
+				const skillDir = join(tempDir, "audit-code");
+				mkdirSync(skillDir, { recursive: true });
+				writeFileSync(
+					join(skillDir, "SKILL.md"),
+					`# story: e51s04
+<!-- story: e45s12 -->
+---
+name: audit-code
+description: Self-review checklist for the coding agent
+---
+# Audit Code
+`,
+				);
+				const { skills, diagnostics } = loadSkillsFromDir({ dir: tempDir, source: "test" });
+				expect(diagnostics).toHaveLength(0);
+				expect(skills).toHaveLength(1);
+				expect(skills[0].name).toBe("audit-code");
+				expect(skills[0].description).toContain("Self-review checklist");
+			} finally {
+				rmSync(tempDir, { recursive: true, force: true });
+			}
+		});
+
+		it("should skip root README/CHANGELOG markdown that is not a skill", () => {
+			const tempDir = mkdtempSync(join(tmpdir(), "skills-readme-skip-"));
+			try {
+				writeFileSync(join(tempDir, "README.md"), "# Skills\n\nNot a skill.\n");
+				writeFileSync(
+					join(tempDir, "real-skill.md"),
+					`---
+name: real-skill
+description: A real root skill file
+---
+Body`,
+				);
+				const { skills, diagnostics } = loadSkillsFromDir({ dir: tempDir, source: "test" });
+				expect(diagnostics).toHaveLength(0);
+				expect(skills.map((s) => s.name)).toEqual(["real-skill"]);
+			} finally {
+				rmSync(tempDir, { recursive: true, force: true });
+			}
+		});
+
 		it("should skip files without frontmatter", () => {
 			const { skills, diagnostics } = loadSkillsFromDir({
 				dir: join(fixturesDir, "no-frontmatter"),

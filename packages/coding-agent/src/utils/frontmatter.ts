@@ -7,21 +7,54 @@ type ParsedFrontmatter<T extends Record<string, unknown>> = {
 
 const normalizeNewlines = (value: string): string => value.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 
+const FRONTMATTER_OPEN = /^---(?:[ \t]*\r?\n|$)/m;
+
+/**
+ * Locate YAML frontmatter even when a short preamble (comments/HTML) precedes the opening fence.
+ * bigpowers and similar skill packs emit story markers before `---`.
+ */
 const extractFrontmatter = (content: string): { yamlString: string | null; body: string } => {
 	const normalized = normalizeNewlines(content);
 
-	if (!normalized.startsWith("---")) {
+	const openMatch = FRONTMATTER_OPEN.exec(normalized);
+	if (!openMatch || openMatch.index === undefined) {
 		return { yamlString: null, body: normalized };
 	}
 
-	const endIndex = normalized.indexOf("\n---", 3);
-	if (endIndex === -1) {
+	// Reject preambles that already look like document body (too long / has headings beyond comments).
+	const preamble = normalized.slice(0, openMatch.index);
+	if (preamble.length > 0) {
+		const preambleLines = preamble.split("\n").filter((line) => line.trim().length > 0);
+		const onlyPreambleNoise = preambleLines.every(
+			(line) =>
+				line.trimStart().startsWith("#") ||
+				line.trimStart().startsWith("<!--") ||
+				line.trim() === "-->" ||
+				/^ARCHIVED:/i.test(line.trim()),
+		);
+		if (!onlyPreambleNoise || preambleLines.length > 32) {
+			return { yamlString: null, body: normalized };
+		}
+	}
+
+	const yamlStart = openMatch.index + openMatch[0].length;
+	const endIndex = normalized.indexOf("\n---", yamlStart - 1);
+	if (endIndex === -1 || endIndex < yamlStart) {
 		return { yamlString: null, body: normalized };
 	}
+
+	// Closing fence must be a line that is exactly `---` (optional trailing spaces).
+	const afterClose = normalized.slice(endIndex + 1); // starts at ---
+	if (!/^---[ \t]*(?:\n|$)/.test(afterClose)) {
+		return { yamlString: null, body: normalized };
+	}
+
+	const closeLineEnd = afterClose.search(/\n/);
+	const bodyStart = closeLineEnd === -1 ? normalized.length : endIndex + 1 + closeLineEnd + 1;
 
 	return {
-		yamlString: normalized.slice(4, endIndex),
-		body: normalized.slice(endIndex + 4).trim(),
+		yamlString: normalized.slice(yamlStart, endIndex),
+		body: normalized.slice(bodyStart).trim(),
 	};
 };
 

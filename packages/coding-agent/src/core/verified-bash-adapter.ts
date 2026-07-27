@@ -28,6 +28,10 @@ export interface VerifiedBashExecutionRequest {
 	readonly executor?: "bash-tool" | "ci-runner";
 	readonly toolCallId?: string;
 	readonly signal?: AbortSignal;
+	/** Optional process env forwarded to BashOperations.exec (session PI_*, spawnHook). */
+	readonly env?: NodeJS.ProcessEnv;
+	/** Optional live output fan-out; receipt capture still runs independently. */
+	readonly onData?: (data: Buffer) => void;
 }
 
 export type VerifiedLocalBashExecutionRequest = Omit<VerifiedBashExecutionRequest, "operations" | "shell"> & {
@@ -45,7 +49,8 @@ export class VerifiedBashAdapterError extends Error {
 }
 
 /**
- * Bind an opt-in, caller-trusted BashOperations execution to a receipt.
+ * Bind a caller-trusted BashOperations execution to a receipt.
+ * Default session/CLI paths enable this adapter unless `OMK_VERIFIED_BASH=0`.
  * BashOperations exposes a combined output stream, so the policy records the
  * redacted bounded stream as stdout and leaves stderr empty by construction.
  */
@@ -58,6 +63,7 @@ export async function executeVerifiedBash(
 		// ponytail: bounded concat is simpler than a chunk deque; split if profiling shows pressure.
 		const appended = Buffer.concat([combined, data]);
 		combined = appended.byteLength > MAX_CAPTURE_BYTES ? appended.subarray(-MAX_CAPTURE_BYTES) : appended;
+		request.onData?.(data);
 	};
 
 	const alreadyRedactedOutput = () => {
@@ -92,6 +98,7 @@ export async function executeVerifiedBash(
 					onData: capture,
 					...(request.signal !== undefined ? { signal: request.signal } : {}),
 					...(request.timeoutMs !== null ? { timeout: request.timeoutMs / 1000 } : {}),
+					...(request.env !== undefined ? { env: request.env } : {}),
 				});
 				if (request.signal?.aborted) {
 					return { status: "aborted", exitCode: null, alreadyRedactedOutput: alreadyRedactedOutput() };
@@ -129,4 +136,49 @@ export async function executeVerifiedLocalBash(
 		...(sandboxPolicy !== undefined ? { sandboxPolicy } : {}),
 	});
 	return executeVerifiedBash({ ...executionRequest, operations, shell });
+}
+
+export interface VerifiedBashOperationsBinding {
+	readonly evidenceExecutor: VerifiedEvidenceExecutor;
+	readonly goalId: string;
+	readonly laneId?: string;
+	readonly shell: string;
+	readonly workspaceScope?: WorkspaceScope;
+}
+
+/**
+ * Wrap BashOperations so each exec is receipt-bound. Used by AgentSession to
+ * inject the default-on verified path into createBashTool without circular imports.
+ */
+export function createVerifiedBashOperations(
+	inner: BashOperations,
+	binding: VerifiedBashOperationsBinding,
+): BashOperations {
+	return {
+		exec: async (command, cwd, options) => {
+			const claim = command.length > 200 ? `bash: ${command.slice(0, 197)}...` : `bash: ${command}`;
+			const execution = await executeVerifiedBash({
+				evidenceExecutor: binding.evidenceExecutor,
+				operations: inner,
+				goalId: binding.goalId,
+				...(binding.laneId !== undefined ? { laneId: binding.laneId } : {}),
+				claim,
+				shell: binding.shell,
+				script: command,
+				cwd,
+				timeoutMs: options.timeout !== undefined && options.timeout > 0 ? options.timeout * 1000 : null,
+				workspaceScope: binding.workspaceScope ?? { root: cwd, artifactPaths: [] },
+				executor: "bash-tool",
+				...(options.signal !== undefined ? { signal: options.signal } : {}),
+				...(options.env !== undefined ? { env: options.env } : {}),
+				onData: options.onData,
+			});
+			const status = execution.receipt.core.status;
+			if (status === "aborted") throw new Error("aborted");
+			if (status === "timeout") {
+				throw new Error(`timeout:${options.timeout ?? 0}`);
+			}
+			return { exitCode: execution.receipt.core.exitCode };
+		},
+	};
 }

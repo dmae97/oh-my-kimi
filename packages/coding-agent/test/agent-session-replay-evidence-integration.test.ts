@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall, registerFauxProvider } from "omk-ai";
@@ -8,6 +8,7 @@ import { createAgentSessionFromServices, createAgentSessionServices } from "../s
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
+import type { BashOperations } from "../src/core/tools/bash.ts";
 import { EvidenceReceiptStore } from "../src/guardrails/evidence-receipt-store.ts";
 import { EvidenceGate, ReplayLedgerManager, TaskContractBuilder } from "../src/guardrails/evidence-system.ts";
 import { VerifiedEvidenceExecutor } from "../src/guardrails/verified-executor.ts";
@@ -192,5 +193,210 @@ describe("AgentSession ReplayLedger evidence freshness bridge", () => {
 		const after = await verify("after");
 		expect(gate.check(contractFor(after.evidenceMetadata)).status).toBe("open");
 		session.dispose();
+	});
+
+	it("binds default executeBash through the verified adapter when a replay ledger exists", async () => {
+		const previous = process.env.OMK_VERIFIED_BASH;
+		delete process.env.OMK_VERIFIED_BASH;
+		try {
+			const faux = registerFauxProvider();
+			faux.setResponses([fauxAssistantMessage("ready")]);
+			const authStorage = AuthStorage.inMemory();
+			authStorage.setRuntimeApiKey(faux.getModel().provider, "faux-key");
+			const services = await createAgentSessionServices({
+				cwd,
+				agentDir: join(root, "agent-default-bash"),
+				authStorage,
+				settingsManager: SettingsManager.inMemory({}),
+				resourceLoaderOptions: {
+					noExtensions: true,
+					noSkills: true,
+					noPromptTemplates: true,
+					noThemes: true,
+					noContextFiles: true,
+				},
+			});
+			const sessionManager = SessionManager.create(cwd, join(root, "sessions-default-bash"));
+			const { session } = await createAgentSessionFromServices({
+				services,
+				sessionManager,
+				model: faux.getModel(),
+			});
+
+			const operations: BashOperations = {
+				exec: async (_command, _cwd, options) => {
+					options.onData(Buffer.from("verified-default-path\n"));
+					return { exitCode: 0 };
+				},
+			};
+			const result = await session.executeBash("printf verified", undefined, { operations });
+			expect(result.output).toContain("verified-default-path");
+			expect(result.exitCode).toBe(0);
+
+			const sessionFile = sessionManager.getSessionFile();
+			if (!sessionFile) throw new Error("expected persisted session file");
+			const replayPath = `${sessionFile}.replay.jsonl`;
+			const events = new ReplayLedgerManager(sessionManager.getSessionId(), replayPath).getEvents();
+			expect(events.some((event) => event.type === "evidence_receipt")).toBe(true);
+
+			const receiptRoot = join(`${sessionFile}.evidence`, "receipts");
+			expect(existsSync(receiptRoot)).toBe(true);
+			expect(readdirSync(receiptRoot).length).toBeGreaterThan(0);
+			session.dispose();
+		} finally {
+			if (previous === undefined) delete process.env.OMK_VERIFIED_BASH;
+			else process.env.OMK_VERIFIED_BASH = previous;
+		}
+	});
+
+	it("keeps executeBash unverified when OMK_VERIFIED_BASH=0", async () => {
+		const previous = process.env.OMK_VERIFIED_BASH;
+		process.env.OMK_VERIFIED_BASH = "0";
+		try {
+			const faux = registerFauxProvider();
+			faux.setResponses([fauxAssistantMessage("ready")]);
+			const authStorage = AuthStorage.inMemory();
+			authStorage.setRuntimeApiKey(faux.getModel().provider, "faux-key");
+			const services = await createAgentSessionServices({
+				cwd,
+				agentDir: join(root, "agent-optout-bash"),
+				authStorage,
+				settingsManager: SettingsManager.inMemory({}),
+				resourceLoaderOptions: {
+					noExtensions: true,
+					noSkills: true,
+					noPromptTemplates: true,
+					noThemes: true,
+					noContextFiles: true,
+				},
+			});
+			const sessionManager = SessionManager.create(cwd, join(root, "sessions-optout-bash"));
+			const { session } = await createAgentSessionFromServices({
+				services,
+				sessionManager,
+				model: faux.getModel(),
+			});
+
+			const operations: BashOperations = {
+				exec: async (_command, _cwd, options) => {
+					options.onData(Buffer.from("legacy-path\n"));
+					return { exitCode: 0 };
+				},
+			};
+			const result = await session.executeBash("printf legacy", undefined, { operations });
+			expect(result.output).toContain("legacy-path");
+
+			const sessionFile = sessionManager.getSessionFile();
+			if (!sessionFile) throw new Error("expected persisted session file");
+			const replayPath = `${sessionFile}.replay.jsonl`;
+			// Ledger/store dirs may exist from session construction; no receipt events or files.
+			if (existsSync(replayPath)) {
+				const events = new ReplayLedgerManager(sessionManager.getSessionId(), replayPath).getEvents();
+				expect(events.some((event) => event.type === "evidence_receipt")).toBe(false);
+			}
+			const receiptRoot = join(`${sessionFile}.evidence`, "receipts");
+			if (existsSync(receiptRoot)) {
+				expect(readdirSync(receiptRoot)).toEqual([]);
+			}
+			session.dispose();
+		} finally {
+			if (previous === undefined) delete process.env.OMK_VERIFIED_BASH;
+			else process.env.OMK_VERIFIED_BASH = previous;
+		}
+	});
+
+	it("records sandbox_audit decisions by default and honors OMK_BASH_SANDBOX=0", async () => {
+		const prevSandbox = process.env.OMK_BASH_SANDBOX;
+		const prevVerified = process.env.OMK_VERIFIED_BASH;
+		delete process.env.OMK_BASH_SANDBOX;
+		delete process.env.OMK_VERIFIED_BASH;
+		try {
+			const faux = registerFauxProvider();
+			faux.setResponses([fauxAssistantMessage("ready")]);
+			const authStorage = AuthStorage.inMemory();
+			authStorage.setRuntimeApiKey(faux.getModel().provider, "faux-key");
+			const services = await createAgentSessionServices({
+				cwd,
+				agentDir: join(root, "agent-sandbox-audit"),
+				authStorage,
+				settingsManager: SettingsManager.inMemory({}),
+				resourceLoaderOptions: {
+					noExtensions: true,
+					noSkills: true,
+					noPromptTemplates: true,
+					noThemes: true,
+					noContextFiles: true,
+				},
+			});
+			const sessionManager = SessionManager.create(cwd, join(root, "sessions-sandbox-audit"));
+			const { session } = await createAgentSessionFromServices({
+				services,
+				sessionManager,
+				model: faux.getModel(),
+			});
+
+			const result = await session.executeBash("true");
+			expect(result.exitCode).toBe(0);
+
+			const sessionFile = sessionManager.getSessionFile();
+			if (!sessionFile) throw new Error("expected persisted session file");
+			const replayPath = `${sessionFile}.replay.jsonl`;
+			const audited = new ReplayLedgerManager(sessionManager.getSessionId(), replayPath)
+				.getEvents()
+				.filter((event) => event.type === "sandbox_audit");
+			expect(audited.length).toBeGreaterThan(0);
+			expect(JSON.stringify(audited.at(-1)?.payload)).toContain("audit_fallback");
+			session.dispose();
+		} finally {
+			if (prevSandbox === undefined) delete process.env.OMK_BASH_SANDBOX;
+			else process.env.OMK_BASH_SANDBOX = prevSandbox;
+			if (prevVerified === undefined) delete process.env.OMK_VERIFIED_BASH;
+			else process.env.OMK_VERIFIED_BASH = prevVerified;
+		}
+	});
+
+	it("skips sandbox_audit when OMK_BASH_SANDBOX=0", async () => {
+		const prevSandbox = process.env.OMK_BASH_SANDBOX;
+		process.env.OMK_BASH_SANDBOX = "0";
+		try {
+			const faux = registerFauxProvider();
+			faux.setResponses([fauxAssistantMessage("ready")]);
+			const authStorage = AuthStorage.inMemory();
+			authStorage.setRuntimeApiKey(faux.getModel().provider, "faux-key");
+			const services = await createAgentSessionServices({
+				cwd,
+				agentDir: join(root, "agent-sandbox-off"),
+				authStorage,
+				settingsManager: SettingsManager.inMemory({}),
+				resourceLoaderOptions: {
+					noExtensions: true,
+					noSkills: true,
+					noPromptTemplates: true,
+					noThemes: true,
+					noContextFiles: true,
+				},
+			});
+			const sessionManager = SessionManager.create(cwd, join(root, "sessions-sandbox-off"));
+			const { session } = await createAgentSessionFromServices({
+				services,
+				sessionManager,
+				model: faux.getModel(),
+			});
+
+			const result = await session.executeBash("true");
+			expect(result.exitCode).toBe(0);
+
+			const sessionFile = sessionManager.getSessionFile();
+			if (!sessionFile) throw new Error("expected persisted session file");
+			const replayPath = `${sessionFile}.replay.jsonl`;
+			const sandboxEvents = new ReplayLedgerManager(sessionManager.getSessionId(), replayPath)
+				.getEvents()
+				.filter((event) => event.type === "sandbox_audit");
+			expect(sandboxEvents).toEqual([]);
+			session.dispose();
+		} finally {
+			if (prevSandbox === undefined) delete process.env.OMK_BASH_SANDBOX;
+			else process.env.OMK_BASH_SANDBOX = prevSandbox;
+		}
 	});
 });

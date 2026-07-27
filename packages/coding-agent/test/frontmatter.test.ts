@@ -45,6 +45,22 @@ describe("parseFrontmatter", () => {
 		const { frontmatter } = parseFrontmatter(input);
 		expect(frontmatter).toEqual({});
 	});
+
+	it("parses frontmatter after comment/HTML preamble (bigpowers-style)", () => {
+		const input =
+			"# story: e51s04\n<!-- story: e45s12 -->\n---\nname: audit-code\ndescription: Self-review checklist\n---\n\n# Audit Code\n";
+		const { frontmatter, body } = parseFrontmatter<Record<string, string>>(input);
+		expect(frontmatter.name).toBe("audit-code");
+		expect(frontmatter.description).toBe("Self-review checklist");
+		expect(body).toContain("# Audit Code");
+	});
+
+	it("ignores preamble that is not comment noise", () => {
+		const input = "# Real heading\n\nSome prose before fence.\n---\nname: nope\ndescription: x\n---\nBody";
+		const { frontmatter, body } = parseFrontmatter<Record<string, string>>(input);
+		expect(frontmatter).toEqual({});
+		expect(body).toContain("Some prose before fence.");
+	});
 });
 
 describe("stripFrontmatter", () => {

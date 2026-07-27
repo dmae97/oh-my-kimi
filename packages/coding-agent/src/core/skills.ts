@@ -6,6 +6,7 @@ import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { parseFrontmatter } from "../utils/frontmatter.ts";
 import { canonicalizePath, resolvePath } from "../utils/paths.ts";
 import type { ResourceDiagnostic } from "./diagnostics.ts";
+import { cachedSkillScan, type SkillCatalogCacheEntry, writeSkillCatalog } from "./skills-catalog-cache.ts";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
 
 /** Max name length per spec */
@@ -297,7 +298,13 @@ function loadSkillsFromDirInternal(
 				continue;
 			}
 
-			if (!isFile || !includeRootFiles || !entry.name.endsWith(".md")) {
+			// Root-level docs (README/CHANGELOG/LICENSE) are not skills.
+			if (
+				!isFile ||
+				!includeRootFiles ||
+				!entry.name.endsWith(".md") ||
+				/^(readme|changelog|license|contributing|history)(\..+)?$/i.test(entry.name)
+			) {
 				continue;
 			}
 
@@ -422,6 +429,12 @@ export interface LoadSkillsOptions {
 	/** Include default skills directories. */
 	includeDefaults: boolean;
 	resolveSourceInfo?: SkillSourceInfoResolver;
+	/**
+	 * Persistent skill-catalog cache. Default: enabled, except under test
+	 * runners (VITEST) where writes are off unless explicitly opted in, so
+	 * fixture directories stay pristine.
+	 */
+	catalogCache?: boolean;
 }
 
 interface SkillCandidate {
@@ -539,6 +552,21 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 	const collisionDiagnostics: ResourceDiagnostic[] = [];
 	let candidateOrder = 0;
 
+	// Startup fast path: per-dir fingerprint cache, written once at the end.
+	const catalogStore: Record<string, SkillCatalogCacheEntry<LoadSkillsResult>> = {};
+	const catalogEnabled = options.catalogCache ?? process.env.VITEST !== "true";
+	const catalogAgentDir = resolvedAgentDir;
+	function cachedScan(dir: string, source: string, resolver?: SkillSourceInfoResolver): LoadSkillsResult {
+		if (!catalogEnabled) {
+			return loadSkillsFromDirInternal(dir, source, true, undefined, undefined, resolver);
+		}
+		const { result, store } = cachedSkillScan<LoadSkillsResult>(catalogAgentDir, dir, () =>
+			loadSkillsFromDirInternal(dir, source, true, undefined, undefined, resolver),
+		);
+		if (store) Object.assign(catalogStore, store);
+		return result;
+	}
+
 	function addSkills(result: LoadSkillsResult) {
 		allDiagnostics.push(...result.diagnostics);
 		for (const skill of result.skills) {
@@ -559,26 +587,8 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 	}
 
 	if (includeDefaults) {
-		addSkills(
-			loadSkillsFromDirInternal(
-				resolve(resolvedCwd, CONFIG_DIR_NAME, "skills"),
-				"project",
-				true,
-				undefined,
-				undefined,
-				resolveSourceInfo,
-			),
-		);
-		addSkills(
-			loadSkillsFromDirInternal(
-				join(resolvedAgentDir, "skills"),
-				"user",
-				true,
-				undefined,
-				undefined,
-				resolveSourceInfo,
-			),
-		);
+		addSkills(cachedScan(resolve(resolvedCwd, CONFIG_DIR_NAME, "skills"), "project", resolveSourceInfo));
+		addSkills(cachedScan(join(resolvedAgentDir, "skills"), "user", resolveSourceInfo));
 	}
 
 	const userSkillsDir = join(resolvedAgentDir, "skills");
@@ -612,7 +622,7 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 			const stats = statSync(resolvedPath);
 			const source = getSource(resolvedPath);
 			if (stats.isDirectory()) {
-				addSkills(loadSkillsFromDirInternal(resolvedPath, source, true, undefined, undefined, resolveSourceInfo));
+				addSkills(cachedScan(resolvedPath, source, resolveSourceInfo));
 			} else if (stats.isFile() && resolvedPath.endsWith(".md")) {
 				const result = loadSkillFromFile(resolvedPath, source, resolveSourceInfo?.(resolvedPath));
 				if (result.skill) {
@@ -643,6 +653,10 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 			}
 			collisionDiagnostics.push(createSkillCollisionDiagnostic(winner, loser));
 		}
+	}
+
+	if (catalogEnabled) {
+		writeSkillCatalog(catalogAgentDir, catalogStore);
 	}
 
 	return {

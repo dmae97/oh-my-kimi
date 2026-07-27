@@ -656,6 +656,25 @@ Content`,
 			expect(result.skills.some((r) => r.path === rootSkill && r.enabled)).toBe(true);
 			expect(result.skills.some((r) => r.path === nestedSkill)).toBe(false);
 		});
+
+		it("should skip package skills root README/CHANGELOG docs", async () => {
+			const pkgDir = join(tempDir, "skill-readme-pkg");
+			mkdirSync(join(pkgDir, "skills", "real-skill"), { recursive: true });
+			const readmePath = join(pkgDir, "skills", "README.md");
+			const changelogPath = join(pkgDir, "skills", "CHANGELOG.md");
+			const realSkill = join(pkgDir, "skills", "real-skill", "SKILL.md");
+			const rootSkillMd = join(pkgDir, "skills", "root-skill.md");
+			writeFileSync(readmePath, "# Skills\n\nNot a skill.\n");
+			writeFileSync(changelogPath, "# Changelog\n");
+			writeFileSync(realSkill, "---\nname: real-skill\ndescription: Real package skill\n---\n");
+			writeFileSync(rootSkillMd, "---\nname: root-skill-md\ndescription: Real root markdown skill\n---\n");
+
+			const result = await packageManager.resolveExtensionSources([pkgDir]);
+			expect(result.skills.some((r) => r.path === readmePath)).toBe(false);
+			expect(result.skills.some((r) => r.path === changelogPath)).toBe(false);
+			expect(result.skills.some((r) => r.path === realSkill && r.enabled)).toBe(true);
+			expect(result.skills.some((r) => r.path === rootSkillMd && r.enabled)).toBe(true);
+		});
 	});
 
 	describe("progress callback", () => {

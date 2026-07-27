@@ -84,6 +84,10 @@ These variables are read by OMK itself:
 | `OMK_SHARE_VIEWER_URL` | Override the base URL used by `/share` |
 | `OMK_HARDWARE_CURSOR` | Set to `1` to show the hardware cursor; see [Terminal setup](terminal-setup.md) |
 | `OMK_CONTEXT_GOVERNOR` | Configure the context-budget governor; see `context-budget-*` sources |
+| `OMK_VERIFIED_BASH` | Default-on verified bash adapter for AgentSession/CLI bash. Set to `0` to opt out and use the legacy unverified path (see [SDK — Evidence and Verification](sdk.md#evidence-and-verification)) |
+| `OMK_BASH_SANDBOX` | Bash sandbox mode: `audit` (default — unwrapped spawn, every decision recorded to the replay ledger), `enforce` (wrap with macOS `sandbox-exec` / Linux `bwrap`, fail closed when no backend), `0`/`off` to disable. `session.setBashSandboxMode()` overrides at runtime |
+| `LIVE_E2E` | Test-only: keep provider credentials so live-API e2e suites run on purpose (default scrubbed for hermetic tests) |
+| `OMK_OMP_SEAMS` | Default-on OMP pure seams for `read`/`grep`. Set to `0` to opt out |
 | `VISUAL`, `EDITOR` | External editor fallback when `externalEditor` is unset |
 | `HTTP_PROXY`, `HTTPS_PROXY` | Proxy outbound HTTP requests |
 

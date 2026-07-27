@@ -505,13 +505,15 @@ const { session } = await createAgentSession({ resourceLoader: loader });
 
 Specify which built-in tools to enable:
 
-- Built-in tool names: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`
-- Default built-ins: `read`, `bash`, `edit`, `write`
+- Built-in tool names: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `diagnostics`
+- Default built-ins: `read`, `bash`, `edit`, `write`, `diagnostics`
 - `noTools: "all"` disables all tools
 - `noTools: "builtin"` disables default built-ins while keeping extension and custom tools enabled
 - `excludeTools` disables specific built-in, extension, or custom tool names after any `tools` allowlist is applied
 
 The `edit` tool returns `details.diff` for OMK's TUI display and `details.patch` as a standard unified patch for SDK consumers.
+
+The `diagnostics` tool runs the project's own checkers and normalizes the result — `tsc --noEmit` for TypeScript, `pyright`/`ruff` for Python, `go vet` for Go, `cargo check` for Rust. Missing checkers or project markers are reported as `skipped` in the tool result instead of failing. Output is capped at 50 diagnostics and cached for 5 s.
 
 ```typescript
 import { createAgentSession } from "open-multi-agent-kit";
@@ -1130,7 +1132,11 @@ RPC mode is preferred when:
 
 ## Evidence and Verification
 
-Execution-bound evidence is an optional, application-driven layer. It records a declared verification command and reported outcome between two artifact-set snapshots, then binds that record to a tamper-evident ledger. `VerifiedEvidenceExecutor` never executes the declared command. The opt-in `executeVerifiedBash()` adapter invokes caller-supplied `BashOperations`; `executeVerifiedLocalBash()` instead derives the shell identity and runner from OMK's built-in local backend. The default CLI and AgentSession bash paths remain unverified. The repository CI workflow is the sole built-in callsite: it runs the release-consistency verifier through the local adapter.
+Execution-bound evidence records a declared verification command and reported outcome between two artifact-set snapshots, then binds that record to a tamper-evident ledger. `VerifiedEvidenceExecutor` never executes the declared command. `executeVerifiedBash()` invokes caller-supplied `BashOperations`; `executeVerifiedLocalBash()` derives the shell identity and runner from OMK's built-in local backend.
+
+**Default path (opt-out):** when an AgentSession has a replay ledger (persisted sessions create one automatically), LLM-callable `bash` and interactive/RPC `executeBash` bind through `executeVerifiedBash` with `executor: "bash-tool"` and receipts under `<sessionFile>.evidence/receipts` (or `cwd/.omk/session-evidence/<goalId>/receipts` for ephemeral sessions). Session workspace scope is git-aware: inside a worktree, the receipt binds the toplevel plus the sorted dirty set (capped at 32 paths, 1 s TTL). Set `OMK_VERIFIED_BASH=0` to restore the legacy unverified path. Custom `createBashTool()` calls stay unverified unless the caller wraps operations with `createVerifiedBashOperations()`. CI still runs release-consistency through `executeVerifiedLocalBash()` with `executor: "ci-runner"`.
+
+**Default sandbox (opt-out):** session bash also carries a default `audit`-mode sandbox preflight (workspace-write policy rooted at the session cwd). The spawn stays unwrapped, but every decision is appended to the replay ledger as a `sandbox_audit` event, giving a tamper-evident audit trail. `OMK_BASH_SANDBOX=enforce` activates the real OS backend — macOS `sandbox-exec` seatbelt or Linux `bwrap` bubblewrap — and fails closed when neither is installed; `OMK_BASH_SANDBOX=0` disables the preflight entirely.
 
 ### Recorded and invoked inputs
 
@@ -1164,7 +1170,7 @@ Injected runners must follow the built-in terminal protocol: return an integer e
 
 `.github/workflows/ci.yml` invokes the compiled `dist/verify-ci.js` entry after the normal repository check. That entry runs only `node scripts/check-release-consistency.mjs` through `executeVerifiedLocalBash()` with `executor: "ci-runner"`, applies a strict `EvidenceGate`, writes receipts, ledger, and report under `.omk/ci-evidence`, and returns a non-zero process exit when the gate is blocked. CI uploads that directory as `verified-release-consistency`.
 
-This callsite does not wrap the full build, check, or test suite and does not enable receipts for interactive, RPC, or SDK-created AgentSession bash calls. Its workspace freshness scope is limited to the root and coding-agent package manifests.
+This callsite does not wrap the full build, check, or test suite. Session bash receipts (default-on above) use an empty artifact set and do not replace CI's manifest-scoped release-consistency gate. CI workspace freshness remains limited to the root and coding-agent package manifests.
 
 ### Execution ordering
 
