@@ -74,6 +74,12 @@ import type {
 	ExtensionWidgetOptions,
 } from "../../core/extensions/index.ts";
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.ts";
+import {
+	githubStarNudgeBody,
+	githubStarNudgeTitle,
+	OMK_GITHUB_STAR_URL,
+	shouldShowGithubStarNudge,
+} from "../../core/github-star-nudge.ts";
 import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/http-dispatcher.ts";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import { createCompactionSummaryMessage } from "../../core/messages.ts";
@@ -92,6 +98,7 @@ import { getChangelogPath, getNewEntries, parseChangelog } from "../../utils/cha
 import { copyToClipboard } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
 import { parseGitUrl } from "../../utils/git.ts";
+import { openBrowser } from "../../utils/open-browser.ts";
 import { getCwdRelativePath } from "../../utils/paths.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { ensureTool } from "../../utils/tools-manager.ts";
@@ -717,6 +724,34 @@ export class InteractiveMode {
 		if (this.editor !== this.defaultEditor) {
 			this.editor.setAutocompleteProvider?.(provider);
 		}
+	}
+
+	private showGithubStarNudgeIfNeeded(): void {
+		if (!shouldShowGithubStarNudge({ githubStarred: this.settingsManager.getGithubStarred() })) {
+			return;
+		}
+
+		const starUrl = OMK_GITHUB_STAR_URL;
+		const starLink = getCapabilities().hyperlinks
+			? hyperlink(theme.fg("accent", "open repo & star"), starUrl)
+			: theme.fg("accent", starUrl);
+		const actionLine =
+			theme.fg("muted", "Star it, then run ") +
+			theme.bold(theme.fg("accent", "/star")) +
+			theme.fg("muted", " so this stops. Link: ") +
+			starLink;
+
+		if (this.chatContainer.children.length > 0) {
+			this.chatContainer.addChild(new Spacer(1));
+		}
+		this.chatContainer.addChild(new DynamicBorder((text) => theme.fg("accent", text)));
+		this.chatContainer.addChild(
+			new Text(`${theme.bold(theme.fg("accent", githubStarNudgeTitle()))}\n${githubStarNudgeBody()}`, 1, 0),
+		);
+		this.chatContainer.addChild(new Spacer(1));
+		this.chatContainer.addChild(new Text(actionLine, 1, 0));
+		this.chatContainer.addChild(new DynamicBorder((text) => theme.fg("accent", text)));
+		this.ui.requestRender();
 	}
 
 	private showStartupNoticesIfNeeded(): void {
@@ -1888,6 +1923,7 @@ export class InteractiveMode {
 		this.setupExtensionShortcuts(extensionRunner);
 		this.showLoadedResources({ force: false, showDiagnosticsWhenQuiet: true });
 		this.showStartupNoticesIfNeeded();
+		this.showGithubStarNudgeIfNeeded();
 	}
 
 	private applyRuntimeSettings(): void {
@@ -2868,6 +2904,11 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
+			if (text === "/star" || text.startsWith("/star ")) {
+				this.handleStarCommand(text);
+				return true;
+			}
+
 			if (text === "/changelog") {
 				this.handleChangelogCommand();
 				this.editor.setText("");
@@ -5748,6 +5789,52 @@ export class InteractiveMode {
 
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(info, 1, 0));
+		this.ui.requestRender();
+	}
+
+	private handleStarCommand(text: string): void {
+		const arg = text === "/star" ? "" : text.slice("/star".length).trim().toLowerCase();
+		const reset = arg === "reset" || arg === "again" || arg === "clear";
+
+		if (reset) {
+			this.settingsManager.setGithubStarred(false);
+			this.chatContainer.addChild(new Spacer(1));
+			this.chatContainer.addChild(
+				new Text(
+					theme.fg(
+						"warning",
+						"Star nudge reset. It will show again on the next interactive launch until you /star.",
+					),
+					1,
+					0,
+				),
+			);
+			this.ui.requestRender();
+			return;
+		}
+
+		openBrowser(OMK_GITHUB_STAR_URL);
+		this.settingsManager.setGithubStarred(true);
+
+		const starLink = getCapabilities().hyperlinks
+			? hyperlink(theme.fg("accent", OMK_GITHUB_STAR_URL), OMK_GITHUB_STAR_URL)
+			: theme.fg("accent", OMK_GITHUB_STAR_URL);
+
+		this.chatContainer.addChild(new Spacer(1));
+		this.chatContainer.addChild(new DynamicBorder((text) => theme.fg("accent", text)));
+		this.chatContainer.addChild(
+			new Text(
+				[
+					theme.bold(theme.fg("accent", "Thanks — star nudge off")),
+					theme.fg("muted", "Opened the repo (if a browser is available). Hit the star if you have not yet."),
+					`${theme.fg("muted", "Repo: ")}${starLink}`,
+					theme.fg("dim", "Forgot already? /star reset brings the nag back."),
+				].join("\n"),
+				1,
+				0,
+			),
+		);
+		this.chatContainer.addChild(new DynamicBorder((text) => theme.fg("accent", text)));
 		this.ui.requestRender();
 	}
 

@@ -226,6 +226,7 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/share` | Upload as private GitHub gist with shareable HTML link |
 | `/reload` | Reload keybindings, extensions, skills, prompts, and context files (themes hot-reload automatically) |
 | `/hotkeys` | Show all keyboard shortcuts |
+| `/star` | Open the OMK GitHub repo and stop the startup star nudge (`/star reset` restores it) |
 | `/changelog` | Display version history |
 | `/quit` | Quit omk |
 

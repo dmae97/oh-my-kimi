@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Persistent GitHub star nudge** on interactive startup: first installs and anyone who has not confirmed a star keep seeing a nag banner every launch until they star https://github.com/dmae97/omk and run `/star` (writes global `githubStarred: true` in `~/.omk/agent/settings.json`). `/star reset` brings the nag back. Project settings cannot silence it.
+
 ## [0.94.0] - 2026-07-27
 
 ### Added

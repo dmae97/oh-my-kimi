@@ -71,6 +71,7 @@ Advisory-only hint source for the v4 auto thinking-level resolver. Read from the
 | `theme` | string | `"dark"` | Theme name (`"dark"`, `"light"`, or custom) |
 | `quietStartup` | boolean | `false` | Hide startup header |
 | `collapseChangelog` | boolean | `false` | Show condensed changelog after updates |
+| `githubStarred` | boolean | `false` | Global-only. After the operator stars the OMK GitHub repo and runs `/star`, set to `true` so the startup star nudge stops. Fresh installs and anyone who has not confirmed stay `false`/`unset` and keep seeing the nudge every interactive launch |
 | `enableInstallTelemetry` | boolean | `true` | Send an anonymous install/update version ping after first install or changelog-detected updates. This does not control update checks |
 | `doubleEscapeAction` | string | `"tree"` | Action for double-escape: `"tree"`, `"fork"`, or `"none"` |
 | `treeFilterMode` | string | `"default"` | Default filter for `/tree`: `"default"`, `"no-tools"`, `"user-only"`, `"labeled-only"`, `"all"` |
@@ -84,6 +85,16 @@ Advisory-only hint source for the v4 auto thinking-level resolver. Read from the
 `enableInstallTelemetry` only controls the anonymous install/update ping to `the OMK install telemetry endpoint`. Opting out of telemetry does not disable update checks; OMK can still fetch `the OMK latest-version endpoint` to look for the latest version.
 
 Set `OMK_SKIP_VERSION_CHECK=1` to disable the OMK version update check. Use `--offline` or `OMK_OFFLINE=1` to disable all startup network operations described here, including update checks, package update checks, and install/update telemetry.
+
+### GitHub star nudge
+
+Interactive mode remembers whether this install has confirmed a GitHub star via global `githubStarred` in `~/.omk/agent/settings.json`.
+
+- Missing / `false`: every interactive startup shows a star nudge with the repo link and `/star`.
+- `/star`: opens https://github.com/dmae97/omk and sets `githubStarred: true` so the nudge stops.
+- `/star reset`: clears the flag so the nudge returns on the next launch.
+
+Project `.omk/settings.json` cannot silence this nudge; only the global flag counts.
 
 ### Warnings
 

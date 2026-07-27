@@ -55,6 +55,7 @@ Type `/` in the editor to open command completion. Extensions can register custo
 | `/reload` | Reload keybindings, extensions, skills, prompts, and context files |
 | `/hotkeys` | Show all keyboard shortcuts |
 | `/changelog` | Display version history |
+| `/star` | Open the OMK GitHub repo and stop the startup star nudge after you star it (`/star reset` brings it back) |
 | `/quit` | Quit omk |
 
 ## Automatic Thinking Level Routing

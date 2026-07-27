@@ -136,6 +136,8 @@ export type PackageSource =
 
 export interface Settings {
 	lastChangelogVersion?: string;
+	/** Operator confirmed a GitHub star; suppresses the startup star nudge. Global-only. */
+	githubStarred?: boolean;
 	defaultProvider?: string;
 	defaultModel?: string;
 	defaultThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
@@ -653,6 +655,17 @@ export class SettingsManager {
 	setLastChangelogVersion(version: string): void {
 		this.globalSettings.lastChangelogVersion = version;
 		this.markModified("lastChangelogVersion");
+		this.save();
+	}
+
+	/** Global-only: true after the operator confirms they starred the OMK repo. */
+	getGithubStarred(): boolean {
+		return this.globalSettings.githubStarred === true;
+	}
+
+	setGithubStarred(starred: boolean): void {
+		this.globalSettings.githubStarred = starred;
+		this.markModified("githubStarred");
 		this.save();
 	}
 
