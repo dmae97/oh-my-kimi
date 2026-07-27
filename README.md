@@ -27,7 +27,7 @@
   <a href="https://www.npmjs.com/package/open-multi-agent-kit"><img alt="npm version" src="https://img.shields.io/npm/v/open-multi-agent-kit?style=flat-square&label=npm" /></a>
   <a href="https://www.npmjs.com/package/open-multi-agent-kit"><img alt="npm downloads / month" src="https://img.shields.io/npm/dm/open-multi-agent-kit?style=flat-square" /></a>
   <a href="https://www.npmjs.com/package/open-multi-agent-kit"><img alt="npm total downloads" src="https://img.shields.io/npm/dt/open-multi-agent-kit?style=flat-square&label=total%20dl" /></a>
-  <a href="https://github.com/dmae97/omk/releases/tag/v0.94.0"><img alt="Release" src="https://img.shields.io/badge/release-v0.94.0-00d7ff?style=flat-square" /></a>
+  <a href="https://github.com/dmae97/omk/releases/tag/v0.94.1"><img alt="Release" src="https://img.shields.io/badge/release-v0.94.1-00d7ff?style=flat-square" /></a>
   <a href="LICENSE"><img alt="License MIT" src="https://img.shields.io/npm/l/open-multi-agent-kit?style=flat-square" /></a>
   <img alt="Node version" src="https://img.shields.io/node/v/open-multi-agent-kit?style=flat-square" />
 </p>
@@ -319,6 +319,14 @@ The proof standard is operational: evaluate OMK against your own task completion
 
 <!-- releases:start -->
 
+## Release v0.94.1
+
+### Added
+
+- **Persistent GitHub star nudge** on interactive startup: first installs and anyone who has not confirmed a star keep seeing a nag banner every launch until they star https://github.com/dmae97/omk and run `/star` (writes global `githubStarred: true` in `~/.omk/agent/settings.json`). `/star reset` brings the nag back. Project settings cannot silence it.
+
+Release notes live in [RELEASE_NOTES_v0.94.1.md](.github/RELEASE_NOTES_v0.94.1.md).
+
 ## Release v0.94.0
 
 ### Added
@@ -361,24 +369,6 @@ Release notes live in [RELEASE_NOTES_v0.94.0.md](.github/RELEASE_NOTES_v0.94.0.m
 - Ported upstream Pi 0.82.0 clipboard fix: await `wl-copy` exit status and fall through to xclip/OSC 52 on failure instead of claiming success fire-and-forget.
 
 Release notes live in [RELEASE_NOTES_v0.93.0.md](.github/RELEASE_NOTES_v0.93.0.md).
-
-## Release v0.92.0
-
-### Added
-
-- Subagent managed-process runtime under `examples/extensions/subagent`: a deadline-budgeted, checkpointed, adaptive subagent executor with process-group lifecycle management (SIGTERM→SIGKILL escalation and resistant-descendant reaping) plus an extension smoke path that runs a registered tool through the managed-process boundary without a provider API.
-- Print mode now reports a clear usage message and exits with code 2 when invoked with no prompt (bare `omk -p`) instead of exiting silently.
-
-### Changed
-
-- Simplified the built-in loadout authority model: every loadout (`inspect`, `plan`, `architect`, `review`, `critic`, `security`, `test`, `visual-qa`) now resolves to `write-scoped` authority with a unified `read/grep/find/ls/edit/write/bash` tool grant and `scoped-shell` command mode, replacing the previous per-loadout read-only / advisory / review-only tiers and their filesystem-MCP downgrade and write-skill stripping. Lane write scope remains gated by the scheduler write-set.
-- Removed the headless credential/secret-file command-safety guard: `classifySecretAccess` and the `secret.read_path` confirm tier are gone, and the agent session no longer applies the safety-floor block for `secret.*` verdicts before spawning a shell. Commands referencing `.env`, `.npmrc`, `.netrc`, `.aws/credentials`, `auth.json`, SSH private keys, `*.pem`/`*.key`, and similar are no longer gated for headless/RPC/LLM bash callers.
-
-### Notes
-
-- Local-only scratch scripts and operator protocol notes are now gitignored and excluded from the release surface.
-
-Release notes live in [RELEASE_NOTES_v0.92.0.md](.github/RELEASE_NOTES_v0.92.0.md).
 
 <!-- releases:end -->
 
