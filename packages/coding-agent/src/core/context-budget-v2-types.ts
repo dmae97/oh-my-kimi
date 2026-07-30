@@ -202,10 +202,13 @@ export interface ContextBudgetCacheProviderV2 {
 	setInvalidationSnapshot?(snapshot: ContextCacheInvalidationSnapshot): void;
 	readRepresentation(key: string): ContextBudgetRepresentationCacheReadV2 | undefined;
 	writeRepresentation(input: { readonly key: string; readonly entry: ContextBudgetRepresentationCacheEntryV2 }): void;
+	deleteRepresentation?(key: string): void;
 	readNegativeRepresentation(key: string): ContextBudgetNegativeCacheEntryV2 | undefined;
 	writeNegativeRepresentation(input: { readonly key: string; readonly reason: string }): void;
+	deleteNegativeRepresentation?(key: string): void;
 	readPlan(key: string): ContextBudgetPlanCacheReadV2 | undefined;
 	writePlan(input: { readonly key: string; readonly entry: ContextBudgetPlanCacheEntryV2 }): void;
+	deletePlan?(key: string): void;
 }
 
 export interface ContextBudgetPlanCacheTelemetryV2 {

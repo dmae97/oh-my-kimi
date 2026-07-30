@@ -101,7 +101,9 @@ export function recordContextBudgetRepresentationCacheHitV2(
 	telemetry: MutableTokenCacheTelemetryV2,
 	kind: ContextRepresentationKindV2,
 	keyKind: ContextBudgetRepresentationCacheKeyKindV2 = "exact",
+	savedTokens = 0,
 ): void {
+	telemetry.tokens.savedByCache += Math.max(0, Math.floor(savedTokens));
 	if (keyKind === "materialized") {
 		telemetry.representationCache.semanticHits += 1;
 		return;

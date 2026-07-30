@@ -43,6 +43,15 @@ describe("check-pinned-deps root scratch exclusion", () => {
 		expectScannerSuccess(pinnedDepsScript, root);
 	});
 
+	it("excludes generated runtime artifact roots", () => {
+		const root = createFixture();
+		for (const path of [[".omk", "runs"], [".omk", "worktrees"], [".pi"]]) {
+			writePackageJson(join(root, ...path, "package.json"), { dependencies: { thirdParty: "^1.0.0" } });
+		}
+
+		expectScannerSuccess(pinnedDepsScript, root);
+	});
+
 	it("rejects unpinned dependencies in a nested OMP-like path", () => {
 		const root = createFixture();
 		const packageJsonPath = join(root, "workspace", "vendor", "oh-my-pi", "package.json");
@@ -66,6 +75,18 @@ describe("check-pinned-deps root scratch exclusion", () => {
 
 		expectPinnedDepsFailure(root, packageJsonPath);
 	});
+
+	it("reports malformed package manifests without an uncaught exception", () => {
+		const root = createFixture();
+		const packageJsonPath = join(root, "workspace", "malformed", "package.json");
+		mkdirSync(join(packageJsonPath, ".."), { recursive: true });
+		writeFileSync(packageJsonPath, "{not json\n");
+
+		const result = runScanner(pinnedDepsScript, root);
+		expect(result.error).toBeUndefined();
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain(`${packageJsonPath}: invalid package.json`);
+	});
 });
 
 describe("check-ts-relative-imports root scratch exclusion", () => {
@@ -79,6 +100,15 @@ describe("check-ts-relative-imports root scratch exclusion", () => {
 	it("excludes the exact imported OMP source tree", () => {
 		const root = createFixture();
 		writeTypescript(join(root, "vendor", "oh-my-pi", "ignored.ts"));
+
+		expectScannerSuccess(tsImportsScript, root);
+	});
+
+	it("excludes generated runtime artifact roots", () => {
+		const root = createFixture();
+		for (const path of [[".omk", "runs"], [".omk", "worktrees"], [".pi"]]) {
+			writeTypescript(join(root, ...path, "ignored.ts"));
+		}
 
 		expectScannerSuccess(tsImportsScript, root);
 	});

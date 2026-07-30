@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadSkills } from "../src/core/skills.ts";
 import {
@@ -42,6 +42,22 @@ describe("skills catalog cache", () => {
 		writeFileSync(join(skillsDir, "extra.md"), "# changed note\n");
 		const afterEdit = fingerprintSkillDir(agentDir);
 		expect(afterEdit.totalSize).not.toBe(afterAdd.totalSize);
+	});
+
+	it("invalidates same-size edits even when another file owns the maximum mtime", () => {
+		const firstPath = join(skillsDir, "first.md");
+		const newestPath = join(skillsDir, "newest.md");
+		writeFileSync(firstPath, "AAAA");
+		writeFileSync(newestPath, "BBBB");
+		const nowSeconds = Date.now() / 1000;
+		utimesSync(firstPath, nowSeconds - 100, nowSeconds - 100);
+		utimesSync(newestPath, nowSeconds + 100, nowSeconds + 100);
+		const before = fingerprintSkillDir(agentDir);
+
+		writeFileSync(firstPath, "ZZZZ");
+		utimesSync(firstPath, nowSeconds - 50, nowSeconds - 50);
+
+		expect(fingerprintSkillDir(agentDir)).not.toEqual(before);
 	});
 
 	it("reuses the cached catalog on an unchanged tree", () => {
@@ -91,5 +107,20 @@ describe("skills catalog cache", () => {
 		writeFileSync(join(agentDir, "cache", "skill-catalog-v1.json"), "{not json");
 		expect(readSkillCatalog(agentDir)).toEqual({});
 		expect(() => writeSkillCatalog(agentDir, {})).not.toThrow();
+	});
+
+	it("structurally invalid cache entries degrade to a clean miss", () => {
+		const cacheDir = join(agentDir, "cache");
+		mkdirSync(cacheDir, { recursive: true });
+		writeFileSync(
+			join(cacheDir, "skill-catalog-v1.json"),
+			JSON.stringify({ [resolve(join(agentDir, "skills"))]: {} }),
+		);
+		let scans = 0;
+
+		const result = cachedSkillScan(agentDir, join(agentDir, "skills"), () => ({ scan: ++scans }));
+
+		expect(result.result).toEqual({ scan: 1 });
+		expect(scans).toBe(1);
 	});
 });

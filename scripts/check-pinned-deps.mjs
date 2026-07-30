@@ -5,7 +5,15 @@ const dependencySections = ["dependencies", "devDependencies", "optionalDependen
 const exactVersionPattern = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const ignoredDirectories = new Set([".git", "dist", "node_modules"]);
 // These paths are relative to the scan root; keep exclusions exact.
-const ignoredDirectoryPaths = new Set([".omk/git", ".omk/goals", ".omk/npm", join("vendor", "oh-my-pi")]);
+const ignoredDirectoryPaths = new Set([
+	".pi",
+	".omk/git",
+	".omk/goals",
+	".omk/npm",
+	".omk/runs",
+	".omk/worktrees",
+	join("vendor", "oh-my-pi"),
+]);
 // The pre-existing third-party scratch tree is only the exact `~` child of the scan root.
 const rootScratchDirectory = "~";
 const internalWorkspaceDependencies = new Set(["omk-adaptorch-wpl", "omk-agent-core", "omk-ai", "omk-tui"]);
@@ -57,7 +65,13 @@ const failures = [];
 collectPackageJsonFiles(scanRoot);
 
 for (const file of packageJsonFiles.sort()) {
-	const packageJson = JSON.parse(readFileSync(file, "utf8"));
+	let packageJson;
+	try {
+		packageJson = JSON.parse(readFileSync(file, "utf8"));
+	} catch {
+		failures.push(`${file}: invalid package.json`);
+		continue;
+	}
 
 	for (const section of dependencySections) {
 		const dependencies = packageJson[section];

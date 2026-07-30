@@ -8,7 +8,6 @@ import {
 	computeContextBudgetTargetTokenBucketV2,
 } from "./context-budget-v2-cache-keys.ts";
 import type { MutableTokenCacheTelemetryV2 } from "./context-budget-v2-cache-telemetry.ts";
-import { recordContextBudgetRepresentationCacheHitV2 } from "./context-budget-v2-cache-telemetry.ts";
 import {
 	validateContextBudgetMaterializedRepresentationCacheEntryV2,
 	validateContextBudgetRepresentationCacheEntryV2,
@@ -70,17 +69,13 @@ export function applyRepresentationCacheV2(input: {
 		});
 		if (rejection) {
 			recordRepresentationReject(input.cache.telemetry, rejection);
+			if (rejection === "stale") provider.deleteRepresentation?.(exactKey);
 			resolved.push({
 				...candidate,
 				cache: { hit: false, key: exactKey, keyKind: "exact", rejectedReason: rejection },
 			});
 			continue;
 		}
-		recordContextBudgetRepresentationCacheHitV2(
-			input.cache.telemetry,
-			cached.entry.kind,
-			cached.entry.keyKind ?? "exact",
-		);
 		resolved.push({
 			...candidate,
 			cache: { hit: true, key: exactKey, keyKind: cached.entry.keyKind ?? "exact", layer: cached.layer },
@@ -123,9 +118,9 @@ function readMaterializedRepresentationCacheV2(input: {
 	});
 	if (rejection) {
 		recordRepresentationReject(input.cache.telemetry, rejection);
+		if (rejection === "stale") input.provider.deleteRepresentation?.(key);
 		return { ...input.candidate, cache: { hit: false, key, keyKind: "materialized", rejectedReason: rejection } };
 	}
-	recordContextBudgetRepresentationCacheHitV2(input.cache.telemetry, cached.entry.kind, "materialized");
 	return {
 		...input.candidate,
 		cache: { hit: true, key, keyKind: "materialized", layer: cached.layer },

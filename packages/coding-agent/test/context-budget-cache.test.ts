@@ -45,10 +45,22 @@ describe("context budget v2 exact cache", () => {
 		expect(first.observability.cache.representationCache.misses).toBeGreaterThan(0);
 		expect(first.observability.cache.representationCache.writes).toBeGreaterThan(0);
 		expect(planHit.observability.cache.planCache.hit).toBe(true);
+		expect(planHit.observability.cache.tokens.savedByCache).toBeGreaterThan(0);
 		expect(planHit.planHash).toBe(first.planHash);
 		expect(representationHit.observability.cache.planCache.hit).toBe(false);
-		expect(representationHit.observability.cache.representationCache.exactHits).toBeGreaterThan(0);
+		expect(representationHit.observability.cache.representationCache.exactHits).toBe(1);
+		expect(representationHit.observability.cache.tokens.savedByCache).toBeGreaterThan(0);
 		expect(representationHit.selectedRepresentations[0]?.cache?.hit).toBe(true);
+	});
+
+	it("bounds the in-memory cache", () => {
+		const cacheProvider = createMemoryContextBudgetCacheProviderV2();
+		for (let index = 0; index <= 256; index++) {
+			cacheProvider.writeNegativeRepresentation({ key: `negative-${index}`, reason: "test" });
+		}
+
+		expect(cacheProvider.readNegativeRepresentation("negative-0")).toBeUndefined();
+		expect(cacheProvider.readNegativeRepresentation("negative-256")).toBeDefined();
 	});
 
 	it("rejects stale and negative representation cache entries before selection", () => {

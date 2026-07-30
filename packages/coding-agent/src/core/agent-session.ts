@@ -739,7 +739,8 @@ export class AgentSession {
 			...(sessionFile ? { journalPath: `${sessionFile}.runjournal` } : {}),
 			sessionId: this.sessionManager.getSessionId(),
 		});
-		const startupTerminal = this._runJournalStore.records.at(-1);
+		const startupRecords = this._runJournalStore.records;
+		const startupTerminal = startupRecords[startupRecords.length - 1];
 		if (startupTerminal?.event === "run_recovered") {
 			this._lastTermination = startupTerminal.termination;
 		}
@@ -1775,7 +1776,9 @@ export class AgentSession {
 		return undefined;
 	}
 
-	private _getContextBudgetOptions(): BuildSystemPromptOptions["contextBudget"] | undefined {
+	private _getContextBudgetOptions(
+		queryContext = this._extractCurrentQuery(),
+	): BuildSystemPromptOptions["contextBudget"] | undefined {
 		const contextGovernorOverride = process.env.OMK_CONTEXT_GOVERNOR;
 		if (contextGovernorOverride === "0") {
 			return undefined;
@@ -1840,7 +1843,7 @@ export class AgentSession {
 			modelId: this.model?.id ?? "unknown",
 			tokenizerMode: parseTokenizerModeEnv(process.env.OMK_CONTEXT_GOVERNOR_TOKENIZER),
 			activeSkillNames: parseCommaSeparatedEnv(process.env.OMK_CONTEXT_GOVERNOR_ACTIVE_SKILLS),
-			queryContext: this._extractCurrentQuery(),
+			queryContext,
 			cacheProvider,
 		};
 	}
@@ -2101,16 +2104,13 @@ export class AgentSession {
 			}
 			this._pendingNextTurnMessages = [];
 
-			const turnSystemPromptOptions =
-				promptActiveSkillNames.length > 0
-					? {
-							...this._baseSystemPromptOptions,
-							activeSkillNames: promptActiveSkillNames,
-							...(promptActiveSkillSource ? { activeSkillSource: promptActiveSkillSource } : {}),
-						}
-					: this._baseSystemPromptOptions;
-			const turnSystemPrompt =
-				promptActiveSkillNames.length > 0 ? buildSystemPrompt(turnSystemPromptOptions) : this._baseSystemPrompt;
+			const turnSystemPromptOptions = {
+				...this._baseSystemPromptOptions,
+				contextBudget: this._getContextBudgetOptions(expandedText),
+				...(promptActiveSkillNames.length > 0 ? { activeSkillNames: promptActiveSkillNames } : {}),
+				...(promptActiveSkillSource ? { activeSkillSource: promptActiveSkillSource } : {}),
+			};
+			const turnSystemPrompt = buildSystemPrompt(turnSystemPromptOptions);
 
 			// Emit before_agent_start extension event
 			const result = await this._extensionRunner.emitBeforeAgentStart(

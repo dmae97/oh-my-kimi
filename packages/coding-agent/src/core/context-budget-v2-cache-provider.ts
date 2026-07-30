@@ -12,6 +12,26 @@ import type {
 	ContextBudgetRepresentationCacheReadV2,
 } from "./context-budget-v2-types.ts";
 
+const DEFAULT_MAX_ENTRIES_PER_CACHE = 256;
+
+function readLru<T>(store: Map<string, T>, key: string): T | undefined {
+	const entry = store.get(key);
+	if (entry === undefined) return undefined;
+	store.delete(key);
+	store.set(key, entry);
+	return entry;
+}
+
+function writeLru<T>(store: Map<string, T>, key: string, entry: T, maxEntries: number): void {
+	store.delete(key);
+	store.set(key, entry);
+	while (store.size > maxEntries) {
+		const oldestKey = store.keys().next().value;
+		if (oldestKey === undefined) return;
+		store.delete(oldestKey);
+	}
+}
+
 export function createMemoryContextBudgetCacheProviderV2(
 	layer: ContextBudgetCacheLayerV2 = "turn",
 ): ContextBudgetCacheProviderV2 {
@@ -23,10 +43,12 @@ export class MemoryContextBudgetCacheProviderV2 implements ContextBudgetCachePro
 	private readonly negatives = new Map<string, ContextBudgetNegativeCacheEntryV2>();
 	private readonly plans = new Map<string, ContextBudgetPlanCacheEntryV2>();
 	private readonly layer: ContextBudgetCacheLayerV2;
+	private readonly maxEntries: number;
 	private invalidationSnapshot: ContextCacheInvalidationSnapshot | undefined;
 
-	constructor(layer: ContextBudgetCacheLayerV2) {
+	constructor(layer: ContextBudgetCacheLayerV2, maxEntries = DEFAULT_MAX_ENTRIES_PER_CACHE) {
 		this.layer = layer;
+		this.maxEntries = maxEntries;
 	}
 
 	getInvalidationSnapshot(): ContextCacheInvalidationSnapshot | undefined {
@@ -49,28 +71,45 @@ export class MemoryContextBudgetCacheProviderV2 implements ContextBudgetCachePro
 	}
 
 	readRepresentation(key: string): ContextBudgetRepresentationCacheReadV2 | undefined {
-		const entry = this.representations.get(key);
+		const entry = readLru(this.representations, key);
 		return entry ? { entry, layer: this.layer } : undefined;
 	}
 
 	writeRepresentation(input: { readonly key: string; readonly entry: ContextBudgetRepresentationCacheEntryV2 }): void {
-		this.representations.set(input.key, input.entry);
+		writeLru(this.representations, input.key, input.entry, this.maxEntries);
+	}
+
+	deleteRepresentation(key: string): void {
+		this.representations.delete(key);
 	}
 
 	readNegativeRepresentation(key: string): ContextBudgetNegativeCacheEntryV2 | undefined {
-		return this.negatives.get(key);
+		return readLru(this.negatives, key);
 	}
 
 	writeNegativeRepresentation(input: { readonly key: string; readonly reason: string }): void {
-		this.negatives.set(input.key, { reason: input.reason, layer: this.layer });
+		writeLru(
+			this.negatives,
+			input.key,
+			{ reason: input.reason, createdAtEpochMs: Date.now(), layer: this.layer },
+			this.maxEntries,
+		);
+	}
+
+	deleteNegativeRepresentation(key: string): void {
+		this.negatives.delete(key);
 	}
 
 	readPlan(key: string): ContextBudgetPlanCacheReadV2 | undefined {
-		const entry = this.plans.get(key);
+		const entry = readLru(this.plans, key);
 		return entry ? { entry, layer: this.layer } : undefined;
 	}
 
 	writePlan(input: { readonly key: string; readonly entry: ContextBudgetPlanCacheEntryV2 }): void {
-		this.plans.set(input.key, input.entry);
+		writeLru(this.plans, input.key, input.entry, this.maxEntries);
+	}
+
+	deletePlan(key: string): void {
+		this.plans.delete(key);
 	}
 }

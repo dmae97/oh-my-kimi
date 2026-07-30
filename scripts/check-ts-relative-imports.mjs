@@ -3,7 +3,15 @@ import { join, relative } from "node:path";
 import ts from "typescript";
 
 const ignoredDirectories = new Set([".git", "coverage", "dist", "node_modules"]);
-const ignoredDirectoryPaths = new Set([join("vendor", "oh-my-pi")]);
+const ignoredDirectoryPaths = new Set([
+	".pi",
+	".omk/git",
+	".omk/goals",
+	".omk/npm",
+	".omk/runs",
+	".omk/worktrees",
+	join("vendor", "oh-my-pi"),
+]);
 // The pre-existing third-party scratch tree is only the exact `~` child of the scan root.
 const rootScratchDirectory = "~";
 const files = [];

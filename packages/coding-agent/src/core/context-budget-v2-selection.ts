@@ -13,6 +13,7 @@ import {
 	type ContextBudgetSelectionCacheV2,
 	writeRepresentationCacheV2,
 } from "./context-budget-v2-cache.ts";
+import { recordContextBudgetRepresentationCacheHitV2 } from "./context-budget-v2-cache-telemetry.ts";
 import { computeCoverageGap } from "./context-budget-v2-coverage.ts";
 import { contentHashOf } from "./context-budget-v2-plan-hash.ts";
 import { applyRedundancyPenalties, type PlannedItemV2, scoreContextBudgetItemV2 } from "./context-budget-v2-scoring.ts";
@@ -140,6 +141,14 @@ export function selectOptionalItem(planned: PlannedItemV2, state: OptionalSelect
 		return state.usedTokens;
 	}
 	if (state.cache) {
+		if (chosen.cache?.hit === true) {
+			recordContextBudgetRepresentationCacheHitV2(
+				state.cache.telemetry,
+				chosen.kind,
+				chosen.cache.keyKind,
+				planned.fullTokens,
+			);
+		}
 		writeRepresentationCacheV2({ planned, selected: chosen, cache: state.cache, materializedEnabled });
 	}
 	state.selection.set(planned.item.id, toSelected(planned.item.id, chosen));

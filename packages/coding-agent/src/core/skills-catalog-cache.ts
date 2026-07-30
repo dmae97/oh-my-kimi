@@ -3,16 +3,17 @@
  *
  * A full scan walks every skill dir reading and frontmatter-parsing each
  * SKILL.md; on this host that is 800+ file reads per session start. The cache
- * replaces that with a fingerprint walk (readdir/stat only, no file reads):
- * when `{fileCount, maxMtimeMs, totalSize}` matches the stored fingerprint the
- * parsed catalog is reused verbatim. Any add/edit/delete under the scanned
- * tree changes the fingerprint and triggers exactly one full rescan.
+ * replaces that with a fingerprint walk (readdir/stat only, no file reads).
+ * The digest includes every relative path and its size, mtime, ctime, and inode,
+ * so edits cannot hide behind aggregate count/size/max-mtime collisions. Any
+ * add/edit/delete under the scanned tree triggers exactly one full rescan.
  *
  * Fail-soft: a corrupt or unreadable cache is a miss, never an error. Writes
  * are atomic (tmp + rename). Cross-instance safety relies on the fingerprint,
  * not on the file: another process editing skills between our write and our
  * read still invalidates on the next fingerprint walk.
  */
+import { createHash } from "node:crypto";
 import {
 	type Dirent,
 	existsSync,
@@ -24,12 +25,13 @@ import {
 	statSync,
 	writeFileSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 
 export interface SkillDirFingerprint {
 	readonly files: number;
 	readonly maxMtimeMs: number;
 	readonly totalSize: number;
+	readonly digest: string;
 }
 
 export interface SkillCatalogCacheEntry<T> {
@@ -51,6 +53,7 @@ export function fingerprintSkillDir(root: string): SkillDirFingerprint {
 	let totalSize = 0;
 	let walked = 0;
 	const visited = new Set<string>();
+	const digest = createHash("sha256");
 
 	const walk = (dir: string, depth: number): void => {
 		if (depth > MAX_WALK_DEPTH || walked > MAX_WALK_ENTRIES) return;
@@ -64,7 +67,7 @@ export function fingerprintSkillDir(root: string): SkillDirFingerprint {
 		visited.add(real);
 		let entries: Dirent[];
 		try {
-			entries = readdirSync(dir, { withFileTypes: true });
+			entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
 		} catch {
 			return;
 		}
@@ -86,18 +89,52 @@ export function fingerprintSkillDir(root: string): SkillDirFingerprint {
 			files++;
 			totalSize += stats.size;
 			if (stats.mtimeMs > maxMtimeMs) maxMtimeMs = stats.mtimeMs;
+			digest.update(relative(root, fullPath));
+			digest.update(`\0${stats.size}\0${stats.mtimeMs}\0${stats.ctimeMs}\0${stats.ino}\0`);
 		}
 	};
 
 	walk(root, 0);
-	return { files, maxMtimeMs, totalSize };
+	return { files, maxMtimeMs, totalSize, digest: digest.digest("hex") };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isSkillDirFingerprint(value: unknown): value is SkillDirFingerprint {
+	if (!isRecord(value)) return false;
+	return (
+		Number.isSafeInteger(value.files) &&
+		(value.files as number) >= 0 &&
+		typeof value.maxMtimeMs === "number" &&
+		Number.isFinite(value.maxMtimeMs) &&
+		typeof value.totalSize === "number" &&
+		Number.isFinite(value.totalSize) &&
+		(value.totalSize as number) >= 0 &&
+		typeof value.digest === "string" &&
+		/^[a-f0-9]{64}$/u.test(value.digest)
+	);
+}
+
+function isSkillCatalogCacheEntry(value: unknown): value is SkillCatalogCacheEntry<unknown> {
+	return (
+		isRecord(value) &&
+		isSkillDirFingerprint(value.fingerprint) &&
+		Object.getOwnPropertyDescriptor(value, "result") !== undefined
+	);
 }
 
 export function readSkillCatalog(agentDir: string): CatalogStore {
 	try {
 		const raw = readFileSync(join(agentDir, "cache", CACHE_FILE_NAME), "utf8");
-		const parsed = JSON.parse(raw);
-		if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as CatalogStore;
+		const parsed: unknown = JSON.parse(raw);
+		if (!isRecord(parsed)) return {};
+		const catalog: CatalogStore = {};
+		for (const [key, value] of Object.entries(parsed)) {
+			if (isSkillCatalogCacheEntry(value)) catalog[key] = value;
+		}
+		return catalog;
 	} catch {}
 	return {};
 }
@@ -118,7 +155,7 @@ export function writeSkillCatalog(agentDir: string, store: CatalogStore): void {
 }
 
 function fingerprintEquals(a: SkillDirFingerprint, b: SkillDirFingerprint): boolean {
-	return a.files === b.files && a.maxMtimeMs === b.maxMtimeMs && a.totalSize === b.totalSize;
+	return a.files === b.files && a.maxMtimeMs === b.maxMtimeMs && a.totalSize === b.totalSize && a.digest === b.digest;
 }
 
 /**
@@ -139,7 +176,7 @@ export function cachedSkillScan<T>(
 	const fingerprint = fingerprintSkillDir(dir);
 	const key = resolve(dir);
 	const hit = catalog[key];
-	if (hit && fingerprintEquals(hit.fingerprint, fingerprint)) {
+	if (isSkillCatalogCacheEntry(hit) && fingerprintEquals(hit.fingerprint, fingerprint)) {
 		return { result: structuredClone(hit.result) as T, store: catalog };
 	}
 	const result = scan();

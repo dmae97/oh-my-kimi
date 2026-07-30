@@ -64,6 +64,7 @@
 		"generate-image-models": "node scripts/generate-image-models.ts",
 		"build": "tsgo -p tsconfig.build.json",
 		"test": "vitest --run",
+		"test:live": "vitest --run --config vitest.live.config.ts",
 		"prepublishOnly": "npm run clean && npm run build"
 	},
 	"dependencies": {

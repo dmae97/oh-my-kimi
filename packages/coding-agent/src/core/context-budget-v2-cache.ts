@@ -80,10 +80,12 @@ export function readValidPlanCacheV2(input: {
 	});
 	if (rejection) {
 		input.cache.telemetry.planCache.rejectedReason = rejection;
+		if (rejection === "stale") input.cache.provider?.deletePlan?.(input.key);
 		return undefined;
 	}
 	input.cache.telemetry.planCache.hit = true;
 	input.cache.telemetry.planCache.layer = read.layer;
+	input.cache.telemetry.tokens.savedByCache = read.entry.plan.rawTokens;
 	return withCacheTelemetry(read.entry.plan, input.cache.telemetry);
 }
 
