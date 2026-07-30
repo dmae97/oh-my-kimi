@@ -209,7 +209,7 @@ function assertInitShape(input: unknown): asserts input is ContextCacheInvalidat
 		if (!INIT_ALLOWED_KEYS.has(key)) fail(`init has unknown key "${key}"`);
 	}
 	for (const required of INIT_REQUIRED_KEYS) {
-		if (!Object.hasOwn(input, required)) {
+		if (Object.getOwnPropertyDescriptor(input, required) === undefined) {
 			fail(`init is missing required key "${required}"`);
 		}
 	}
