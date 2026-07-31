@@ -211,7 +211,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and
 
 - [Read the documentation](packages/coding-agent/docs/index.md)
 - [Browse all public Skills](SKILLS.md)
-- [Release notes](https://github.com/dmae97/omk/releases)
+- [Release notes for v0.95.0](.github/RELEASE_NOTES_v0.95.0.md)
 
 ## Recent releases
 
