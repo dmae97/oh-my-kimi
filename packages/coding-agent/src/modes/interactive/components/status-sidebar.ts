@@ -6,6 +6,7 @@ import { loadMcpInventory, type McpServerEntry } from "../../../core/mcp-invento
 import {
 	type CodexUsageSnapshot,
 	getConfiguredSubscriptionUsageProviders,
+	getSubscriptionUsageRevision,
 	getSubscriptionUsageSource,
 	loadSubscriptionUsage,
 	parseCodexUsageSnapshot,
@@ -93,6 +94,7 @@ export class StatusSidebarComponent implements Component {
 	private subscriptionUsageProviders: readonly string[] = [];
 	private subscriptionUsageFetchedAt = new Map<string, number>();
 	private subscriptionUsageInFlight = new Map<string, AgentSession>();
+	private subscriptionUsageRevision = new Map<string, number>();
 
 	constructor(
 		getSession: () => AgentSession,
@@ -248,6 +250,7 @@ export class StatusSidebarComponent implements Component {
 			this.subscriptionUsage.clear();
 			this.subscriptionUsageFetchedAt.clear();
 			this.subscriptionUsageInFlight.clear();
+			this.subscriptionUsageRevision.clear();
 			this.subscriptionUsageSession = session;
 		}
 
@@ -255,20 +258,27 @@ export class StatusSidebarComponent implements Component {
 		this.subscriptionUsageProviders = providers;
 		const configured = new Set(providers);
 		for (const provider of this.subscriptionUsage.keys()) {
-			if (!configured.has(provider)) this.subscriptionUsage.delete(provider);
+			if (!configured.has(provider)) {
+				this.subscriptionUsage.delete(provider);
+				this.subscriptionUsageFetchedAt.delete(provider);
+				this.subscriptionUsageRevision.delete(provider);
+			}
 		}
 
 		const now = Date.now();
 		for (const provider of providers) {
 			const source = getSubscriptionUsageSource(provider);
+			const revision = getSubscriptionUsageRevision(provider);
+			const revisionChanged = revision !== (this.subscriptionUsageRevision.get(provider) ?? 0);
 			if (
 				!source ||
 				this.subscriptionUsageInFlight.has(provider) ||
-				now - (this.subscriptionUsageFetchedAt.get(provider) ?? 0) < source.ttlMs
+				(!revisionChanged && now - (this.subscriptionUsageFetchedAt.get(provider) ?? 0) < source.ttlMs)
 			) {
 				continue;
 			}
 			this.subscriptionUsageFetchedAt.set(provider, now);
+			this.subscriptionUsageRevision.set(provider, revision);
 			this.subscriptionUsageInFlight.set(provider, session);
 			void this.fetchSubscriptionUsage(session, provider)
 				.then((snapshot) => {
@@ -309,12 +319,8 @@ export class StatusSidebarComponent implements Component {
 				continue;
 			}
 			if (snapshot.windows.length === 0) {
-				lines.push(
-					boxTextLine(
-						width,
-						`${theme.fg("accent", label)} ${theme.fg("dim", snapshot.message ?? "usage unavailable")}`,
-					),
-				);
+				lines.push(boxTextLine(width, theme.fg("accent", label)));
+				lines.push(boxTextLine(width, theme.fg("dim", snapshot.message ?? "usage unavailable")));
 				continue;
 			}
 			lines.push(boxTextLine(width, theme.fg("accent", label)));

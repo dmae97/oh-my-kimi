@@ -1,12 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import {
 	getConfiguredSubscriptionUsageProviders,
+	getSubscriptionUsageRevision,
 	getSubscriptionUsageSource,
 	loadSubscriptionUsage,
 	parseClaudeUsageSnapshot,
 	parseCodexUsageSnapshot,
 	parseKimiUsageSnapshot,
 	parseZaiUsageSnapshot,
+	recordClaudePassiveUsage,
 	recordCodexPassiveUsage,
 	supportsSubscriptionUsage,
 } from "../src/core/provider-usage.ts";
@@ -47,7 +49,7 @@ describe("subscription usage providers", () => {
 		expect(getSubscriptionUsageSource("openai-codex")?.label).toBe("CODEX");
 		expect(getSubscriptionUsageSource("anthropic")?.label).toBe("CLAUDE");
 		expect(getSubscriptionUsageSource("qwen-oauth")?.label).toBe("QWEN");
-		expect(getSubscriptionUsageSource("modelstudio-maas")?.label).toBe("QWEN");
+		expect(getSubscriptionUsageSource("modelstudio-maas")?.label).toBe("QWEN TOKEN PLAN");
 		expect(getSubscriptionUsageSource("kimi-code")?.label).toBe("KIMI");
 		expect(getSubscriptionUsageSource("kimi-coding")?.label).toBe("KIMI");
 		expect(getSubscriptionUsageSource("zhipu-coding-plan")?.label).toBe("GLM");
@@ -69,19 +71,23 @@ describe("subscription usage providers", () => {
 			true,
 		);
 		expect(supportsSubscriptionUsage(session("zai", { configuredProviders: ["zai"] }) as never)).toBe(true);
+		expect(
+			supportsSubscriptionUsage(session("modelstudio-maas", { configuredProviders: ["modelstudio-maas"] }) as never),
+		).toBe(true);
 		expect(supportsSubscriptionUsage(session("openai", { configuredProviders: ["openai"] }) as never)).toBe(false);
 	});
 
 	it("lists every configured quota group with the active provider first", () => {
 		const configured = session("anthropic", {
 			oauthProviders: ["openai-codex", "anthropic", "grok-oauth-proxy"],
-			configuredProviders: ["kimi-coding", "zai"],
+			configuredProviders: ["kimi-coding", "zai", "modelstudio-maas"],
 		});
 		expect(getConfiguredSubscriptionUsageProviders(configured as never)).toEqual([
 			"anthropic",
 			"openai-codex",
 			"kimi-coding",
 			"zai",
+			"modelstudio-maas",
 			"grok-oauth-proxy",
 		]);
 	});
@@ -200,6 +206,67 @@ describe("subscription usage providers", () => {
 		expect(parseClaudeUsageSnapshot({ limits: [{ kind: "session", percent: null }] })).toBeUndefined();
 		expect(parseKimiUsageSnapshot({ limits: [{ detail: { limit: 0, used: 1 } }] })).toBeUndefined();
 		expect(parseZaiUsageSnapshot({ success: false, data: { limits: [] } })).toBeUndefined();
+	});
+
+	it("uses passive Claude Code headers when the usage endpoint is rate limited", async () => {
+		const token = "test-claude-passive-token";
+		const nowMs = Date.now();
+		const beforeRevision = getSubscriptionUsageRevision("anthropic");
+		recordClaudePassiveUsage(
+			token,
+			{
+				limitId: "anthropic-unified",
+				primary: {
+					usedPercent: 37.5,
+					windowSeconds: 5 * 60 * 60,
+					resetsAt: Math.floor(nowMs / 1000) + 3_600,
+				},
+				secondary: {
+					usedPercent: 62,
+					windowSeconds: 7 * 24 * 60 * 60,
+					resetsAt: Math.floor(nowMs / 1000) + 86_400,
+				},
+			},
+			nowMs,
+		);
+		const fetchMock = vi.fn(async () => new Response("rate limited", { status: 429 }));
+
+		const result = await loadSubscriptionUsage(
+			session("anthropic", { oauthProviders: ["anthropic"], apiKeys: { anthropic: token } }) as never,
+			fetchMock,
+		);
+
+		expect(getSubscriptionUsageRevision("anthropic")).toBeGreaterThan(beforeRevision);
+		expect(result).toEqual({
+			label: "CLAUDE",
+			windows: [
+				{ label: "5H", usedPercent: 37.5, resetsAt: Math.floor(nowMs / 1000) + 3_600 },
+				{ label: "7D", usedPercent: 62, resetsAt: Math.floor(nowMs / 1000) + 86_400 },
+			],
+		});
+
+		const otherAccount = await loadSubscriptionUsage(
+			session("anthropic", {
+				oauthProviders: ["anthropic"],
+				apiKeys: { anthropic: "test-other-claude-account" },
+			}) as never,
+			fetchMock,
+		);
+		expect(otherAccount).toEqual({ label: "CLAUDE", windows: [], message: "rate limited · retry later" });
+	});
+
+	it("recognizes the Qwen Token Plan without probing a nonexistent quota API", async () => {
+		const fetchMock = vi.fn();
+		const result = await loadSubscriptionUsage(
+			session("modelstudio-maas", {
+				configuredProviders: ["modelstudio-maas"],
+				apiKeys: { "modelstudio-maas": "test-token-plan-key" },
+			}) as never,
+			fetchMock,
+		);
+
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(result).toEqual({ label: "QWEN TOKEN PLAN", windows: [], message: "console-only quota" });
 	});
 
 	it("fetches Claude quota with the stored OAuth token without returning it", async () => {

@@ -1,15 +1,18 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { Type } from "typebox";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { getModel } from "../src/models.ts";
 import { streamAnthropic } from "../src/providers/anthropic.ts";
 import type { Context, ToolCall } from "../src/types.ts";
 
-function createSseResponse(events: Array<{ event: string; data: string }>): Response {
+function createSseResponse(
+	events: Array<{ event: string; data: string }>,
+	headers: Record<string, string> = {},
+): Response {
 	const body = events.map(({ event, data }) => `event: ${event}\ndata: ${data}\n`).join("\n");
 	return new Response(body, {
 		status: 200,
-		headers: { "content-type": "text/event-stream" },
+		headers: { "content-type": "text/event-stream", ...headers },
 	});
 }
 
@@ -79,6 +82,56 @@ function createFakeAnthropicClient(response: Response): Anthropic {
 }
 
 describe("Anthropic raw SSE parsing", () => {
+	it("reports Claude Code unified rate-limit headers without blocking the stream", async () => {
+		const model = getModel("anthropic", "claude-haiku-4-5");
+		const context: Context = {
+			messages: [{ role: "user", content: "Say hello.", timestamp: Date.now() }],
+		};
+		const nowSeconds = Math.floor(Date.now() / 1000);
+		const response = createSseResponse(minimalAnthropicEvents, {
+			"anthropic-ratelimit-unified-5h-utilization": "0.125",
+			"anthropic-ratelimit-unified-5h-reset": String(nowSeconds + 3_600),
+			"anthropic-ratelimit-unified-7d-utilization": "0.42",
+			"anthropic-ratelimit-unified-7d-reset": String(nowSeconds + 86_400),
+		});
+		const onRateLimit = vi.fn(() => new Promise<never>(() => {}));
+
+		const result = await streamAnthropic(model, context, {
+			client: createFakeAnthropicClient(response),
+			onRateLimit,
+		}).result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(onRateLimit).toHaveBeenCalledWith(
+			{
+				limitId: "anthropic-unified",
+				primary: { usedPercent: 12.5, windowSeconds: 18_000, resetsAt: nowSeconds + 3_600 },
+				secondary: { usedPercent: 42, windowSeconds: 604_800, resetsAt: nowSeconds + 86_400 },
+			},
+			model,
+		);
+	});
+
+	it("ignores malformed Claude Code unified rate-limit headers", async () => {
+		const model = getModel("anthropic", "claude-haiku-4-5");
+		const context: Context = {
+			messages: [{ role: "user", content: "Say hello.", timestamp: Date.now() }],
+		};
+		const response = createSseResponse(minimalAnthropicEvents, {
+			"anthropic-ratelimit-unified-5h-utilization": "4.2",
+			"anthropic-ratelimit-unified-5h-reset": String(Number.MAX_SAFE_INTEGER),
+		});
+		const onRateLimit = vi.fn();
+
+		const result = await streamAnthropic(model, context, {
+			client: createFakeAnthropicClient(response),
+			onRateLimit,
+		}).result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(onRateLimit).not.toHaveBeenCalled();
+	});
+
 	it("repairs malformed SSE JSON and malformed streamed tool JSON", async () => {
 		const model = getModel("anthropic", "claude-haiku-4-5");
 		const context: Context = {

@@ -16,6 +16,7 @@ import type {
 	ImageContent,
 	Message,
 	Model,
+	ProviderRateLimitSnapshot,
 	SimpleStreamOptions,
 	StopReason,
 	StreamFunction,
@@ -31,7 +32,6 @@ import { headersToRecord } from "../utils/headers.ts";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.ts";
 import { retryProviderRequest } from "../utils/provider-retry.ts";
 import { sanitizeSurrogates, sanitizeSurrogatesDeep } from "../utils/sanitize-unicode.ts";
-
 import { resolveCloudflareBaseUrl } from "./cloudflare.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
 import { adjustMaxTokensForThinking, buildBaseOptions } from "./simple-options.ts";
@@ -252,6 +252,52 @@ function mergeHeaders(...headerSources: (Record<string, string | null> | undefin
 		}
 	}
 	return merged;
+}
+
+const ANTHROPIC_FIVE_HOUR_SECONDS = 5 * 60 * 60;
+const ANTHROPIC_SEVEN_DAY_SECONDS = 7 * 24 * 60 * 60;
+const MAX_RATE_LIMIT_RESET_HORIZON_SECONDS = 10 * 365 * 24 * 60 * 60;
+
+function anthropicRateLimitWindow(
+	headers: Headers,
+	prefix: "5h" | "7d",
+	windowSeconds: number,
+): ProviderRateLimitSnapshot["primary"] {
+	const utilization = Number(headers.get(`anthropic-ratelimit-unified-${prefix}-utilization`));
+	const resetsAt = Number(headers.get(`anthropic-ratelimit-unified-${prefix}-reset`));
+	const nowSeconds = Date.now() / 1000;
+	if (
+		!Number.isFinite(utilization) ||
+		utilization < 0 ||
+		utilization > 1 ||
+		!Number.isSafeInteger(resetsAt) ||
+		resetsAt <= 0 ||
+		resetsAt > nowSeconds + MAX_RATE_LIMIT_RESET_HORIZON_SECONDS
+	) {
+		return undefined;
+	}
+	return { usedPercent: Math.round(utilization * 10_000) / 100, windowSeconds, resetsAt };
+}
+
+function parseAnthropicRateLimitHeaders(headers: Headers): ProviderRateLimitSnapshot | undefined {
+	const primary = anthropicRateLimitWindow(headers, "5h", ANTHROPIC_FIVE_HOUR_SECONDS);
+	const secondary = anthropicRateLimitWindow(headers, "7d", ANTHROPIC_SEVEN_DAY_SECONDS);
+	return primary || secondary ? { limitId: "anthropic-unified", primary, secondary } : undefined;
+}
+
+function notifyAnthropicRateLimits(
+	snapshot: ProviderRateLimitSnapshot | undefined,
+	model: Model<"anthropic-messages">,
+	options?: AnthropicOptions,
+): void {
+	if (!snapshot || !options?.onRateLimit) return;
+	try {
+		void Promise.resolve(options.onRateLimit(snapshot, model)).catch(() => {
+			// Passive quota observation must never fail or retry a model request.
+		});
+	} catch {
+		// Ignore synchronous observer failures for the same reason.
+	}
 }
 
 interface ServerSentEvent {
@@ -530,6 +576,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 				},
 			);
 			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
+			notifyAnthropicRateLimits(parseAnthropicRateLimitHeaders(response.headers), model, options);
 			stream.push({ type: "start", partial: output });
 
 			type Block = (ThinkingContent | TextContent | (ToolCall & { partialJson: string })) & { index: number };

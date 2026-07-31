@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Anthropic streaming now emits Claude Code's official `anthropic-ratelimit-unified-5h-*` and `7d-*` response values through the existing non-blocking `StreamOptions.onRateLimit` observer.
+
 ## [0.94.1] - 2026-07-27
 
 ## [0.94.0] - 2026-07-27

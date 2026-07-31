@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 import { visibleWidth } from "omk-tui";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { McpInventory, McpServerEntry } from "../src/core/mcp-inventory.ts";
+import { recordClaudePassiveUsage } from "../src/core/provider-usage.ts";
 import {
 	mcpMaxRows,
 	parseCodexUsageSnapshot,
@@ -241,11 +242,53 @@ describe("StatusSidebarComponent (pinned opencode-style rail)", () => {
 		expect(plainLines.some((line) => line.includes("7D") && line.includes("18%"))).toBe(true);
 	});
 
-	it("states when a connected provider has no programmatic quota API", async () => {
+	it("refreshes Claude quota immediately after passive headers arrive", async () => {
 		const session = makeSession();
-		session.state.model.provider = "qwen-oauth";
+		session.state.model.provider = "anthropic";
 		session.modelRegistry.isUsingOAuth = () => true;
-		session.modelRegistry.isUsingOAuthProvider = (provider) => provider === "qwen-oauth";
+		session.modelRegistry.isUsingOAuthProvider = (provider) => provider === "anthropic";
+		let usedPercent = 35;
+		const fetchSubscriptionUsage = vi.fn(async () => ({
+			label: "CLAUDE",
+			windows: [{ label: "5H", usedPercent }],
+		}));
+		const requestRender = vi.fn();
+		const sidebar = new StatusSidebarComponent(
+			() => session as never,
+			makeFooterData() as never,
+			() => true,
+			() => 32,
+			{ requestRender, fetchSubscriptionUsage },
+		);
+
+		sidebar.render(STATUS_SIDEBAR_WIDTH);
+		await vi.waitFor(() => expect(fetchSubscriptionUsage).toHaveBeenCalledTimes(1));
+		await vi.waitFor(() => expect(requestRender).toHaveBeenCalledTimes(1));
+		usedPercent = 48;
+		recordClaudePassiveUsage("test-sidebar-claude-token", {
+			limitId: "anthropic-unified",
+			primary: {
+				usedPercent,
+				windowSeconds: 5 * 60 * 60,
+				resetsAt: Math.floor(Date.now() / 1000) + 3_600,
+			},
+		});
+		sidebar.render(STATUS_SIDEBAR_WIDTH);
+
+		await vi.waitFor(() => expect(fetchSubscriptionUsage).toHaveBeenCalledTimes(2));
+		await vi.waitFor(() => expect(requestRender).toHaveBeenCalledTimes(2));
+		await vi.waitFor(() => {
+			const text = stripAnsi(sidebar.render(STATUS_SIDEBAR_WIDTH).join("\n"));
+			expect(text).toContain("48%");
+		});
+	});
+
+	it("identifies a configured Model Studio Token Plan as console-only quota", async () => {
+		const session = makeSession();
+		session.state.model.provider = "modelstudio-maas";
+		session.modelRegistry.getProviderAuthStatus = (provider) => ({
+			configured: provider === "modelstudio-maas",
+		});
 		const requestRender = vi.fn();
 		const sidebar = new StatusSidebarComponent(
 			() => session as never,
@@ -258,8 +301,8 @@ describe("StatusSidebarComponent (pinned opencode-style rail)", () => {
 		sidebar.render(STATUS_SIDEBAR_WIDTH);
 		await vi.waitFor(() => expect(requestRender).toHaveBeenCalled());
 		const text = stripAnsi(sidebar.render(STATUS_SIDEBAR_WIDTH).join("\n"));
-		expect(text).toContain("QWEN");
-		expect(text).toContain("quota API unavailable");
+		expect(text).toContain("QWEN TOKEN PLAN");
+		expect(text).toContain("console-only quota");
 	});
 
 	it("renders every configured provider while quota requests settle independently", async () => {

@@ -11,8 +11,8 @@ const KIMI_USAGE_URL = "https://api.kimi.com/coding/v1/usages";
 const OPENAI_AUTH_CLAIM = "https://api.openai.com/auth";
 const MAX_USAGE_RESPONSE_BYTES = 1024 * 1024;
 const MAX_USAGE_LIMITS = 64;
-const MAX_PASSIVE_CODEX_ACCOUNTS = 64;
-const PASSIVE_CODEX_TTL_MS = 6 * 60 * 60 * 1000;
+const MAX_PASSIVE_ACCOUNTS = 64;
+const PASSIVE_USAGE_TTL_MS = 6 * 60 * 60 * 1000;
 
 export type SubscriptionUsageWindow = {
 	readonly label: string;
@@ -34,7 +34,7 @@ export type CodexUsageSnapshot = {
 
 type ParsedCodexWindow = CodexUsageWindow & { readonly windowSeconds?: number };
 type ObservedCodexWindow = { readonly window: ParsedCodexWindow; readonly observedAt: number };
-type PassiveCodexEntry = { readonly primary?: ObservedCodexWindow; readonly secondary?: ObservedCodexWindow };
+type PassiveUsageEntry = { readonly primary?: ObservedCodexWindow; readonly secondary?: ObservedCodexWindow };
 type UsageKind = "codex" | "claude" | "kimi" | "zai" | "unavailable";
 type CredentialCandidate = { readonly provider: string; readonly oauthOnly: boolean };
 
@@ -43,29 +43,37 @@ export type SubscriptionUsageSource = {
 	readonly kind: UsageKind;
 	readonly credentials: readonly CredentialCandidate[];
 	readonly ttlMs: number;
+	readonly unavailableMessage?: string;
 };
 
 type UsageSession = Pick<AgentSession, "state" | "modelRegistry">;
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+type FetchJsonResult = { readonly status: number; readonly payload?: unknown };
 
-const passiveCodexUsage = new Map<string, PassiveCodexEntry>();
+const passiveCodexUsage = new Map<string, PassiveUsageEntry>();
+const passiveClaudeUsage = new Map<string, PassiveUsageEntry>();
+const subscriptionUsageRevisions = new Map<string, number>();
 const MINUTE_TTL_MS = 60_000;
 const VISIBLE_USAGE_PROVIDERS = [
 	"openai-codex",
 	"anthropic",
 	"kimi-coding",
 	"zai",
+	"modelstudio-maas",
 	"qwen-oauth",
 	"grok-oauth-proxy",
 ] as const;
 const SOURCES: Readonly<Record<string, SubscriptionUsageSource>> = {
 	"openai-codex": source("CODEX", "codex", [{ provider: "openai-codex", oauthOnly: true }]),
 	anthropic: source("CLAUDE", "claude", [{ provider: "anthropic", oauthOnly: true }], 5 * MINUTE_TTL_MS),
-	"qwen-oauth": source("QWEN", "unavailable", [
-		{ provider: "qwen-oauth", oauthOnly: true },
-		{ provider: "modelstudio-maas", oauthOnly: false },
-	]),
-	"modelstudio-maas": source("QWEN", "unavailable", [{ provider: "modelstudio-maas", oauthOnly: false }]),
+	"qwen-oauth": source("QWEN", "unavailable", [{ provider: "qwen-oauth", oauthOnly: true }]),
+	"modelstudio-maas": source(
+		"QWEN TOKEN PLAN",
+		"unavailable",
+		[{ provider: "modelstudio-maas", oauthOnly: false }],
+		MINUTE_TTL_MS,
+		"console-only quota",
+	),
 	"kimi-code": source("KIMI", "kimi", [
 		{ provider: "kimi-code", oauthOnly: true },
 		{ provider: "kimi-coding", oauthOnly: false },
@@ -96,8 +104,9 @@ function source(
 	kind: UsageKind,
 	credentials: readonly CredentialCandidate[],
 	ttlMs = MINUTE_TTL_MS,
+	unavailableMessage?: string,
 ): SubscriptionUsageSource {
-	return { label, kind, credentials, ttlMs };
+	return { label, kind, credentials, ttlMs, unavailableMessage };
 }
 
 export function getSubscriptionUsageSource(provider: string | undefined): SubscriptionUsageSource | undefined {
@@ -111,6 +120,22 @@ export function getSubscriptionUsageSource(provider: string | undefined): Subscr
 		]);
 	}
 	return undefined;
+}
+
+function usageRevisionKey(provider: string): string {
+	const kind = getSubscriptionUsageSource(provider)?.kind;
+	if (kind === "codex") return "codex";
+	if (kind === "claude") return "claude";
+	return provider;
+}
+
+export function getSubscriptionUsageRevision(provider: string): number {
+	return subscriptionUsageRevisions.get(usageRevisionKey(provider)) ?? 0;
+}
+
+function bumpSubscriptionUsageRevision(provider: string): void {
+	const key = usageRevisionKey(provider);
+	subscriptionUsageRevisions.set(key, (subscriptionUsageRevisions.get(key) ?? 0) + 1);
 }
 
 export function supportsSubscriptionUsage(session: UsageSession, provider = session.state.model?.provider): boolean {
@@ -140,7 +165,11 @@ export async function loadSubscriptionUsage(
 	const usageSource = getSubscriptionUsageSource(provider);
 	if (!model || !usageSource || !supportsSubscriptionUsage(session, provider)) return undefined;
 	if (usageSource.kind === "unavailable") {
-		return { label: usageSource.label, windows: [], message: "quota API unavailable" };
+		return {
+			label: usageSource.label,
+			windows: [],
+			message: usageSource.unavailableMessage ?? "quota API unavailable",
+		};
 	}
 	if (offline()) return { label: usageSource.label, windows: [], message: "offline" };
 
@@ -246,13 +275,13 @@ export function recordCodexPassiveUsage(apiKey: string, snapshot: ProviderRateLi
 	const limitId = snapshot.limitId?.trim().toLowerCase().replace(/-/g, "_");
 	if (!accountId || !Number.isFinite(nowMs) || nowMs < 0 || (limitId && limitId !== "codex")) return;
 	prunePassiveCodexUsage(nowMs);
-	const cacheKey = passiveCodexCacheKey(accountId);
+	const cacheKey = passiveCredentialCacheKey(accountId);
 	const primary = normalizePassiveCodexWindow(snapshot.primary, nowMs);
 	const secondary = normalizePassiveCodexWindow(snapshot.secondary, nowMs);
 	if (!primary && !secondary) return;
 
 	const previous = passiveCodexUsage.get(cacheKey);
-	const next: PassiveCodexEntry = {
+	const next: PassiveUsageEntry = {
 		primary: primary ? { window: primary, observedAt: nowMs } : freshObservedCodexWindow(previous?.primary, nowMs),
 		secondary: secondary
 			? { window: secondary, observedAt: nowMs }
@@ -260,11 +289,50 @@ export function recordCodexPassiveUsage(apiKey: string, snapshot: ProviderRateLi
 	};
 	passiveCodexUsage.delete(cacheKey);
 	passiveCodexUsage.set(cacheKey, next);
-	while (passiveCodexUsage.size > MAX_PASSIVE_CODEX_ACCOUNTS) {
+	while (passiveCodexUsage.size > MAX_PASSIVE_ACCOUNTS) {
 		const oldestCacheKey = passiveCodexUsage.keys().next().value;
 		if (oldestCacheKey === undefined) break;
 		passiveCodexUsage.delete(oldestCacheKey);
 	}
+	bumpSubscriptionUsageRevision("openai-codex");
+}
+
+export function recordClaudePassiveUsage(
+	apiKey: string,
+	snapshot: ProviderRateLimitSnapshot,
+	nowMs = Date.now(),
+): void {
+	const limitId = snapshot.limitId?.trim().toLowerCase().replace(/-/g, "_");
+	if (
+		!apiKey ||
+		apiKey.length > 32_768 ||
+		!Number.isFinite(nowMs) ||
+		nowMs < 0 ||
+		(limitId && limitId !== "anthropic_unified")
+	) {
+		return;
+	}
+	prunePassiveClaudeUsage(nowMs);
+	const cacheKey = passiveCredentialCacheKey(apiKey);
+	const primary = normalizePassiveCodexWindow(snapshot.primary, nowMs);
+	const secondary = normalizePassiveCodexWindow(snapshot.secondary, nowMs);
+	if (!primary && !secondary) return;
+
+	const previous = passiveClaudeUsage.get(cacheKey);
+	const next: PassiveUsageEntry = {
+		primary: primary ? { window: primary, observedAt: nowMs } : freshObservedCodexWindow(previous?.primary, nowMs),
+		secondary: secondary
+			? { window: secondary, observedAt: nowMs }
+			: freshObservedCodexWindow(previous?.secondary, nowMs),
+	};
+	passiveClaudeUsage.delete(cacheKey);
+	passiveClaudeUsage.set(cacheKey, next);
+	while (passiveClaudeUsage.size > MAX_PASSIVE_ACCOUNTS) {
+		const oldestCacheKey = passiveClaudeUsage.keys().next().value;
+		if (oldestCacheKey === undefined) break;
+		passiveClaudeUsage.delete(oldestCacheKey);
+	}
+	bumpSubscriptionUsageRevision("anthropic");
 }
 
 async function fetchCodexUsage(
@@ -308,16 +376,25 @@ async function fetchClaudeUsage(
 	apiKey: string,
 	fetchImpl: FetchLike,
 ): Promise<SubscriptionUsageSnapshot> {
-	const payload = await fetchJson(fetchImpl, CLAUDE_USAGE_URL, {
+	const passive = passiveClaudeSnapshot(apiKey);
+	const response = await fetchJsonResult(fetchImpl, CLAUDE_USAGE_URL, {
 		headers: {
 			Authorization: `Bearer ${apiKey}`,
 			Accept: "application/json",
 			"anthropic-beta": "claude-code-20250219,oauth-2025-04-20",
-			"User-Agent": "claude-cli/2.1.75 (external, cli)",
+			"User-Agent": "claude-cli/2.1.177 (external, cli)",
 		},
 	});
-	const windows = parseClaudeUsageSnapshot(payload);
-	return windows ? { label, windows } : { label, windows: [], message: "usage unavailable" };
+	const windows = [...(parseClaudeUsageSnapshot(response.payload) ?? [])];
+	for (const passiveWindow of [
+		passive?.fiveHour ? withLabel("5H", passive.fiveHour) : undefined,
+		passive?.sevenDay ? withLabel("7D", passive.sevenDay) : undefined,
+	].filter(isDefined)) {
+		if (!windows.some((window) => window.label === passiveWindow.label)) windows.push(passiveWindow);
+	}
+	return windows.length > 0
+		? { label, windows }
+		: { label, windows: [], message: response.status === 429 ? "rate limited · retry later" : "usage unavailable" };
 }
 
 async function fetchKimiUsage(label: string, apiKey: string, fetchImpl: FetchLike): Promise<SubscriptionUsageSnapshot> {
@@ -358,11 +435,19 @@ async function fetchZaiUsage(
 }
 
 async function fetchJson(fetchImpl: FetchLike, url: string, init: RequestInit): Promise<unknown> {
+	return (await fetchJsonResult(fetchImpl, url, init)).payload;
+}
+
+async function fetchJsonResult(fetchImpl: FetchLike, url: string, init: RequestInit): Promise<FetchJsonResult> {
 	const response = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(10_000) });
-	if (!response.ok) return undefined;
+	if (!response.ok) return { status: response.status };
 	const declaredBytes = Number(response.headers?.get("content-length"));
-	if (Number.isFinite(declaredBytes) && declaredBytes > MAX_USAGE_RESPONSE_BYTES) return undefined;
-	if (!response.body || typeof response.body.getReader !== "function") return response.json();
+	if (Number.isFinite(declaredBytes) && declaredBytes > MAX_USAGE_RESPONSE_BYTES) {
+		return { status: response.status };
+	}
+	if (!response.body || typeof response.body.getReader !== "function") {
+		return { status: response.status, payload: await response.json() };
+	}
 
 	const reader = response.body.getReader();
 	const chunks: Uint8Array[] = [];
@@ -373,7 +458,7 @@ async function fetchJson(fetchImpl: FetchLike, url: string, init: RequestInit): 
 		totalBytes += value.byteLength;
 		if (totalBytes > MAX_USAGE_RESPONSE_BYTES) {
 			await reader.cancel();
-			return undefined;
+			return { status: response.status };
 		}
 		chunks.push(value);
 	}
@@ -384,9 +469,9 @@ async function fetchJson(fetchImpl: FetchLike, url: string, init: RequestInit): 
 		offset += chunk.byteLength;
 	}
 	try {
-		return JSON.parse(new TextDecoder().decode(body)) as unknown;
+		return { status: response.status, payload: JSON.parse(new TextDecoder().decode(body)) as unknown };
 	} catch {
-		return undefined;
+		return { status: response.status };
 	}
 }
 
@@ -551,15 +636,15 @@ function normalizePassiveCodexWindow(
 	};
 }
 
-function passiveCodexCacheKey(accountId: string): string {
-	return createHash("sha256").update(accountId).digest("base64url");
+function passiveCredentialCacheKey(identifier: string): string {
+	return createHash("sha256").update(identifier).digest("base64url");
 }
 
 function freshObservedCodexWindow(
 	observed: ObservedCodexWindow | undefined,
 	nowMs: number,
 ): ObservedCodexWindow | undefined {
-	if (!observed || nowMs - observed.observedAt > PASSIVE_CODEX_TTL_MS) return undefined;
+	if (!observed || nowMs - observed.observedAt > PASSIVE_USAGE_TTL_MS) return undefined;
 	if (observed.window.resetsAt !== undefined && observed.window.resetsAt <= nowMs / 1000) return undefined;
 	return observed;
 }
@@ -572,11 +657,19 @@ function prunePassiveCodexUsage(nowMs: number): void {
 	}
 }
 
+function prunePassiveClaudeUsage(nowMs: number): void {
+	for (const [cacheKey, entry] of passiveClaudeUsage) {
+		if (!freshObservedCodexWindow(entry.primary, nowMs) && !freshObservedCodexWindow(entry.secondary, nowMs)) {
+			passiveClaudeUsage.delete(cacheKey);
+		}
+	}
+}
+
 function passiveCodexSnapshot(apiKey: string, nowMs = Date.now()): CodexUsageSnapshot | undefined {
 	const accountId = codexAccountId(apiKey);
 	if (!accountId || !Number.isFinite(nowMs) || nowMs < 0) return undefined;
 	prunePassiveCodexUsage(nowMs);
-	const cacheKey = passiveCodexCacheKey(accountId);
+	const cacheKey = passiveCredentialCacheKey(accountId);
 	const entry = passiveCodexUsage.get(cacheKey);
 	if (!entry) return undefined;
 	const primary = freshObservedCodexWindow(entry.primary, nowMs);
@@ -588,6 +681,31 @@ function passiveCodexSnapshot(apiKey: string, nowMs = Date.now()): CodexUsageSna
 	const freshEntry = { primary, secondary };
 	passiveCodexUsage.delete(cacheKey);
 	passiveCodexUsage.set(cacheKey, freshEntry);
+
+	const windows = [primary?.window, secondary?.window].filter(isDefined);
+	const fiveHour = windows.find((window) => near(window.windowSeconds, FIVE_HOUR_SECONDS));
+	const sevenDay = windows.find((window) => near(window.windowSeconds, SEVEN_DAY_SECONDS));
+	if (!fiveHour && !sevenDay) return undefined;
+	return {
+		...(fiveHour ? { fiveHour: publicCodexWindow(fiveHour) } : {}),
+		...(sevenDay ? { sevenDay: publicCodexWindow(sevenDay) } : {}),
+	};
+}
+
+function passiveClaudeSnapshot(apiKey: string, nowMs = Date.now()): CodexUsageSnapshot | undefined {
+	if (!apiKey || apiKey.length > 32_768 || !Number.isFinite(nowMs) || nowMs < 0) return undefined;
+	prunePassiveClaudeUsage(nowMs);
+	const cacheKey = passiveCredentialCacheKey(apiKey);
+	const entry = passiveClaudeUsage.get(cacheKey);
+	if (!entry) return undefined;
+	const primary = freshObservedCodexWindow(entry.primary, nowMs);
+	const secondary = freshObservedCodexWindow(entry.secondary, nowMs);
+	if (!primary && !secondary) {
+		passiveClaudeUsage.delete(cacheKey);
+		return undefined;
+	}
+	passiveClaudeUsage.delete(cacheKey);
+	passiveClaudeUsage.set(cacheKey, { primary, secondary });
 
 	const windows = [primary?.window, secondary?.window].filter(isDefined);
 	const fiveHour = windows.find((window) => near(window.windowSeconds, FIVE_HOUR_SECONDS));

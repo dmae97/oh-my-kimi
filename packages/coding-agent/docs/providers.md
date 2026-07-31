@@ -21,7 +21,7 @@ Use `/login` in interactive mode, then select a provider:
 
 Use `/logout` to clear credentials. Tokens are stored in `~/.omk/agent/auth.json` and auto-refresh when expired.
 
-When the status sidebar is pinned, its **USAGE** section lists every configured subscription provider, with the active provider first. OMK reads quota windows from fixed provider endpoints for Codex, Claude, Kimi Code, and GLM/ZAI Coding Plan, caches the result, and displays each percentage and reset countdown separately. Qwen and Grok are recognized but show `quota API unavailable` because those providers do not expose a programmatic subscription-quota endpoint; OMK does not estimate or copy values.
+When the status sidebar is pinned, its **USAGE** section lists every configured subscription provider, with the active provider first. OMK reads quota windows from fixed provider endpoints for Codex, Claude, Kimi Code, and GLM/ZAI Coding Plan, caches the result, and displays each percentage and reset countdown separately. Claude also passively merges the official `anthropic-ratelimit-unified-*` response headers used by Claude Code, so a temporarily rate-limited usage endpoint does not erase a recent 5-hour/7-day snapshot. Alibaba Model Studio Token Plan is recognized as **QWEN TOKEN PLAN** but shows `console-only quota`: the plan exposes no programmatic balance endpoint, and the Qwen desktop app is a `chat.qwen.ai` wrapper rather than a Token Plan usage source. Qwen OAuth and Grok remain explicit `quota API unavailable`; OMK does not estimate or copy values.
 
 ### OpenAI Codex
 
