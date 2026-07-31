@@ -60,7 +60,7 @@ export interface TerminalSettings {
 }
 
 export interface ImageSettings {
-	autoResize?: boolean; // default: true (resize images to 2000x2000 max for better model compatibility)
+	autoResize?: boolean; // default: true (resize images to 1900x1900 max — below Anthropic's 2000px many-image limit)
 	blockImages?: boolean; // default: false - when true, prevents all images from being sent to LLM providers
 }
 
@@ -136,8 +136,6 @@ export type PackageSource =
 
 export interface Settings {
 	lastChangelogVersion?: string;
-	/** Operator confirmed a GitHub star; suppresses the startup star nudge. Global-only. */
-	githubStarred?: boolean;
 	defaultProvider?: string;
 	defaultModel?: string;
 	defaultThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
@@ -390,6 +388,19 @@ export class SettingsManager {
 		return SettingsManager.fromStorage(storage);
 	}
 
+	private static parseStoredSettings(content: string, scope: SettingsScope): Settings {
+		try {
+			const parsed: unknown = JSON.parse(content);
+			if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+				throw new TypeError("settings root must be a JSON object");
+			}
+			return SettingsManager.migrateSettings(parsed as Record<string, unknown>);
+		} catch (error) {
+			const reason = error instanceof Error ? error.message : String(error);
+			throw new Error(`Failed to parse ${scope} settings: ${reason}`);
+		}
+	}
+
 	private static loadFromStorage(storage: SettingsStorage, scope: SettingsScope): Settings {
 		let content: string | undefined;
 		storage.withLock(scope, (current) => {
@@ -397,11 +408,7 @@ export class SettingsManager {
 			return undefined;
 		});
 
-		if (!content) {
-			return {};
-		}
-		const settings = JSON.parse(content);
-		return SettingsManager.migrateSettings(settings);
+		return content ? SettingsManager.parseStoredSettings(content, scope) : {};
 	}
 
 	private static tryLoadFromStorage(
@@ -582,9 +589,7 @@ export class SettingsManager {
 		modifiedNestedFields: Map<keyof Settings, Set<string>>,
 	): void {
 		this.storage.withLock(scope, (current) => {
-			const currentFileSettings = current
-				? SettingsManager.migrateSettings(JSON.parse(current) as Record<string, unknown>)
-				: {};
+			const currentFileSettings = current ? SettingsManager.parseStoredSettings(current, scope) : {};
 			const mergedSettings: Settings = { ...currentFileSettings };
 			for (const field of modifiedFields) {
 				const value = snapshotSettings[field];
@@ -655,17 +660,6 @@ export class SettingsManager {
 	setLastChangelogVersion(version: string): void {
 		this.globalSettings.lastChangelogVersion = version;
 		this.markModified("lastChangelogVersion");
-		this.save();
-	}
-
-	/** Global-only: true after the operator confirms they starred the OMK repo. */
-	getGithubStarred(): boolean {
-		return this.globalSettings.githubStarred === true;
-	}
-
-	setGithubStarred(starred: boolean): void {
-		this.globalSettings.githubStarred = starred;
-		this.markModified("githubStarred");
 		this.save();
 	}
 

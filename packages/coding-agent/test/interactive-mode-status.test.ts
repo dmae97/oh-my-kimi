@@ -102,6 +102,28 @@ describe("InteractiveMode termination rendering", () => {
 		expect(fakeThis.showError).toHaveBeenCalledWith(expect.stringContaining("kind=process_crash"));
 	});
 
+	test("keeps typed compaction cancellation telemetry without rendering a duplicate error", () => {
+		const termination = classifySessionTermination({
+			sessionId: "session-1",
+			runId: "compaction-1",
+			timestamp: "2026-07-17T00:00:00.000Z",
+			source: "observed",
+			message: "Compaction cancelled",
+			cause: { area: "compaction", code: "aborted" },
+			sideEffects: "none",
+		});
+		const fakeThis = { lastRenderedTermination: undefined as typeof termination | undefined, showError: vi.fn() };
+		const showSessionTermination = Reflect.get(InteractiveMode.prototype, "showSessionTermination") as (
+			this: typeof fakeThis,
+			value: typeof termination,
+		) => void;
+
+		showSessionTermination.call(fakeThis, termination);
+
+		expect(fakeThis.lastRenderedTermination).toBe(termination);
+		expect(fakeThis.showError).not.toHaveBeenCalled();
+	});
+
 	test("Given tool_timeout, When its session event is handled, Then interactive mode routes the typed termination", async () => {
 		const termination = classifySessionTermination({
 			sessionId: "session-1",

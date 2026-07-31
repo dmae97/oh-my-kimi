@@ -501,7 +501,14 @@ function nextActionFor(classification: Classification, input: ClassifySessionTer
 		case "tool_fatal":
 			return "Inspect the failed tool result and repair its configuration before retrying.";
 		case "compaction":
-			return "Retry compaction after resolving the reported barrier or stale transaction.";
+			switch (classification.causeCode) {
+				case "compaction.aborted":
+					return "Retry /compact if cancellation was unintended; avoid Escape while compaction is running.";
+				case "compaction.stale":
+					return "Retry /compact after pending session changes settle.";
+				default:
+					return "Resolve the reported compaction error, then retry /compact.";
+			}
 		case "persistence":
 			return `Run omk session doctor --session ${input.sessionId} before resuming.`;
 		case "process_signal":

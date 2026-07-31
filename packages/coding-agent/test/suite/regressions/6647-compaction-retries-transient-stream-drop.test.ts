@@ -112,22 +112,25 @@ describe("#6647 compaction retries transient summarization failures", () => {
 		expect(model.id).toBeTruthy();
 	});
 
-	it("does not retry a non-retryable error (insufficient_quota)", async () => {
-		const harness = await createHarness({ withConfiguredAuth: false });
-		harnesses.push(harness);
-		seedCompactableSession(harness);
-		harness.settingsManager.applyOverrides({ retry: { enabled: true, maxRetries: 3, baseDelayMs: 0 } });
+	it.each(["insufficient_quota", "429 Insufficient balance or no resource package. Please recharge."])(
+		"does not retry a non-retryable quota error (%s)",
+		async (errorMessage) => {
+			const harness = await createHarness({ withConfiguredAuth: false });
+			harnesses.push(harness);
+			seedCompactableSession(harness);
+			harness.settingsManager.applyOverrides({ retry: { enabled: true, maxRetries: 3, baseDelayMs: 0 } });
 
-		const error: AssistantMessage = {
-			...fauxAssistantMessage("", { stopReason: "error", errorMessage: "insufficient_quota" }),
-			usage: createUsage(10),
-		};
-		const getCallCount = useScriptedStreamFn(harness, [error]);
+			const error: AssistantMessage = {
+				...fauxAssistantMessage("", { stopReason: "error", errorMessage }),
+				usage: createUsage(10),
+			};
+			const getCallCount = useScriptedStreamFn(harness, [error]);
 
-		await expect(harness.session.compact()).rejects.toThrow("insufficient_quota");
-		expect(getCallCount()).toBe(1);
-		expect(harness.eventsOfType("summarization_retry_scheduled")).toHaveLength(0);
-	});
+			await expect(harness.session.compact()).rejects.toThrow(errorMessage);
+			expect(getCallCount()).toBe(1);
+			expect(harness.eventsOfType("summarization_retry_scheduled")).toHaveLength(0);
+		},
+	);
 
 	it("does not retry when retry is disabled", async () => {
 		const harness = await createHarness({ withConfiguredAuth: false });
@@ -187,7 +190,7 @@ describe("#6647 compaction retries transient summarization failures", () => {
 		// The aborted retry backoff is normalized to an aborted assistant message,
 		// which compaction classifies as aborted.
 		await expect(compactPromise).rejects.toThrow();
-		const compactionEnd = harness.eventsOfType("compaction_end").at(-1);
+		const compactionEnd = harness.eventsOfType("compaction_end").slice(-1)[0];
 		expect(compactionEnd).toMatchObject({ aborted: true });
 	});
 });

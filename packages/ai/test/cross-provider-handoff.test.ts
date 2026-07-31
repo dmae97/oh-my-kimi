@@ -122,12 +122,14 @@ const PROVIDER_MODEL_PAIRS: ProviderModelPair[] = [
 	{ provider: "opencode", model: "big-pickle", label: "zen-big-pickle" },
 	{ provider: "opencode", model: "claude-sonnet-4-5", label: "zen-claude-sonnet-4-5" },
 	{ provider: "opencode", model: "gemini-3-flash", label: "zen-gemini-3-flash" },
-	{ provider: "opencode", model: "glm-4.7-free", label: "zen-glm-4.7-free" },
+	{ provider: "opencode", model: "glm-5.1", label: "zen-glm-5.1" },
 	{ provider: "opencode", model: "gpt-5.2-codex", label: "zen-gpt-5.2-codex" },
-	{ provider: "opencode", model: "minimax-m2.1-free", label: "zen-minimax-m2.1-free" },
+	{ provider: "opencode", model: "minimax-m2.7", label: "zen-minimax-m2.7" },
+	{ provider: "opencode", model: "kimi-k3", label: "zen-kimi-k3" },
 	// OpenCode Go
-	{ provider: "opencode-go", model: "kimi-k2.5", label: "go-kimi-k2.5" },
-	{ provider: "opencode-go", model: "minimax-m2.5", label: "go-minimax-m2.5" },
+	{ provider: "opencode-go", model: "kimi-k2.6", label: "go-kimi-k2.6" },
+	{ provider: "opencode-go", model: "minimax-m2.7", label: "go-minimax-m2.7" },
+	{ provider: "opencode-go", model: "kimi-k3", label: "go-kimi-k3" },
 	// Xiaomi MiMo
 	{ provider: "xiaomi", model: "mimo-v2.5-pro", label: "xiaomi-mimo-v2.5-pro" },
 	{ provider: "xiaomi-token-plan-cn", model: "mimo-v2.5-pro", label: "xiaomi-token-plan-cn-mimo-v2.5-pro" },

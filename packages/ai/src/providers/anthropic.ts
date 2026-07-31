@@ -32,6 +32,7 @@ import { headersToRecord } from "../utils/headers.ts";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.ts";
 import { retryProviderRequest } from "../utils/provider-retry.ts";
 import { sanitizeSurrogates, sanitizeSurrogatesDeep } from "../utils/sanitize-unicode.ts";
+import { sanitizeOversizedImages } from "./anthropic-image-guard.ts";
 import { resolveCloudflareBaseUrl } from "./cloudflare.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
 import { adjustMaxTokensForThinking, buildBaseOptions } from "./simple-options.ts";
@@ -1085,7 +1086,10 @@ function convertMessages(
 	const params: MessageParam[] = [];
 
 	// Transform messages for cross-provider compatibility
-	const transformedMessages = transformMessages(messages, model, normalizeToolCallId);
+	const compatibleMessages = transformMessages(messages, model, normalizeToolCallId);
+	// Pre-send guard: replace recognized images exceeding Anthropic's
+	// dimension limit so those transcript entries do not repeat the same 400.
+	const { messages: transformedMessages } = sanitizeOversizedImages(compatibleMessages);
 
 	for (let i = 0; i < transformedMessages.length; i++) {
 		const msg = transformedMessages[i];

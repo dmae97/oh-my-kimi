@@ -68,6 +68,14 @@ describe("classifySessionTermination", () => {
 		expect(Object.isFrozen(termination)).toBe(true);
 	});
 
+	it("gives cancellation-specific compaction recovery advice", () => {
+		const termination = classify({ area: "compaction", code: "aborted" });
+
+		expect(termination.nextAction).toMatch(/retry \/compact/i);
+		expect(termination.nextAction).toContain("Escape");
+		expect(termination.nextAction).not.toMatch(/barrier|stale transaction/i);
+	});
+
 	it("Given provider_auth, When formatted, Then it preserves the diagnostic and stable recovery fields", () => {
 		const termination = classifySessionTermination({
 			sessionId: "session-1",

@@ -212,6 +212,10 @@ describe("AgentSession compaction characterization", () => {
 		harness.session.abortCompaction();
 
 		await expect(compactPromise).rejects.toThrow("Compaction cancelled");
+		expect(harness.session.lastTermination).toMatchObject({
+			causeCode: "compaction.aborted",
+			nextAction: expect.stringMatching(/retry \/compact/i),
+		});
 	});
 
 	it("resumes after threshold compaction when only agent-level queued messages exist", async () => {

@@ -471,9 +471,9 @@ export class ModelRegistry {
 
 		// Let OAuth providers modify their models (e.g., update baseUrl)
 		for (const oauthProvider of this.authStorage.getOAuthProviders()) {
-			const cred = this.authStorage.get(oauthProvider.id);
-			if (cred?.type === "oauth" && oauthProvider.modifyModels) {
-				combined = oauthProvider.modifyModels(combined, cred);
+			const credentials = this.authStorage.getOAuthCredentials(oauthProvider.id);
+			if (credentials && oauthProvider.modifyModels) {
+				combined = oauthProvider.modifyModels(combined, credentials);
 			}
 		}
 

@@ -19,13 +19,14 @@ function getUrl(input: unknown): string {
 	throw new Error(`Unsupported fetch input: ${String(input)}`);
 }
 
-function createAccessToken(accountId: string): string {
+function createAccessToken(accountId: string, email?: string): string {
 	const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64");
 	const payload = Buffer.from(
 		JSON.stringify({
 			"https://api.openai.com/auth": {
 				chatgpt_account_id: accountId,
 			},
+			...(email ? { "https://api.openai.com/profile": { email } } : {}),
 		}),
 	).toString("base64");
 	return `${header}.${payload}.signature`;
@@ -52,12 +53,23 @@ describe("OpenAI Codex OAuth", () => {
 		vi.useRealTimers();
 	});
 
+	it("derives a readable label from legacy credentials without stored email metadata", () => {
+		const access = createAccessToken("opaque-account-id", "legacy@example.com");
+		expect(
+			openaiCodexOAuthProvider.getAccountLabel?.({
+				access,
+				refresh: "refresh-token",
+				expires: Date.now() + 60_000,
+			}),
+		).toBe("legacy@example.com");
+	});
+
 	it("logs in with the OpenAI Codex device code flow", async () => {
 		vi.useFakeTimers();
 		const startTime = new Date("2026-05-20T00:00:00Z");
 		vi.setSystemTime(startTime);
 
-		const accessToken = createAccessToken("account-123");
+		const accessToken = createAccessToken("account-123", "user@example.com");
 		const deviceInfos: Array<{
 			userCode: string;
 			verificationUri: string;
@@ -151,6 +163,7 @@ describe("OpenAI Codex OAuth", () => {
 			refresh: "refresh-token",
 			expires: startTime.getTime() + 5000 + 3600 * 1000,
 			accountId: "account-123",
+			email: "user@example.com",
 		});
 		expect(pollTimes).toEqual([startTime.getTime(), startTime.getTime() + 5000]);
 	});

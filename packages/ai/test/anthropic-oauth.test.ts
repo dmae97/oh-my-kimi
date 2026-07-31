@@ -48,6 +48,8 @@ describe.sequential("Anthropic OAuth", () => {
 				access_token: "access-token",
 				refresh_token: "refresh-token",
 				expires_in: 3600,
+				account: { uuid: "account-123", email_address: "claude@example.com" },
+				organization: { uuid: "org-123", name: "Personal" },
 			});
 		});
 		vi.stubGlobal("fetch", fetchMock);
@@ -68,8 +70,14 @@ describe.sequential("Anthropic OAuth", () => {
 			},
 		});
 
-		expect(credentials.access).toBe("access-token");
-		expect(credentials.refresh).toBe("refresh-token");
+		expect(credentials).toMatchObject({
+			access: "access-token",
+			refresh: "refresh-token",
+			accountId: "account-123",
+			email: "claude@example.com",
+			orgId: "org-123",
+			orgName: "Personal",
+		});
 		expect(fetchMock).toHaveBeenCalledOnce();
 	});
 

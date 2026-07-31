@@ -18,6 +18,7 @@ import { getOAuthApiKey, getOAuthProvider, getOAuthProviders } from "omk-ai/oaut
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { getAgentDir } from "../config.ts";
+import { stripAnsi } from "../utils/ansi.ts";
 import { normalizePath } from "../utils/paths.ts";
 import { resolveConfigValue } from "./resolve-config-value.ts";
 
@@ -28,11 +29,144 @@ export type ApiKeyCredential = {
 
 export type OAuthCredential = {
 	type: "oauth";
+	/** Complete account list when more than one subscription account is configured. */
+	accounts?: OAuthCredentials[];
+	/** Index of the account explicitly selected for this provider. */
+	activeAccount?: number;
+	/** Legacy cursor accepted when migrating older auth.json files. */
+	nextAccount?: number;
 } & OAuthCredentials;
+
+export interface OAuthAccountSummary {
+	index: number;
+	label: string;
+	selected: boolean;
+}
 
 export type AuthCredential = ApiKeyCredential | OAuthCredential;
 
 export type AuthStorageData = Record<string, AuthCredential>;
+
+const OAUTH_ACCOUNT_ID_FIELDS = ["accountId", "email", "userId", "username"] as const;
+const OAUTH_ACCOUNT_LABEL_FIELDS = ["email", "username"] as const;
+const OAUTH_ACCOUNT_LABEL_MAX_LENGTH = 96;
+const UNSAFE_ACCOUNT_LABEL_PATTERN =
+	/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/g;
+
+function sanitizeOAuthAccountLabel(value: string): string | undefined {
+	const sanitized = stripAnsi(value)
+		.replace(/[\t\r\n]+/g, " ")
+		.replace(UNSAFE_ACCOUNT_LABEL_PATTERN, "")
+		.replace(/\s+/g, " ")
+		.trim()
+		.slice(0, OAUTH_ACCOUNT_LABEL_MAX_LENGTH);
+	return sanitized || undefined;
+}
+
+function stripOAuthStorageMetadata(credential: OAuthCredential): OAuthCredentials {
+	const {
+		type: _type,
+		accounts: _accounts,
+		activeAccount: _activeAccount,
+		nextAccount: _nextAccount,
+		...credentials
+	} = credential;
+	return credentials;
+}
+
+function getOAuthAccounts(credential: OAuthCredential): OAuthCredentials[] {
+	if (Array.isArray(credential.accounts) && credential.accounts.length > 0) {
+		return credential.accounts;
+	}
+	return [stripOAuthStorageMetadata(credential)];
+}
+
+function normalizeOAuthAccountIndex(index: unknown, accountCount: number): number {
+	if (accountCount <= 0 || typeof index !== "number" || !Number.isInteger(index)) {
+		return 0;
+	}
+	return ((index % accountCount) + accountCount) % accountCount;
+}
+
+function getSelectedOAuthAccountIndex(credential: OAuthCredential, accountCount: number): number {
+	return normalizeOAuthAccountIndex(credential.activeAccount ?? credential.nextAccount, accountCount);
+}
+
+function createOAuthCredential(accounts: OAuthCredentials[], activeAccount = 0): OAuthCredential {
+	const selectedIndex = normalizeOAuthAccountIndex(activeAccount, accounts.length);
+	const selected = accounts[selectedIndex];
+	if (!selected) {
+		throw new Error("OAuth credential must contain at least one account");
+	}
+	if (accounts.length === 1) {
+		return { ...selected, type: "oauth" };
+	}
+	return {
+		...selected,
+		type: "oauth",
+		accounts,
+		activeAccount: selectedIndex,
+	};
+}
+
+function getOAuthAccountIdentity(credentials: OAuthCredentials): string | undefined {
+	const accountId = credentials.accountId;
+	const orgId = credentials.orgId;
+	if (typeof accountId === "string" && accountId.trim() && typeof orgId === "string" && orgId.trim()) {
+		return `accountId:${accountId.trim().toLowerCase()}:orgId:${orgId.trim().toLowerCase()}`;
+	}
+	for (const field of OAUTH_ACCOUNT_ID_FIELDS) {
+		const value = credentials[field];
+		if (typeof value === "string" && value.trim()) {
+			return `${field}:${value.trim().toLowerCase()}`;
+		}
+	}
+	return undefined;
+}
+
+function getOAuthAccountDisplayLabel(providerId: string, credentials: OAuthCredentials): string | undefined {
+	for (const field of OAUTH_ACCOUNT_LABEL_FIELDS) {
+		const value = credentials[field];
+		if (typeof value === "string" && value.trim()) {
+			const label = sanitizeOAuthAccountLabel(value);
+			if (!label) continue;
+			const orgName =
+				typeof credentials.orgName === "string" ? sanitizeOAuthAccountLabel(credentials.orgName) : undefined;
+			return sanitizeOAuthAccountLabel(orgName ? `${label} (${orgName})` : label);
+		}
+	}
+	try {
+		const label = getOAuthProvider(providerId)?.getAccountLabel?.(credentials);
+		return typeof label === "string" ? sanitizeOAuthAccountLabel(label) : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function findMatchingOAuthAccount(accounts: OAuthCredentials[], credentials: OAuthCredentials): number {
+	const identity = getOAuthAccountIdentity(credentials);
+	if (identity) {
+		const exactMatch = accounts.findIndex((account) => getOAuthAccountIdentity(account) === identity);
+		if (exactMatch >= 0) return exactMatch;
+	}
+
+	// Let newly enriched credentials update older entries that predate email/org metadata.
+	for (const field of OAUTH_ACCOUNT_ID_FIELDS) {
+		const value = credentials[field];
+		if (typeof value !== "string" || !value.trim()) continue;
+		const normalizedValue = value.trim().toLowerCase();
+		const orgId = typeof credentials.orgId === "string" ? credentials.orgId.trim().toLowerCase() : "";
+		const compatibleMatch = accounts.findIndex((account) => {
+			const existingValue = account[field];
+			if (typeof existingValue !== "string" || existingValue.trim().toLowerCase() !== normalizedValue) return false;
+			const existingOrgId = typeof account.orgId === "string" ? account.orgId.trim().toLowerCase() : "";
+			return !orgId || !existingOrgId || orgId === existingOrgId;
+		});
+		if (compatibleMatch >= 0) return compatibleMatch;
+	}
+
+	return accounts.findIndex((account) => account.refresh === credentials.refresh);
+}
 
 export type AuthStatus = {
 	configured: boolean;
@@ -254,7 +388,12 @@ export class AuthStorage {
 		if (!content) {
 			return {};
 		}
-		return JSON.parse(content) as AuthStorageData;
+		try {
+			return JSON.parse(content) as AuthStorageData;
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			throw new Error(`Failed to parse auth storage: ${message}`);
+		}
 	}
 
 	/**
@@ -345,6 +484,65 @@ export class AuthStorage {
 		return false;
 	}
 
+	/** Return the number of stored OAuth accounts for a provider. */
+	getOAuthAccountCount(provider: string): number {
+		const credential = this.data[provider];
+		return credential?.type === "oauth" ? getOAuthAccounts(credential).length : 0;
+	}
+
+	/** Return safe, human-readable labels for every stored OAuth account. */
+	listOAuthAccounts(provider: string): OAuthAccountSummary[] {
+		const credential = this.data[provider];
+		if (credential?.type !== "oauth") return [];
+		const accounts = getOAuthAccounts(credential);
+		const selectedIndex = getSelectedOAuthAccountIndex(credential, accounts.length);
+		return accounts.map((account, index) => ({
+			index,
+			label: getOAuthAccountDisplayLabel(provider, account) ?? `Account ${index + 1}`,
+			selected: index === selectedIndex,
+		}));
+	}
+
+	/** Return the human-readable label of the selected OAuth account. */
+	getOAuthAccountLabel(provider: string): string | undefined {
+		return this.listOAuthAccounts(provider).find((account) => account.selected)?.label;
+	}
+
+	/** Explicitly select and persist the OAuth account used by this provider. */
+	selectOAuthAccount(provider: string, accountIndex: number): void {
+		this.storage.withLock((current) => {
+			const currentData = this.parseStorageData(current);
+			const credential = currentData[provider];
+			if (credential?.type !== "oauth") {
+				throw new Error(`No OAuth accounts configured for ${provider}`);
+			}
+			const accounts = [...getOAuthAccounts(credential)];
+			if (!Number.isInteger(accountIndex) || accountIndex < 0 || accountIndex >= accounts.length) {
+				throw new Error(`Invalid OAuth account index ${accountIndex} for ${provider}`);
+			}
+			const merged: AuthStorageData = {
+				...currentData,
+				[provider]: createOAuthCredential(accounts, accountIndex),
+			};
+			this.data = merged;
+			this.loadError = null;
+			return { result: undefined, next: JSON.stringify(merged, null, 2) };
+		});
+	}
+
+	/**
+	 * Return the explicitly selected OAuth credentials without refreshing tokens.
+	 * Used by provider model customization hooks.
+	 */
+	getOAuthCredentials(provider: string): OAuthCredentials | undefined {
+		const credential = this.data[provider];
+		if (credential?.type !== "oauth") {
+			return undefined;
+		}
+		const accounts = getOAuthAccounts(credential);
+		return accounts[getSelectedOAuthAccountIndex(credential, accounts.length)];
+	}
+
 	/**
 	 * Return auth status without exposing credential values or refreshing tokens.
 	 */
@@ -383,7 +581,8 @@ export class AuthStorage {
 	}
 
 	/**
-	 * Login to an OAuth provider.
+	 * Login to an OAuth provider. Repeated logins append distinct accounts and
+	 * update an existing account when the provider exposes a stable identity.
 	 */
 	async login(providerId: OAuthProviderId, callbacks: OAuthLoginCallbacks): Promise<void> {
 		const provider = getOAuthProvider(providerId);
@@ -392,7 +591,41 @@ export class AuthStorage {
 		}
 
 		const credentials = await provider.login(callbacks);
-		this.set(providerId, { type: "oauth", ...credentials });
+		if (this.loadError) {
+			this.data[providerId] = { type: "oauth", ...credentials };
+			return;
+		}
+
+		try {
+			this.storage.withLock((current) => {
+				const currentData = this.parseStorageData(current);
+				const existing = currentData[providerId];
+				let credential: OAuthCredential;
+
+				if (existing?.type === "oauth") {
+					const accounts = [...getOAuthAccounts(existing)];
+					const matchingIndex = findMatchingOAuthAccount(accounts, credentials);
+					let activeAccount: number;
+					if (matchingIndex >= 0) {
+						accounts[matchingIndex] = credentials;
+						activeAccount = matchingIndex;
+					} else {
+						accounts.push(credentials);
+						activeAccount = accounts.length - 1;
+					}
+					credential = createOAuthCredential(accounts, activeAccount);
+				} else {
+					credential = createOAuthCredential([credentials]);
+				}
+
+				const merged: AuthStorageData = { ...currentData, [providerId]: credential };
+				this.data = merged;
+				this.loadError = null;
+				return { result: undefined, next: JSON.stringify(merged, null, 2) };
+			});
+		} catch (error) {
+			this.recordError(error);
+		}
 	}
 
 	/**
@@ -402,11 +635,8 @@ export class AuthStorage {
 		this.remove(provider);
 	}
 
-	/**
-	 * Refresh OAuth token with backend locking to prevent race conditions.
-	 * Multiple OMK instances may try to refresh simultaneously when tokens expire.
-	 */
-	private async refreshOAuthTokenWithLock(
+	/** Resolve the explicitly selected account and refresh it under the storage lock. */
+	private async resolveOAuthTokenWithLock(
 		providerId: OAuthProviderId,
 	): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
 		const provider = getOAuthProvider(providerId);
@@ -414,42 +644,43 @@ export class AuthStorage {
 			return null;
 		}
 
-		const result = await this.storage.withLockAsync(async (current) => {
+		return this.storage.withLockAsync(async (current) => {
 			const currentData = this.parseStorageData(current);
 			this.data = currentData;
 			this.loadError = null;
 
-			const cred = currentData[providerId];
-			if (cred?.type !== "oauth") {
+			const credential = currentData[providerId];
+			if (credential?.type !== "oauth") {
 				return { result: null };
 			}
 
-			if (Date.now() < cred.expires) {
-				return { result: { apiKey: provider.getApiKey(cred), newCredentials: cred } };
+			const accounts = [...getOAuthAccounts(credential)];
+			const accountIndex = getSelectedOAuthAccountIndex(credential, accounts.length);
+			const account = accounts[accountIndex];
+			if (!account) return { result: null };
+
+			const resolved =
+				Date.now() < account.expires
+					? { apiKey: provider.getApiKey(account), newCredentials: account }
+					: await getOAuthApiKey(providerId, { [providerId]: account });
+			if (!resolved) return { result: null };
+
+			if (resolved.newCredentials === account) {
+				return { result: resolved };
 			}
 
-			const oauthCreds: Record<string, OAuthCredentials> = {};
-			for (const [key, value] of Object.entries(currentData)) {
-				if (value.type === "oauth") {
-					oauthCreds[key] = value;
-				}
-			}
-
-			const refreshed = await getOAuthApiKey(providerId, oauthCreds);
-			if (!refreshed) {
-				return { result: null };
-			}
-
+			const newCredentials = { ...account, ...resolved.newCredentials };
+			accounts[accountIndex] = newCredentials;
 			const merged: AuthStorageData = {
 				...currentData,
-				[providerId]: { type: "oauth", ...refreshed.newCredentials },
+				[providerId]: createOAuthCredential(accounts, accountIndex),
 			};
 			this.data = merged;
-			this.loadError = null;
-			return { result: refreshed, next: JSON.stringify(merged, null, 2) };
+			return {
+				result: { ...resolved, newCredentials },
+				next: JSON.stringify(merged, null, 2),
+			};
 		});
-
-		return result;
 	}
 
 	/**
@@ -475,40 +706,16 @@ export class AuthStorage {
 		}
 
 		if (cred?.type === "oauth") {
-			const provider = getOAuthProvider(providerId);
-			if (!provider) {
-				// Unknown OAuth provider, can't get API key
-				return undefined;
-			}
-
-			// Check if token needs refresh
-			const needsRefresh = Date.now() >= cred.expires;
-
-			if (needsRefresh) {
-				// Use locked refresh to prevent race conditions
-				try {
-					const result = await this.refreshOAuthTokenWithLock(providerId);
-					if (result) {
-						return result.apiKey;
-					}
-				} catch (error) {
-					this.recordError(error);
-					// Refresh failed - re-read file to check if another instance succeeded
-					this.reload();
-					const updatedCred = this.data[providerId];
-
-					if (updatedCred?.type === "oauth" && Date.now() < updatedCred.expires) {
-						// Another instance refreshed successfully, use those credentials
-						return provider.getApiKey(updatedCred);
-					}
-
-					// Refresh truly failed - return undefined so model discovery skips this provider
-					// User can /login to re-authenticate (credentials preserved for retry)
-					return undefined;
+			try {
+				const result = await this.resolveOAuthTokenWithLock(providerId);
+				if (result) {
+					return result.apiKey;
 				}
-			} else {
-				// Token not expired, use current access token
-				return provider.getApiKey(cred);
+			} catch (error) {
+				this.recordError(error);
+				// Credentials are preserved so a later request or /login can recover.
+				this.reload();
+				return undefined;
 			}
 		}
 

@@ -14,7 +14,7 @@ Edit directly or use `/settings` for common options.
 ### Model & Thinking
 
 | Setting | Type | Default | Description |
-|---------|------|---------|-------------|
+| --------- | ------ | --------- | ------------- |
 | `defaultProvider` | string | - | Default provider (e.g., `"anthropic"`, `"openai"`) |
 | `defaultModel` | string | - | Default model ID |
 | `defaultThinkingLevel` | string | - | `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"` |
@@ -67,11 +67,10 @@ Advisory-only hint source for the v4 auto thinking-level resolver. Read from the
 ### UI & Display
 
 | Setting | Type | Default | Description |
-|---------|------|---------|-------------|
+| --------- | ------ | --------- | ------------- |
 | `theme` | string | `"dark"` | Theme name (`"dark"`, `"light"`, or custom) |
 | `quietStartup` | boolean | `false` | Hide startup header |
 | `collapseChangelog` | boolean | `false` | Show condensed changelog after updates |
-| `githubStarred` | boolean | `false` | Global-only. After the operator stars the OMK GitHub repo and runs `/star`, set to `true` so the startup star nudge stops. Fresh installs and anyone who has not confirmed stay `false`/`unset` and keep seeing the nudge every interactive launch |
 | `enableInstallTelemetry` | boolean | `true` | Send an anonymous install/update version ping after first install or changelog-detected updates. This does not control update checks |
 | `doubleEscapeAction` | string | `"tree"` | Action for double-escape: `"tree"`, `"fork"`, or `"none"` |
 | `treeFilterMode` | string | `"default"` | Default filter for `/tree`: `"default"`, `"no-tools"`, `"user-only"`, `"labeled-only"`, `"all"` |
@@ -85,16 +84,6 @@ Advisory-only hint source for the v4 auto thinking-level resolver. Read from the
 `enableInstallTelemetry` only controls the anonymous install/update ping to `the OMK install telemetry endpoint`. Opting out of telemetry does not disable update checks; OMK can still fetch `the OMK latest-version endpoint` to look for the latest version.
 
 Set `OMK_SKIP_VERSION_CHECK=1` to disable the OMK version update check. Use `--offline` or `OMK_OFFLINE=1` to disable all startup network operations described here, including update checks, package update checks, and install/update telemetry.
-
-### GitHub star nudge
-
-Interactive mode remembers whether this install has confirmed a GitHub star via global `githubStarred` in `~/.omk/agent/settings.json`.
-
-- Missing / `false`: every interactive startup shows a star nudge with the repo link and `/star`.
-- `/star`: opens https://github.com/dmae97/omk and sets `githubStarred: true` so the nudge stops.
-- `/star reset`: clears the flag so the nudge returns on the next launch.
-
-Project `.omk/settings.json` cannot silence this nudge; only the global flag counts.
 
 ### Warnings
 
@@ -113,7 +102,7 @@ Project `.omk/settings.json` cannot silence this nudge; only the global flag cou
 ### Compaction
 
 | Setting | Type | Default | Description |
-|---------|------|---------|-------------|
+| --------- | ------ | --------- | ------------- |
 | `compaction.enabled` | boolean | `true` | Enable auto-compaction |
 | `compaction.model` | string | session model | Authenticated canonical `provider/model` used only for compaction |
 | `compaction.reserveTokens` | number | `16384` | Legacy/default output reserve (tokens reserved for the LLM response) |
@@ -161,7 +150,7 @@ This setting is global-only: `.omk/settings.json` cannot enable or disable it. U
 ### Agent Tool Execution
 
 | Setting | Type | Default | Description |
-|---------|------|---------|-------------|
+| --------- | ------ | --------- | ------------- |
 | `agent.toolScheduler` | string | `"dag-v2"` | Deterministic resource-claim scheduler. Use `"waves-v1"` for compatibility rollback |
 | `agent.maxToolConcurrency` | number | `4` | Maximum calls in one DAG level; `0` removes the cap |
 | `agent.toolTimeoutMs` | number | `0` | Fallback tool execution timeout in milliseconds; `0` disables the fallback timer |
@@ -200,7 +189,7 @@ The DAG preserves source-order result artifacts. `bash`, unknown tools, and exte
 ### Retry
 
 | Setting | Type | Default | Description |
-|---------|------|---------|-------------|
+| --------- | ------ | --------- | ------------- |
 | `retry.enabled` | boolean | `true` | Enable automatic agent-level retry on transient errors |
 | `retry.maxRetries` | number | `3` | Maximum agent-level retry attempts |
 | `retry.baseDelayMs` | number | `2000` | Base delay for agent-level exponential backoff (2s, 4s, 8s) |
@@ -230,7 +219,7 @@ Keep `retry.provider.maxRetries` at `0` unless provider-level retries are explic
 ### Message Delivery
 
 | Setting | Type | Default | Description |
-|---------|------|---------|-------------|
+| --------- | ------ | --------- | ------------- |
 | `steeringMode` | string | `"one-at-a-time"` | How steering messages are sent: `"all"` or `"one-at-a-time"` |
 | `followUpMode` | string | `"one-at-a-time"` | How follow-up messages are sent: `"all"` or `"one-at-a-time"` |
 | `transport` | string | `"auto"` | Preferred transport for providers that support multiple transports: `"sse"`, `"websocket"`, `"websocket-cached"`, or `"auto"` |
@@ -240,7 +229,7 @@ Keep `retry.provider.maxRetries` at `0` unless provider-level retries are explic
 ### Terminal & Images
 
 | Setting | Type | Default | Description |
-|---------|------|---------|-------------|
+| --------- | ------ | --------- | ------------- |
 | `terminal.showImages` | boolean | `true` | Show images in terminal (if supported) |
 | `terminal.imageWidthCells` | number | `60` | Preferred inline image width in terminal cells |
 | `terminal.clearOnShrink` | boolean | `false` | Clear empty rows when content shrinks (can cause flicker) |
@@ -250,7 +239,7 @@ Keep `retry.provider.maxRetries` at `0` unless provider-level retries are explic
 ### Shell
 
 | Setting | Type | Default | Description |
-|---------|------|---------|-------------|
+| --------- | ------ | --------- | ------------- |
 | `shellPath` | string | - | Custom shell path (e.g., for Cygwin on Windows) |
 | `shellCommandPrefix` | string | - | Prefix for every bash command (e.g., `"shopt -s expand_aliases"`) |
 | `npmCommand` | string[] | - | Command argv used for npm package lookup/install operations (e.g., `["mise", "exec", "node@20", "--", "npm"]`) |
@@ -300,7 +289,7 @@ These settings define where to load extensions, skills, prompts, and themes from
 Paths in `~/.omk/agent/settings.json` resolve relative to `~/.omk/agent`. Paths in `.omk/settings.json` resolve relative to `.omk`. Absolute paths and `~` are supported.
 
 | Setting | Type | Default | Description |
-|---------|------|---------|-------------|
+| --------- | ------ | --------- | ------------- |
 | `packages` | array | `[]` | npm/git packages to load resources from |
 | `extensions` | string[] | `[]` | Local extension file paths or directories |
 | `skills` | string[] | `[]` | Local skill file paths or directories |

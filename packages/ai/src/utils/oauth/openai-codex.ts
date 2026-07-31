@@ -42,6 +42,7 @@ export const OPENAI_CODEX_BROWSER_LOGIN_METHOD = "browser";
 export const OPENAI_CODEX_DEVICE_CODE_LOGIN_METHOD = "device_code";
 const SCOPE = "openid profile email offline_access";
 const JWT_CLAIM_PATH = "https://api.openai.com/auth";
+const JWT_PROFILE_CLAIM_PATH = "https://api.openai.com/profile";
 
 type OAuthToken = { access: string; refresh: string; expires: number };
 type TokenOperation = "exchange" | "refresh";
@@ -65,6 +66,10 @@ type JwtPayload = {
 	[JWT_CLAIM_PATH]?: {
 		chatgpt_account_id?: string;
 	};
+	[JWT_PROFILE_CLAIM_PATH]?: {
+		email?: string;
+	};
+	email?: string;
 	[key: string]: unknown;
 };
 
@@ -277,7 +282,9 @@ async function pollOpenAICodexDeviceAuth(device: DeviceAuthInfo, signal?: AbortS
 				const json = JSON.parse(responseBody) as { error?: string | { code?: string } } | null;
 				const error = json?.error;
 				errorCode = typeof error === "object" ? error?.code : error;
-			} catch {}
+			} catch {
+				errorCode = undefined;
+			}
 
 			if (errorCode === "deviceauth_authorization_pending") {
 				return { status: "pending" };
@@ -300,7 +307,13 @@ async function createAuthorizationFlow(
 	const { verifier, challenge } = await generatePKCE();
 	const state = createState();
 
-	const url = new URL(AUTHORIZE_URL);
+	let url: URL;
+	try {
+		url = new URL(AUTHORIZE_URL);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		throw new Error(`Invalid OpenAI authorization URL: ${AUTHORIZE_URL}: ${message}`);
+	}
 	url.searchParams.set("response_type", "code");
 	url.searchParams.set("client_id", CLIENT_ID);
 	url.searchParams.set("redirect_uri", REDIRECT_URI);
@@ -404,17 +417,25 @@ function getAccountId(accessToken: string): string | null {
 	return typeof accountId === "string" && accountId.length > 0 ? accountId : null;
 }
 
+function getAccountEmail(accessToken: string): string | undefined {
+	const payload = decodeJwt(accessToken);
+	const email = payload?.[JWT_PROFILE_CLAIM_PATH]?.email ?? payload?.email;
+	return typeof email === "string" && email.trim() ? email.trim() : undefined;
+}
+
 function credentialsFromToken(token: OAuthToken): OAuthCredentials {
 	const accountId = getAccountId(token.access);
 	if (!accountId) {
 		throw new Error("Failed to extract accountId from token");
 	}
+	const email = getAccountEmail(token.access);
 
 	return {
 		access: token.access,
 		refresh: token.refresh,
 		expires: token.expires,
 		accountId,
+		...(email ? { email } : {}),
 	};
 }
 
@@ -602,5 +623,9 @@ export const openaiCodexOAuthProvider: OAuthProviderInterface = {
 
 	getApiKey(credentials: OAuthCredentials): string {
 		return credentials.access;
+	},
+
+	getAccountLabel(credentials: OAuthCredentials): string | undefined {
+		return getAccountEmail(credentials.access);
 	},
 };

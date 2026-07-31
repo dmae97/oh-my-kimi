@@ -9308,6 +9308,7 @@ export const MODELS = {
 			provider: "opencode",
 			baseUrl: "https://opencode.ai/zen/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text"],
 			cost: {
 				input: 1.4,
@@ -9748,6 +9749,23 @@ export const MODELS = {
 			contextWindow: 262144,
 			maxTokens: 262144,
 		} satisfies Model<"openai-completions">,
+		"kimi-k3": {
+			id: "kimi-k3",
+			name: "Kimi K3",
+			api: "openai-completions",
+			provider: "opencode",
+			baseUrl: "https://opencode.ai/zen/v1",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: {
+				input: 3,
+				output: 15,
+				cacheRead: 0.3,
+				cacheWrite: 0,
+			},
+			contextWindow: 1048576,
+			maxTokens: 131072,
+		} satisfies Model<"openai-completions">,
 		"laguna-s-2.1-free": {
 			id: "laguna-s-2.1-free",
 			name: "Laguna S 2.1 Free",
@@ -9984,6 +10002,7 @@ export const MODELS = {
 			provider: "opencode-go",
 			baseUrl: "https://opencode.ai/zen/go/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"high","max":"max"},
 			input: ["text"],
 			cost: {
 				input: 1.4,

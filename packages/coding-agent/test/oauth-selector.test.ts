@@ -63,6 +63,45 @@ describe("OAuthSelectorComponent", () => {
 		expect(output).toContain("subscription configured");
 	});
 
+	it("shows the active account and account count for a multi-account subscription", () => {
+		const firstAccount = {
+			access: "first-access-token",
+			refresh: "first-refresh-token",
+			expires: Date.now() + 60_000,
+			email: "first@example.com",
+		};
+		const authStorage = AuthStorage.inMemory({
+			"openai-codex": {
+				...firstAccount,
+				type: "oauth",
+				accounts: [
+					firstAccount,
+					{
+						access: "second-access-token",
+						refresh: "second-refresh-token",
+						expires: Date.now() + 60_000,
+						email: "second@example.com",
+					},
+				],
+				activeAccount: 0,
+			},
+		});
+		const selector = new OAuthSelectorComponent(
+			"login",
+			authStorage,
+			[{ id: "openai-codex", name: "OpenAI Codex", authType: "oauth" }],
+			() => {},
+			() => {},
+		);
+
+		const output = stripAnsi(selector.render(120).join("\n"));
+
+		expect(output).toContain("Select a subscription provider:");
+		expect(output).toContain("OpenAI Codex");
+		expect(output).toContain("✓ first@example.com · 2 accounts");
+		expect(output).not.toContain("second@example.com");
+	});
+
 	it("shows environment API key auth as configured", () => {
 		process.env.OPENAI_API_KEY = "test-openai-key";
 		const authStorage = AuthStorage.inMemory();

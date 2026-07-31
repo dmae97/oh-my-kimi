@@ -18,7 +18,7 @@ The editor can be replaced temporarily by built-in UI such as `/settings` or by 
 ### Editor Features
 
 | Feature | How |
-|---------|-----|
+| --------- | ----- |
 | File reference | Type `@` to fuzzy-search project files |
 | Path completion | Press Tab to complete paths |
 | Multi-line input | Shift+Enter, or Ctrl+Enter on Windows Terminal |
@@ -35,7 +35,7 @@ See [Keybindings](keybindings.md) for all shortcuts and customization.
 Type `/` in the editor to open command completion. Extensions can register custom commands, skills are available as `/skill:name`, `!skill:name`, or `!name` for known skills, `!omk <role-or-request>` selects an OMK role hub such as frontend, backend, loop, or plan, and prompt templates expand via `/templatename`.
 
 | Command | Description |
-|---------|-------------|
+| --------- | ------------- |
 | `/login`, `/logout` | Manage OAuth or API-key credentials |
 | `/model` | Switch models, then choose thinking level |
 | `/think` | Choose thinking level, or `auto` to route per task through v4 |
@@ -55,7 +55,7 @@ Type `/` in the editor to open command completion. Extensions can register custo
 | `/reload` | Reload keybindings, extensions, skills, prompts, and context files |
 | `/hotkeys` | Show all keyboard shortcuts |
 | `/changelog` | Display version history |
-| `/star` | Open the OMK GitHub repo and stop the startup star nudge after you star it (`/star reset` brings it back) |
+| `/star` | Open the OMK GitHub repository |
 | `/quit` | Quit omk |
 
 ## Automatic Thinking Level Routing
@@ -222,7 +222,7 @@ Config sources, highest precedence first: `models.json`, `KIMI_BASE_URL`/`KIMI_M
 ### Modes
 
 | Flag | Description |
-|------|-------------|
+| ------ | ------------- |
 | default | Interactive mode |
 | `-p`, `--print` | Print response and exit |
 | `--mode json` | Output all events as JSON lines; see [JSON mode](json.md) |
@@ -238,7 +238,7 @@ cat README.md | omk -p "Summarize this text"
 ### Model Options
 
 | Option | Description |
-|--------|-------------|
+| -------- | ------------- |
 | `--provider <name>` | Provider, such as `anthropic`, `openai`, or `google` |
 | `--model <pattern>` | Model pattern or ID; supports `provider/id` and optional `:<thinking>` |
 | `--api-key <key>` | API key, overriding environment variables |
@@ -249,7 +249,7 @@ cat README.md | omk -p "Summarize this text"
 ### Session Options
 
 | Option | Description |
-|--------|-------------|
+| -------- | ------------- |
 | `-c`, `--continue` | Continue the most recent session |
 | `-r`, `--resume` | Browse and select a session |
 | `--session <path\|id>` | Use a specific session file or partial UUID |
@@ -261,7 +261,7 @@ cat README.md | omk -p "Summarize this text"
 ### Tool Options
 
 | Option | Description |
-|--------|-------------|
+| -------- | ------------- |
 | `--tools <list>`, `-t <list>` | Allowlist specific built-in, extension, and custom tools |
 | `--exclude-tools <list>`, `-xt <list>` | Disable specific built-in, extension, and custom tools |
 | `--no-builtin-tools`, `-nbt` | Disable built-in tools but keep extension/custom tools enabled |
@@ -272,7 +272,7 @@ Built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`.
 ### Resource Options
 
 | Option | Description |
-|--------|-------------|
+| -------- | ------------- |
 | `-e`, `--extension <source>` | Load an extension from path, npm, or git; repeatable |
 | `--no-extensions` | Disable extension discovery |
 | `--skill <path>` | Load a skill; repeatable |
@@ -292,7 +292,7 @@ omk --no-extensions -e ./my-extension.ts
 ### Other Options
 
 | Option | Description |
-|--------|-------------|
+| -------- | ------------- |
 | `--system-prompt <text>` | Replace default prompt; context files and skills are still appended |
 | `--append-system-prompt <text>` | Append to system prompt |
 | `--verbose` | Force verbose startup |
@@ -346,7 +346,7 @@ omk --exclude-tools ask_question
 ### Environment Variables
 
 | Variable | Description |
-|----------|-------------|
+| ---------- | ------------- |
 | `OMK_CODING_AGENT_DIR` | Override config directory; default is `~/.omk/agent` |
 | `OMK_CODING_AGENT_SESSION_DIR` | Override session storage directory; overridden by `--session-dir` |
 | `OMK_PACKAGE_DIR` | Override package directory, useful for Nix/Guix store paths |

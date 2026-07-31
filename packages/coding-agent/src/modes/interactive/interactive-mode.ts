@@ -74,12 +74,7 @@ import type {
 	ExtensionWidgetOptions,
 } from "../../core/extensions/index.ts";
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.ts";
-import {
-	githubStarNudgeBody,
-	githubStarNudgeTitle,
-	OMK_GITHUB_STAR_URL,
-	shouldShowGithubStarNudge,
-} from "../../core/github-star-nudge.ts";
+import { OMK_GITHUB_REPOSITORY_URL } from "../../core/github-repository.ts";
 import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/http-dispatcher.ts";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import { createCompactionSummaryMessage } from "../../core/messages.ts";
@@ -125,6 +120,7 @@ import { FooterComponent } from "./components/footer.ts";
 import { formatKeyText, keyDisplayText, keyHint, keyText, rawKeyHint } from "./components/keybinding-hints.ts";
 import { LoginDialogComponent } from "./components/login-dialog.ts";
 import { ModelSelectorComponent } from "./components/model-selector.ts";
+import { OAuthAccountSelectorComponent } from "./components/oauth-account-selector.ts";
 import { type AuthSelectorProvider, OAuthSelectorComponent } from "./components/oauth-selector.ts";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
@@ -726,34 +722,6 @@ export class InteractiveMode {
 		}
 	}
 
-	private showGithubStarNudgeIfNeeded(): void {
-		if (!shouldShowGithubStarNudge({ githubStarred: this.settingsManager.getGithubStarred() })) {
-			return;
-		}
-
-		const starUrl = OMK_GITHUB_STAR_URL;
-		const starLink = getCapabilities().hyperlinks
-			? hyperlink(theme.fg("accent", "open repo & star"), starUrl)
-			: theme.fg("accent", starUrl);
-		const actionLine =
-			theme.fg("muted", "Star it, then run ") +
-			theme.bold(theme.fg("accent", "/star")) +
-			theme.fg("muted", " so this stops. Link: ") +
-			starLink;
-
-		if (this.chatContainer.children.length > 0) {
-			this.chatContainer.addChild(new Spacer(1));
-		}
-		this.chatContainer.addChild(new DynamicBorder((text) => theme.fg("accent", text)));
-		this.chatContainer.addChild(
-			new Text(`${theme.bold(theme.fg("accent", githubStarNudgeTitle()))}\n${githubStarNudgeBody()}`, 1, 0),
-		);
-		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new Text(actionLine, 1, 0));
-		this.chatContainer.addChild(new DynamicBorder((text) => theme.fg("accent", text)));
-		this.ui.requestRender();
-	}
-
 	private showStartupNoticesIfNeeded(): void {
 		if (this.startupNoticesShown) {
 			return;
@@ -916,6 +884,7 @@ export class InteractiveMode {
 			this.footerDataProvider,
 			() => this.session.autoCompactionEnabled,
 			() => this.ui.terminal.rows,
+			{ requestRender: () => this.ui.requestRender() },
 		);
 		this.ui.showOverlay(this.statusSidebar, {
 			anchor: "top-right",
@@ -1923,7 +1892,6 @@ export class InteractiveMode {
 		this.setupExtensionShortcuts(extensionRunner);
 		this.showLoadedResources({ force: false, showDiagnosticsWhenQuiet: true });
 		this.showStartupNoticesIfNeeded();
-		this.showGithubStarNudgeIfNeeded();
 	}
 
 	private applyRuntimeSettings(): void {
@@ -2904,8 +2872,8 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
-			if (text === "/star" || text.startsWith("/star ")) {
-				this.handleStarCommand(text);
+			if (text === "/star") {
+				this.handleStarCommand();
 				return true;
 			}
 
@@ -3310,11 +3278,7 @@ export class InteractiveMode {
 					this.statusContainer.clear();
 				}
 				if (event.aborted) {
-					if (event.reason === "manual") {
-						this.showError("Compaction cancelled");
-					} else {
-						this.showStatus("Auto-compaction cancelled");
-					}
+					this.showStatus(event.reason === "manual" ? "Compaction cancelled" : "Auto-compaction cancelled");
 				} else if (event.result) {
 					this.chatContainer.clear();
 					this.rebuildChatFromMessages();
@@ -3458,6 +3422,8 @@ export class InteractiveMode {
 	private showSessionTermination(termination: SessionTermination): void {
 		if (termination.kind === "completed" || this.lastRenderedTermination === termination) return;
 		this.lastRenderedTermination = termination;
+		// compaction_end owns the concise cancellation status; rendering this too duplicates it as a scary error.
+		if (termination.causeCode === "compaction.aborted") return;
 		this.showError(formatSessionTermination(termination));
 	}
 
@@ -3791,13 +3757,19 @@ export class InteractiveMode {
 		this.isShuttingDown = true;
 		try {
 			this.unregisterSignalHandlers();
-		} catch {}
+		} catch (cleanupError) {
+			void cleanupError;
+		}
 		try {
 			killTrackedDetachedChildren();
-		} catch {}
+		} catch (cleanupError) {
+			void cleanupError;
+		}
 		try {
 			this.ui.stop();
-		} catch {}
+		} catch (cleanupError) {
+			void cleanupError;
+		}
 		console.error("OMK exiting due to uncaughtException:");
 		console.error(error);
 		process.exit(1);
@@ -5130,7 +5102,12 @@ export class InteractiveMode {
 					}
 
 					if (providerOption.authType === "oauth") {
-						await this.showLoginDialog(providerOption.id, providerOption.name);
+						const accounts = this.session.modelRegistry.authStorage.listOAuthAccounts(providerOption.id);
+						if (accounts.length > 0) {
+							this.showOAuthAccountSelector(providerOption);
+						} else {
+							await this.showLoginDialog(providerOption.id, providerOption.name);
+						}
 					} else if (providerOption.id === BEDROCK_PROVIDER_ID) {
 						this.showBedrockSetupDialog(providerOption.id, providerOption.name);
 					} else {
@@ -5142,6 +5119,46 @@ export class InteractiveMode {
 					this.showLoginAuthTypeSelector();
 				},
 				(providerId) => this.session.modelRegistry.getProviderAuthStatus(providerId),
+			);
+			return { component: selector, focus: selector };
+		});
+	}
+
+	private showOAuthAccountSelector(provider: AuthSelectorProvider): void {
+		const authStorage = this.session.modelRegistry.authStorage;
+		const accounts = authStorage.listOAuthAccounts(provider.id);
+		if (accounts.length === 0) {
+			void this.showLoginDialog(provider.id, provider.name);
+			return;
+		}
+
+		this.showSelector((done) => {
+			const selector = new OAuthAccountSelectorComponent(
+				provider.name,
+				accounts,
+				async (selection) => {
+					done();
+					if (selection.kind === "add") {
+						await this.showLoginDialog(provider.id, provider.name);
+						return;
+					}
+
+					try {
+						authStorage.selectOAuthAccount(provider.id, selection.index);
+						this.session.modelRegistry.refresh();
+						await this.updateAvailableProviderCount();
+						this.footer.invalidate();
+						this.updateEditorBorderColor();
+						const label = authStorage.getOAuthAccountLabel(provider.id) ?? `Account ${selection.index + 1}`;
+						this.showStatus(`Active ${provider.name} account: ${label}.`);
+					} catch (error: unknown) {
+						this.showError(`Account selection failed: ${error instanceof Error ? error.message : String(error)}`);
+					}
+				},
+				() => {
+					done();
+					this.showLoginProviderSelector("oauth");
+				},
 			);
 			return { component: selector, focus: selector };
 		});
@@ -5175,13 +5192,21 @@ export class InteractiveMode {
 					}
 
 					try {
+						const oauthAccountCount = this.session.modelRegistry.authStorage.getOAuthAccountCount(
+							providerOption.id,
+						);
 						this.session.modelRegistry.authStorage.logout(providerOption.id);
 						this.session.modelRegistry.refresh();
 						await this.updateAvailableProviderCount();
-						const message =
-							providerOption.authType === "oauth"
-								? `Logged out of ${providerOption.name}`
-								: `Removed stored API key for ${providerOption.name}. Environment variables and models.json config are unchanged.`;
+						let message: string;
+						if (providerOption.authType === "oauth") {
+							message =
+								oauthAccountCount > 1
+									? `Logged out of ${providerOption.name}. Removed ${oauthAccountCount} subscription accounts.`
+									: `Logged out of ${providerOption.name}`;
+						} else {
+							message = `Removed stored API key for ${providerOption.name}. Environment variables and models.json config are unchanged.`;
+						}
 						this.showStatus(message);
 					} catch (error: unknown) {
 						this.showError(`Logout failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -5204,7 +5229,17 @@ export class InteractiveMode {
 	): Promise<void> {
 		this.session.modelRegistry.refresh();
 
-		const actionLabel = authType === "oauth" ? `Logged in to ${providerName}` : `Saved API key for ${providerName}`;
+		const oauthAccountCount = this.session.modelRegistry.authStorage.getOAuthAccountCount(providerId);
+		const oauthAccountLabel = this.session.modelRegistry.authStorage.getOAuthAccountLabel(providerId);
+		let actionLabel: string;
+		if (authType === "oauth") {
+			actionLabel = `Logged in to ${providerName}${oauthAccountLabel ? ` as ${oauthAccountLabel}` : ""}`;
+			if (oauthAccountCount > 1) {
+				actionLabel += ` (${oauthAccountCount} subscription accounts; use /login to switch)`;
+			}
+		} else {
+			actionLabel = `Saved API key for ${providerName}`;
+		}
 
 		let selectedModel: Model<any> | undefined;
 		let selectionError: string | undefined;
@@ -5792,43 +5827,21 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
-	private handleStarCommand(text: string): void {
-		const arg = text === "/star" ? "" : text.slice("/star".length).trim().toLowerCase();
-		const reset = arg === "reset" || arg === "again" || arg === "clear";
+	private handleStarCommand(): void {
+		openBrowser(OMK_GITHUB_REPOSITORY_URL);
 
-		if (reset) {
-			this.settingsManager.setGithubStarred(false);
-			this.chatContainer.addChild(new Spacer(1));
-			this.chatContainer.addChild(
-				new Text(
-					theme.fg(
-						"warning",
-						"Star nudge reset. It will show again on the next interactive launch until you /star.",
-					),
-					1,
-					0,
-				),
-			);
-			this.ui.requestRender();
-			return;
-		}
-
-		openBrowser(OMK_GITHUB_STAR_URL);
-		this.settingsManager.setGithubStarred(true);
-
-		const starLink = getCapabilities().hyperlinks
-			? hyperlink(theme.fg("accent", OMK_GITHUB_STAR_URL), OMK_GITHUB_STAR_URL)
-			: theme.fg("accent", OMK_GITHUB_STAR_URL);
+		const repositoryLink = getCapabilities().hyperlinks
+			? hyperlink(theme.fg("accent", OMK_GITHUB_REPOSITORY_URL), OMK_GITHUB_REPOSITORY_URL)
+			: theme.fg("accent", OMK_GITHUB_REPOSITORY_URL);
 
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new DynamicBorder((text) => theme.fg("accent", text)));
 		this.chatContainer.addChild(
 			new Text(
 				[
-					theme.bold(theme.fg("accent", "Thanks — star nudge off")),
-					theme.fg("muted", "Opened the repo (if a browser is available). Hit the star if you have not yet."),
-					`${theme.fg("muted", "Repo: ")}${starLink}`,
-					theme.fg("dim", "Forgot already? /star reset brings the nag back."),
+					theme.bold(theme.fg("accent", "OMK on GitHub")),
+					theme.fg("muted", "Opened the OMK repository in your browser."),
+					`${theme.fg("muted", "Repository: ")}${repositoryLink}`,
 				].join("\n"),
 				1,
 				0,

@@ -1365,6 +1365,8 @@ export interface ProviderConfig {
 		refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials>;
 		/** Convert credentials to API key string for the provider. */
 		getApiKey(credentials: OAuthCredentials): string;
+		/** Optional: derive a human-readable account label from stored credentials. */
+		getAccountLabel?(credentials: OAuthCredentials): string | undefined;
 		/** Optional: modify models for this provider (e.g., update baseUrl based on credentials). */
 		modifyModels?(models: Model<Api>[], credentials: OAuthCredentials): Model<Api>[];
 	};

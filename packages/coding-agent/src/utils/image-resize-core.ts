@@ -2,8 +2,8 @@ import { applyExifOrientation } from "./exif-orientation.ts";
 import { loadPhoton } from "./photon.ts";
 
 export interface ImageResizeOptions {
-	maxWidth?: number; // Default: 2000
-	maxHeight?: number; // Default: 2000
+	maxWidth?: number; // Default: 1900 (margin below Anthropic's 2000px many-image limit)
+	maxHeight?: number; // Default: 1900
 	maxBytes?: number; // Default: 4.5MB of base64 payload (below Anthropic's 5MB limit)
 	jpegQuality?: number; // Default: 80
 }
@@ -22,8 +22,8 @@ export interface ResizedImage {
 const DEFAULT_MAX_BYTES = 4.5 * 1024 * 1024;
 
 const DEFAULT_OPTIONS: Required<ImageResizeOptions> = {
-	maxWidth: 2000,
-	maxHeight: 2000,
+	maxWidth: 1900,
+	maxHeight: 1900,
 	maxBytes: DEFAULT_MAX_BYTES,
 	jpegQuality: 80,
 };

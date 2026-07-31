@@ -58,7 +58,18 @@ export class OAuthSelectorComponent extends Container implements Focusable {
 		this.addChild(new Spacer(1));
 
 		// Add title
-		const title = mode === "login" ? "Select provider to configure:" : "Select provider to logout:";
+		let providerType: string | undefined;
+		if (providers.every((provider) => provider.authType === "oauth")) {
+			providerType = "subscription";
+		} else if (providers.every((provider) => provider.authType === "api_key")) {
+			providerType = "API key";
+		}
+		let title = "Select provider to configure:";
+		if (mode === "logout") {
+			title = "Select provider to log out:";
+		} else if (providerType) {
+			title = `Select a ${providerType} provider:`;
+		}
 		this.addChild(new TruncatedText(theme.fg("accent", theme.bold(title)), 1, 0));
 		this.addChild(new Spacer(1));
 
@@ -142,9 +153,19 @@ export class OAuthSelectorComponent extends Container implements Focusable {
 
 	private formatStatusIndicator(provider: AuthSelectorProvider): string {
 		const credential = this.authStorage.get(provider.id);
-		if (credential?.type === provider.authType) return theme.fg("success", " ✓ configured");
+		const oauthAccounts = this.authStorage.listOAuthAccounts(provider.id);
+		const selectedAccount = oauthAccounts.find((account) => account.selected);
+		const oauthLabel = selectedAccount?.label ?? "configured";
+		const accountCount = oauthAccounts.length > 1 ? ` · ${oauthAccounts.length} accounts` : "";
+		if (credential?.type === provider.authType) {
+			const label = provider.authType === "oauth" ? `${oauthLabel}${accountCount}` : "configured";
+			return theme.fg("success", ` ✓ ${label}`);
+		}
 		if (credential) {
-			const label = credential.type === "oauth" ? "subscription configured" : "API key configured";
+			const label =
+				credential.type === "oauth"
+					? `subscription configured (${oauthLabel}${accountCount})`
+					: "API key configured";
 			return theme.fg("muted", " • ") + theme.fg("warning", label);
 		}
 		if (provider.authType !== "api_key") return theme.fg("muted", " • unconfigured");

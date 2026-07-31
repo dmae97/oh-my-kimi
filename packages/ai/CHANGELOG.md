@@ -4,7 +4,14 @@
 
 ### Fixed
 
+- Anthropic requests now replace recognized PNG, JPEG, GIF, or WebP blocks above the 1,900 px safety limit with a descriptive text placeholder before sending, preventing repeated oversized-image failures without mutating the stored transcript.
 - Anthropic streaming now emits Claude Code's official `anthropic-ratelimit-unified-5h-*` and `7d-*` response values through the existing non-blocking `StreamOptions.onRateLimit` observer.
+- OpenAI Codex streaming now emits passive `x-codex-primary-*`, `x-codex-secondary-*`, and `codex.rate_limits` quota signals through the same non-blocking observer.
+- OpenCode Zen (`opencode`) now includes `kimi-k3` with the current pricing and limits reported by models.dev, and provider handoff tests cover current Zen and Go model IDs.
+- `cross-provider-handoff.test.ts` referenced deprecated/removed OpenCode Zen (`glm-4.7-free`, `minimax-m2.1-free`) and OpenCode Go (`kimi-k2.5`, `minimax-m2.5`) model ids that no longer resolve via `getModel()` (would throw once real OpenCode credentials are configured); replaced with current models (`glm-5.1`, `minimax-m2.7` for Zen; `kimi-k2.6`, `minimax-m2.7` for Go) and added explicit `kimi-k3` coverage for both tiers.
+- OpenCode Zen/Go `glm-5.2` was missing `thinkingLevelMap`, so the `xhigh`/`max` thinking levels were invisible in `getSupportedThinkingLevels()` (top-tier levels are only exposed when a model explicitly maps them) even though models.dev reports `glm-5.2` supports `reasoning_options: {effort: ["high", "max"]}`. Added `thinkingLevelMap: { xhigh: "high", max: "max" }` to both `opencode` and `opencode-go` `glm-5.2` entries so `/thinking max` now reaches the API as `reasoning_effort: "max"` instead of clamping down to `high`.
+- Provider errors reporting an insufficient balance are now classified as non-retryable quota failures instead of transient 429s.
+- OpenAI Codex and Anthropic OAuth login now retain the signed-in email (plus Claude organization metadata) so clients can identify stored subscription accounts without exposing opaque account IDs.
 
 ## [0.94.1] - 2026-07-27
 
@@ -282,6 +289,7 @@
 ### Breaking Changes
 
 - Replaced `OpenAICompletionsCompat.reasoningEffortMap` with top-level `Model.thinkingLevelMap` for model-specific thinking controls ([#3208](https://github.com/badlogic/pi-mono/issues/3208)). Migration: move mappings from `model.compat.reasoningEffortMap` to `model.thinkingLevelMap`. See `packages/ai/README.md#custom-models` and `packages/coding-agent/docs/models.md#thinking-level-map`. Map values keep the same provider-specific string semantics, and `null` marks a pi thinking level unsupported. Example:
+
   ```ts
   // Before
   compat: { reasoningEffortMap: { high: "high", xhigh: "max" } }
@@ -289,6 +297,7 @@
   // After
   thinkingLevelMap: { minimal: null, low: null, medium: null, high: "high", xhigh: "max" }
   ```
+
 - Removed `supportsXhigh()`. Migration: use `getSupportedThinkingLevels(model).includes("xhigh")` or `clampThinkingLevel(model, requestedLevel)` instead ([#3208](https://github.com/badlogic/pi-mono/issues/3208)).
 
 ### Added
@@ -1479,7 +1488,7 @@ _Dedicated to Peter's shoulder ([@steipete](https://twitter.com/steipete))_
   - Corrected cache_read: $1.50 → $0.50 per MTok
   - Corrected cache_write: $18.75 → $6.25 per MTok
   - Added manual override in `scripts/generate-models.ts` until upstream fix is merged
-  - Submitted PR to models.dev: https://github.com/sst/models.dev/pull/439
+  - Submitted PR to models.dev: <https://github.com/sst/models.dev/pull/439>
 
 ## [0.9.4] - 2025-11-26
 

@@ -18,6 +18,7 @@ export { FooterComponent } from "./footer.ts";
 export { keyHint, keyText, rawKeyHint } from "./keybinding-hints.ts";
 export { LoginDialogComponent } from "./login-dialog.ts";
 export { ModelSelectorComponent } from "./model-selector.ts";
+export { type OAuthAccountSelection, OAuthAccountSelectorComponent } from "./oauth-account-selector.ts";
 export { OAuthSelectorComponent } from "./oauth-selector.ts";
 export { type ModelsCallbacks, type ModelsConfig, ScopedModelsSelectorComponent } from "./scoped-models-selector.ts";
 export { SessionSelectorComponent } from "./session-selector.ts";

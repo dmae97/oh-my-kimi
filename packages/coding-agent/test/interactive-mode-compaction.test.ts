@@ -56,6 +56,44 @@ describe("InteractiveMode compaction events", () => {
 		expect(fakeThis.flushCompactionQueue).toHaveBeenCalledWith({ willRetry: false });
 	});
 
+	test("renders manual cancellation once as a status instead of an error", async () => {
+		const fakeThis = {
+			isInitialized: true,
+			footer: { invalidate: vi.fn() },
+			autoCompactionEscapeHandler: undefined as (() => void) | undefined,
+			autoCompactionLoader: undefined,
+			defaultEditor: {},
+			statusContainer: { clear: vi.fn() },
+			showError: vi.fn(),
+			showStatus: vi.fn(),
+			flushCompactionQueue: vi.fn().mockResolvedValue(undefined),
+			settingsManager: { getShowTerminalProgress: () => false },
+			ui: { requestRender: vi.fn(), terminal: { setProgress: vi.fn() } },
+		};
+		const handleEvent = Reflect.get(InteractiveMode.prototype, "handleEvent") as (
+			this: typeof fakeThis,
+			event: {
+				type: "compaction_end";
+				reason: "manual";
+				result: undefined;
+				aborted: true;
+				willRetry: false;
+			},
+		) => Promise<void>;
+
+		await handleEvent.call(fakeThis, {
+			type: "compaction_end",
+			reason: "manual",
+			result: undefined,
+			aborted: true,
+			willRetry: false,
+		});
+
+		expect(fakeThis.showStatus).toHaveBeenCalledOnce();
+		expect(fakeThis.showStatus).toHaveBeenCalledWith("Compaction cancelled");
+		expect(fakeThis.showError).not.toHaveBeenCalled();
+	});
+
 	test("flushes queued follow-up and steering into the retry turn when willRetry is true", async () => {
 		const fakeThis = {
 			compactionQueuedMessages: [

@@ -432,6 +432,251 @@ describe("AuthStorage", () => {
 		});
 	});
 
+	describe("multiple OAuth accounts", () => {
+		const callbacks = {
+			onAuth: () => {},
+			onDeviceCode: () => {},
+			onPrompt: async () => "",
+			onSelect: async () => undefined,
+		};
+
+		test("repeated login appends accounts and persists an explicit selection across instances", async () => {
+			const providerId = `test-oauth-multi-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+			const loginCredentials = [
+				{
+					refresh: "refresh-a",
+					access: "access-a",
+					expires: Date.now() + 60_000,
+					accountId: "account-a",
+					email: "a@example.com",
+				},
+				{
+					refresh: "refresh-b",
+					access: "access-b",
+					expires: Date.now() + 60_000,
+					accountId: "account-b",
+					email: "b@example.com",
+				},
+				{
+					refresh: "refresh-a-new",
+					access: "access-a-new",
+					expires: Date.now() + 60_000,
+					accountId: "account-a",
+					email: "a@example.com",
+				},
+			];
+			let loginIndex = 0;
+			registerOAuthProvider({
+				id: providerId,
+				name: "Test Multi Account Provider",
+				async login() {
+					const credentials = loginCredentials[loginIndex++];
+					if (!credentials) throw new Error("Unexpected login call");
+					return credentials;
+				},
+				async refreshToken(credentials) {
+					return credentials;
+				},
+				getApiKey(credentials) {
+					return credentials.access;
+				},
+			});
+
+			authStorage = AuthStorage.create(authJsonPath);
+			const secondInstance = AuthStorage.create(authJsonPath);
+			await authStorage.login(providerId, callbacks);
+			await secondInstance.login(providerId, callbacks);
+			await authStorage.login(providerId, callbacks);
+
+			expect(authStorage.getOAuthAccountCount(providerId)).toBe(2);
+			expect(authStorage.listOAuthAccounts(providerId)).toEqual([
+				{ index: 0, label: "a@example.com", selected: true },
+				{ index: 1, label: "b@example.com", selected: false },
+			]);
+			expect(await authStorage.getApiKey(providerId)).toBe("access-a-new");
+			expect(await authStorage.getApiKey(providerId)).toBe("access-a-new");
+
+			authStorage.selectOAuthAccount(providerId, 1);
+			expect(authStorage.getOAuthAccountLabel(providerId)).toBe("b@example.com");
+			expect(await authStorage.getApiKey(providerId)).toBe("access-b");
+			secondInstance.reload();
+			expect(secondInstance.getOAuthAccountLabel(providerId)).toBe("b@example.com");
+			expect(await secondInstance.getApiKey(providerId)).toBe("access-b");
+
+			authStorage.logout(providerId);
+			secondInstance.reload();
+			expect(authStorage.getOAuthAccountCount(providerId)).toBe(0);
+			expect(secondInstance.getOAuthAccountCount(providerId)).toBe(0);
+		});
+
+		test("uses a provider label resolver for legacy credentials without display metadata", () => {
+			const providerId = `test-oauth-label-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+			registerOAuthProvider({
+				id: providerId,
+				name: "Test OAuth Label Provider",
+				async login() {
+					throw new Error("Not used in this test");
+				},
+				async refreshToken(credentials) {
+					return credentials;
+				},
+				getApiKey(credentials) {
+					return credentials.access;
+				},
+				getAccountLabel(credentials) {
+					return credentials.access === "legacy-access" ? "legacy@example.com" : undefined;
+				},
+			});
+			authStorage = AuthStorage.inMemory({
+				[providerId]: {
+					type: "oauth",
+					refresh: "legacy-refresh",
+					access: "legacy-access",
+					expires: Date.now() + 60_000,
+					accountId: "opaque-oauth-id",
+				},
+			});
+
+			expect(authStorage.getOAuthAccountLabel(providerId)).toBe("legacy@example.com");
+			expect(authStorage.getOAuthAccountLabel(providerId)).not.toContain("opaque-oauth-id");
+		});
+
+		test("sanitizes account metadata before rendering labels", () => {
+			const providerId = `test-oauth-safe-label-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+			authStorage = AuthStorage.inMemory({
+				[providerId]: {
+					type: "oauth",
+					refresh: "safe-refresh",
+					access: "safe-access",
+					expires: Date.now() + 60_000,
+					email: "\u001b[31malice@example.com\n\u202e",
+					orgName: "Acme\tCorp\u2066",
+				},
+			});
+
+			expect(authStorage.getOAuthAccountLabel(providerId)).toBe("alice@example.com (Acme Corp)");
+		});
+
+		test("refreshes only the selected account and preserves the other accounts", async () => {
+			const providerId = `test-oauth-refresh-multi-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+			const refreshedAccounts: string[] = [];
+			registerOAuthProvider({
+				id: providerId,
+				name: "Test Multi Account Refresh Provider",
+				async login() {
+					throw new Error("Not used in this test");
+				},
+				async refreshToken(credentials) {
+					refreshedAccounts.push(credentials.refresh);
+					return {
+						refresh: credentials.refresh,
+						access: `${credentials.access}-refreshed`,
+						expires: Date.now() + 60_000,
+					};
+				},
+				getApiKey(credentials) {
+					return credentials.access;
+				},
+			});
+
+			const firstAccount = {
+				refresh: "refresh-1",
+				access: "access-1",
+				expires: Date.now() - 1_000,
+				email: "first@example.com",
+			};
+			const secondAccount = {
+				refresh: "refresh-2",
+				access: "access-2",
+				expires: Date.now() + 60_000,
+				email: "second@example.com",
+			};
+			authStorage = AuthStorage.inMemory({
+				[providerId]: {
+					...firstAccount,
+					type: "oauth",
+					accounts: [firstAccount, secondAccount],
+					activeAccount: 0,
+				},
+			});
+
+			expect(await authStorage.getApiKey(providerId)).toBe("access-1-refreshed");
+			expect(await authStorage.getApiKey(providerId)).toBe("access-1-refreshed");
+			authStorage.selectOAuthAccount(providerId, 1);
+			expect(await authStorage.getApiKey(providerId)).toBe("access-2");
+			expect(refreshedAccounts).toEqual(["refresh-1"]);
+
+			const stored = authStorage.get(providerId);
+			expect(stored?.type).toBe("oauth");
+			if (stored?.type !== "oauth") throw new Error("Expected OAuth credentials");
+			expect(stored.accounts?.[0]).toMatchObject({ access: "access-1-refreshed", email: "first@example.com" });
+			expect(stored.accounts?.[1]?.access).toBe("access-2");
+			expect(stored.activeAccount).toBe(1);
+		});
+
+		test("never falls through to another account when the selected account cannot refresh", async () => {
+			const providerId = `test-oauth-refresh-fallback-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+			registerOAuthProvider({
+				id: providerId,
+				name: "Test Multi Account Fallback Provider",
+				async login() {
+					throw new Error("Not used in this test");
+				},
+				async refreshToken() {
+					throw new Error("Account refresh rejected");
+				},
+				getApiKey(credentials) {
+					return credentials.access;
+				},
+			});
+
+			const expiredAccount = { refresh: "expired-refresh", access: "expired-access", expires: Date.now() - 1_000 };
+			const validAccount = { refresh: "valid-refresh", access: "valid-access", expires: Date.now() + 60_000 };
+			authStorage = AuthStorage.inMemory({
+				[providerId]: {
+					...expiredAccount,
+					type: "oauth",
+					accounts: [expiredAccount, validAccount],
+					activeAccount: 0,
+				},
+			});
+
+			expect(await authStorage.getApiKey(providerId)).toBeUndefined();
+			expect(authStorage.drainErrors()[0]?.message).toContain("Failed to refresh OAuth token");
+			authStorage.selectOAuthAccount(providerId, 1);
+			expect(await authStorage.getApiKey(providerId)).toBe("valid-access");
+			expect(authStorage.getOAuthAccountCount(providerId)).toBe(2);
+		});
+
+		test("keeps the legacy single-account storage shape until another account is added", async () => {
+			const providerId = `test-oauth-legacy-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+			registerOAuthProvider({
+				id: providerId,
+				name: "Test Legacy OAuth Provider",
+				async login() {
+					throw new Error("Not used in this test");
+				},
+				async refreshToken(credentials) {
+					return credentials;
+				},
+				getApiKey(credentials) {
+					return credentials.access;
+				},
+			});
+			const legacyCredential = {
+				type: "oauth",
+				refresh: "legacy-refresh",
+				access: "legacy-access",
+				expires: Date.now() + 60_000,
+			};
+			writeAuthJson({ [providerId]: legacyCredential });
+			authStorage = AuthStorage.create(authJsonPath);
+
+			expect(await authStorage.getApiKey(providerId)).toBe("legacy-access");
+			expect(JSON.parse(readFileSync(authJsonPath, "utf-8"))[providerId]).toEqual(legacyCredential);
+		});
+	});
+
 	describe("oauth lock compromise handling", () => {
 		test("returns undefined on compromised lock and allows a later retry", async () => {
 			const providerId = `test-oauth-provider-${Date.now()}-${Math.random().toString(36).slice(2)}`;

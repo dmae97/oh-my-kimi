@@ -28,12 +28,69 @@ const decode = (s: string) => atob(s);
 const CLIENT_ID = decode("OWQxYzI1MGEtZTYxYi00NGQ5LTg4ZWQtNTk0NGQxOTYyZjVl");
 const AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
 const TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
+const BOOTSTRAP_URL = "https://api.anthropic.com/api/claude_cli/bootstrap";
+const BOOTSTRAP_MODEL = "claude-opus-4-8";
+const BOOTSTRAP_USER_AGENT = "claude-code/2.1.75";
 const CALLBACK_HOST = process.env.OMK_OAUTH_CALLBACK_HOST || "127.0.0.1";
 const CALLBACK_PORT = 53692;
 const CALLBACK_PATH = "/callback";
 const REDIRECT_URI = `http://localhost:${CALLBACK_PORT}${CALLBACK_PATH}`;
 const SCOPES =
 	"org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
+
+type AnthropicIdentity = {
+	accountId?: string;
+	email?: string;
+	orgId?: string;
+	orgName?: string;
+};
+
+type AnthropicTokenResponse = {
+	access_token: string;
+	refresh_token: string;
+	expires_in: number;
+	account?: { uuid?: string; email_address?: string };
+	organization?: { uuid?: string; name?: string };
+};
+
+function nonEmpty(value: unknown): string | undefined {
+	return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+async function getAnthropicIdentity(accessToken: string): Promise<AnthropicIdentity> {
+	try {
+		const url = `${BOOTSTRAP_URL}?entrypoint=cli&model=${encodeURIComponent(BOOTSTRAP_MODEL)}`;
+		const response = await fetch(url, {
+			headers: {
+				Accept: "application/json, text/plain, */*",
+				Authorization: `Bearer ${accessToken}`,
+				"Content-Type": "application/json",
+				"User-Agent": BOOTSTRAP_USER_AGENT,
+				"anthropic-beta": "oauth-2025-04-20",
+			},
+			signal: AbortSignal.timeout(30_000),
+		});
+		if (!response.ok) return {};
+		const data = (await response.json()) as {
+			oauth_account?: {
+				account_uuid?: string;
+				account_email?: string;
+				organization_uuid?: string;
+				organization_name?: string;
+			};
+		};
+		return {
+			accountId: nonEmpty(data.oauth_account?.account_uuid),
+			email: nonEmpty(data.oauth_account?.account_email),
+			orgId: nonEmpty(data.oauth_account?.organization_uuid),
+			orgName: nonEmpty(data.oauth_account?.organization_name),
+		};
+	} catch {
+		// Identity improves local account labels but must not make authentication fail.
+		return {};
+	}
+}
+
 async function getNodeApis(): Promise<NodeApis> {
 	if (nodeApis) return nodeApis;
 	if (!nodeApisPromise) {
@@ -84,8 +141,8 @@ function formatErrorDetails(error: unknown): string {
 		const errorWithCode = error as Error & { code?: string; errno?: number | string; cause?: unknown };
 		if (errorWithCode.code) details.push(`code=${errorWithCode.code}`);
 		if (typeof errorWithCode.errno !== "undefined") details.push(`errno=${String(errorWithCode.errno)}`);
-		if (typeof error.cause !== "undefined") {
-			details.push(`cause=${formatErrorDetails(error.cause)}`);
+		if (typeof errorWithCode.cause !== "undefined") {
+			details.push(`cause=${formatErrorDetails(errorWithCode.cause)}`);
 		}
 		if (error.stack) {
 			details.push(`stack=${error.stack}`);
@@ -180,7 +237,7 @@ async function postJson(url: string, body: Record<string, string | number>): Pro
 	const responseBody = await response.text();
 
 	if (!response.ok) {
-		throw new Error(`HTTP request failed. status=${response.status}; url=${url}; body=${responseBody}`);
+		throw new Error(`HTTP request failed. status=${response.status}; url=${url}`);
 	}
 
 	return responseBody;
@@ -208,19 +265,27 @@ async function exchangeAuthorizationCode(
 		);
 	}
 
-	let tokenData: { access_token: string; refresh_token: string; expires_in: number };
+	let tokenData: AnthropicTokenResponse;
 	try {
-		tokenData = JSON.parse(responseBody) as { access_token: string; refresh_token: string; expires_in: number };
+		tokenData = JSON.parse(responseBody) as AnthropicTokenResponse;
 	} catch (error) {
-		throw new Error(
-			`Token exchange returned invalid JSON. url=${TOKEN_URL}; body=${responseBody}; details=${formatErrorDetails(error)}`,
-		);
+		throw new Error(`Token exchange returned invalid JSON. url=${TOKEN_URL}; details=${formatErrorDetails(error)}`);
 	}
+
+	const inlineIdentity: AnthropicIdentity = {
+		accountId: nonEmpty(tokenData.account?.uuid),
+		email: nonEmpty(tokenData.account?.email_address),
+		orgId: nonEmpty(tokenData.organization?.uuid),
+		orgName: nonEmpty(tokenData.organization?.name),
+	};
+	const fallbackIdentity = inlineIdentity.email ? {} : await getAnthropicIdentity(tokenData.access_token);
 
 	return {
 		refresh: tokenData.refresh_token,
 		access: tokenData.access_token,
 		expires: Date.now() + tokenData.expires_in * 1000 - 5 * 60 * 1000,
+		...fallbackIdentity,
+		...inlineIdentity,
 	};
 }
 

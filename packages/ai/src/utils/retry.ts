@@ -18,6 +18,7 @@ const NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN = buildProviderErrorPattern([
 	// Generic quota/budget/billing exhaustion. `insufficient_quota` is OpenAI's
 	// quota/billing error code; the other strings cover common gateway wording.
 	"insufficient_quota",
+	"insufficient balance",
 	"out of budget",
 	"quota exceeded",
 	"billing",

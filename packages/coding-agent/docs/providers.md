@@ -19,9 +19,13 @@ Use `/login` in interactive mode, then select a provider:
 - Claude Pro/Max
 - GitHub Copilot
 
-Use `/logout` to clear credentials. Tokens are stored in `~/.omk/agent/auth.json` and auto-refresh when expired.
+Run `/login` and choose a configured subscription provider to open its account picker. Select an existing account by its ChatGPT, Claude, or Google email when available, or choose **Add another account** to sign in with a new one. OMK keeps and refreshes each account independently, pins the provider to the account you select, and does not silently fail over to another subscription. `/model` remains dedicated to model selection.
+
+Use `/logout` to clear all stored accounts for a provider. Tokens are stored in `~/.omk/agent/auth.json` and auto-refresh when expired.
 
 When the status sidebar is pinned, its **USAGE** section lists every configured subscription provider, with the active provider first. OMK reads quota windows from fixed provider endpoints for Codex, Claude, Kimi Code, and GLM/ZAI Coding Plan, caches the result, and displays each percentage and reset countdown separately. Claude also passively merges the official `anthropic-ratelimit-unified-*` response headers used by Claude Code. If Anthropic's usage endpoint is rate limited and no complete recent snapshot exists, OMK mirrors Claude Code's own startup quota check with one fixed-endpoint Haiku request capped at one output token, no more than once per OAuth credential per hour. This fallback consumes a small amount of Claude plan quota.
+
+Codex streaming passively merges `x-codex-primary-*`, `x-codex-secondary-*`, and `codex.rate_limits` signals through the non-blocking `StreamOptions.onRateLimit` observer. These signals supplement missing polling windows only when the Codex service returns them; OMK does not infer a missing 5-hour value from a 7-day value.
 
 Alibaba Model Studio Token Plan is recognized as **QWEN TOKEN PLAN** but shows `console-only quota`. Its [official usage page](https://modelstudio.console.alibabacloud.com/ap-southeast-1?tab=plan&commonbuy=1&orderType=buy#/efm/subscription/token-plan) obtains `per5HourPercentage`, `per5HourResetTime`, `per1WeekPercentage`, and `per1WeekResetTime` through an authenticated Alibaba Cloud console gateway. The plan-specific `sk-sp-*` key does not authorize that console endpoint, and compatible-mode model responses expose token counts but no quota headers. OMK therefore does not copy browser cookies or estimate quota from token counts. Qwen OAuth and Grok remain explicit `quota API unavailable`.
 
@@ -61,7 +65,7 @@ omk
 ```
 
 | Provider | Environment Variable | `auth.json` key |
-|----------|----------------------|------------------|
+| ---------- | ---------------------- | ------------------ |
 | Anthropic | `ANTHROPIC_API_KEY` | `anthropic` |
 | Ant Ling | `ANT_LING_API_KEY` | `ant-ling` |
 | Azure OpenAI Responses | `AZURE_OPENAI_API_KEY` | `azure-openai-responses` |
@@ -135,28 +139,35 @@ The file is created with `0600` permissions (user read/write only). Auth file cr
 The `key` field supports command execution, environment interpolation, and literals:
 
 - **Shell command:** `"!command"` at the start executes the whole value as a command and uses stdout (cached for process lifetime)
+
   ```json
   { "type": "api_key", "key": "!security find-generic-password -ws 'anthropic'" }
   { "type": "api_key", "key": "!op read 'op://vault/item/credential'" }
   ```
+
 - **Environment interpolation:** `"$ENV_VAR"` or `"${ENV_VAR}"` uses the value of the named variable. Interpolation works inside larger literals.
+
   ```json
   { "type": "api_key", "key": "$MY_ANTHROPIC_KEY" }
   { "type": "api_key", "key": "${KEY_PREFIX}_${KEY_SUFFIX}" }
   ```
+
   `$FOO_BAR` is the variable `FOO_BAR`; use `${FOO}_BAR` when `BAR` is literal text. Missing environment variables make the value unresolved.
 - **Escapes:** `"$$"` emits a literal `"$"`; `"$!"` emits a literal `"!"` without triggering command execution.
+
   ```json
   { "type": "api_key", "key": "$$literal-dollar-prefix" }
   { "type": "api_key", "key": "$!literal-bang-prefix" }
   ```
+
 - **Literal value:** Used directly
+
   ```json
   { "type": "api_key", "key": "sk-ant-..." }
   { "type": "api_key", "key": "public" }
   ```
 
-Legacy uppercase env-var-like values such as `MY_API_KEY` are migrated to `$MY_API_KEY` on startup. OAuth credentials are also stored here after `/login` and managed automatically.
+Legacy uppercase env-var-like values such as `MY_API_KEY` are migrated to `$MY_API_KEY` on startup. OAuth credentials are also stored here after `/login`; multi-account lists, selected-account state, and token refresh are managed automatically.
 
 ## Cloud Providers
 
@@ -234,7 +245,7 @@ Routes to OpenAI, Anthropic, and Workers AI through Cloudflare AI Gateway. Worke
 AI Gateway authentication uses `CLOUDFLARE_API_KEY` as `cf-aig-authorization`. Upstream authentication can be one of:
 
 | Mode | Request auth | Upstream auth |
-|------|--------------|---------------|
+| ------ | -------------- | --------------- |
 | Workers AI | Cloudflare token only | Cloudflare-native |
 | Unified billing | Cloudflare token only | Cloudflare handles upstream auth and deducts credits |
 | Stored BYOK | Cloudflare token only | Cloudflare injects provider keys stored in the AI Gateway dashboard |
