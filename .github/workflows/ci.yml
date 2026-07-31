@@ -21,14 +21,14 @@ jobs:
       COREPACK_HOME: /tmp/omk-corepack
     steps:
       - name: Checkout
-        # actions/checkout v4.4.0
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        # actions/checkout v5.1.0
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
 
       - name: Setup Node.js
-        # actions/setup-node v4.4.0
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        # actions/setup-node v5.0.0
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: 22
           cache: npm
@@ -40,8 +40,8 @@ jobs:
           npm --version
 
       - name: Setup Go
-        # actions/setup-go v5.6.0
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        # actions/setup-go v6.5.0
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.22.x'
           cache-dependency-path: packages/initcheck/go.sum
@@ -81,8 +81,8 @@ jobs:
 
       - name: Upload release consistency receipt
         if: always() && steps.verify_receipt.outcome != 'skipped'
-        # actions/upload-artifact v4.6.2
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        # actions/upload-artifact v6.0.0
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
           name: verified-release-consistency
           path: .omk/ci-evidence
