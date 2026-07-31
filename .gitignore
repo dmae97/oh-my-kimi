@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist.bak/
 *.log
 .DS_Store
 *.tsbuildinfo
@@ -24,12 +25,9 @@ packages/*/dist-firefox/
 !.omk/prompts/**
 !.omk/skills/
 !.omk/skills/**
-# Sensitive core: leaked vendor prompt corpus + liberation prompt-engineering
-# research. Never committed; integrity manifest kept locally (also ignored).
+# Private research corpora; never version or publish.
 .omk/skills/system-prompts-leaks/
-.omk/skills/system-prompts-leaks/**
 .omk/skills/omk-godmod/
-.omk/skills/omk-godmod/**
 .omk/.sha256-sensitive
 packages/coding-agent/omk-session-*.html
 /GOAL-GJC-OMK-CONTROL-PORT.md
@@ -80,6 +78,13 @@ plans/
 .pi/hf-sessions/
 .pi/hf-sessions-backup/
 collect.sh
+
+# Local Spec Kit bootstrap state; canonical project specs remain under specs/.
+/.specify/
+
+# Local strategy drafts, kept outside package and release content.
+/OMK_REBRAND_VIRAL_MARKETING_MASTERPLAN_KO.md
+/claw-stack-agentic-os-v2.md
 
 # Local code-intel tool caches
 .serena/

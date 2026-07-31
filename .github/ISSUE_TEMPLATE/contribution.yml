@@ -1,15 +1,13 @@
 name: Contribution Proposal
-description: Propose a change or feature (required for new contributors before submitting a PR)
-labels: []
+description: Propose a focused change or feature
 body:
   - type: markdown
     attributes:
       value: |
-        **Before you start:** Read [CONTRIBUTING.md](https://github.com/dmae97/open-multi-agent-kit/blob/main/CONTRIBUTING.md).
+        **Before you start:** Read the repository's `CONTRIBUTING.md`.
 
-        New issues from new contributors are auto-closed by default. Maintainers review auto-closed issues daily. Issues that do not meet the quality bar in [CONTRIBUTING.md](https://github.com/dmae97/open-multi-agent-kit/blob/main/CONTRIBUTING.md) will not be reopened or receive a reply.
-
-        Keep this short. If it doesn't fit on one screen, it's too long. Write in your own voice.
+        Keep the proposal focused.
+        Explain the problem before the implementation.
 
   - type: textarea
     id: what
