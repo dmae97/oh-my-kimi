@@ -117,3 +117,14 @@ Evidence root: `.omk/runs/harness-graph/`. Gates: `file-exists` | `command-pass`
   > gate: command-pass
   > risk: high
   > evidence: `.omk/runs/harness-graph/T012.md`
+
+## Phase 5 — Recommendation intelligence (DONE)
+
+- [x] T013 Skill-wiring recommender (item-based CF: peer-overlap → missing-skill suggestions)
+  > role: coder
+  > deps: T004
+  > files: [`.omk/harness-graph/recommend-wiring.py`]
+  > verify: `python3 .omk/harness-graph/recommend-wiring.py`
+  > gate: command-pass
+  > risk: low
+  > evidence: `.omk/runs/harness-graph/T013.md`

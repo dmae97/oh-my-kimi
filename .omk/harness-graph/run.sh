@@ -12,6 +12,9 @@ node .omk/harness-graph/reconcile-catalog.mjs
 echo "== structural analysis (networkx) =="
 python3 .omk/harness-graph/graph_analyze.py
 
+echo "== wiring recommendations (item-based CF) =="
+python3 .omk/harness-graph/recommend-wiring.py
+
 echo "== drift loop (snapshot + diff vs previous) =="
 python3 .omk/harness-graph/drift_loop.py
 
