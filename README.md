@@ -217,6 +217,24 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and
 
 <!-- releases:start -->
 
+## Release v0.95.0
+
+### Added
+
+- Added explicit multi-account subscription authentication: `/login` now opens an account picker for configured OAuth providers, offers a separate **Add another account** action, captures ChatGPT/Claude/Google email identities, and pins requests to the selected account without silent rotation or failover.
+- Added multi-provider quota meters to the pinned STATUS RAIL: every configured Codex, Claude, Kimi Code, and GLM/ZAI subscription is shown together with independent windows and reset countdowns. Codex polling passively merges official `x-codex-primary-*`, `x-codex-secondary-*`, and `codex.rate_limits` signals when they are present. Claude Code's passive `anthropic-ratelimit-unified-*` headers preserve recent 5-hour/7-day values; when the usage endpoint is rate limited and the snapshot is incomplete, an account-scoped, hourly-capped one-token Haiku quota check mirrors Claude Code's startup fallback. Model Studio Token Plan is identified as `QWEN TOKEN PLAN` with `console-only quota` because its official usage endpoint requires an Alibaba Cloud console session rather than the plan API key; Qwen OAuth/Grok remain explicit `quota API unavailable` entries.
+
+### Fixed
+
+- Removed the persistent GitHub star prompt from interactive startup. The `/star` command remains available as an explicit, on-demand repository shortcut and no longer writes a tracking flag to settings.
+- Anthropic-bound images now default to a 1,900 px longest edge and pass through a final header-level size guard, preventing sticky oversized-image request failures from clipboard and extension paths.
+- Cancelling manual compaction now clears the transient compaction notice and restores queued input without duplicating messages.
+- Refreshed built-in model metadata via `omk-ai` so OpenCode Zen (`opencode`) gains the `kimi-k3` entry that OpenCode Go (`opencode-go`) already had, with current provider handoff coverage for both catalogs.
+- `glm-5.2` on OpenCode Zen/Go now exposes the `xhigh`/`max` thinking levels in the thinking-level selector (`Ctrl+T` / `/thinking`); it was previously capped at `high` because top-tier levels require an explicit `thinkingLevelMap` entry to appear.
+- Auto-compaction now fails fast on insufficient-balance 429 responses instead of repeating the same quota error through every retry.
+
+Release notes live in [RELEASE_NOTES_v0.95.0.md](.github/RELEASE_NOTES_v0.95.0.md).
+
 ## Release v0.94.1
 
 ### Added
@@ -250,23 +268,6 @@ Release notes live in [RELEASE_NOTES_v0.94.1.md](.github/RELEASE_NOTES_v0.94.1.m
 - **Verified bash is default-on (opt-out).** When an AgentSession has a replay ledger, LLM-callable `bash` and interactive/RPC `executeBash` bind through `executeVerifiedBash` (`executor: "bash-tool"`, receipts under `<sessionFile>.evidence`). Set `OMK_VERIFIED_BASH=0` for the legacy unverified path. Adapter gains `env`/`onData` fan-out and `createVerifiedBashOperations()` so session PI_* env and live streaming stay intact without import cycles. See [SDK — Evidence](packages/coding-agent/docs/sdk.md#evidence-and-verification) and [Environment Variables](packages/coding-agent/docs/environment-variables.md).
 
 Release notes live in [RELEASE_NOTES_v0.94.0.md](.github/RELEASE_NOTES_v0.94.0.md).
-
-## Release v0.93.0
-
-### Added
-
-- Ported upstream Pi 0.82.0 bash session environment: the LLM-callable bash tool now receives `PI_SESSION_ID`, `PI_SESSION_FILE`, `PI_PROVIDER`, `PI_MODEL`, and `PI_REASONING_LEVEL` (parent-env spoofing is stripped; disable per tool via `createBashTool(cwd, { exposeSessionEnvironment: false })`). See [Environment Variables](packages/coding-agent/docs/environment-variables.md).
-- Ported upstream Pi 0.82.0 `bash_execution_update` session events: direct RPC `bash` commands stream output chunks correlated with the command `id`. See [RPC](packages/coding-agent/docs/rpc.md).
-- Ported upstream Pi 0.81.1/0.82.0 summarization resilience: compaction and branch-summary calls now follow `retry` settings with exponential backoff (new `summarization_retry_scheduled` / `summarization_retry_attempt_start` / `summarization_retry_finished` session events, surfaced in TUI and RPC), run with prompt caching disabled, and use fresh routing session IDs. See [Compaction](packages/coding-agent/docs/compaction.md).
-- Ported upstream Pi 0.82.0 abortable provider retries in `omk-ai`: SDK-level retries are replaced by `retryProviderRequest` with abortable backoff sleeps, retry-after caps now fail fast instead of clamping, and transient DNS/transport errors are classified retryable.
-- Subagent capability enforcement: agent frontmatter may declare `skills`/`mcp`/`hooks` plus `enforceCapabilities: true` to spawn with `--no-skills` + resolved `--skill` paths; `enforceCapabilities` now correctly parses YAML booleans/numbers/strings (`parseEnforceFlag`), the skill catalog scan skips archived corpus trees (e.g. `system-prompts-leaks`) so real skill names resolve to their real paths, and the MCP allowlist is synced to the live configured server set. Includes deterministic OMK-native domain profiles for the capability router and 16 coercion unit tests (`examples/extensions/subagent/agents.test.ts`).
-
-### Fixed
-
-- Fixed persisted compaction envelope validation rejecting every session compacted two or more times: the writer attests the kept-window slice from the previous compaction's `firstKeptEntryId`, but reopen validation required the full parent branch, so any twice-compacted session crashed on open with `Invalid compaction envelope source`. Validation now accepts either exact form (tamper-evidence unchanged); regression tests in `test/session-file-compaction-window.test.ts`.
-- Ported upstream Pi 0.82.0 clipboard fix: await `wl-copy` exit status and fall through to xclip/OSC 52 on failure instead of claiming success fire-and-forget.
-
-Release notes live in [RELEASE_NOTES_v0.93.0.md](.github/RELEASE_NOTES_v0.93.0.md).
 
 <!-- releases:end -->
 

@@ -1,6 +1,6 @@
 {
 	"name": "open-multi-agent-kit",
-	"version": "0.94.1",
+	"version": "0.95.0",
 	"description": "OMK (Open Multi-Agent Kit) coding agent CLI with read, bash, edit, write tools and session management",
 	"type": "module",
 	"omkConfig": {
@@ -44,9 +44,9 @@
 		"postinstall": "node ./scripts/link-workspace-deps.mjs"
 	},
 	"dependencies": {
-		"omk-agent-core": "^0.94.1",
-		"omk-ai": "^0.94.1",
-		"omk-tui": "^0.94.1",
+		"omk-agent-core": "^0.95.0",
+		"omk-ai": "^0.95.0",
+		"omk-tui": "^0.95.0",
 		"@silvia-odwyer/photon-node": "0.3.4",
 		"chalk": "5.6.2",
 		"cross-spawn": "7.0.6",
@@ -61,7 +61,7 @@
 		"typebox": "1.1.38",
 		"undici": "8.5.0",
 		"yaml": "2.9.0",
-		"omk-adaptorch-wpl": "^0.94.1"
+		"omk-adaptorch-wpl": "^0.95.0"
 	},
 	"overrides": {
 		"rimraf": "6.1.2",
