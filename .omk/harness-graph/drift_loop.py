@@ -66,8 +66,10 @@ def diff(prev, cur):
         "new_dead_hooks": d(prev.get("dead_hooks", []), cur["dead_hooks"]),
         "resolved_dead_hooks": d(cur["dead_hooks"], prev.get("dead_hooks", [])),
         "new_dead_mcp": d(prev.get("dead_mcp", []), cur["dead_mcp"]),
-        "hook_edge_delta": cur["counts"]["hookEdgesDead"] - prev["counts"]["hookEdgesDead"],
-        "mcp_edge_delta": cur["counts"]["mcpEdgesDead"] - prev["counts"]["mcpEdgesDead"],
+        "hook_edge_delta": cur["counts"]["hookEdgesDead"]
+        - prev["counts"]["hookEdgesDead"],
+        "mcp_edge_delta": cur["counts"]["mcpEdgesDead"]
+        - prev["counts"]["mcpEdgesDead"],
         "orphan_delta": cur["orphan_count"] - prev["orphan_count"],
     }
 
