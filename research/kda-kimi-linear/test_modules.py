@@ -1,4 +1,5 @@
 """Smoke + property tests for the KDA/MLA/hybrid modules (shapes, causality, KV-cache win)."""
+
 from __future__ import annotations
 
 import torch
@@ -15,7 +16,8 @@ def test_kda_layer_forward_and_causal():
     with torch.no_grad():
         y, S = m(x)
         assert y.shape == x.shape and S.shape[0] == 2
-        x2 = x.clone(); x2[:, 25:] += torch.randn_like(x2[:, 25:])
+        x2 = x.clone()
+        x2[:, 25:] += torch.randn_like(x2[:, 25:])
         y2, _ = m(x2)
     past = (y[:, :25] - y2[:, :25]).abs().max().item()
     assert past < 1e-5, f"KDA layer not causal: {past}"
@@ -31,9 +33,11 @@ def test_mla_forward_and_kv_cache():
         y = m(x)
     assert y.shape == x.shape
     latent = m.kv_cache_bytes_per_token()
-    full = 2 * H * dh * 2                     # full MHA K+V cache, fp16
-    print(f"  MLA: out {tuple(y.shape)}  latent cache {latent}B/tok vs full {full}B/tok "
-          f"(−{100 * (1 - latent / full):.0f}%)  OK")
+    full = 2 * H * dh * 2  # full MHA K+V cache, fp16
+    print(
+        f"  MLA: out {tuple(y.shape)}  latent cache {latent}B/tok vs full {full}B/tok "
+        f"(−{100 * (1 - latent / full):.0f}%)  OK"
+    )
     assert latent < full
 
 

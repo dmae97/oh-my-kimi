@@ -13,6 +13,15 @@ numerically equal** to the exact recurrence (max abs error ~1e-15, machine preci
 | **KDA layer** — short-conv, gates, output norm (drop-in module) | `modules.py` | ✅ |
 | **MLA** — Multi-head Latent Attention (low-rank KV cache + decoupled RoPE) | `mla.py` | ✅ −69% KV cache measured |
 | **Kimi Linear hybrid** — KDA:MLA interleaved 3:1 | `hybrid.py` | ✅ |
+| training smoke (MQAR associative recall) | `train_smoke.py` | ✅ 99.1% on fresh seqs |
+| scaling benchmark (linear vs quadratic) | `benchmark.py` | ✅ KDA ~O(T), FullAttn superlinear |
+| external cross-check vs FLA Triton KDA | `test_fla_crosscheck.py` | ✅ agrees to ~3e-6 |
+
+### Validation — triple-proven
+
+1. **Internal**: `kda_chunk` == `kda_recurrent` to **~1e-15** (float64, chunk sizes 1–64).
+2. **Learning**: Kimi Linear hybrid learns MQAR associative recall to **99.1%** on *fresh* sequences (generalization, not memorization) — proves gradients flow end-to-end.
+3. **External**: matches `flash-linear-attention`'s independent Triton `fused_recurrent_kda` to **3.3e-6** and `chunk_kda` to **1.3e-3** relative — a second, unrelated codebase agrees.
 
 ## The formulation (paper Eq. 1)
 

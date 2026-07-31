@@ -1,6 +1,7 @@
 """Kimi Linear hybrid stack: KDA and MLA layers interleaved at a 3:1 ratio (paper §default),
 with pre-norm residuals and a SwiGLU MLP. This is the drop-in "expressive + efficient" block.
 """
+
 from __future__ import annotations
 
 import torch.nn as nn
@@ -13,7 +14,7 @@ from mla import MultiHeadLatentAttention
 class SwiGLU(nn.Module):
     def __init__(self, d, mult=4):
         super().__init__()
-        h = int(d * mult)
+        h = d * mult  # mult is an int multiplier
         self.w1 = nn.Linear(d, h, bias=False)
         self.w2 = nn.Linear(d, h, bias=False)
         self.w3 = nn.Linear(h, d, bias=False)
@@ -27,14 +28,17 @@ class Block(nn.Module):
         super().__init__()
         self.kind = kind
         self.n1 = RMSNorm(d_model)
-        self.mix = (KimiDeltaAttention(d_model, n_heads, **kw) if kind == "kda"
-                    else MultiHeadLatentAttention(d_model, n_heads, **kw))
+        self.mix = (
+            KimiDeltaAttention(d_model, n_heads, **kw)
+            if kind == "kda"
+            else MultiHeadLatentAttention(d_model, n_heads, **kw)
+        )
         self.n2 = RMSNorm(d_model)
         self.mlp = SwiGLU(d_model)
 
     def forward(self, x):
         y = self.mix(self.n1(x))
-        x = x + (y[0] if isinstance(y, tuple) else y)          # KDA returns (out, state)
+        x = x + (y[0] if isinstance(y, tuple) else y)  # KDA returns (out, state)
         return x + self.mlp(self.n2(x))
 
 
@@ -51,7 +55,8 @@ class KimiLinear(nn.Module):
         self.layers = nn.ModuleList(layers)
         self.norm = RMSNorm(d_model)
         self.head = nn.Linear(d_model, vocab, bias=False)
-        self.head.weight = self.emb.weight                     # tie
+        self.head.weight = self.emb.weight  # tie
+        nn.init.normal_(self.emb.weight, std=0.02)  # transformer-standard; avoids huge init logits
         self.layout = [b.kind for b in self.layers]
 
     def forward(self, ids):
