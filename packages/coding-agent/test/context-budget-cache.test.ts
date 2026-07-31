@@ -226,4 +226,68 @@ describe("context budget v2 exact cache", () => {
 		expect(changed.observability.cache.representationCache.exactHits).toBe(0);
 		expect(changed.selectedRepresentations[0]?.text).toBe("new explicit summary");
 	});
+
+	it("still hits the plan cache when age advances by one turn within the same recency bucket", () => {
+		// Regression test: ageTurns/baseScore/effectiveScore are recomputed on every planning
+		// pass (recency decays continuously via deriveRecency), so hashing their raw values used
+		// to change the plan cache key on every single turn even when the same items would be
+		// selected -- the cache could never hit past the first call in a session. See
+		// bucketAgeTurnsForCacheKeyV2 in context-budget-v2-plan-cache-keys.ts. Ages are chosen far
+		// past any plausible recency half-life so the one-turn recency delta is negligible
+		// regardless of the exact half-life constant, and both still fall in the same log2 bucket.
+		const cacheProvider = createMemoryContextBudgetCacheProviderV2();
+		const historyItem = (ageTurns: number) =>
+			makeItem({
+				id: "cached-history",
+				tier: "history",
+				priority: "medium",
+				text: "cacheable history ".repeat(80),
+				tokenEstimate: 300,
+				ageTurns,
+			});
+
+		const first = planWith([historyItem(200)], {
+			cacheProvider,
+			modelId: "gpt-cache-test",
+			query: "cacheable history",
+		});
+		// Simulate the next turn: the same item is legitimately one turn older, as it always is
+		// in production. This must still be served from the plan cache.
+		const second = planWith([historyItem(201)], {
+			cacheProvider,
+			modelId: "gpt-cache-test",
+			query: "cacheable history",
+		});
+
+		expect(first.observability.cache.planCache.hit).toBe(false);
+		expect(second.observability.cache.planCache.hit).toBe(true);
+		expect(second.observability.cache.tokens.savedByCache).toBeGreaterThan(0);
+	});
+
+	it("misses the plan cache once age crosses into a materially different recency bucket", () => {
+		const cacheProvider = createMemoryContextBudgetCacheProviderV2();
+		const historyItem = (ageTurns: number) =>
+			makeItem({
+				id: "cached-history",
+				tier: "history",
+				priority: "medium",
+				text: "cacheable history ".repeat(80),
+				tokenEstimate: 300,
+				ageTurns,
+			});
+
+		const first = planWith([historyItem(8)], {
+			cacheProvider,
+			modelId: "gpt-cache-test",
+			query: "cacheable history",
+		});
+		const muchOlder = planWith([historyItem(400)], {
+			cacheProvider,
+			modelId: "gpt-cache-test",
+			query: "cacheable history",
+		});
+
+		expect(first.observability.cache.planCache.hit).toBe(false);
+		expect(muchOlder.observability.cache.planCache.hit).toBe(false);
+	});
 });
