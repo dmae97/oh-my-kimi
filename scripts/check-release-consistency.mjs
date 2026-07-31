@@ -299,7 +299,8 @@ function readJson(path) {
 		return JSON.parse(readFileSync(path, "utf8"));
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		throw new Error(`Unable to parse JSON file ${path}: ${message}`);
+		console.error(`Unable to parse JSON file ${path}: ${message}`);
+		process.exit(1);
 	}
 }
 

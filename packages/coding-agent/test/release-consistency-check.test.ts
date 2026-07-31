@@ -46,6 +46,17 @@ describe("release consistency check", () => {
 		expect(result.stderr + result.stdout).toContain("package_repository_url_mismatch");
 	});
 
+	it("reports malformed package metadata without an uncaught parser error", () => {
+		const root = createFixture();
+		writeFileSync(join(root, "packages", "coding-agent", "package.json"), "{ invalid json\n");
+
+		const result = spawnCheck(root);
+
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain("Unable to parse JSON file");
+		expect(result.stderr).not.toContain("SyntaxError:");
+	});
+
 	it("rejects stale hardcoded control-panel version strings outside release artifacts", () => {
 		const root = createFixture();
 		writeFileSync(
