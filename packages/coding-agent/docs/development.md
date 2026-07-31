@@ -6,7 +6,7 @@ See [AGENTS.md](https://github.com/dmae97/omk/blob/main/AGENTS.md) for additiona
 
 ```bash
 git clone https://github.com/dmae97/omk
-cd omk-mono
+cd omk
 npm install
 npm run build
 ```
@@ -14,7 +14,7 @@ npm run build
 Run from source:
 
 ```bash
-/path/to/omk-mono/omk-test.sh
+/path/to/omk/omk-test.sh
 ```
 
 The script can be run from any directory. OMK keeps the caller's current working directory.
@@ -49,6 +49,7 @@ Never use `__dirname` directly for package assets.
 ## Debug Command
 
 `/debug` (hidden) writes to `~/.omk/agent/omk-debug.log`:
+
 - Rendered TUI lines with ANSI codes
 - Last messages sent to the LLM
 

@@ -11,21 +11,37 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   build-check-test:
     runs-on: ubuntu-latest
+    env:
+      COREPACK_HOME: /tmp/omk-corepack
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        # actions/checkout v4.4.0
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        # actions/setup-node v4.4.0
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
           cache: npm
 
+      - name: Pin npm
+        run: |
+          corepack enable npm
+          corepack prepare npm@11.14.1 --activate
+          npm --version
+
       - name: Setup Go
-        uses: actions/setup-go@v5
+        # actions/setup-go v5.6.0
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version: '1.22.x'
           cache-dependency-path: packages/initcheck/go.sum
@@ -39,10 +55,15 @@ jobs:
 
       - name: Install system dependencies
         run: |
-          # GitHub-hosted runners occasionally ship broken Microsoft apt mirrors (NOSPLIT / unsigned InRelease).
-          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list 2>/dev/null || true
+          # Hosted runners occasionally ship broken Microsoft apt mirrors.
+          sudo rm -f \
+            /etc/apt/sources.list.d/microsoft-prod.list \
+            /etc/apt/sources.list.d/azure-cli.list \
+            2>/dev/null || true
           sudo apt-get update -o Acquire::AllowReleaseInfoChange=true
-          sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep
+          sudo apt-get install -y \
+            libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev \
+            librsvg2-dev fd-find ripgrep
           sudo ln -s $(which fdfind) /usr/local/bin/fd
 
       - name: Install dependencies
@@ -60,7 +81,8 @@ jobs:
 
       - name: Upload release consistency receipt
         if: always() && steps.verify_receipt.outcome != 'skipped'
-        uses: actions/upload-artifact@v4
+        # actions/upload-artifact v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: verified-release-consistency
           path: .omk/ci-evidence

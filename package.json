@@ -2,6 +2,7 @@
 	"name": "omk-monorepo",
 	"private": true,
 	"type": "module",
+	"packageManager": "npm@11.14.1",
 	"workspaces": [
 		"packages/*",
 		"packages/coding-agent/examples/extensions/with-deps",
@@ -56,7 +57,7 @@
 	"engines": {
 		"node": ">=22.19.0"
 	},
-	"version": "0.91.0",
+	"version": "0.94.1",
 	"overrides": {
 		"rimraf": "6.1.2",
 		"gaxios": {
