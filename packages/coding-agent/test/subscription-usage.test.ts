@@ -255,7 +255,83 @@ describe("subscription usage providers", () => {
 		expect(otherAccount).toEqual({ label: "CLAUDE", windows: [], message: "rate limited · retry later" });
 	});
 
-	it("recognizes the Qwen Token Plan without probing a nonexistent quota API", async () => {
+	it("mirrors Claude Code's one-token quota check when the usage endpoint is rate limited", async () => {
+		const token = "test-claude-quota-probe-token";
+		const nowSeconds = Math.floor(Date.now() / 1000);
+		const requests: Array<{ url: string; init?: RequestInit }> = [];
+		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+			const url = String(input);
+			requests.push({ url, init });
+			if (url.endsWith("/api/oauth/usage")) return new Response(null, { status: 429 });
+			return new Response(null, {
+				status: 200,
+				headers: {
+					"anthropic-ratelimit-unified-5h-utilization": "0.24",
+					"anthropic-ratelimit-unified-5h-reset": String(nowSeconds + 3_600),
+					"anthropic-ratelimit-unified-7d-utilization": "0.44",
+					"anthropic-ratelimit-unified-7d-reset": String(nowSeconds + 86_400),
+				},
+			});
+		});
+		const testSession = session("anthropic", {
+			oauthProviders: ["anthropic"],
+			apiKeys: { anthropic: token },
+		}) as never;
+
+		const result = await loadSubscriptionUsage(testSession, fetchMock);
+
+		expect(result).toEqual({
+			label: "CLAUDE",
+			windows: [
+				{ label: "5H", usedPercent: 24, resetsAt: nowSeconds + 3_600 },
+				{ label: "7D", usedPercent: 44, resetsAt: nowSeconds + 86_400 },
+			],
+		});
+		expect(requests).toHaveLength(2);
+		expect(requests[1]?.url).toBe("https://api.anthropic.com/v1/messages");
+		expect(requests[1]?.init?.method).toBe("POST");
+		expect(new Headers(requests[1]?.init?.headers).get("authorization")).toBe(`Bearer ${token}`);
+		expect(JSON.parse(String(requests[1]?.init?.body))).toEqual({
+			model: "claude-haiku-4-5",
+			max_tokens: 1,
+			messages: [{ role: "user", content: "quota" }],
+		});
+
+		await loadSubscriptionUsage(testSession, fetchMock);
+		expect(requests).toHaveLength(3);
+		expect(requests.filter(({ url }) => url.endsWith("/v1/messages"))).toHaveLength(1);
+		expect(JSON.stringify(result)).not.toContain(token);
+	});
+
+	it("rejects malformed quota-check headers and cools down failed Claude probes", async () => {
+		const token = "test-claude-malformed-probe-token";
+		const requests: string[] = [];
+		const fetchMock = vi.fn(async (input: string | URL | Request) => {
+			const url = String(input);
+			requests.push(url);
+			if (url.endsWith("/api/oauth/usage")) return new Response(null, { status: 429 });
+			return new Response(null, {
+				status: 200,
+				headers: {
+					"anthropic-ratelimit-unified-5h-utilization": "4.2",
+					"anthropic-ratelimit-unified-5h-reset": String(Number.MAX_SAFE_INTEGER),
+				},
+			});
+		});
+		const testSession = session("anthropic", {
+			oauthProviders: ["anthropic"],
+			apiKeys: { anthropic: token },
+		}) as never;
+
+		const first = await loadSubscriptionUsage(testSession, fetchMock);
+		const second = await loadSubscriptionUsage(testSession, fetchMock);
+
+		expect(first).toEqual({ label: "CLAUDE", windows: [], message: "rate limited · retry later" });
+		expect(second).toEqual(first);
+		expect(requests.filter((url) => url.endsWith("/v1/messages"))).toHaveLength(1);
+	});
+
+	it("recognizes the Qwen Token Plan without sending its key to the console-only usage API", async () => {
 		const fetchMock = vi.fn();
 		const result = await loadSubscriptionUsage(
 			session("modelstudio-maas", {

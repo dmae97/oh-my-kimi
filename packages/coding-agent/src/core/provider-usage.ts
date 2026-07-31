@@ -7,12 +7,15 @@ const SEVEN_DAY_SECONDS = 7 * 24 * 60 * 60;
 const WINDOW_TOLERANCE_SECONDS = 120;
 const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
+const CLAUDE_MESSAGES_URL = "https://api.anthropic.com/v1/messages";
 const KIMI_USAGE_URL = "https://api.kimi.com/coding/v1/usages";
 const OPENAI_AUTH_CLAIM = "https://api.openai.com/auth";
 const MAX_USAGE_RESPONSE_BYTES = 1024 * 1024;
 const MAX_USAGE_LIMITS = 64;
 const MAX_PASSIVE_ACCOUNTS = 64;
 const PASSIVE_USAGE_TTL_MS = 6 * 60 * 60 * 1000;
+const CLAUDE_QUOTA_PROBE_COOLDOWN_MS = 60 * 60 * 1000;
+const CLAUDE_QUOTA_PROBE_TIMEOUT_MS = 10_000;
 
 export type SubscriptionUsageWindow = {
 	readonly label: string;
@@ -52,6 +55,8 @@ type FetchJsonResult = { readonly status: number; readonly payload?: unknown };
 
 const passiveCodexUsage = new Map<string, PassiveUsageEntry>();
 const passiveClaudeUsage = new Map<string, PassiveUsageEntry>();
+const claudeQuotaProbeAttempts = new Map<string, number>();
+const claudeQuotaProbesInFlight = new Map<string, Promise<void>>();
 const subscriptionUsageRevisions = new Map<string, number>();
 const MINUTE_TTL_MS = 60_000;
 const VISIBLE_USAGE_PROVIDERS = [
@@ -376,7 +381,7 @@ async function fetchClaudeUsage(
 	apiKey: string,
 	fetchImpl: FetchLike,
 ): Promise<SubscriptionUsageSnapshot> {
-	const passive = passiveClaudeSnapshot(apiKey);
+	let passive = passiveClaudeSnapshot(apiKey);
 	const response = await fetchJsonResult(fetchImpl, CLAUDE_USAGE_URL, {
 		headers: {
 			Authorization: `Bearer ${apiKey}`,
@@ -386,6 +391,10 @@ async function fetchClaudeUsage(
 		},
 	});
 	const windows = [...(parseClaudeUsageSnapshot(response.payload) ?? [])];
+	if (response.status === 429 && (!passive?.fiveHour || !passive?.sevenDay)) {
+		await probeClaudeQuota(apiKey, fetchImpl);
+		passive = passiveClaudeSnapshot(apiKey);
+	}
 	for (const passiveWindow of [
 		passive?.fiveHour ? withLabel("5H", passive.fiveHour) : undefined,
 		passive?.sevenDay ? withLabel("7D", passive.sevenDay) : undefined,
@@ -395,6 +404,90 @@ async function fetchClaudeUsage(
 	return windows.length > 0
 		? { label, windows }
 		: { label, windows: [], message: response.status === 429 ? "rate limited · retry later" : "usage unavailable" };
+}
+
+/**
+ * Claude Code 2.1.177 performs the same `quota`/`max_tokens: 1` request during startup.
+ * Keep it account-scoped and hourly so a pinned sidebar cannot turn the fallback into polling.
+ */
+async function probeClaudeQuota(apiKey: string, fetchImpl: FetchLike, nowMs = Date.now()): Promise<void> {
+	if (!apiKey || apiKey.length > 32_768 || !Number.isFinite(nowMs) || nowMs < 0) return;
+	const cacheKey = passiveCredentialCacheKey(apiKey);
+	const activeProbe = claudeQuotaProbesInFlight.get(cacheKey);
+	if (activeProbe) return activeProbe;
+	const lastAttempt = claudeQuotaProbeAttempts.get(cacheKey);
+	if (lastAttempt !== undefined && nowMs - lastAttempt < CLAUDE_QUOTA_PROBE_COOLDOWN_MS) return;
+	if (claudeQuotaProbesInFlight.size >= MAX_PASSIVE_ACCOUNTS) return;
+
+	claudeQuotaProbeAttempts.delete(cacheKey);
+	claudeQuotaProbeAttempts.set(cacheKey, nowMs);
+	while (claudeQuotaProbeAttempts.size > MAX_PASSIVE_ACCOUNTS) {
+		const oldestCacheKey = claudeQuotaProbeAttempts.keys().next().value;
+		if (oldestCacheKey === undefined) break;
+		claudeQuotaProbeAttempts.delete(oldestCacheKey);
+	}
+
+	const probe = (async () => {
+		try {
+			const response = await fetchImpl(CLAUDE_MESSAGES_URL, {
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${apiKey}`,
+					Accept: "application/json",
+					"Content-Type": "application/json",
+					"anthropic-version": "2023-06-01",
+					"anthropic-beta": "claude-code-20250219,oauth-2025-04-20",
+					"anthropic-dangerous-direct-browser-access": "true",
+					"User-Agent": "claude-cli/2.1.177 (external, cli)",
+					"x-app": "cli",
+				},
+				body: JSON.stringify({
+					model: "claude-haiku-4-5",
+					max_tokens: 1,
+					messages: [{ role: "user", content: "quota" }],
+				}),
+				signal: AbortSignal.timeout(CLAUDE_QUOTA_PROBE_TIMEOUT_MS),
+			});
+			const snapshot = parseClaudeQuotaProbeHeaders(response.headers, nowMs);
+			if (snapshot) recordClaudePassiveUsage(apiKey, snapshot, nowMs);
+			try {
+				await response.body?.cancel();
+			} catch {
+				// The quota snapshot lives entirely in response headers.
+			}
+		} catch {
+			// This mirrors Claude Code's best-effort startup quota check.
+		}
+	})().finally(() => {
+		claudeQuotaProbesInFlight.delete(cacheKey);
+	});
+	claudeQuotaProbesInFlight.set(cacheKey, probe);
+	return probe;
+}
+
+function parseClaudeQuotaProbeHeaders(headers: Headers, nowMs: number): ProviderRateLimitSnapshot | undefined {
+	const parseWindow = (prefix: "5h" | "7d", windowSeconds: number): ProviderRateLimitWindow | undefined => {
+		const rawUtilization = headers.get(`anthropic-ratelimit-unified-${prefix}-utilization`);
+		const rawReset = headers.get(`anthropic-ratelimit-unified-${prefix}-reset`);
+		if (rawUtilization === null || rawReset === null) return undefined;
+		const utilization = Number(rawUtilization);
+		const resetsAt = Number(rawReset);
+		const maxResetAt = nowMs / 1000 + 10 * 365 * 24 * 60 * 60;
+		if (
+			!Number.isFinite(utilization) ||
+			utilization < 0 ||
+			utilization > 1 ||
+			!Number.isSafeInteger(resetsAt) ||
+			resetsAt <= 0 ||
+			resetsAt > maxResetAt
+		) {
+			return undefined;
+		}
+		return { usedPercent: Math.round(utilization * 10_000) / 100, windowSeconds, resetsAt };
+	};
+	const primary = parseWindow("5h", FIVE_HOUR_SECONDS);
+	const secondary = parseWindow("7d", SEVEN_DAY_SECONDS);
+	return primary || secondary ? { limitId: "anthropic-unified", primary, secondary } : undefined;
 }
 
 async function fetchKimiUsage(label: string, apiKey: string, fetchImpl: FetchLike): Promise<SubscriptionUsageSnapshot> {

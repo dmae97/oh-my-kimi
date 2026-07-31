@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added multi-provider quota meters to the pinned STATUS RAIL: every configured Codex, Claude, Kimi Code, and GLM/ZAI subscription is shown together with independent windows and reset countdowns. Claude Code's passive `anthropic-ratelimit-unified-*` headers now preserve recent 5-hour/7-day values while the usage endpoint is rate limited. Model Studio Token Plan is identified as `QWEN TOKEN PLAN` with `console-only quota`; Qwen OAuth/Grok remain explicit `quota API unavailable` entries.
+- Added multi-provider quota meters to the pinned STATUS RAIL: every configured Codex, Claude, Kimi Code, and GLM/ZAI subscription is shown together with independent windows and reset countdowns. Claude Code's passive `anthropic-ratelimit-unified-*` headers preserve recent 5-hour/7-day values; when the usage endpoint is rate limited and the snapshot is incomplete, an account-scoped, hourly-capped one-token Haiku quota check mirrors Claude Code's startup fallback. Model Studio Token Plan is identified as `QWEN TOKEN PLAN` with `console-only quota` because its official usage endpoint requires an Alibaba Cloud console session rather than the plan API key; Qwen OAuth/Grok remain explicit `quota API unavailable` entries.
 
 ## [0.94.1] - 2026-07-27
 
