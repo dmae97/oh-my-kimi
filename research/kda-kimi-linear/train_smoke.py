@@ -11,6 +11,7 @@ Loss/accuracy are measured ONLY on the answer positions (after each query key).
 
 Run: python3 train_smoke.py   (CPU-fine; uses CUDA if present)
 """
+
 from __future__ import annotations
 
 import torch
@@ -46,7 +47,7 @@ def make_batch(B, n_pairs=8, n_queries=4):
         answer_pos = []
         for qi in qidx:
             seq.append(KEY0 + keys[qi].item())
-            answer_pos.append(len(seq))          # the value is predicted AT the next position
+            answer_pos.append(len(seq))  # the value is predicted AT the next position
             seq.append(VAL0 + vals[qi].item())
         row = torch.tensor(seq, dtype=torch.long)
         ids[b, : row.numel()] = row
@@ -76,8 +77,10 @@ def main():
     model = KimiLinear(vocab=VOCAB, d_model=128, n_layers=4, n_heads=4, ratio=3).to(DEV)
     opt = torch.optim.AdamW(model.parameters(), lr=1.5e-3, weight_decay=0.01)
     n_params = sum(p.numel() for p in model.parameters())
-    print(f"device={DEV}  params={n_params/1e6:.2f}M  layout={model.layout}  vocab={VOCAB}")
-    print(f"baseline (random) acc ≈ {1/N_VALS:.3f}\n")
+    print(
+        f"device={DEV}  params={n_params / 1e6:.2f}M  layout={model.layout}  vocab={VOCAB}"
+    )
+    print(f"baseline (random) acc ≈ {1 / N_VALS:.3f}\n")
 
     steps = 600
     for step in range(1, steps + 1):

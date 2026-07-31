@@ -11,6 +11,7 @@ Convention mapping (FLA uses [B,T,H,K], gate in log space, scaled queries):
 
 Run: python3 test_fla_crosscheck.py   (requires CUDA + fla)
 """
+
 from __future__ import annotations
 
 import torch
@@ -26,7 +27,9 @@ HAVE_FLA = importlib.util.find_spec("fla") is not None and torch.cuda.is_availab
 def _inputs(B=2, H=4, T=256, K=64, V=64, dtype=torch.float32, dev="cuda"):
     g = torch.Generator(device=dev).manual_seed(0)
     q = torch.randn(B, H, T, K, device=dev, dtype=dtype, generator=g)
-    k = F.normalize(torch.randn(B, H, T, K, device=dev, dtype=dtype, generator=g), dim=-1)
+    k = F.normalize(
+        torch.randn(B, H, T, K, device=dev, dtype=dtype, generator=g), dim=-1
+    )
     v = torch.randn(B, H, T, V, device=dev, dtype=dtype, generator=g)
     alpha = 0.90 + 0.10 * torch.rand(B, H, T, K, device=dev, dtype=dtype, generator=g)
     beta = torch.rand(B, H, T, device=dev, dtype=dtype, generator=g)
@@ -34,12 +37,19 @@ def _inputs(B=2, H=4, T=256, K=64, V=64, dtype=torch.float32, dev="cuda"):
 
 
 def _fla_call(fn, q, k, v, alpha, beta):
-    to = lambda x: x.transpose(1, 2).contiguous()      # [B,H,T,*] -> [B,T,H,*]
-    out = fn(to(q), to(k), to(v), torch.log(alpha).transpose(1, 2).contiguous(),
-             beta.transpose(1, 2).contiguous(), scale=1.0,
-             use_qk_l2norm_in_kernel=False, output_final_state=True)
+    to = lambda x: x.transpose(1, 2).contiguous()  # [B,H,T,*] -> [B,T,H,*]
+    out = fn(
+        to(q),
+        to(k),
+        to(v),
+        torch.log(alpha).transpose(1, 2).contiguous(),
+        beta.transpose(1, 2).contiguous(),
+        scale=1.0,
+        use_qk_l2norm_in_kernel=False,
+        output_final_state=True,
+    )
     o = out[0] if isinstance(out, tuple) else out
-    return o.transpose(1, 2)                            # back to [B,H,T,V]
+    return o.transpose(1, 2)  # back to [B,H,T,V]
 
 
 def test_crosscheck_chunk_and_recurrent():
@@ -47,6 +57,7 @@ def test_crosscheck_chunk_and_recurrent():
         print("  SKIP — fla or CUDA unavailable")
         return
     from fla.ops import chunk_kda, fused_recurrent_kda  # type: ignore[import-not-found]
+
     q, k, v, alpha, beta = _inputs()
     o_ref, _ = kda_recurrent(q, k, v, alpha, beta)
     o_mine_chunk, _ = kda_chunk(q, k, v, alpha, beta, chunk_size=64)

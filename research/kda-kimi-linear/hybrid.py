@@ -56,7 +56,9 @@ class KimiLinear(nn.Module):
         self.norm = RMSNorm(d_model)
         self.head = nn.Linear(d_model, vocab, bias=False)
         self.head.weight = self.emb.weight  # tie
-        nn.init.normal_(self.emb.weight, std=0.02)  # transformer-standard; avoids huge init logits
+        nn.init.normal_(
+            self.emb.weight, std=0.02
+        )  # transformer-standard; avoids huge init logits
         self.layout = [b.kind for b in self.layers]
 
     def forward(self, ids):
