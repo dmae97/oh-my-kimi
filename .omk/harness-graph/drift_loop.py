@@ -35,6 +35,10 @@ def snapshot(q, g):
         "ts": datetime.datetime.now().isoformat(timespec="seconds"),
         "counts": q["counts"],
         "dead": sorted(r["target"] for r in q["deadSkills"]),
+        # Hooks/MCP get their own sets. Folding them into "dead" would fix the counts but would
+        # make the alert text lie about what kind of thing broke.
+        "dead_hooks": sorted(r["target"] for r in q.get("deadHooks", [])),
+        "dead_mcp": sorted(r["target"] for r in q.get("deadMcp", [])),
         "inactive": sorted(r["target"] for r in q["inactiveSkills"]),
         "orphan_count": len(q["orphanActiveSkills"]),
         "node_count": len(nodes),
@@ -56,6 +60,14 @@ def diff(prev, cur):
         - prev["counts"]["skillEdgesInactive"],
         "dead_edge_delta": cur["counts"]["skillEdgesDead"]
         - prev["counts"]["skillEdgesDead"],
+        # A dead hook/MCP edge is an agent wired to a capability that does not exist. These were
+        # rendered in the delta table but never alerted on, so hookEdgesDead 0 -> 398 shipped as
+        # "no drift". Any metric worth printing is worth alerting on.
+        "new_dead_hooks": d(prev.get("dead_hooks", []), cur["dead_hooks"]),
+        "resolved_dead_hooks": d(cur["dead_hooks"], prev.get("dead_hooks", [])),
+        "new_dead_mcp": d(prev.get("dead_mcp", []), cur["dead_mcp"]),
+        "hook_edge_delta": cur["counts"]["hookEdgesDead"] - prev["counts"]["hookEdgesDead"],
+        "mcp_edge_delta": cur["counts"]["mcpEdgesDead"] - prev["counts"]["mcpEdgesDead"],
         "orphan_delta": cur["orphan_count"] - prev["orphan_count"],
     }
 
@@ -92,7 +104,21 @@ def main():
                 f"🔴 {len(dd['new_dead'])} NEW dead skill links: {', '.join(dd['new_dead'][:10])}"
             )
         if dd["dead_edge_delta"] > 0:
-            alerts.append(f"🔴 dead edges grew by {dd['dead_edge_delta']}")
+            alerts.append(f"🔴 dead skill edges grew by {dd['dead_edge_delta']}")
+        if dd["new_dead_hooks"]:
+            alerts.append(
+                f"🔴 {len(dd['new_dead_hooks'])} NEW dead HOOK links: {', '.join(dd['new_dead_hooks'][:10])}"
+            )
+        if dd["hook_edge_delta"] > 0:
+            alerts.append(
+                f"🔴 dead hook edges grew by {dd['hook_edge_delta']} — agents wired to hooks that do not exist"
+            )
+        if dd["new_dead_mcp"]:
+            alerts.append(
+                f"🔴 {len(dd['new_dead_mcp'])} NEW dead MCP links: {', '.join(dd['new_dead_mcp'][:10])}"
+            )
+        if dd["mcp_edge_delta"] > 0:
+            alerts.append(f"🔴 dead MCP edges grew by {dd['mcp_edge_delta']}")
         if dd["new_inactive"]:
             alerts.append(
                 f"🟠 {len(dd['new_inactive'])} NEW inactive skills: {', '.join(dd['new_inactive'][:10])}"
@@ -104,6 +130,10 @@ def main():
         if dd["resolved_dead"]:
             alerts.append(
                 f"✅ resolved {len(dd['resolved_dead'])} dead links: {', '.join(dd['resolved_dead'][:10])}"
+            )
+        if dd["resolved_dead_hooks"]:
+            alerts.append(
+                f"✅ resolved {len(dd['resolved_dead_hooks'])} dead hook links: {', '.join(dd['resolved_dead_hooks'][:10])}"
             )
         if dd["resolved_inactive"]:
             alerts.append(f"✅ resolved {len(dd['resolved_inactive'])} inactive skills")

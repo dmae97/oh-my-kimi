@@ -39,22 +39,19 @@ const HOOKS_JSON = path.join(AGENT_ROOT, "hooks.json");
 const MCP_JSON = path.join(AGENT_ROOT, "mcp.json");
 const SETTINGS_JSON = path.join(AGENT_ROOT, "settings.json");
 
-// Runtime-configured MCP servers (status reports 23; mcp.json only holds 21 — serena and
-// chrome-devtools are registered by extensions, so mcp.json alone yields false dead links).
-const RUNTIME_MCP = [
-  "adaptorch", "adaptorch-mcp", "blender-mcp", "chrome-devtools", "context7", "fetch",
-  "filesystem", "firecrawl", "ghidra", "github", "lean-ctx", "memory", "obsidian",
-  "ouroboros", "playwright", "powershell-admin", "serena", "supermemory", "zai-vision",
-  "zai-reader", "zai-zread", "understand-anything", "unity-mcp",
-];
-
-const RUNTIME_HOOKS = [
-  "pre-shell-guard", "protect-secrets", "stop-verify",
-  "awesome-agent-skills-router", "branch-diff-snapshot", "eslint-after-edit",
-  "notify-sound-on-stop", "npm-audit-summary", "post-format", "post-init-mcp",
-  "precompact-checkpoint", "release-check-before-stop", "session-context",
-  "subagent-stop-audit", "typecheck-after-edit", "worktree-create-guard",
-];
+// Hook/MCP ground truth is DERIVED, never hardcoded. It mirrors exactly what the omk-runtime
+// extension resolves at runtime (~/.pi/agent/extensions/omk-runtime/index.ts):
+//   hooks -> `*.sh` in $OMK_HOME/extensions            (HOOK_DISCOVERY_DIR + summarizeHooks)
+//   mcp   -> $OMK_HOME/mcp.json ∪ $OMK_HOME/agent/mcp.json  (listConfiguredMcpServers)
+//
+// A frozen literal array here makes hookEdgesDead/mcpEdgesDead structurally incapable of going
+// red: whatever you type in becomes "valid" by definition. That is exactly how 398 agent->hook
+// edges (protect-secrets 209, pre-shell-guard 150, stop-verify 39) pointed at scripts that do
+// not exist in the live install while the report printed `hookEdgesDead: 0`. Freezing the
+// answer key is the same sin as mutating the catalog to make a metric green — see README.
+const OMK_HOME = process.env.OMK_HOME || path.join(HOME, ".omk");
+const HOOK_DISCOVERY_DIR = path.join(OMK_HOME, "extensions");
+const ROOT_MCP_JSON = path.join(OMK_HOME, "mcp.json");
 
 const STOPWORDS = new Set(
   ("a an and are as at be by for from has have in into is it its of on or that the to " +
@@ -147,8 +144,21 @@ function loadOnDiskCatalog() {
   return set;
 }
 
+// Same rule the runtime uses: a hook exists iff `<name>.sh` is a file in $OMK_HOME/extensions.
+// A `.bak-*` rename (how protect-secrets was retired on 2026-07-21) therefore reads as absent.
+function discoverRuntimeHooks() {
+  let entries = [];
+  try { entries = fs.readdirSync(HOOK_DISCOVERY_DIR, { withFileTypes: true }); } catch { /* dir gone */ }
+  return entries.filter((e) => e.isFile() && e.name.endsWith(".sh")).map((e) => e.name.slice(0, -3));
+}
+
 function loadValidHooks() {
-  const set = new Set(RUNTIME_HOOKS);
+  const discovered = discoverRuntimeHooks();
+  // Empty discovery means the path moved, not that every hook died. Reporting 100% dead would
+  // be as dishonest as reporting 0% — fail loudly instead of emitting a confident wrong number.
+  if (discovered.length === 0)
+    throw new Error(`no *.sh found in ${HOOK_DISCOVERY_DIR} — hook discovery is broken. Fix the path; do NOT reintroduce a hardcoded list.`);
+  const set = new Set(discovered);
   const h = readJSON(HOOKS_JSON);
   if (h && h.hooks) for (const [integ, cfg] of Object.entries(h.hooks)) {
     set.add(integ);
@@ -159,12 +169,13 @@ function loadValidHooks() {
 
 function loadValidMcp() {
   const enabled = new Set(), disabled = new Set();
-  for (const k of RUNTIME_MCP) enabled.add(k); // runtime-configured baseline
-  const m = readJSON(MCP_JSON);
-  if (m) {
-    if (m.mcpServers) for (const k of Object.keys(m.mcpServers)) enabled.add(k);
-    if (m._disabledMcpServers) for (const k of Object.keys(m._disabledMcpServers)) { if (!enabled.has(k)) disabled.add(k); }
-  }
+  const configs = [ROOT_MCP_JSON, MCP_JSON].map(readJSON).filter(Boolean);
+  for (const m of configs) if (m.mcpServers) for (const k of Object.keys(m.mcpServers)) enabled.add(k);
+  if (enabled.size === 0)
+    throw new Error(`no mcpServers found in ${ROOT_MCP_JSON} or ${MCP_JSON} — MCP discovery is broken. Fix the path; do NOT reintroduce a hardcoded list.`);
+  // A server disabled in one config but enabled in the other counts as enabled (union wins).
+  for (const m of configs)
+    if (m._disabledMcpServers) for (const k of Object.keys(m._disabledMcpServers)) if (!enabled.has(k)) disabled.add(k);
   return { enabled, disabled };
 }
 
@@ -302,6 +313,15 @@ function queries(g, thresh = 0.5) {
       mcpEdgesDead: g.edges.filter((e) => e.type === "agent->mcp" && e.tier === "dead").length,
       malformedAgents: g.malformed.size,
     },
+    // Where every catalog came from. Shipped in the artifact so a future reader can tell a
+    // measured zero from a zero that was defined into existence.
+    provenance: [
+      { catalog: "hooks (valid)", size: g.validHooks.size, source: `${HOOK_DISCOVERY_DIR}/*.sh + ${HOOKS_JSON}` },
+      { catalog: "mcp (enabled)", size: g.mcpEnabled.size, source: `${ROOT_MCP_JSON} ∪ ${MCP_JSON}` },
+      { catalog: "mcp (disabled)", size: g.mcpDisabled.size, source: "_disabledMcpServers in the same files" },
+      { catalog: "skills (active)", size: g.active.size, source: ACTIVE_SOURCES.map((s) => s.file).join(" ∪ ") },
+      { catalog: "skills (on disk)", size: g.onDisk.size, source: SKILL_ROOTS.join(" ∪ ") },
+    ],
     deadSkills: rows(g.dead.skill),
     inactiveSkills: rows(g.inactive),
     deadHooks: rows(g.dead.hook),
@@ -341,6 +361,12 @@ function report(q) {
   p("| metric | value |\n|---|---:|");
   for (const [k, v] of Object.entries(q.counts)) p(`| ${k} | ${v} |`);
   p("");
+
+  p("### Catalog provenance (what each \"valid\" set was measured against)\n");
+  p("| catalog | size | derived from |\n|---|---:|---|");
+  for (const r of q.provenance) p(`| ${r.catalog} | ${r.size} | \`${r.source}\` |`);
+  p("\n> Hooks/MCP are discovered from the runtime, not a literal array. A hardcoded answer key");
+  p("> makes the dead-edge count structurally unable to go red.\n");
 
   p("## 2. DEAD skill links (referenced, no SKILL.md anywhere — high confidence)\n");
   tbl(p, q.deadSkills, ["skill", "#agents", "example agents"]);

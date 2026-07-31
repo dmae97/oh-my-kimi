@@ -12,6 +12,7 @@ Usage:
   python3 recommend-wiring.py                 # full report -> out/wiring-recommendations.md
   python3 recommend-wiring.py --agent NAME    # recommendations for one agent
 """
+
 import json
 import os
 import sys
@@ -21,8 +22,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "out")
 GRAPH = os.path.join(OUT, "harness-graph.json")
 
-MIN_OVERLAP = 0.30   # peer must share >=30% of skills (Jaccard)
-MIN_PEERS = 3        # a recommendation needs >=3 supporting peers
+MIN_OVERLAP = 0.30  # peer must share >=30% of skills (Jaccard)
+MIN_PEERS = 3  # a recommendation needs >=3 supporting peers
 TOP_PER_AGENT = 5
 
 
@@ -65,7 +66,11 @@ def recommend(agent_skills, target):
         for sk in oskills - mine:
             score[sk] += sim
             support[sk] += 1
-    recs = [(sk, round(sc, 3), support[sk]) for sk, sc in score.items() if support[sk] >= MIN_PEERS]
+    recs = [
+        (sk, round(sc, 3), support[sk])
+        for sk, sc in score.items()
+        if support[sk] >= MIN_PEERS
+    ]
     recs.sort(key=lambda r: (-r[1], -r[2]))
     return recs[:TOP_PER_AGENT]
 
@@ -80,7 +85,9 @@ def main():
         for sk, sc, sup in recs:
             print(f"  {sc:>5}  ({sup} peers)  {sk}")
         if not recs:
-            print("  (none — agent has no peers above overlap threshold, or is fully equipped)")
+            print(
+                "  (none — agent has no peers above overlap threshold, or is fully equipped)"
+            )
         return
 
     all_recs = {}
@@ -92,12 +99,19 @@ def main():
             for sk, _sc, _sup in r:
                 agg[sk] += 1
 
-    L = ["# Skill-Wiring Recommendations (item-based CF)", "",
-         f"Agents with recommendations: **{len(all_recs)}** / {len(agent_skills)}. "
-         f"Recommendation-only — review before wiring; never auto-applied.", "",
-         f"_thresholds: peer-overlap ≥ {MIN_OVERLAP}, min supporting peers ≥ {MIN_PEERS}_", "",
-         "## Most-recommended skills (wire these to raise coverage)", "",
-         "| skill | #agents recommended for |", "|---|---:|"]
+    L = [
+        "# Skill-Wiring Recommendations (item-based CF)",
+        "",
+        f"Agents with recommendations: **{len(all_recs)}** / {len(agent_skills)}. "
+        f"Recommendation-only — review before wiring; never auto-applied.",
+        "",
+        f"_thresholds: peer-overlap ≥ {MIN_OVERLAP}, min supporting peers ≥ {MIN_PEERS}_",
+        "",
+        "## Most-recommended skills (wire these to raise coverage)",
+        "",
+        "| skill | #agents recommended for |",
+        "|---|---:|",
+    ]
     for sk, n in sorted(agg.items(), key=lambda x: -x[1])[:20]:
         L.append(f"| {sk} | {n} |")
 
@@ -113,7 +127,9 @@ def main():
         sys.exit(f"cannot write report: {e}")
 
     print("wiring recommendations -> out/wiring-recommendations.md")
-    print(f"  agents with recs: {len(all_recs)}/{len(agent_skills)}  distinct recommended skills: {len(agg)}")
+    print(
+        f"  agents with recs: {len(all_recs)}/{len(agent_skills)}  distinct recommended skills: {len(agg)}"
+    )
     top = sorted(agg.items(), key=lambda x: -x[1])[:6]
     for sk, n in top:
         print(f"    {n}\t{sk}")

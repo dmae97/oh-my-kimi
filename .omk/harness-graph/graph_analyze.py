@@ -38,6 +38,9 @@ def load():
             name=n["name"],
             tier=n.get("tier"),
             inbound=n.get("inbound", 0),
+            # dead_cut() keys off this for hook/mcp nodes (they have no tier). Dropping it here
+            # made the hook/MCP dead-cut list structurally always empty.
+            dead=n.get("dead", False),
         )
     for e in g["edges"]:
         G.add_edge(e["from"], e["to"], type=e["type"], tier=e.get("tier"))

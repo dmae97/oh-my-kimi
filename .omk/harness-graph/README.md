@@ -49,8 +49,36 @@ resolves; treat dead-link counts as "unresolved against the on-disk catalog", ne
 runtime catalog to make a metric go green.
 
 **Status:** the 689 inactive edges were resolved to **0** by `activate-roots.mjs` (224 demanded
-skill dirs added to `settings.json`). Remaining honest debt: 7 dead skill refs + 45 malformed
-agents + 439 orphan-active skills. Framework/MCP evaluation in `FRAMEWORK-RESEARCH.md`.
+skill dirs added to `settings.json`). Remaining honest debt: 0 dead skill refs + 0 malformed
+agents + 434 orphan-active skills + **3 dead hooks (398 edges)**. Framework/MCP evaluation in
+`FRAMEWORK-RESEARCH.md`.
+
+## The green-metric trap (2026-08-01)
+
+`hookEdgesDead: 0` was not a measurement. `build-harness-graph.mjs` held a literal
+`RUNTIME_HOOKS` array, so whatever was typed into it became "valid" by definition. Its first
+three entries — `pre-shell-guard`, `protect-secrets`, `stop-verify` — had no script in the live
+install, hiding **398 agent→hook edges** behind a green zero. Freezing the answer key is the same
+sin as mutating the catalog; it just fails in the other direction.
+
+Five detectors were stacked on top of that one lie and every one of them failed open:
+
+| # | layer | failure |
+| --- | --- | --- |
+| 1 | `build-harness-graph.mjs` | hardcoded `RUNTIME_HOOKS`/`RUNTIME_MCP` answer key |
+| 2 | `drift_loop.py` | `dead_edge_delta` read `skillEdgesDead` only — printed `hookEdgesDead +398` in the delta table, alerted "no drift" |
+| 3 | `graph_analyze.py` | `load()` dropped the `dead` node flag, so hook/MCP `dead_cut` was structurally always empty |
+| 4 | `omk-runtime/index.ts` `runHook()` | executed from `OMK_HOOKS_DIR` (`~/.omk/runtime/.omk/hooks`, nonexistent) while discovery had already migrated to `~/.omk/extensions` → every guard returned `"unknown"`, and the caller only blocks on `"deny"` |
+| 5 | `omk-runtime/index.ts` system prompt | hardcoded `"Safety hooks active in Pi: …"` with no check behind it |
+
+Net effect: `protect-secrets` and `pre-shell-guard` intercepted **nothing** on any
+bash/read/write/edit call, `session-context.sh` silently returned empty every session, and the
+model was told the opposite. All five are fixed; hooks/MCP are now derived from the same sources
+`omk-runtime` resolves at runtime, and discovery returning empty **throws** rather than reporting
+100% dead.
+
+**Rule:** any "valid" set must be derived from the runtime. If you cannot derive it, fail loudly —
+never hardcode it, and never let a metric be printed without also being alerted on.
 
 ## Wire as a standing audit (optional)
 
