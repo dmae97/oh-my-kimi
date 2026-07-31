@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import type { ProviderRateLimitSnapshot, ProviderRateLimitWindow } from "omk-ai";
 import type { AgentSession } from "./agent-session.ts";
 
 const FIVE_HOUR_SECONDS = 5 * 60 * 60;
@@ -9,6 +11,8 @@ const KIMI_USAGE_URL = "https://api.kimi.com/coding/v1/usages";
 const OPENAI_AUTH_CLAIM = "https://api.openai.com/auth";
 const MAX_USAGE_RESPONSE_BYTES = 1024 * 1024;
 const MAX_USAGE_LIMITS = 64;
+const MAX_PASSIVE_CODEX_ACCOUNTS = 64;
+const PASSIVE_CODEX_TTL_MS = 6 * 60 * 60 * 1000;
 
 export type SubscriptionUsageWindow = {
 	readonly label: string;
@@ -29,6 +33,8 @@ export type CodexUsageSnapshot = {
 };
 
 type ParsedCodexWindow = CodexUsageWindow & { readonly windowSeconds?: number };
+type ObservedCodexWindow = { readonly window: ParsedCodexWindow; readonly observedAt: number };
+type PassiveCodexEntry = { readonly primary?: ObservedCodexWindow; readonly secondary?: ObservedCodexWindow };
 type UsageKind = "codex" | "claude" | "kimi" | "zai" | "unavailable";
 type CredentialCandidate = { readonly provider: string; readonly oauthOnly: boolean };
 
@@ -42,6 +48,7 @@ export type SubscriptionUsageSource = {
 type UsageSession = Pick<AgentSession, "state" | "modelRegistry">;
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
+const passiveCodexUsage = new Map<string, PassiveCodexEntry>();
 const MINUTE_TTL_MS = 60_000;
 const SOURCES: Readonly<Record<string, SubscriptionUsageSource>> = {
 	"openai-codex": source("CODEX", "codex", [{ provider: "openai-codex", oauthOnly: true }]),
@@ -200,6 +207,32 @@ export function parseZaiUsageSnapshot(value: unknown): readonly SubscriptionUsag
 	return windows.length > 0 ? windows : undefined;
 }
 
+export function recordCodexPassiveUsage(apiKey: string, snapshot: ProviderRateLimitSnapshot, nowMs = Date.now()): void {
+	const accountId = codexAccountId(apiKey);
+	const limitId = snapshot.limitId?.trim().toLowerCase().replace(/-/g, "_");
+	if (!accountId || !Number.isFinite(nowMs) || nowMs < 0 || (limitId && limitId !== "codex")) return;
+	prunePassiveCodexUsage(nowMs);
+	const cacheKey = passiveCodexCacheKey(accountId);
+	const primary = normalizePassiveCodexWindow(snapshot.primary, nowMs);
+	const secondary = normalizePassiveCodexWindow(snapshot.secondary, nowMs);
+	if (!primary && !secondary) return;
+
+	const previous = passiveCodexUsage.get(cacheKey);
+	const next: PassiveCodexEntry = {
+		primary: primary ? { window: primary, observedAt: nowMs } : freshObservedCodexWindow(previous?.primary, nowMs),
+		secondary: secondary
+			? { window: secondary, observedAt: nowMs }
+			: freshObservedCodexWindow(previous?.secondary, nowMs),
+	};
+	passiveCodexUsage.delete(cacheKey);
+	passiveCodexUsage.set(cacheKey, next);
+	while (passiveCodexUsage.size > MAX_PASSIVE_CODEX_ACCOUNTS) {
+		const oldestCacheKey = passiveCodexUsage.keys().next().value;
+		if (oldestCacheKey === undefined) break;
+		passiveCodexUsage.delete(oldestCacheKey);
+	}
+}
+
 async function fetchCodexUsage(
 	label: string,
 	apiKey: string,
@@ -207,21 +240,31 @@ async function fetchCodexUsage(
 ): Promise<SubscriptionUsageSnapshot> {
 	const accountId = codexAccountId(apiKey);
 	if (!accountId) return { label, windows: [], message: "usage unavailable" };
-	const payload = await fetchJson(fetchImpl, CODEX_USAGE_URL, {
-		headers: {
-			Authorization: `Bearer ${apiKey}`,
-			Accept: "application/json",
-			"chatgpt-account-id": accountId,
-			"User-Agent": "omk",
-		},
-	});
-	const parsed = parseCodexUsageSnapshot(payload);
-	if (!parsed) return { label, windows: [], message: "usage unavailable" };
+	const passive = passiveCodexSnapshot(apiKey);
+	let polled: CodexUsageSnapshot | undefined;
+	try {
+		const payload = await fetchJson(fetchImpl, CODEX_USAGE_URL, {
+			headers: {
+				Authorization: `Bearer ${apiKey}`,
+				Accept: "application/json",
+				"chatgpt-account-id": accountId,
+				"User-Agent": "omk",
+			},
+		});
+		polled = parseCodexUsageSnapshot(payload);
+	} catch (error) {
+		if (!passive) throw error;
+	}
+	const merged: CodexUsageSnapshot = {
+		fiveHour: polled?.fiveHour ?? passive?.fiveHour,
+		sevenDay: polled?.sevenDay ?? passive?.sevenDay,
+	};
+	if (!merged.fiveHour && !merged.sevenDay) return { label, windows: [], message: "usage unavailable" };
 	return {
 		label,
 		windows: [
-			parsed.fiveHour ? withLabel("5H", parsed.fiveHour) : undefined,
-			parsed.sevenDay ? withLabel("7D", parsed.sevenDay) : undefined,
+			merged.fiveHour ? withLabel("5H", merged.fiveHour) : undefined,
+			merged.sevenDay ? withLabel("7D", merged.sevenDay) : undefined,
 		].filter(isDefined),
 	};
 }
@@ -304,7 +347,11 @@ async function fetchJson(fetchImpl: FetchLike, url: string, init: RequestInit): 
 		body.set(chunk, offset);
 		offset += chunk.byteLength;
 	}
-	return JSON.parse(new TextDecoder().decode(body)) as unknown;
+	try {
+		return JSON.parse(new TextDecoder().decode(body)) as unknown;
+	} catch {
+		return undefined;
+	}
 }
 
 function credentialConfigured(session: UsageSession, candidate: CredentialCandidate): boolean {
@@ -440,15 +487,90 @@ function epochSeconds(value: unknown): number | undefined {
 	return Number.isFinite(parsed) ? parsed / 1000 : undefined;
 }
 
+function normalizePassiveCodexWindow(
+	window: ProviderRateLimitWindow | undefined,
+	nowMs: number,
+): ParsedCodexWindow | undefined {
+	if (!window || !Number.isFinite(window.usedPercent)) return undefined;
+	const windowSeconds =
+		window.windowSeconds !== undefined &&
+		Number.isFinite(window.windowSeconds) &&
+		window.windowSeconds > 0 &&
+		window.windowSeconds <= Number.MAX_SAFE_INTEGER
+			? Math.round(window.windowSeconds)
+			: undefined;
+	const maxResetAt = nowMs / 1000 + 10 * 365 * 24 * 60 * 60;
+	const resetsAtValue = window.resetsAt === undefined ? undefined : Math.floor(window.resetsAt);
+	const resetsAt =
+		resetsAtValue !== undefined &&
+		Number.isSafeInteger(resetsAtValue) &&
+		resetsAtValue > 0 &&
+		resetsAtValue <= maxResetAt
+			? resetsAtValue
+			: undefined;
+	return {
+		usedPercent: clampPercent(window.usedPercent),
+		...(windowSeconds === undefined ? {} : { windowSeconds }),
+		...(resetsAt === undefined ? {} : { resetsAt }),
+	};
+}
+
+function passiveCodexCacheKey(accountId: string): string {
+	return createHash("sha256").update(accountId).digest("base64url");
+}
+
+function freshObservedCodexWindow(
+	observed: ObservedCodexWindow | undefined,
+	nowMs: number,
+): ObservedCodexWindow | undefined {
+	if (!observed || nowMs - observed.observedAt > PASSIVE_CODEX_TTL_MS) return undefined;
+	if (observed.window.resetsAt !== undefined && observed.window.resetsAt <= nowMs / 1000) return undefined;
+	return observed;
+}
+
+function prunePassiveCodexUsage(nowMs: number): void {
+	for (const [cacheKey, entry] of passiveCodexUsage) {
+		if (!freshObservedCodexWindow(entry.primary, nowMs) && !freshObservedCodexWindow(entry.secondary, nowMs)) {
+			passiveCodexUsage.delete(cacheKey);
+		}
+	}
+}
+
+function passiveCodexSnapshot(apiKey: string, nowMs = Date.now()): CodexUsageSnapshot | undefined {
+	const accountId = codexAccountId(apiKey);
+	if (!accountId || !Number.isFinite(nowMs) || nowMs < 0) return undefined;
+	prunePassiveCodexUsage(nowMs);
+	const cacheKey = passiveCodexCacheKey(accountId);
+	const entry = passiveCodexUsage.get(cacheKey);
+	if (!entry) return undefined;
+	const primary = freshObservedCodexWindow(entry.primary, nowMs);
+	const secondary = freshObservedCodexWindow(entry.secondary, nowMs);
+	if (!primary && !secondary) {
+		passiveCodexUsage.delete(cacheKey);
+		return undefined;
+	}
+	const freshEntry = { primary, secondary };
+	passiveCodexUsage.delete(cacheKey);
+	passiveCodexUsage.set(cacheKey, freshEntry);
+
+	const windows = [primary?.window, secondary?.window].filter(isDefined);
+	const fiveHour = windows.find((window) => near(window.windowSeconds, FIVE_HOUR_SECONDS));
+	const sevenDay = windows.find((window) => near(window.windowSeconds, SEVEN_DAY_SECONDS));
+	if (!fiveHour && !sevenDay) return undefined;
+	return {
+		...(fiveHour ? { fiveHour: publicCodexWindow(fiveHour) } : {}),
+		...(sevenDay ? { sevenDay: publicCodexWindow(sevenDay) } : {}),
+	};
+}
+
 function codexAccountId(token: string): string | undefined {
 	try {
 		const payload = token.split(".")[1];
 		if (!payload) return undefined;
 		const claims = record(JSON.parse(Buffer.from(payload, "base64url").toString("utf8")));
 		const auth = record(claims?.[OPENAI_AUTH_CLAIM]);
-		return typeof auth?.chatgpt_account_id === "string" && auth.chatgpt_account_id
-			? auth.chatgpt_account_id
-			: undefined;
+		const accountId = typeof auth?.chatgpt_account_id === "string" ? auth.chatgpt_account_id.trim() : "";
+		return accountId && accountId.length <= 256 ? accountId : undefined;
 	} catch {
 		return undefined;
 	}

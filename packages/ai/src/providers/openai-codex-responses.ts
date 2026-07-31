@@ -27,6 +27,8 @@ import type {
 	AssistantMessage,
 	Context,
 	Model,
+	ProviderRateLimitSnapshot,
+	ProviderRateLimitWindow,
 	SimpleStreamOptions,
 	StreamFunction,
 	StreamOptions,
@@ -56,6 +58,9 @@ const BASE_DELAY_MS = 1000;
 const DEFAULT_MAX_RETRY_DELAY_MS = 60_000;
 const DEFAULT_SSE_HEADER_TIMEOUT_MS = 10_000;
 const DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS = 15_000;
+const MAX_CODEX_RATE_LIMIT_EVENTS = 16;
+const MAX_CODEX_WINDOW_MINUTES = 10 * 365 * 24 * 60;
+const MAX_CODEX_RESET_HORIZON_SECONDS = 10 * 365 * 24 * 60 * 60;
 const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
 const WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE = 1009;
 
@@ -353,6 +358,7 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 							const timeoutError = headerTimeout.error();
 							throw timeoutError && !options?.signal?.aborted ? timeoutError : error;
 						}
+						notifyCodexRateLimits(parseCodexRateLimitHeaders(response.headers), model, options);
 						try {
 							await options?.onResponse?.(
 								{ status: response.status, headers: headersToRecord(response.headers) },
@@ -574,7 +580,12 @@ function resolveCodexUrl(baseUrl?: string): string {
 }
 
 function resolveCodexWebSocketUrl(baseUrl?: string): string {
-	const url = new URL(resolveCodexUrl(baseUrl));
+	let url: URL;
+	try {
+		url = new URL(resolveCodexUrl(baseUrl));
+	} catch (cause) {
+		throw new CodexProtocolError("Invalid Codex WebSocket URL", { cause });
+	}
 	if (url.protocol === "https:") url.protocol = "wss:";
 	if (url.protocol === "http:") url.protocol = "ws:";
 	return url.toString();
@@ -591,16 +602,23 @@ async function processStream(
 	model: Model<"openai-codex-responses">,
 	options?: OpenAICodexResponsesOptions,
 ): Promise<void> {
-	await processResponsesStream(mapCodexEvents(parseSSE(response, options?.signal)), output, stream, model, {
-		serviceTier: options?.serviceTier,
-		resolveServiceTier: resolveCodexServiceTier,
-		applyServiceTierPricing: (usage, serviceTier) => applyServiceTierPricing(usage, serviceTier, model),
-	});
+	await processResponsesStream(
+		mapCodexEvents(parseSSE(response, options?.signal), model, options),
+		output,
+		stream,
+		model,
+		{
+			serviceTier: options?.serviceTier,
+			resolveServiceTier: resolveCodexServiceTier,
+			applyServiceTierPricing: (usage, serviceTier) => applyServiceTierPricing(usage, serviceTier, model),
+		},
+	);
 }
 
 class CodexApiError extends Error {
 	readonly code?: string;
 	readonly payload?: Record<string, unknown>;
+	readonly cause?: unknown;
 
 	constructor(message: string, options?: { code?: string; payload?: Record<string, unknown>; cause?: unknown }) {
 		super(message);
@@ -613,6 +631,7 @@ class CodexApiError extends Error {
 
 class CodexProtocolError extends Error {
 	readonly payload?: unknown;
+	readonly cause?: unknown;
 
 	constructor(message: string, options?: { payload?: unknown; cause?: unknown }) {
 		super(message);
@@ -626,10 +645,102 @@ function isCodexNonTransportError(error: unknown): boolean {
 	return error instanceof CodexApiError || error instanceof CodexProtocolError;
 }
 
-async function* mapCodexEvents(events: AsyncIterable<Record<string, unknown>>): AsyncGenerator<ResponseStreamEvent> {
+function codexRateLimitNumber(value: unknown): number | undefined {
+	if (typeof value !== "number" && typeof value !== "string") return undefined;
+	if (typeof value === "string" && value.trim() === "") return undefined;
+	const parsed = Number(value);
+	return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function codexRateLimitWindow(
+	usedPercentValue: unknown,
+	windowMinutesValue: unknown,
+	resetsAtValue: unknown,
+): ProviderRateLimitWindow | undefined {
+	const usedPercent = codexRateLimitNumber(usedPercentValue);
+	if (usedPercent === undefined) return undefined;
+	const windowMinutes = codexRateLimitNumber(windowMinutesValue);
+	const parsedResetsAt = codexRateLimitNumber(resetsAtValue);
+	const resetsAt = parsedResetsAt === undefined ? undefined : Math.floor(parsedResetsAt);
+	const maxResetAt = Date.now() / 1000 + MAX_CODEX_RESET_HORIZON_SECONDS;
+	return {
+		usedPercent: Math.min(100, Math.max(0, usedPercent)),
+		...(windowMinutes !== undefined && windowMinutes > 0 && windowMinutes <= MAX_CODEX_WINDOW_MINUTES
+			? { windowSeconds: Math.round(windowMinutes * 60) }
+			: {}),
+		...(resetsAt !== undefined && Number.isSafeInteger(resetsAt) && resetsAt > 0 && resetsAt <= maxResetAt
+			? { resetsAt }
+			: {}),
+	};
+}
+
+function parseCodexRateLimitHeaders(headers: Headers): ProviderRateLimitSnapshot | undefined {
+	const primary = codexRateLimitWindow(
+		headers.get("x-codex-primary-used-percent"),
+		headers.get("x-codex-primary-window-minutes"),
+		headers.get("x-codex-primary-reset-at"),
+	);
+	const secondary = codexRateLimitWindow(
+		headers.get("x-codex-secondary-used-percent"),
+		headers.get("x-codex-secondary-window-minutes"),
+		headers.get("x-codex-secondary-reset-at"),
+	);
+	return primary || secondary ? { limitId: "codex", primary, secondary } : undefined;
+}
+
+function parseCodexRateLimitEvent(event: Record<string, unknown>): ProviderRateLimitSnapshot | undefined {
+	if (event.type !== "codex.rate_limits") return undefined;
+	const details =
+		typeof event.rate_limits === "object" && event.rate_limits !== null
+			? (event.rate_limits as Record<string, unknown>)
+			: undefined;
+	const parseWindow = (value: unknown) => {
+		const window = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : undefined;
+		return window ? codexRateLimitWindow(window.used_percent, window.window_minutes, window.reset_at) : undefined;
+	};
+	const primary = parseWindow(details?.primary);
+	const secondary = parseWindow(details?.secondary);
+	if (!primary && !secondary) return undefined;
+	const rawLimitId = event.metered_limit_name ?? event.limit_name;
+	const limitId =
+		typeof rawLimitId === "string" && rawLimitId.trim()
+			? rawLimitId.trim().toLowerCase().replace(/-/g, "_").slice(0, 128)
+			: undefined;
+	return { limitId, primary, secondary };
+}
+
+function notifyCodexRateLimits(
+	snapshot: ProviderRateLimitSnapshot | undefined,
+	model: Model<"openai-codex-responses">,
+	options?: OpenAICodexResponsesOptions,
+): void {
+	if (!snapshot || !options?.onRateLimit) return;
+	try {
+		void Promise.resolve(options.onRateLimit(snapshot, model)).catch(() => {
+			// Passive quota observation must never fail or retry a model request.
+		});
+	} catch {
+		// Ignore synchronous observer failures for the same reason.
+	}
+}
+
+async function* mapCodexEvents(
+	events: AsyncIterable<Record<string, unknown>>,
+	model: Model<"openai-codex-responses">,
+	options?: OpenAICodexResponsesOptions,
+): AsyncGenerator<ResponseStreamEvent> {
+	let observedRateLimitEvents = 0;
 	for await (const event of events) {
 		const type = typeof event.type === "string" ? event.type : undefined;
 		if (!type) continue;
+
+		if (type === "codex.rate_limits") {
+			if (observedRateLimitEvents < MAX_CODEX_RATE_LIMIT_EVENTS) {
+				observedRateLimitEvents++;
+				notifyCodexRateLimits(parseCodexRateLimitEvent(event), model, options);
+			}
+			continue;
+		}
 
 		if (type === "error") {
 			// Codex nests the real fields under `error` (e.g. context_length_exceeded);
@@ -744,10 +855,14 @@ async function* parseSSE(response: Response, signal?: AbortSignal): AsyncGenerat
 		signal?.removeEventListener("abort", onAbort);
 		try {
 			await reader.cancel();
-		} catch {}
+		} catch {
+			// The terminal event may have already closed the stream.
+		}
 		try {
 			reader.releaseLock();
-		} catch {}
+		} catch {
+			// Ignore cleanup races after cancellation.
+		}
 	}
 }
 
@@ -955,7 +1070,9 @@ function isWebSocketReusable(socket: WebSocketLike): boolean {
 function closeWebSocketSilently(socket: WebSocketLike, code = 1000, reason = "done"): void {
 	try {
 		socket.close(code, reason);
-	} catch {}
+	} catch {
+		// Best-effort cleanup for runtimes that throw after close.
+	}
 }
 
 function scheduleSessionWebSocketExpiry(sessionId: string, entry: CachedWebSocketConnection): void {
@@ -1421,7 +1538,7 @@ async function processWebSocketStream(
 		socket.send(JSON.stringify({ type: "response.create", ...requestBody }));
 		await processResponsesStream(
 			startWebSocketOutputOnFirstEvent(
-				mapCodexEvents(parseWebSocket(socket, options?.signal, idleTimeoutMs)),
+				mapCodexEvents(parseWebSocket(socket, options?.signal, idleTimeoutMs), model, options),
 				output,
 				stream,
 				onStart,
@@ -1484,7 +1601,9 @@ async function parseErrorResponse(response: Response): Promise<{ message: string
 			}
 			message = err.message || friendlyMessage || message;
 		}
-	} catch {}
+	} catch {
+		// Preserve the raw provider error when the body is not JSON.
+	}
 
 	return { message, friendlyMessage };
 }

@@ -6,8 +6,17 @@ import {
 	parseCodexUsageSnapshot,
 	parseKimiUsageSnapshot,
 	parseZaiUsageSnapshot,
+	recordCodexPassiveUsage,
 	supportsSubscriptionUsage,
 } from "../src/core/provider-usage.ts";
+
+function codexToken(accountId: string): string {
+	const payload = Buffer.from(
+		JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: accountId } }),
+		"utf8",
+	).toString("base64url");
+	return `test.${payload}.signature`;
+}
 
 function session(
 	provider: string,
@@ -57,6 +66,45 @@ describe("subscription usage providers", () => {
 		expect(supportsSubscriptionUsage(session("kimi-coding", { oauthProviders: ["kimi-code"] }) as never)).toBe(true);
 		expect(supportsSubscriptionUsage(session("zai", { configuredProviders: ["zai"] }) as never)).toBe(true);
 		expect(supportsSubscriptionUsage(session("openai", { configuredProviders: ["openai"] }) as never)).toBe(false);
+	});
+
+	it("merges passive Codex response limits into missing polled windows", async () => {
+		const token = codexToken("acct-passive-merge");
+		recordCodexPassiveUsage(token, {
+			limitId: "codex",
+			primary: { usedPercent: 37, windowSeconds: 5 * 60 * 60, resetsAt: 1_900_000_000 },
+		});
+		const fetchMock = vi.fn(
+			async () =>
+				new Response(
+					JSON.stringify({
+						rate_limit: {
+							primary_window: {
+								used_percent: 50,
+								limit_window_seconds: 7 * 24 * 60 * 60,
+								reset_at: 1_900_500_000,
+							},
+						},
+					}),
+					{ status: 200, headers: { "content-type": "application/json" } },
+				),
+		);
+
+		const result = await loadSubscriptionUsage(
+			session("openai-codex", {
+				oauthProviders: ["openai-codex"],
+				apiKeys: { "openai-codex": token },
+			}) as never,
+			fetchMock,
+		);
+
+		expect(result).toEqual({
+			label: "CODEX",
+			windows: [
+				{ label: "5H", usedPercent: 37, resetsAt: 1_900_000_000 },
+				{ label: "7D", usedPercent: 50, resetsAt: 1_900_500_000 },
+			],
+		});
 	});
 
 	it("uses reset_after_seconds when Codex omits reset_at and does not invent a missing 5H window", () => {

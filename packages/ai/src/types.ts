@@ -85,6 +85,18 @@ export interface ProviderResponse {
 	headers: Record<string, string>;
 }
 
+export interface ProviderRateLimitWindow {
+	usedPercent: number;
+	windowSeconds?: number;
+	resetsAt?: number;
+}
+
+export interface ProviderRateLimitSnapshot {
+	limitId?: string;
+	primary?: ProviderRateLimitWindow;
+	secondary?: ProviderRateLimitWindow;
+}
+
 export interface StreamOptions {
 	temperature?: number;
 	maxTokens?: number;
@@ -116,6 +128,11 @@ export interface StreamOptions {
 	 * its body stream is consumed.
 	 */
 	onResponse?: (response: ProviderResponse, model: Model<Api>) => void | Promise<void>;
+	/**
+	 * Optional passive observer for provider-supplied rate-limit snapshots.
+	 * Observer failures never fail or retry the model request.
+	 */
+	onRateLimit?: (snapshot: ProviderRateLimitSnapshot, model: Model<Api>) => void | Promise<void>;
 	/**
 	 * Optional custom HTTP headers to include in API requests.
 	 * Merged with provider defaults; caller values override default headers.

@@ -150,4 +150,23 @@ describe("createAgentSession stream options", () => {
 
 		expect(options?.websocketConnectTimeoutMs).toBe(0);
 	});
+
+	it("chains passive rate-limit observers through SDK stream options", async () => {
+		const snapshot = { primary: { usedPercent: 12, windowSeconds: 5 * 60 * 60 } };
+		let observed: unknown;
+		const options = await captureStreamOptions(
+			"openai-codex-responses",
+			{},
+			{
+				onRateLimit: (value) => {
+					observed = value;
+					return new Promise<void>(() => {});
+				},
+			},
+		);
+
+		const pending = options?.onRateLimit?.(snapshot, createModel("openai-codex-responses"));
+		expect(observed).toEqual(snapshot);
+		expect(pending).toBeInstanceOf(Promise);
+	});
 });

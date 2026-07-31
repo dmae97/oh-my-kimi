@@ -8,7 +8,7 @@ import {
 	streamOpenAICodexResponses,
 	streamSimpleOpenAICodexResponses,
 } from "../src/providers/openai-codex-responses.ts";
-import type { Context, Model } from "../src/types.ts";
+import type { Context, Model, ProviderRateLimitSnapshot } from "../src/types.ts";
 
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 
@@ -92,6 +92,12 @@ describe("openai-codex streaming", () => {
 
 		const sse = `${[
 			`data: ${JSON.stringify({
+				type: "codex.rate_limits",
+				rate_limits: {
+					secondary: { used_percent: 25, window_minutes: 7 * 24 * 60, reset_at: 1_900_000_000 },
+				},
+			})}`,
+			`data: ${JSON.stringify({
 				type: "response.output_item.added",
 				item: { type: "message", id: "msg_1", role: "assistant", status: "in_progress", content: [] },
 			})}`,
@@ -147,7 +153,12 @@ describe("openai-codex streaming", () => {
 				expect(headers?.has("x-api-key")).toBe(false);
 				return new Response(stream, {
 					status: 200,
-					headers: { "content-type": "text/event-stream" },
+					headers: {
+						"content-type": "text/event-stream",
+						"x-codex-primary-used-percent": "12.5",
+						"x-codex-primary-window-minutes": "300",
+						"x-codex-primary-reset-at": "1800000000",
+					},
 				});
 			}
 			return new Response("not found", { status: 404 });
@@ -173,7 +184,15 @@ describe("openai-codex streaming", () => {
 			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
 		};
 
-		const streamResult = streamOpenAICodexResponses(model, context, { apiKey: token, transport: "sse" });
+		const observedRateLimits: ProviderRateLimitSnapshot[] = [];
+		const streamResult = streamOpenAICodexResponses(model, context, {
+			apiKey: token,
+			transport: "sse",
+			onRateLimit: (snapshot) => {
+				observedRateLimits.push(snapshot);
+				return new Promise<void>(() => {});
+			},
+		});
 		let sawTextDelta = false;
 		let sawDone = false;
 
@@ -189,6 +208,14 @@ describe("openai-codex streaming", () => {
 
 		expect(sawTextDelta).toBe(true);
 		expect(sawDone).toBe(true);
+		expect(observedRateLimits).toHaveLength(2);
+		expect(observedRateLimits[0]).toMatchObject({
+			limitId: "codex",
+			primary: { usedPercent: 12.5, windowSeconds: 5 * 60 * 60, resetsAt: 1_800_000_000 },
+		});
+		expect(observedRateLimits[1]).toMatchObject({
+			secondary: { usedPercent: 25, windowSeconds: 7 * 24 * 60 * 60, resetsAt: 1_900_000_000 },
+		});
 	});
 
 	it("completes after response.completed even when the SSE body stays open", async () => {
@@ -988,6 +1015,7 @@ describe("openai-codex streaming", () => {
 	it("forwards auto transport from streamSimple options and uses cached websocket context", async () => {
 		const token = mockToken();
 		const sentBodies: unknown[] = [];
+		const observedRateLimits: ProviderRateLimitSnapshot[] = [];
 		let capturedWebSocketHeaders: Record<string, string> | undefined;
 
 		const fetchMock = vi.fn(async () => new Response("unexpected fetch", { status: 500 }));
@@ -1019,6 +1047,10 @@ describe("openai-codex streaming", () => {
 			send(data: string): void {
 				sentBodies.push(JSON.parse(data));
 				const events = [
+					{
+						type: "codex.rate_limits",
+						rate_limits: { primary: { used_percent: 18, window_minutes: 300, reset_at: 1_800_000_000 } },
+					},
 					{
 						type: "response.output_item.added",
 						item: { type: "message", id: "msg_1", role: "assistant", status: "in_progress", content: [] },
@@ -1087,9 +1119,20 @@ describe("openai-codex streaming", () => {
 			apiKey: token,
 			sessionId: "session-auto",
 			transport: "auto",
+			onRateLimit: (snapshot) => {
+				observedRateLimits.push(snapshot);
+				return new Promise<void>(() => {});
+			},
 		}).result();
 
 		expect(sentBodies).toHaveLength(1);
+		expect(observedRateLimits).toEqual([
+			{
+				limitId: undefined,
+				primary: { usedPercent: 18, windowSeconds: 5 * 60 * 60, resetsAt: 1_800_000_000 },
+				secondary: undefined,
+			},
+		]);
 		expect(capturedWebSocketHeaders?.["session-id"]).toBe("session-auto");
 		expect(capturedWebSocketHeaders?.session_id).toBeUndefined();
 		expect(capturedWebSocketHeaders?.["x-client-request-id"]).toBe("session-auto");

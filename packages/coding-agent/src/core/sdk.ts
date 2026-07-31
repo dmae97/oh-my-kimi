@@ -25,6 +25,7 @@ import { convertToLlm } from "./messages.ts";
 import { ModelRegistry } from "./model-registry.ts";
 import { findInitialModel } from "./model-resolver.ts";
 import { mergeProviderAttributionHeaders } from "./provider-attribution.ts";
+import { recordCodexPassiveUsage } from "./provider-usage.ts";
 import type { ResourceLoader } from "./resource-loader.ts";
 import { DefaultResourceLoader } from "./resource-loader.ts";
 import { getDefaultSessionDir, SessionManager } from "./session-manager.ts";
@@ -514,6 +515,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				websocketConnectTimeoutMs,
 				maxRetries: options?.maxRetries ?? providerRetrySettings.maxRetries,
 				maxRetryDelayMs: options?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
+				onRateLimit: async (snapshot, responseModel) => {
+					if (auth.apiKey) recordCodexPassiveUsage(auth.apiKey, snapshot);
+					await options?.onRateLimit?.(snapshot, responseModel);
+				},
 				headers: mergeProviderAttributionHeaders(
 					model,
 					settingsManager,
