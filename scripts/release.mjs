@@ -45,8 +45,17 @@ function run(cmd, options = {}) {
 }
 
 function getVersion() {
-	const pkg = JSON.parse(readFileSync("packages/ai/package.json", "utf-8"));
-	return pkg.version;
+	try {
+		const pkg = JSON.parse(readFileSync("packages/ai/package.json", "utf-8"));
+		if (typeof pkg?.version !== "string" || !SEMVER_RE.test(pkg.version)) {
+			throw new Error("missing or invalid semantic version");
+		}
+		return pkg.version;
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		console.error(`Error: unable to read packages/ai/package.json: ${message}`);
+		process.exit(1);
+	}
 }
 
 function compareVersions(a, b) {
@@ -92,7 +101,9 @@ function bumpOrSetVersion(target) {
 	}
 
 	console.log(`Setting explicit version (${target})...`);
-	run(`npm version ${target} -ws --no-git-tag-version && node scripts/sync-versions.js && npm install --package-lock-only --ignore-scripts`);
+	run(
+		`npm version ${target} --workspaces --include-workspace-root --no-git-tag-version && node scripts/sync-versions.js && npm install --package-lock-only --ignore-scripts`,
+	);
 	return getVersion();
 }
 
