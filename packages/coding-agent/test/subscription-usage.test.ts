@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+	getConfiguredSubscriptionUsageProviders,
 	getSubscriptionUsageSource,
 	loadSubscriptionUsage,
 	parseClaudeUsageSnapshot,
@@ -64,8 +65,25 @@ describe("subscription usage providers", () => {
 			false,
 		);
 		expect(supportsSubscriptionUsage(session("kimi-coding", { oauthProviders: ["kimi-code"] }) as never)).toBe(true);
+		expect(supportsSubscriptionUsage(session("kimi-coding", { configuredProviders: ["kimi-coding"] }) as never)).toBe(
+			true,
+		);
 		expect(supportsSubscriptionUsage(session("zai", { configuredProviders: ["zai"] }) as never)).toBe(true);
 		expect(supportsSubscriptionUsage(session("openai", { configuredProviders: ["openai"] }) as never)).toBe(false);
+	});
+
+	it("lists every configured quota group with the active provider first", () => {
+		const configured = session("anthropic", {
+			oauthProviders: ["openai-codex", "anthropic", "grok-oauth-proxy"],
+			configuredProviders: ["kimi-coding", "zai"],
+		});
+		expect(getConfiguredSubscriptionUsageProviders(configured as never)).toEqual([
+			"anthropic",
+			"openai-codex",
+			"kimi-coding",
+			"zai",
+			"grok-oauth-proxy",
+		]);
 	});
 
 	it("merges passive Codex response limits into missing polled windows", async () => {
@@ -210,6 +228,25 @@ describe("subscription usage providers", () => {
 			],
 		});
 		expect(JSON.stringify(result)).not.toContain(token);
+	});
+
+	it("uses a configured Kimi Coding key for the fixed official quota endpoint", async () => {
+		const fetchMock = vi.fn(
+			async () =>
+				new Response(JSON.stringify({ usage: { limit: 100, used: 24 } }), {
+					status: 200,
+					headers: { "content-type": "application/json" },
+				}),
+		);
+		const result = await loadSubscriptionUsage(
+			session("kimi-coding", {
+				configuredProviders: ["kimi-coding"],
+				apiKeys: { "kimi-coding": "test-kimi-key" },
+			}) as never,
+			fetchMock,
+		);
+		expect(fetchMock).toHaveBeenCalledOnce();
+		expect(result).toEqual({ label: "KIMI", windows: [{ label: "TOTAL", usedPercent: 24 }] });
 	});
 
 	it("keeps Kimi OAuth quota requests on the fixed official origin and sanitizes labels", async () => {

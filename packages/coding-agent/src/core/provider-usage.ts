@@ -50,23 +50,44 @@ type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<
 
 const passiveCodexUsage = new Map<string, PassiveCodexEntry>();
 const MINUTE_TTL_MS = 60_000;
+const VISIBLE_USAGE_PROVIDERS = [
+	"openai-codex",
+	"anthropic",
+	"kimi-coding",
+	"zai",
+	"qwen-oauth",
+	"grok-oauth-proxy",
+] as const;
 const SOURCES: Readonly<Record<string, SubscriptionUsageSource>> = {
 	"openai-codex": source("CODEX", "codex", [{ provider: "openai-codex", oauthOnly: true }]),
 	anthropic: source("CLAUDE", "claude", [{ provider: "anthropic", oauthOnly: true }], 5 * MINUTE_TTL_MS),
-	"qwen-oauth": source("QWEN", "unavailable", [{ provider: "qwen-oauth", oauthOnly: true }]),
+	"qwen-oauth": source("QWEN", "unavailable", [
+		{ provider: "qwen-oauth", oauthOnly: true },
+		{ provider: "modelstudio-maas", oauthOnly: false },
+	]),
 	"modelstudio-maas": source("QWEN", "unavailable", [{ provider: "modelstudio-maas", oauthOnly: false }]),
-	"kimi-code": source("KIMI", "kimi", [{ provider: "kimi-code", oauthOnly: true }]),
-	"kimi-coding": source("KIMI", "kimi", [{ provider: "kimi-code", oauthOnly: true }]),
+	"kimi-code": source("KIMI", "kimi", [
+		{ provider: "kimi-code", oauthOnly: true },
+		{ provider: "kimi-coding", oauthOnly: false },
+	]),
+	"kimi-coding": source("KIMI", "kimi", [
+		{ provider: "kimi-code", oauthOnly: true },
+		{ provider: "kimi-coding", oauthOnly: false },
+	]),
 	"zhipu-coding-plan": source("GLM", "zai", [{ provider: "zhipu-coding-plan", oauthOnly: true }]),
 	zai: source("GLM", "zai", [
 		{ provider: "zai", oauthOnly: false },
+		{ provider: "zai-coding-cn", oauthOnly: false },
 		{ provider: "zhipu-coding-plan", oauthOnly: true },
 	]),
 	"zai-coding-cn": source("GLM", "zai", [
 		{ provider: "zai-coding-cn", oauthOnly: false },
 		{ provider: "zhipu-coding-plan", oauthOnly: true },
 	]),
-	"grok-oauth-proxy": source("GROK", "unavailable", [{ provider: "grok-oauth-proxy", oauthOnly: true }]),
+	"grok-oauth-proxy": source("GROK", "unavailable", [
+		{ provider: "grok-oauth-proxy", oauthOnly: true },
+		{ provider: "xai", oauthOnly: true },
+	]),
 	xai: source("GROK", "unavailable", [{ provider: "xai", oauthOnly: true }]),
 };
 
@@ -92,19 +113,32 @@ export function getSubscriptionUsageSource(provider: string | undefined): Subscr
 	return undefined;
 }
 
-export function supportsSubscriptionUsage(session: UsageSession): boolean {
-	const provider = session.state.model?.provider;
+export function supportsSubscriptionUsage(session: UsageSession, provider = session.state.model?.provider): boolean {
 	const usageSource = getSubscriptionUsageSource(provider);
 	return usageSource?.credentials.some((candidate) => credentialConfigured(session, candidate)) ?? false;
+}
+
+/** Configured quota groups shown in the rail, with the active group first. */
+export function getConfiguredSubscriptionUsageProviders(session: UsageSession): readonly string[] {
+	const activeProvider = session.state.model?.provider;
+	const activeSource = getSubscriptionUsageSource(activeProvider);
+	const providers = VISIBLE_USAGE_PROVIDERS.filter((provider) => supportsSubscriptionUsage(session, provider));
+	if (!activeProvider || !activeSource || !supportsSubscriptionUsage(session, activeProvider)) return providers;
+	const activeCanonical = providers.find(
+		(provider) => getSubscriptionUsageSource(provider)?.label === activeSource.label,
+	);
+	if (!activeCanonical) return [activeProvider, ...providers];
+	return [activeCanonical, ...providers.filter((provider) => provider !== activeCanonical)];
 }
 
 export async function loadSubscriptionUsage(
 	session: UsageSession,
 	fetchImpl: FetchLike = fetch,
+	provider = session.state.model?.provider,
 ): Promise<SubscriptionUsageSnapshot | undefined> {
 	const model = session.state.model;
-	const usageSource = getSubscriptionUsageSource(model?.provider);
-	if (!model || !usageSource || !supportsSubscriptionUsage(session)) return undefined;
+	const usageSource = getSubscriptionUsageSource(provider);
+	if (!model || !usageSource || !supportsSubscriptionUsage(session, provider)) return undefined;
 	if (usageSource.kind === "unavailable") {
 		return { label: usageSource.label, windows: [], message: "quota API unavailable" };
 	}
@@ -122,7 +156,7 @@ export async function loadSubscriptionUsage(
 			case "kimi":
 				return await fetchKimiUsage(usageSource.label, credential.apiKey, fetchImpl);
 			case "zai":
-				return await fetchZaiUsage(usageSource.label, model.provider, credential, fetchImpl);
+				return await fetchZaiUsage(usageSource.label, provider ?? model.provider, credential, fetchImpl);
 		}
 	} catch {
 		return { label: usageSource.label, windows: [], message: "usage unavailable" };
@@ -307,7 +341,9 @@ async function fetchZaiUsage(
 	fetchImpl: FetchLike,
 ): Promise<SubscriptionUsageSnapshot> {
 	const origin =
-		modelProvider === "zai-coding-cn" || credential.provider === "zhipu-coding-plan"
+		modelProvider === "zai-coding-cn" ||
+		credential.provider === "zai-coding-cn" ||
+		credential.provider === "zhipu-coding-plan"
 			? "https://open.bigmodel.cn"
 			: "https://api.z.ai";
 	const payload = await fetchJson(fetchImpl, `${origin}/api/monitor/usage/quota/limit`, {

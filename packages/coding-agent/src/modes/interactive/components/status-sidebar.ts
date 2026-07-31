@@ -5,16 +5,17 @@ import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provi
 import { loadMcpInventory, type McpServerEntry } from "../../../core/mcp-inventory.ts";
 import {
 	type CodexUsageSnapshot,
+	getConfiguredSubscriptionUsageProviders,
 	getSubscriptionUsageSource,
 	loadSubscriptionUsage,
 	parseCodexUsageSnapshot,
 	type SubscriptionUsageSnapshot,
 	type SubscriptionUsageWindow,
-	supportsSubscriptionUsage,
 } from "../../../core/provider-usage.ts";
 
 export { parseCodexUsageSnapshot };
 
+import { stripAnsi } from "../../../utils/ansi.ts";
 import { type ThemeColor, theme } from "../theme/theme.ts";
 import { boxBottom, boxTextLine, boxTop, sidebarRule } from "./control-panel-box.ts";
 import { classifyMcpStability } from "./control-panel-runtime-status.ts";
@@ -55,7 +56,10 @@ const SPARK_SAMPLE_MS = 1000;
 const MCP_CACHE_TTL_MS = 5000;
 const SPARK_CHARS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"] as const;
 
-type SubscriptionUsageFetcher = (session: AgentSession) => Promise<SubscriptionUsageSnapshot | undefined>;
+type SubscriptionUsageFetcher = (
+	session: AgentSession,
+	provider?: string,
+) => Promise<SubscriptionUsageSnapshot | undefined>;
 type CodexUsageFetcher = (session: AgentSession) => Promise<CodexUsageSnapshot | undefined>;
 type StatusSidebarOptions = Readonly<{
 	requestRender?: () => void;
@@ -84,12 +88,11 @@ export class StatusSidebarComponent implements Component {
 	private cpuHistory: number[] = [];
 	private lastSparkSampleAt = 0;
 	private mcpCache: { at: number; cwd: string; entries: McpServerEntry[] } | undefined;
-	private subscriptionUsage: SubscriptionUsageSnapshot | undefined;
+	private subscriptionUsage = new Map<string, SubscriptionUsageSnapshot>();
 	private subscriptionUsageSession: AgentSession | undefined;
-	private subscriptionUsageProvider: string | undefined;
-	private subscriptionUsageLabel: string | undefined;
-	private subscriptionUsageFetchedAt = 0;
-	private subscriptionUsageInFlight = false;
+	private subscriptionUsageProviders: readonly string[] = [];
+	private subscriptionUsageFetchedAt = new Map<string, number>();
+	private subscriptionUsageInFlight = new Map<string, AgentSession>();
 
 	constructor(
 		getSession: () => AgentSession,
@@ -107,8 +110,11 @@ export class StatusSidebarComponent implements Component {
 		this.fetchSubscriptionUsage =
 			options.fetchSubscriptionUsage ??
 			(legacyFetcher
-				? async (session) => codexSubscriptionSnapshot(await legacyFetcher(session))
-				: loadSubscriptionUsage);
+				? async (session, provider) =>
+						getSubscriptionUsageSource(provider)?.kind === "codex"
+							? codexSubscriptionSnapshot(await legacyFetcher(session))
+							: loadSubscriptionUsage(session, undefined, provider)
+				: (session, provider) => loadSubscriptionUsage(session, undefined, provider));
 	}
 
 	invalidate(): void {
@@ -238,61 +244,88 @@ export class StatusSidebarComponent implements Component {
 	}
 
 	private refreshSubscriptionUsage(session: AgentSession): void {
-		const provider = session.state.model?.provider;
-		const source = getSubscriptionUsageSource(provider);
-		if (!provider || !source || !supportsSubscriptionUsage(session)) {
-			this.subscriptionUsage = undefined;
-			this.subscriptionUsageSession = undefined;
-			this.subscriptionUsageProvider = undefined;
-			this.subscriptionUsageLabel = undefined;
-			return;
-		}
-		if (this.subscriptionUsageSession !== session || this.subscriptionUsageProvider !== provider) {
-			this.subscriptionUsage = undefined;
+		if (this.subscriptionUsageSession !== session) {
+			this.subscriptionUsage.clear();
+			this.subscriptionUsageFetchedAt.clear();
+			this.subscriptionUsageInFlight.clear();
 			this.subscriptionUsageSession = session;
-			this.subscriptionUsageProvider = provider;
-			this.subscriptionUsageLabel = source.label;
-			this.subscriptionUsageFetchedAt = 0;
 		}
+
+		const providers = getConfiguredSubscriptionUsageProviders(session);
+		this.subscriptionUsageProviders = providers;
+		const configured = new Set(providers);
+		for (const provider of this.subscriptionUsage.keys()) {
+			if (!configured.has(provider)) this.subscriptionUsage.delete(provider);
+		}
+
 		const now = Date.now();
-		if (this.subscriptionUsageInFlight || now - this.subscriptionUsageFetchedAt < source.ttlMs) return;
-		this.subscriptionUsageFetchedAt = now;
-		this.subscriptionUsageInFlight = true;
-		void this.fetchSubscriptionUsage(session)
-			.then((snapshot) => {
-				if (this.getSession() === session && session.state.model?.provider === provider) {
-					this.subscriptionUsage = snapshot;
-				}
-			})
-			.catch(() => {
-				if (this.getSession() === session && session.state.model?.provider === provider) {
-					this.subscriptionUsage = { label: source.label, windows: [], message: "usage unavailable" };
-				}
-			})
-			.finally(() => {
-				this.subscriptionUsageInFlight = false;
-				this.requestRender();
-			});
+		for (const provider of providers) {
+			const source = getSubscriptionUsageSource(provider);
+			if (
+				!source ||
+				this.subscriptionUsageInFlight.has(provider) ||
+				now - (this.subscriptionUsageFetchedAt.get(provider) ?? 0) < source.ttlMs
+			) {
+				continue;
+			}
+			this.subscriptionUsageFetchedAt.set(provider, now);
+			this.subscriptionUsageInFlight.set(provider, session);
+			void this.fetchSubscriptionUsage(session, provider)
+				.then((snapshot) => {
+					if (snapshot && this.getSession() === session && this.subscriptionUsageProviders.includes(provider)) {
+						this.subscriptionUsage.set(provider, snapshot);
+					}
+				})
+				.catch(() => {
+					if (this.getSession() === session && this.subscriptionUsageProviders.includes(provider)) {
+						this.subscriptionUsage.set(provider, {
+							label: source.label,
+							windows: [],
+							message: "usage unavailable",
+						});
+					}
+				})
+				.finally(() => {
+					if (this.subscriptionUsageInFlight.get(provider) === session) {
+						this.subscriptionUsageInFlight.delete(provider);
+					}
+					this.requestRender();
+				});
+		}
 	}
 
 	private subscriptionUsageSection(width: number): string[] {
-		const label = this.subscriptionUsage?.label ?? this.subscriptionUsageLabel;
-		if (!label) return [];
-		const lines = [railRule(width, "USAGE", theme.fg("accent", label))];
-		if (!this.subscriptionUsage) {
-			if (this.subscriptionUsageInFlight) lines.push(boxTextLine(width, theme.fg("dim", "loading…")));
-			return lines.length === 1 ? [] : lines;
+		if (this.subscriptionUsageProviders.length === 0) return [];
+		const lines = [railRule(width, "USAGE", theme.fg("accent", String(this.subscriptionUsageProviders.length)))];
+		for (const provider of this.subscriptionUsageProviders) {
+			const source = getSubscriptionUsageSource(provider);
+			const snapshot = this.subscriptionUsage.get(provider);
+			const label = snapshot?.label ?? source?.label;
+			if (!label) continue;
+			if (!snapshot) {
+				if (this.subscriptionUsageInFlight.has(provider)) {
+					lines.push(boxTextLine(width, `${theme.fg("accent", label)} ${theme.fg("dim", "loading…")}`));
+				}
+				continue;
+			}
+			if (snapshot.windows.length === 0) {
+				lines.push(
+					boxTextLine(
+						width,
+						`${theme.fg("accent", label)} ${theme.fg("dim", snapshot.message ?? "usage unavailable")}`,
+					),
+				);
+				continue;
+			}
+			lines.push(boxTextLine(width, theme.fg("accent", label)));
+			for (const window of snapshot.windows) {
+				lines.push(boxTextLine(width, usageMeter(window.label, window, width)));
+			}
+			const resets = snapshot.windows.flatMap((window) =>
+				window.resetsAt === undefined ? [] : [`${window.label} ${formatReset(window.resetsAt)}`],
+			);
+			if (resets.length > 0) lines.push(boxTextLine(width, theme.fg("dim", `reset ${resets.join(" · ")}`)));
 		}
-		for (const window of this.subscriptionUsage.windows) {
-			lines.push(boxTextLine(width, usageMeter(window.label, window, width)));
-		}
-		if (this.subscriptionUsage.message) {
-			lines.push(boxTextLine(width, theme.fg("dim", this.subscriptionUsage.message)));
-		}
-		const resets = this.subscriptionUsage.windows.flatMap((window) =>
-			window.resetsAt === undefined ? [] : [`${window.label} ${formatReset(window.resetsAt)}`],
-		);
-		if (resets.length > 0) lines.push(boxTextLine(width, theme.fg("dim", `reset ${resets.join(" · ")}`)));
 		return lines.length === 1 ? [] : lines;
 	}
 
@@ -385,7 +418,12 @@ function mcpRow(entry: McpServerEntry, width: number): string {
 				: theme.fg("warning", "○");
 	const nameColor: ThemeColor = stability === "stable" ? "text" : stability === "overridden" ? "dim" : "warning";
 	const nameWidth = Math.max(1, width - 4 - 2); // frame (4) + dot + space (2)
-	const name = truncateToWidth(entry.name, nameWidth, "…");
+	const safeName = stripAnsi(entry.name)
+		.replace(/[\t\r\n]+/g, " ")
+		.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, "")
+		.replace(/\s+/g, " ")
+		.trim();
+	const name = truncateToWidth(safeName || "<unnamed>", nameWidth, "…");
 	return `${dot} ${theme.fg(nameColor, name)}`;
 }
 

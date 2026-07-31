@@ -64,6 +64,7 @@ const mockInventory: McpInventory = {
 		entry("chrome-devtools"),
 		entry("filesystem", { overriddenBy: "/tmp/other.json" }),
 		entry("ghidra", { commandSummary: "<unknown>" }),
+		entry("\u001b[31mevil\u202ename\nnext", { commandSummary: "<unknown>" }),
 	],
 	presets: [],
 	sources: [],
@@ -84,8 +85,8 @@ function makeSession() {
 		getContextUsage: () => ({ percent: 42, contextWindow: 200000, tokens: 84000 }),
 		modelRegistry: {
 			isUsingOAuth: () => false,
-			isUsingOAuthProvider: () => false,
-			getProviderAuthStatus: () => ({ configured: false }),
+			isUsingOAuthProvider: (_provider: string) => false,
+			getProviderAuthStatus: (_provider: string) => ({ configured: false }),
 			getApiKeyForProvider: async (): Promise<string | undefined> => undefined,
 			getApiKeyAndHeaders: async (): Promise<
 				{ ok: true; apiKey: string; headers?: Record<string, string> } | { ok: false; error: string }
@@ -142,16 +143,19 @@ describe("StatusSidebarComponent (pinned opencode-style rail)", () => {
 			() => makeSession() as never,
 			makeFooterData() as never,
 			() => true,
+			() => 40,
 		);
 		const text = stripAnsi(sidebar.render(STATUS_SIDEBAR_WIDTH).join("\n"));
-		// 2 stable of 4 total → counter in the section rule.
+		// 2 stable of 5 total → counter in the section rule.
 		expect(text).toContain("MCP");
-		expect(text).toContain("2/4");
+		expect(text).toContain("2/5");
 		// Server names are listed.
 		expect(text).toContain("adaptorch");
 		expect(text).toContain("chrome-devtools");
 		expect(text).toContain("filesystem");
 		expect(text).toContain("ghidra");
+		expect(text).toContain("evilname next");
+		expect(text).not.toContain("\u202e");
 		// Stability dots: stable (●), overridden (◐), unstable (○).
 		expect(text).toContain("●");
 		expect(text).toContain("◐");
@@ -173,7 +177,7 @@ describe("StatusSidebarComponent (pinned opencode-style rail)", () => {
 		const session = makeSession();
 		session.state.model.provider = "openai-codex";
 		session.modelRegistry.isUsingOAuth = () => true;
-		session.modelRegistry.isUsingOAuthProvider = () => true;
+		session.modelRegistry.isUsingOAuthProvider = (provider) => provider === "openai-codex";
 		const requestRender = vi.fn();
 		const sidebar = new StatusSidebarComponent(
 			() => session as never,
@@ -209,7 +213,7 @@ describe("StatusSidebarComponent (pinned opencode-style rail)", () => {
 		const session = makeSession();
 		session.state.model.provider = "anthropic";
 		session.modelRegistry.isUsingOAuth = () => true;
-		session.modelRegistry.isUsingOAuthProvider = () => true;
+		session.modelRegistry.isUsingOAuthProvider = (provider) => provider === "anthropic";
 		const requestRender = vi.fn();
 		const sidebar = new StatusSidebarComponent(
 			() => session as never,
@@ -241,7 +245,7 @@ describe("StatusSidebarComponent (pinned opencode-style rail)", () => {
 		const session = makeSession();
 		session.state.model.provider = "qwen-oauth";
 		session.modelRegistry.isUsingOAuth = () => true;
-		session.modelRegistry.isUsingOAuthProvider = () => true;
+		session.modelRegistry.isUsingOAuthProvider = (provider) => provider === "qwen-oauth";
 		const requestRender = vi.fn();
 		const sidebar = new StatusSidebarComponent(
 			() => session as never,
@@ -258,13 +262,15 @@ describe("StatusSidebarComponent (pinned opencode-style rail)", () => {
 		expect(text).toContain("quota API unavailable");
 	});
 
-	it("ignores a stale quota failure after the active provider changes", async () => {
+	it("renders every configured provider while quota requests settle independently", async () => {
 		const session = makeSession();
 		session.state.model.provider = "openai-codex";
 		session.modelRegistry.isUsingOAuth = () => true;
-		session.modelRegistry.isUsingOAuthProvider = () => true;
-		let rejectFirst: ((error: Error) => void) | undefined;
-		let calls = 0;
+		session.modelRegistry.isUsingOAuthProvider = (provider) =>
+			provider === "openai-codex" || provider === "anthropic";
+		let resolveCodex:
+			| ((snapshot: { label: string; windows: { label: string; usedPercent: number }[] }) => void)
+			| undefined;
 		const requestRender = vi.fn();
 		const sidebar = new StatusSidebarComponent(
 			() => session as never,
@@ -273,11 +279,10 @@ describe("StatusSidebarComponent (pinned opencode-style rail)", () => {
 			() => 32,
 			{
 				requestRender,
-				fetchSubscriptionUsage: async () => {
-					calls++;
-					if (calls === 1) {
-						return new Promise((_, reject) => {
-							rejectFirst = reject;
+				fetchSubscriptionUsage: async (_session, provider) => {
+					if (provider === "openai-codex") {
+						return new Promise((resolve) => {
+							resolveCodex = resolve;
 						});
 					}
 					return { label: "CLAUDE", windows: [{ label: "5H", usedPercent: 22 }] };
@@ -286,23 +291,26 @@ describe("StatusSidebarComponent (pinned opencode-style rail)", () => {
 		);
 
 		sidebar.render(STATUS_SIDEBAR_WIDTH);
-		session.state.model.provider = "anthropic";
-		expect(stripAnsi(sidebar.render(STATUS_SIDEBAR_WIDTH).join("\n"))).toContain("CLAUDE");
-		rejectFirst?.(new Error("stale failure"));
 		await vi.waitFor(() => expect(requestRender).toHaveBeenCalledTimes(1));
-		sidebar.render(STATUS_SIDEBAR_WIDTH);
-		await vi.waitFor(() => expect(requestRender).toHaveBeenCalledTimes(2));
-		const text = stripAnsi(sidebar.render(STATUS_SIDEBAR_WIDTH).join("\n"));
+		let text = stripAnsi(sidebar.render(STATUS_SIDEBAR_WIDTH).join("\n"));
+		expect(text).toContain("CODEX loading…");
 		expect(text).toContain("CLAUDE");
 		expect(text).toContain("22%");
-		expect(text).not.toContain("usage unavailable");
+
+		resolveCodex?.({ label: "CODEX", windows: [{ label: "7D", usedPercent: 41 }] });
+		await vi.waitFor(() => expect(requestRender).toHaveBeenCalledTimes(2));
+		text = stripAnsi(sidebar.render(STATUS_SIDEBAR_WIDTH).join("\n"));
+		expect(text).toContain("CODEX");
+		expect(text).toContain("41%");
+		expect(text).toContain("CLAUDE");
+		expect(text).toContain("22%");
 	});
 
 	it("loads subscription quota from the official endpoint with the OAuth account header", async () => {
 		const session = makeSession();
 		session.state.model.provider = "openai-codex";
 		session.modelRegistry.isUsingOAuth = () => true;
-		session.modelRegistry.isUsingOAuthProvider = () => true;
+		session.modelRegistry.isUsingOAuthProvider = (provider) => provider === "openai-codex";
 		const payload = Buffer.from(
 			JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "account-test" } }),
 		).toString("base64url");
