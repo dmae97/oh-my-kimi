@@ -21,6 +21,9 @@ packages/*/dist-firefox/
 !.omk/git/.gitignore
 !.omk/npm/
 !.omk/npm/.gitignore
+!.omk/harness-graph/
+!.omk/harness-graph/**
+.omk/harness-graph/out/
 !.omk/prompts/
 !.omk/prompts/**
 !.omk/skills/
