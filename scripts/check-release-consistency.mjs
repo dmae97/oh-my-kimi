@@ -5,7 +5,7 @@ import { basename, join, relative } from "node:path";
 
 const semverPattern = String.raw`(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?`;
 const controlPanelVersionPattern = new RegExp(String.raw`omk v(${semverPattern})\s*·\s*OMK(?::)?//CONTROL`, "g");
-const strictTagPattern = /^v(\d+)\.(\d+)\.(\d+)$/;
+const strictTagPattern = /^(?:release-)?v(\d+)\.(\d+)\.(\d+)$/;
 const releaseBadgePattern = /release-v(\d+\.\d+\.\d+)/;
 const releaseNotesLinkPattern = /RELEASE_NOTES_v(\d+\.\d+\.\d+)\.md/;
 const releaseNotesFilePattern = /^RELEASE_NOTES_v(\d+)\.(\d+)\.(\d+)\.md$/;
@@ -295,7 +295,12 @@ function collectFiles(directory, files) {
 }
 
 function readJson(path) {
-	return JSON.parse(readFileSync(path, "utf8"));
+	try {
+		return JSON.parse(readFileSync(path, "utf8"));
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		throw new Error(`Unable to parse JSON file ${path}: ${message}`);
+	}
 }
 
 // (a) Tag lineage: a tag can exist (with a completed GitHub release) without ever being merged
@@ -306,7 +311,7 @@ function readJson(path) {
 // remote's tags that share no commits with HEAD at all); those are excluded by requiring a
 // merge-base to exist before a tag is considered a lineage candidate.
 function checkTagLineage(repoRoot, packageVersion, releaseMode, issues) {
-	const tagListing = runGit(repoRoot, ["tag", "--list", "v*"]);
+	const tagListing = runGit(repoRoot, ["tag", "--list", "v*", "release-v*"]);
 	if (!tagListing.ok) {
 		// No git tags (or not a git checkout at all): nothing to compare against, no issue.
 		return { latestTag: null, latestTagReachable: null, versionBehindTag: false };
@@ -323,21 +328,22 @@ function checkTagLineage(repoRoot, packageVersion, releaseMode, issues) {
 		.filter((entry) => entry !== null)
 		.sort((a, b) => compareVersionTriples(b.triple, a.triple));
 
-	let latestTag = null;
+	let latestCandidate = null;
 	for (const candidate of candidates) {
 		if (runGit(repoRoot, ["merge-base", candidate.tag, "HEAD"]).ok) {
-			latestTag = candidate.tag;
+			latestCandidate = candidate;
 			break;
 		}
 	}
 
-	if (!latestTag) {
+	if (!latestCandidate) {
 		return { latestTag: null, latestTagReachable: null, versionBehindTag: false };
 	}
 
+	const latestTag = latestCandidate.tag;
 	const latestTagReachable = runGit(repoRoot, ["merge-base", "--is-ancestor", latestTag, "HEAD"]).ok;
 	const packageTriple = parseVersionTriple(packageVersion);
-	const tagTriple = parseVersionTriple(latestTag.slice(1));
+	const tagTriple = latestCandidate.triple;
 	const versionBehindTag = Boolean(
 		packageTriple && tagTriple && compareVersionTriples(packageTriple, tagTriple) < 0,
 	);

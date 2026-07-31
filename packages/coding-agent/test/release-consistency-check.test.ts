@@ -85,6 +85,23 @@ describe("release consistency check", () => {
 			expect(output.issues.some((issue) => issue.id === "release_tag_not_merged")).toBe(false);
 		});
 
+		it("recognizes immutable-release replacement tags as release lineage", () => {
+			const root = createFixture();
+			initGitRepo(root);
+			runGitOrThrow(root, ["tag", "v1.2.2"]);
+			runGitOrThrow(root, ["tag", "release-v1.2.3"]);
+
+			const result = spawnCheck(root);
+			const output = JSON.parse(result.stdout) as ReleaseConsistencyResult;
+
+			expect(result.status).toBe(0);
+			expect(output.ok).toBe(true);
+			expect(output.latestTag).toBe("release-v1.2.3");
+			expect(output.latestTagReachable).toBe(true);
+			expect(output.versionBehindTag).toBe(false);
+			expect(output.issues.some((issue) => issue.id === "release_tag_not_merged")).toBe(false);
+		});
+
 		it("reports an unreachable tag as a warning in dev mode and an error in release mode", () => {
 			const root = createFixture();
 			initGitRepo(root);
