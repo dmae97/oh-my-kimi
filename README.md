@@ -1,8 +1,46 @@
-# OMK
+<p align="center">
+  <img
+    src="readmeasset/omk-marketing-control.webp"
+    alt="OMK//CONTROL provider-neutral routing, evidence gates, and parallel lanes"
+    width="100%"
+  />
+</p>
 
-Provider-neutral coding agent and multi-agent orchestration toolkit.
+<p align="center">
+  <img
+    src="readmeasset/omkgirl.png"
+    alt="OMK girl — operator avatar for the OMK//CONTROL coding harness"
+    width="420"
+  />
+</p>
 
-OMK routes work across models, constrains tools and paths, verifies outcomes, and keeps replayable evidence.
+<h1 align="center">OMK</h1>
+
+<p align="center">
+  <strong>Provider-neutral coding agent and multi-agent orchestration toolkit.</strong>
+</p>
+
+<p align="center">
+  OMK routes work across models, constrains tools and paths, verifies outcomes,
+  and keeps replayable evidence.
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/open-multi-agent-kit"><img alt="npm version" src="https://img.shields.io/npm/v/open-multi-agent-kit?style=flat-square&label=npm" /></a>
+  <a href="https://www.npmjs.com/package/open-multi-agent-kit"><img alt="npm downloads per month" src="https://img.shields.io/npm/dm/open-multi-agent-kit?style=flat-square" /></a>
+  <a href="https://www.npmjs.com/package/open-multi-agent-kit"><img alt="npm total downloads" src="https://img.shields.io/npm/dt/open-multi-agent-kit?style=flat-square&label=total%20downloads" /></a>
+  <a href="https://github.com/dmae97/omk/releases/latest"><img alt="latest release" src="https://img.shields.io/github/v/release/dmae97/omk?style=flat-square&label=release" /></a>
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/npm/l/open-multi-agent-kit?style=flat-square" /></a>
+  <img alt="supported Node.js version" src="https://img.shields.io/node/v/open-multi-agent-kit?style=flat-square" />
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/open-multi-agent-kit"><img alt="open-multi-agent-kit npm version" src="https://img.shields.io/npm/v/open-multi-agent-kit?style=flat-square&label=open-multi-agent-kit" /></a>
+  <a href="https://www.npmjs.com/package/omk-ai"><img alt="omk-ai npm version" src="https://img.shields.io/npm/v/omk-ai?style=flat-square&label=omk-ai" /></a>
+  <a href="https://www.npmjs.com/package/omk-agent-core"><img alt="omk-agent-core npm version" src="https://img.shields.io/npm/v/omk-agent-core?style=flat-square&label=omk-agent-core" /></a>
+  <a href="https://www.npmjs.com/package/omk-tui"><img alt="omk-tui npm version" src="https://img.shields.io/npm/v/omk-tui?style=flat-square&label=omk-tui" /></a>
+  <a href="https://www.npmjs.com/package/omk-adaptorch-wpl"><img alt="omk-adaptorch-wpl npm version" src="https://img.shields.io/npm/v/omk-adaptorch-wpl?style=flat-square&label=omk-adaptorch-wpl" /></a>
+</p>
 
 ---
 
@@ -20,6 +58,72 @@ fresh evidence, and records replayable artifacts for review and recovery.
 | An agent says "done" before the build is green | Acceptance predicates block unverified completion |
 | A session crashes midway | Replayable state and session repair preserve the run |
 | The preferred model changes | The control and evidence model stays stable |
+
+---
+
+## OMK in motion
+
+Ten short captures of the control plane's main workflows.
+
+### 1 · Install and boot
+
+<p align="center">
+  <img src="readmeasset/demos/01-install-boot.gif" alt="OMK install and boot" width="820" />
+</p>
+
+### 2 · Goal to DAG
+
+<p align="center">
+  <img src="readmeasset/demos/02-goal-to-dag.gif" alt="OMK goal decomposition into a DAG" width="820" />
+</p>
+
+### 3 · Parallel lanes
+
+<p align="center">
+  <img src="readmeasset/demos/03-parallel-lanes.gif" alt="OMK parallel execution lanes" width="820" />
+</p>
+
+### 4 · Provider routing
+
+<p align="center">
+  <img src="readmeasset/demos/04-provider-routing.gif" alt="OMK provider-neutral routing" width="820" />
+</p>
+
+### 5 · Evidence gate
+
+<p align="center">
+  <img src="readmeasset/demos/05-evidence-gate.gif" alt="OMK evidence gate" width="820" />
+</p>
+
+### 6 · Skill routing
+
+<p align="center">
+  <img src="readmeasset/demos/06-skill-routing.gif" alt="OMK skill routing" width="820" />
+</p>
+
+### 7 · MCP health
+
+<p align="center">
+  <img src="readmeasset/demos/07-mcp-health.gif" alt="OMK MCP health view" width="820" />
+</p>
+
+### 8 · Context budget
+
+<p align="center">
+  <img src="readmeasset/demos/08-context-budget.gif" alt="OMK context budget" width="820" />
+</p>
+
+### 9 · Session doctor
+
+<p align="center">
+  <img src="readmeasset/demos/09-session-doctor.gif" alt="OMK session doctor" width="820" />
+</p>
+
+### 10 · Packages and themes
+
+<p align="center">
+  <img src="readmeasset/demos/10-packages-themes.gif" alt="OMK packages and themes" width="820" />
+</p>
 
 ---
 
@@ -56,6 +160,14 @@ The `open-multi-agent-kit` package ships OMK.
 The OMK//CONTROL startup surface is the default operator view.
 The header reads `omk v<package.version> · OMK//CONTROL`, using the
 installed workspace package version as its source of truth.
+
+<p align="center">
+  <img
+    src="readmeasset/omk_tui.png"
+    alt="OMK//CONTROL terminal dashboard"
+    width="100%"
+  />
+</p>
 
 ---
 
