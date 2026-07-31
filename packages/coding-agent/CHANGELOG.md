@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added active-provider quota meters to the pinned STATUS RAIL: Codex and Claude 5-hour/7-day windows, Kimi Code and GLM/ZAI plan limits, reset countdowns, bounded cached fetches, and explicit unavailable status for Qwen/Grok because those providers expose no programmatic quota API.
+
 ## [0.94.1] - 2026-07-27
 
 ### Added

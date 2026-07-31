@@ -3,6 +3,18 @@ import { truncateToWidth, visibleWidth } from "omk-tui";
 import type { AgentSession } from "../../../core/agent-session.ts";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.ts";
 import { loadMcpInventory, type McpServerEntry } from "../../../core/mcp-inventory.ts";
+import {
+	type CodexUsageSnapshot,
+	getSubscriptionUsageSource,
+	loadSubscriptionUsage,
+	parseCodexUsageSnapshot,
+	type SubscriptionUsageSnapshot,
+	type SubscriptionUsageWindow,
+	supportsSubscriptionUsage,
+} from "../../../core/provider-usage.ts";
+
+export { parseCodexUsageSnapshot };
+
 import { type ThemeColor, theme } from "../theme/theme.ts";
 import { boxBottom, boxTextLine, boxTop, sidebarRule } from "./control-panel-box.ts";
 import { classifyMcpStability } from "./control-panel-runtime-status.ts";
@@ -41,8 +53,16 @@ const SPARK_WINDOW = 44;
 const SPARK_SAMPLE_MS = 1000;
 /** MCP inventory is read from disk; cache it so per-frame renders stay cheap. */
 const MCP_CACHE_TTL_MS = 5000;
-
 const SPARK_CHARS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"] as const;
+
+type SubscriptionUsageFetcher = (session: AgentSession) => Promise<SubscriptionUsageSnapshot | undefined>;
+type CodexUsageFetcher = (session: AgentSession) => Promise<CodexUsageSnapshot | undefined>;
+type StatusSidebarOptions = Readonly<{
+	requestRender?: () => void;
+	fetchSubscriptionUsage?: SubscriptionUsageFetcher;
+	/** Compatibility for callers that injected the original Codex-only fetcher. */
+	fetchCodexUsage?: CodexUsageFetcher;
+}>;
 
 /**
  * Fixed right-rail sidebar that shows the bottom-bar (footer) status vertically,
@@ -57,22 +77,38 @@ export class StatusSidebarComponent implements Component {
 	private footerData: ReadonlyFooterDataProvider;
 	private getAutoCompactEnabled: () => boolean;
 	private getTerminalRows: () => number;
+	private requestRender: () => void;
+	private fetchSubscriptionUsage: SubscriptionUsageFetcher;
 
-	// --- living elements: rolling CPU sparkline + cached MCP roster ---
+	// --- living elements: rolling CPU sparkline + cached MCP/usage data ---
 	private cpuHistory: number[] = [];
 	private lastSparkSampleAt = 0;
 	private mcpCache: { at: number; cwd: string; entries: McpServerEntry[] } | undefined;
+	private subscriptionUsage: SubscriptionUsageSnapshot | undefined;
+	private subscriptionUsageSession: AgentSession | undefined;
+	private subscriptionUsageProvider: string | undefined;
+	private subscriptionUsageLabel: string | undefined;
+	private subscriptionUsageFetchedAt = 0;
+	private subscriptionUsageInFlight = false;
 
 	constructor(
 		getSession: () => AgentSession,
 		footerData: ReadonlyFooterDataProvider,
 		getAutoCompactEnabled: () => boolean,
 		getTerminalRows: () => number = () => 32,
+		options: StatusSidebarOptions = {},
 	) {
 		this.getSession = getSession;
 		this.footerData = footerData;
 		this.getAutoCompactEnabled = getAutoCompactEnabled;
 		this.getTerminalRows = getTerminalRows;
+		this.requestRender = options.requestRender ?? (() => {});
+		const legacyFetcher = options.fetchCodexUsage;
+		this.fetchSubscriptionUsage =
+			options.fetchSubscriptionUsage ??
+			(legacyFetcher
+				? async (session) => codexSubscriptionSnapshot(await legacyFetcher(session))
+				: loadSubscriptionUsage);
 	}
 
 	invalidate(): void {
@@ -83,6 +119,7 @@ export class StatusSidebarComponent implements Component {
 	render(width: number): string[] {
 		const session = this.getSession();
 		const state = session.state;
+		this.refreshSubscriptionUsage(session);
 		const lines: string[] = [boxTop(width, "STATUS RAIL")];
 
 		// --- Live header: session uptime + CPU activity sparkline ---
@@ -113,6 +150,10 @@ export class StatusSidebarComponent implements Component {
 				boxTextLine(width, `${theme.fg("muted", "think ")}${theme.fg("mdCode", state.thinkingLevel || "off")}`),
 			);
 		}
+
+		// --- Active provider subscription quota ---
+		const usageLines = this.subscriptionUsageSection(width);
+		lines.push(...usageLines);
 
 		// --- Context ---
 		lines.push(sidebarRule(width, "CONTEXT"));
@@ -168,7 +209,7 @@ export class StatusSidebarComponent implements Component {
 		}
 
 		// --- MCP roster (opencode-style server list with stability dots) ---
-		lines.push(...this.mcpSection(width, session.sessionManager.getCwd()));
+		lines.push(...this.mcpSection(width, session.sessionManager.getCwd(), usageLines.length));
 
 		// --- System ---
 		lines.push(sidebarRule(width, "SYSTEM"));
@@ -196,11 +237,70 @@ export class StatusSidebarComponent implements Component {
 		return lines;
 	}
 
+	private refreshSubscriptionUsage(session: AgentSession): void {
+		const provider = session.state.model?.provider;
+		const source = getSubscriptionUsageSource(provider);
+		if (!provider || !source || !supportsSubscriptionUsage(session)) {
+			this.subscriptionUsage = undefined;
+			this.subscriptionUsageSession = undefined;
+			this.subscriptionUsageProvider = undefined;
+			this.subscriptionUsageLabel = undefined;
+			return;
+		}
+		if (this.subscriptionUsageSession !== session || this.subscriptionUsageProvider !== provider) {
+			this.subscriptionUsage = undefined;
+			this.subscriptionUsageSession = session;
+			this.subscriptionUsageProvider = provider;
+			this.subscriptionUsageLabel = source.label;
+			this.subscriptionUsageFetchedAt = 0;
+		}
+		const now = Date.now();
+		if (this.subscriptionUsageInFlight || now - this.subscriptionUsageFetchedAt < source.ttlMs) return;
+		this.subscriptionUsageFetchedAt = now;
+		this.subscriptionUsageInFlight = true;
+		void this.fetchSubscriptionUsage(session)
+			.then((snapshot) => {
+				if (this.getSession() === session && session.state.model?.provider === provider) {
+					this.subscriptionUsage = snapshot;
+				}
+			})
+			.catch(() => {
+				if (this.getSession() === session && session.state.model?.provider === provider) {
+					this.subscriptionUsage = { label: source.label, windows: [], message: "usage unavailable" };
+				}
+			})
+			.finally(() => {
+				this.subscriptionUsageInFlight = false;
+				this.requestRender();
+			});
+	}
+
+	private subscriptionUsageSection(width: number): string[] {
+		const label = this.subscriptionUsage?.label ?? this.subscriptionUsageLabel;
+		if (!label) return [];
+		const lines = [railRule(width, "USAGE", theme.fg("accent", label))];
+		if (!this.subscriptionUsage) {
+			if (this.subscriptionUsageInFlight) lines.push(boxTextLine(width, theme.fg("dim", "loading…")));
+			return lines.length === 1 ? [] : lines;
+		}
+		for (const window of this.subscriptionUsage.windows) {
+			lines.push(boxTextLine(width, usageMeter(window.label, window, width)));
+		}
+		if (this.subscriptionUsage.message) {
+			lines.push(boxTextLine(width, theme.fg("dim", this.subscriptionUsage.message)));
+		}
+		const resets = this.subscriptionUsage.windows.flatMap((window) =>
+			window.resetsAt === undefined ? [] : [`${window.label} ${formatReset(window.resetsAt)}`],
+		);
+		if (resets.length > 0) lines.push(boxTextLine(width, theme.fg("dim", `reset ${resets.join(" · ")}`)));
+		return lines.length === 1 ? [] : lines;
+	}
+
 	/**
 	 * MCP server roster with a stable/total counter in the section rule and a
 	 * stability dot per server. Reads are cached so the rail stays cheap to render.
 	 */
-	private mcpSection(width: number, cwd: string): string[] {
+	private mcpSection(width: number, cwd: string, reservedRows = 0): string[] {
 		const entries = this.loadMcpEntries(cwd);
 		const stable = entries.filter((entry) => classifyMcpStability(entry) === "stable").length;
 		const countColor: ThemeColor = entries.length === 0 ? "dim" : stable === entries.length ? "success" : "warning";
@@ -212,7 +312,7 @@ export class StatusSidebarComponent implements Component {
 			return lines;
 		}
 
-		const shown = entries.slice(0, mcpMaxRows(this.getTerminalRows()));
+		const shown = entries.slice(0, mcpMaxRows(this.getTerminalRows() - reservedRows));
 		for (const entry of shown) {
 			lines.push(boxTextLine(width, mcpRow(entry, width)));
 		}
@@ -296,6 +396,50 @@ function formatUptime(seconds: number): string {
 	const s = total % 60;
 	const pad = (n: number) => n.toString().padStart(2, "0");
 	return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+}
+
+function usageMeter(label: string, window: SubscriptionUsageWindow, width: number): string {
+	const percent = Math.max(0, Math.min(100, window.usedPercent));
+	const percentText = `${Math.round(percent)}%`;
+	const labelText = `${label}  `;
+	const innerWidth = Math.max(0, width - 4);
+	const cells = Math.max(4, Math.min(METER_MAX_CELLS, innerWidth - labelText.length - percentText.length - 1));
+	const filled = Math.round((percent / 100) * cells);
+	const color = usageColor(percent);
+	return `${theme.fg("muted", labelText)}${theme.fg(color, "█".repeat(filled))}${theme.fg("borderMuted", "░".repeat(cells - filled))} ${theme.fg(color, percentText)}`;
+}
+
+function usageColor(percent: number): ThemeColor {
+	if (percent >= 90) return "error";
+	if (percent >= 75) return "warning";
+	return "success";
+}
+
+function codexSubscriptionSnapshot(snapshot: CodexUsageSnapshot | undefined): SubscriptionUsageSnapshot | undefined {
+	if (!snapshot) return undefined;
+	return {
+		label: "CODEX",
+		windows: [
+			snapshot.fiveHour ? { label: "5H", ...snapshot.fiveHour } : undefined,
+			snapshot.sevenDay ? { label: "7D", ...snapshot.sevenDay } : undefined,
+		].filter((window): window is SubscriptionUsageWindow => window !== undefined),
+	};
+}
+
+function formatReset(resetsAt: number): string {
+	const seconds = Math.max(0, Math.ceil(resetsAt - Date.now() / 1000));
+	if (seconds < 60) return "now";
+	const totalMinutes = Math.ceil(seconds / 60);
+	if (totalMinutes < 60) return `${totalMinutes}m`;
+	if (totalMinutes < 24 * 60) {
+		const hours = Math.floor(totalMinutes / 60);
+		const minutes = totalMinutes % 60;
+		return `${hours}h${minutes > 0 ? `${minutes}m` : ""}`;
+	}
+	const totalHours = Math.ceil(totalMinutes / 60);
+	const days = Math.floor(totalHours / 24);
+	const hours = totalHours % 24;
+	return `${days}d${hours > 0 ? `${hours}h` : ""}`;
 }
 
 function meter(percent: number | null, width: number): string {

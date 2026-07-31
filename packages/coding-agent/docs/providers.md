@@ -21,6 +21,8 @@ Use `/login` in interactive mode, then select a provider:
 
 Use `/logout` to clear credentials. Tokens are stored in `~/.omk/agent/auth.json` and auto-refresh when expired.
 
+When the status sidebar is pinned, its **USAGE** section follows the active provider. OMK reads quota windows from fixed provider endpoints for Codex, Claude, Kimi Code, and GLM/ZAI Coding Plan, caches the result, and displays each percentage and reset countdown separately. Qwen and Grok are recognized but show `quota API unavailable` because those providers do not expose a programmatic subscription-quota endpoint; OMK does not estimate or copy values.
+
 ### OpenAI Codex
 
 - Requires ChatGPT Plus or Pro subscription

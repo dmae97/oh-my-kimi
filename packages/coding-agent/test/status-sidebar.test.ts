@@ -4,6 +4,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { McpInventory, McpServerEntry } from "../src/core/mcp-inventory.ts";
 import {
 	mcpMaxRows,
+	parseCodexUsageSnapshot,
 	STATUS_SIDEBAR_MAX_WIDTH,
 	STATUS_SIDEBAR_WIDTH,
 	StatusSidebarComponent,
@@ -81,7 +82,15 @@ function makeSession() {
 			getEntries: () => [],
 		},
 		getContextUsage: () => ({ percent: 42, contextWindow: 200000, tokens: 84000 }),
-		modelRegistry: { isUsingOAuth: () => false },
+		modelRegistry: {
+			isUsingOAuth: () => false,
+			isUsingOAuthProvider: () => false,
+			getProviderAuthStatus: () => ({ configured: false }),
+			getApiKeyForProvider: async (): Promise<string | undefined> => undefined,
+			getApiKeyAndHeaders: async (): Promise<
+				{ ok: true; apiKey: string; headers?: Record<string, string> } | { ok: false; error: string }
+			> => ({ ok: false, error: "not configured in tests" }),
+		},
 		autoCompactionEnabled: true,
 	};
 }
@@ -158,6 +167,197 @@ describe("StatusSidebarComponent (pinned opencode-style rail)", () => {
 		const text = stripAnsi(sidebar.render(STATUS_SIDEBAR_WIDTH).join("\n"));
 		expect(text).toContain("up");
 		expect(text).toContain("act");
+	});
+
+	it("renders Codex 5H and 7D quota bars on separate status lines", async () => {
+		const session = makeSession();
+		session.state.model.provider = "openai-codex";
+		session.modelRegistry.isUsingOAuth = () => true;
+		session.modelRegistry.isUsingOAuthProvider = () => true;
+		const requestRender = vi.fn();
+		const sidebar = new StatusSidebarComponent(
+			() => session as never,
+			makeFooterData() as never,
+			() => true,
+			() => 32,
+			{
+				requestRender,
+				fetchCodexUsage: async () => ({
+					fiveHour: { usedPercent: 42, resetsAt: Math.floor(Date.now() / 1000) + 2 * 60 * 60 },
+					sevenDay: { usedPercent: 7, resetsAt: Math.floor(Date.now() / 1000) + 4 * 24 * 60 * 60 },
+				}),
+			},
+		);
+
+		sidebar.render(STATUS_SIDEBAR_WIDTH);
+		await vi.waitFor(() => expect(requestRender).toHaveBeenCalled());
+		const lines = sidebar.render(STATUS_SIDEBAR_WIDTH);
+		const plainLines = lines.map(stripAnsi);
+		const text = plainLines.join("\n");
+		expect(text).toContain("USAGE");
+		expect(plainLines.some((line) => line.includes("5H") && line.includes("42%"))).toBe(true);
+		expect(plainLines.some((line) => line.includes("7D") && line.includes("7%"))).toBe(true);
+		expect(text).toContain("reset");
+		expect(text).toContain("█");
+		expect(text).toContain("░");
+		for (const line of lines) {
+			expect(visibleWidth(line)).toBeLessThanOrEqual(STATUS_SIDEBAR_WIDTH);
+		}
+	});
+
+	it("renders quota windows for non-Codex subscription providers", async () => {
+		const session = makeSession();
+		session.state.model.provider = "anthropic";
+		session.modelRegistry.isUsingOAuth = () => true;
+		session.modelRegistry.isUsingOAuthProvider = () => true;
+		const requestRender = vi.fn();
+		const sidebar = new StatusSidebarComponent(
+			() => session as never,
+			makeFooterData() as never,
+			() => true,
+			() => 32,
+			{
+				requestRender,
+				fetchSubscriptionUsage: async () => ({
+					label: "CLAUDE",
+					windows: [
+						{ label: "5H", usedPercent: 35 },
+						{ label: "7D", usedPercent: 18 },
+					],
+				}),
+			},
+		);
+
+		sidebar.render(STATUS_SIDEBAR_WIDTH);
+		await vi.waitFor(() => expect(requestRender).toHaveBeenCalled());
+		const plainLines = sidebar.render(STATUS_SIDEBAR_WIDTH).map(stripAnsi);
+		const text = plainLines.join("\n");
+		expect(text).toContain("CLAUDE");
+		expect(plainLines.some((line) => line.includes("5H") && line.includes("35%"))).toBe(true);
+		expect(plainLines.some((line) => line.includes("7D") && line.includes("18%"))).toBe(true);
+	});
+
+	it("states when a connected provider has no programmatic quota API", async () => {
+		const session = makeSession();
+		session.state.model.provider = "qwen-oauth";
+		session.modelRegistry.isUsingOAuth = () => true;
+		session.modelRegistry.isUsingOAuthProvider = () => true;
+		const requestRender = vi.fn();
+		const sidebar = new StatusSidebarComponent(
+			() => session as never,
+			makeFooterData() as never,
+			() => true,
+			() => 32,
+			{ requestRender },
+		);
+
+		sidebar.render(STATUS_SIDEBAR_WIDTH);
+		await vi.waitFor(() => expect(requestRender).toHaveBeenCalled());
+		const text = stripAnsi(sidebar.render(STATUS_SIDEBAR_WIDTH).join("\n"));
+		expect(text).toContain("QWEN");
+		expect(text).toContain("quota API unavailable");
+	});
+
+	it("ignores a stale quota failure after the active provider changes", async () => {
+		const session = makeSession();
+		session.state.model.provider = "openai-codex";
+		session.modelRegistry.isUsingOAuth = () => true;
+		session.modelRegistry.isUsingOAuthProvider = () => true;
+		let rejectFirst: ((error: Error) => void) | undefined;
+		let calls = 0;
+		const requestRender = vi.fn();
+		const sidebar = new StatusSidebarComponent(
+			() => session as never,
+			makeFooterData() as never,
+			() => true,
+			() => 32,
+			{
+				requestRender,
+				fetchSubscriptionUsage: async () => {
+					calls++;
+					if (calls === 1) {
+						return new Promise((_, reject) => {
+							rejectFirst = reject;
+						});
+					}
+					return { label: "CLAUDE", windows: [{ label: "5H", usedPercent: 22 }] };
+				},
+			},
+		);
+
+		sidebar.render(STATUS_SIDEBAR_WIDTH);
+		session.state.model.provider = "anthropic";
+		expect(stripAnsi(sidebar.render(STATUS_SIDEBAR_WIDTH).join("\n"))).toContain("CLAUDE");
+		rejectFirst?.(new Error("stale failure"));
+		await vi.waitFor(() => expect(requestRender).toHaveBeenCalledTimes(1));
+		sidebar.render(STATUS_SIDEBAR_WIDTH);
+		await vi.waitFor(() => expect(requestRender).toHaveBeenCalledTimes(2));
+		const text = stripAnsi(sidebar.render(STATUS_SIDEBAR_WIDTH).join("\n"));
+		expect(text).toContain("CLAUDE");
+		expect(text).toContain("22%");
+		expect(text).not.toContain("usage unavailable");
+	});
+
+	it("loads subscription quota from the official endpoint with the OAuth account header", async () => {
+		const session = makeSession();
+		session.state.model.provider = "openai-codex";
+		session.modelRegistry.isUsingOAuth = () => true;
+		session.modelRegistry.isUsingOAuthProvider = () => true;
+		const payload = Buffer.from(
+			JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "account-test" } }),
+		).toString("base64url");
+		const token = `header.${payload}.signature`;
+		session.modelRegistry.getApiKeyForProvider = async () => token;
+		const fetchMock = vi.fn(async () => ({
+			ok: true,
+			json: async () => ({
+				rate_limit: {
+					primary_window: { used_percent: 31, limit_window_seconds: 5 * 60 * 60 },
+					secondary_window: { used_percent: 12, limit_window_seconds: 7 * 24 * 60 * 60 },
+				},
+			}),
+		}));
+		vi.stubGlobal("fetch", fetchMock);
+		try {
+			const requestRender = vi.fn();
+			const sidebar = new StatusSidebarComponent(
+				() => session as never,
+				makeFooterData() as never,
+				() => true,
+				() => 32,
+				{ requestRender },
+			);
+			sidebar.render(STATUS_SIDEBAR_WIDTH);
+			await vi.waitFor(() => expect(requestRender).toHaveBeenCalled());
+			expect(fetchMock).toHaveBeenCalledWith(
+				"https://chatgpt.com/backend-api/wham/usage",
+				expect.objectContaining({
+					headers: expect.objectContaining({
+						Authorization: `Bearer ${token}`,
+						"chatgpt-account-id": "account-test",
+					}),
+				}),
+			);
+			const text = stripAnsi(sidebar.render(STATUS_SIDEBAR_WIDTH).join("\n"));
+			expect(text).toContain("31%");
+			expect(text).toContain("12%");
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
+	it("identifies 5h and 7d windows by duration instead of response order", () => {
+		expect(
+			parseCodexUsageSnapshot({
+				rate_limit: {
+					primary_window: { used_percent: 9, limit_window_seconds: 7 * 24 * 60 * 60, reset_at: 111 },
+					secondary_window: { used_percent: 41, limit_window_seconds: 5 * 60 * 60, reset_at: 222 },
+				},
+			}),
+		).toEqual({
+			fiveHour: { usedPercent: 41, resetsAt: 222 },
+			sevenDay: { usedPercent: 9, resetsAt: 111 },
+		});
 	});
 
 	it("collapses long rosters into a '+N more' line", () => {

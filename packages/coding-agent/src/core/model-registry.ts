@@ -856,12 +856,14 @@ export class ModelRegistry {
 		return providerApiKey ? resolveConfigValueUncached(providerApiKey) : undefined;
 	}
 
-	/**
-	 * Check if a model is using OAuth credentials (subscription).
-	 */
+	/** Check if a provider is using OAuth credentials (subscription). */
+	isUsingOAuthProvider(provider: string): boolean {
+		return this.authStorage.get(provider)?.type === "oauth";
+	}
+
+	/** Check if a model is using OAuth credentials (subscription). */
 	isUsingOAuth(model: Model<Api>): boolean {
-		const cred = this.authStorage.get(model.provider);
-		return cred?.type === "oauth";
+		return this.isUsingOAuthProvider(model.provider);
 	}
 
 	/**
