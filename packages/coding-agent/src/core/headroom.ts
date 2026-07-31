@@ -6,10 +6,15 @@
 // This file is preserved for legacy extension/API consumers and regression tests.
 //
 // ACTUAL HEADROOM / TOKEN BUDGET SYSTEM:
-//   - context-budget-compressors.ts → context budget compression with adapters
 //   - context-budget-token-counter.ts → token counting for budget decisions
 //   - compaction/compaction.ts getCompactionHeadroomThreshold() → headroom threshold
 //   - compaction/compaction.ts shouldCompact() → triggers compaction when headroom low
+//
+// context-budget-compressors.ts (headroom/llmlingua CLI compressor adapters) was removed
+// 2026-08-01: it had zero importers outside its own test file, i.e. it was never wired into
+// the real budget pipeline above despite this comment previously listing it as "the actual
+// system" -- that claim was stale/wrong. If CLI-based compression is wanted again, it needs
+// a real call site in the planner/governor before it's worth re-adding.
 //
 // Keep this utility deterministic and aligned with the active context budget policy.
 
@@ -88,7 +93,7 @@ export class HeadroomMonitor extends EventEmitter {
 			status = "blocked";
 		}
 
-		const previous = this.history.at(-1)?.status;
+		const previous = this.history[this.history.length - 1]?.status;
 		if (previous === "critical" && status === "stressed" && ratio >= 0.75) {
 			return "critical";
 		}
