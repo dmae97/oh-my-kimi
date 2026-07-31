@@ -128,3 +128,17 @@ Evidence root: `.omk/runs/harness-graph/`. Gates: `file-exists` | `command-pass`
   > gate: command-pass
   > risk: low
   > evidence: `.omk/runs/harness-graph/T013.md`
+
+- [x] T014 Harness↔code cross-link (skill→script→dependency; supply-chain blast radius)
+  > role: coder
+  > deps: T001
+  > files: [`.omk/harness-graph/code_crosslink.py`]
+  > verify: `python3 .omk/harness-graph/code_crosslink.py`
+  > gate: command-pass
+  > risk: low
+  > evidence: `.omk/runs/harness-graph/T014.md`
+
+> **Layer note (honest scope)**: the understand-anything KG covers omk-monorepo *source*
+> (packages/, pi-extensions/), a separate plane from out-of-tree skill scripts. The real
+> harness↔code bridge is the dependency graph in T014, not a KG join; the KG was refreshed
+> (1506→1526 nodes) as hygiene.

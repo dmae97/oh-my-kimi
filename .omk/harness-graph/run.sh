@@ -15,6 +15,9 @@ python3 .omk/harness-graph/graph_analyze.py
 echo "== wiring recommendations (item-based CF) =="
 python3 .omk/harness-graph/recommend-wiring.py
 
+echo "== code cross-link (skill->script->dependency) =="
+python3 .omk/harness-graph/code_crosslink.py
+
 echo "== drift loop (snapshot + diff vs previous) =="
 python3 .omk/harness-graph/drift_loop.py
 
