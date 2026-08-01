@@ -370,7 +370,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and
 - [Browse all public Skills](SKILLS.md)
 - [Harness Graph control plane](.omk/harness-graph/README.md)
 - [Changelog (coding-agent / open-multi-agent-kit)](packages/coding-agent/CHANGELOG.md)
-- [Release notes for v0.95.0](.github/RELEASE_NOTES_v0.95.0.md)
+- [Release notes for v0.95.1](.github/RELEASE_NOTES_v0.95.1.md)
 - [Unreleased draft notes](.github/RELEASE_NOTES_UNRELEASED.md)
 
 ### FAQ (AEO)
@@ -398,6 +398,24 @@ truth and syncs the “Recent releases” block below (`npm run sync:readme-rele
 
 <!-- releases:start -->
 
+## Release v0.95.1
+
+### Added
+
+- **Harness Graph control plane** (`.omk/harness-graph/`): deterministic agents×skills×hooks×MCP inventory with 3-tier skill classification, bipartite SPOF criticality, Louvain communities, association-rule lift, hybrid CF wiring recommendations (`jaccard · idf · lift_boost`), fail-closed `health_gate.py` + debt allowlist, executive `dashboard.md`, review-only `wiring-patch`, synthetic unit + property tests, and CI workflow `.github/workflows/harness-graph.yml`.
+- **Harness Graph ops tooling**: `compact-skills-index.mjs` (demand-union index rebuild), `prune-retired-hooks.mjs` (retired hook capability cleanup), `apply-wiring-patch.py` (half-bundle completion checklist), session-start drift audit hook with optional `HARNESS_GRAPH_STRICT=1`.
+
+### Fixed
+
+- Harness Graph green-metric traps: runtime-derived hook/MCP catalogs (no hardcoded answer keys), bipartite SPOF instead of empty articulation tables, default-only model-drift axis (failover is advisory), skills-index no longer dumps the full on-disk universe into false orphan-active counts.
+
+### Docs
+
+- Root README: AEO/SEO-oriented positioning, FAQ, and marketing/growth skill keyword map (`omk-marketing` + marketingskills pack).
+- Spec/plan/scorecard for harness-graph engineering (`specs/012-harness-graph-engineering/`, `.omk/harness-graph/SCORECARD.md`).
+
+Release notes live in [RELEASE_NOTES_v0.95.1.md](.github/RELEASE_NOTES_v0.95.1.md).
+
 ## Release v0.95.0
 
 ### Added
@@ -423,32 +441,6 @@ Release notes live in [RELEASE_NOTES_v0.95.0.md](.github/RELEASE_NOTES_v0.95.0.m
 - **Persistent GitHub star nudge** on interactive startup: first installs and anyone who has not confirmed a star keep seeing a nag banner every launch until they star <https://github.com/dmae97/omk> and run `/star` (writes global `githubStarred: true` in `~/.omk/agent/settings.json`). `/star reset` brings the nag back. Project settings cannot silence it.
 
 Release notes live in [RELEASE_NOTES_v0.94.1.md](.github/RELEASE_NOTES_v0.94.1.md).
-
-## Release v0.94.0
-
-### Added
-
-- **`diagnostics` is now a default-active tool** for new sessions (LLM-callable alongside `read`/`bash`/`edit`/`write`). It stays registered-but-inactive for sessions that pin their own tool list; opt out per session via `activeToolNames` or `excludedToolNames`.
-- **Persistent skill-catalog cache** (`src/core/skills-catalog-cache.ts`): per-dir fingerprint walk (readdir/stat only) gates a JSON catalog at `<agentDir>/cache/skill-catalog-v1.json`. Repeat session starts skip all SKILL.md reads on unchanged trees (measured on this host: 105 ms cold → 41 ms warm for the full scan). Any add/edit/delete under a scanned tree invalidates exactly that dir; corrupt cache degrades to a clean miss. Atomic tmp+rename writes.
-- **Hermetic test environment** (`test/setup-env.ts`): machine-level `OMK_*` and provider credential variables are scrubbed before every worker, so test results no longer depend on the developer shell (safety-gate suites saw env-disabled gates; live e2e suites ran against expired credentials instead of skipping). `LIVE_E2E=1` keeps provider keys when running the live suites on purpose.
-- **`diagnostics` tool** (`src/core/tools/diagnostics.ts`): compiler-backed diagnostics via the project's own checkers — `tsc --noEmit`, `pyright`/`ruff`, `go vet`, `cargo check` — normalized to `SEVERITY path:line:col message`, per-language fail-soft (`skipped` instead of tool errors), 5 s TTL cache, 50-item cap, path/language auto-detect. Registered in `createAllToolDefinitions` and exported from the SDK (`createDiagnosticsTool`, `createDiagnosticsToolDefinition`).
-- **Interactive sandbox promotion**: `session.setBashSandboxMode("audit" | "enforce" | "off")` switches the session sandbox at runtime (next spawn), with a `sandbox_audit` mode-change ledger entry; `session.bashSandboxMode` reads the effective mode. `SessionBashRuntime.setSandboxMode` backs it.
-- **Default-on bash sandbox (opt-out).** Session bash now carries a default `audit`-mode sandbox preflight (workspace-write rooted at the session cwd, OS temp dir as extra write target). Spawns stay unwrapped but every decision lands in the replay ledger as a `sandbox_audit` event — a tamper-evident trail no other harness ships. `OMK_BASH_SANDBOX=enforce` activates the real OS backend (macOS `sandbox-exec` / Linux `bwrap`, auto-detected) and fails closed when unavailable; `=0` disables. New `onSpawnDecision` observer on `BashSandboxPreflight`, plus `createWorkspaceSandboxPolicy()` / `resolveBashSandboxMode()` SDK exports.
-- **Git-aware verified-bash scope.** Session bash receipts now bind the git toplevel plus the sorted dirty set (staged/modified/untracked, capped at 32 paths, 1 s TTL cache) instead of an empty artifact set, so `captureWorkspaceFingerprint` records HEAD and a scope-limited dirty digest. Exported as `resolveSessionWorkspaceScope()`.
-
-### Fixed
-
-- **API provider registry is now a process-wide singleton** (`globalThis`-anchored in `omk-ai/api-registry`). Symlinked workspace dist copies consumed natively and the same files inlined by vite-node used to keep separate registries, so `registerFauxProvider` (and any runtime registration) was invisible to streamers resolving through the other copy — surfacing as "No API provider registered for api: ..." in agent loops. Also removed a stale nested `packages/agent/node_modules/omk-ai` copy (0.92.0) that shadowed the workspace build.
-
-### Changed
-
-- **Extracted `SessionCompactionService`** (`src/core/session-compaction-service.ts`): the compaction state machine — capture/lock, barrier evaluation, emergency tail repair, provenance capture, transaction begin, envelope commit — moved out of `AgentSession` (5,271 → 4,911 lines), which now delegates through thin one-line wrappers. Transaction symbols import from `compaction/transaction.ts` directly so the `compaction/index.js` vi.mock pattern in suites keeps working.
-- **Extracted `SessionBashService`** (`src/core/session-bash-service.ts`): the full bash surface — `executeBash` (prefix/loadout/safety-floor/headless gate), `recordBashResult` with the streaming-deferral queue, `abortBash`, `flushPending` — moved out of `AgentSession`, which now delegates one line each. Ordering contract (queue while streaming, flush on turn end) is pinned by the bash-persistence suite.
-- **Extracted `SessionBashRuntime`** (`src/core/session-bash-runtime.ts`) from `AgentSession`: verified-evidence executor, default sandbox preflight (audit/enforce), git-aware workspace scope, and the receipt-bound bash orchestration (`executeVerified`) now live in one lazily-initialized unit; the session delegates. No behavior change.
-
-- **Verified bash is default-on (opt-out).** When an AgentSession has a replay ledger, LLM-callable `bash` and interactive/RPC `executeBash` bind through `executeVerifiedBash` (`executor: "bash-tool"`, receipts under `<sessionFile>.evidence`). Set `OMK_VERIFIED_BASH=0` for the legacy unverified path. Adapter gains `env`/`onData` fan-out and `createVerifiedBashOperations()` so session PI_* env and live streaming stay intact without import cycles. See [SDK — Evidence](packages/coding-agent/docs/sdk.md#evidence-and-verification) and [Environment Variables](packages/coding-agent/docs/environment-variables.md).
-
-Release notes live in [RELEASE_NOTES_v0.94.0.md](.github/RELEASE_NOTES_v0.94.0.md).
 
 <!-- releases:end -->
 
