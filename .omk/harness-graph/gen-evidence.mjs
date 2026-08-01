@@ -23,6 +23,21 @@ const TASKS = [
   ["T010", "Orphan triage", "test -f .omk/harness-graph/out/orphan-triage.md && echo EXISTS"],
   ["T011", "Session hook", "test -x .omk/harness-graph/hooks/session-drift-audit.sh && echo EXECUTABLE"],
   ["T012", "Governance verify", "test -f specs/012-harness-graph-engineering/spec.md && echo SPEC-PRESENT"],
+  ["T013", "Skill-wiring recommender", "python3 .omk/harness-graph/recommend-wiring.py | head -3"],
+  ["T014", "Harness↔code cross-link", "python3 .omk/harness-graph/code_crosslink.py | head -3"],
+  ["T015", "Bipartite SPOF criticality", "python3 .omk/harness-graph/graph_analyze.py | grep -E 'top SPOF|critical-caps'"],
+  ["T016", "Health gate + allowlist", "python3 .omk/harness-graph/health_gate.py; test -f .omk/harness-graph/out/health-gate.md"],
+  ["T017", "Dashboard + unit tests", "python3 .omk/harness-graph/test_harness_graph.py && test -f .omk/harness-graph/out/dashboard.md"],
+  ["T018", "Projection+modularity communities", "python3 .omk/harness-graph/graph_analyze.py | grep -E 'communities:|top community'"],
+  ["T019", "Association lift rules", "python3 .omk/harness-graph/graph_analyze.py | grep 'top rule'"],
+  ["T020", "Hybrid CF recommender", "python3 .omk/harness-graph/recommend-wiring.py | grep -E 'hybrid|top lift|agents with recs'"],
+  ["T021", "Docs + scorecard", "test -f .omk/harness-graph/SCORECARD.md && grep -q '96' .omk/harness-graph/SCORECARD.md && grep -q 'Requirement 7' specs/012-harness-graph-engineering/spec.md && echo DOCS-OK"],
+  ["T022", "protect-secrets pruned", "node .omk/harness-graph/build-harness-graph.mjs | grep -E 'dead hooks: 0'"],
+  ["T023", "orphans under budget", "python3 -c \"import json;q=json.load(open('.omk/harness-graph/out/harness-queries.json'));assert len(q['orphanActiveSkills'])<=150\""],
+  ["T024", "health gate PASS", "python3 .omk/harness-graph/health_gate.py --json | grep -q 'PASS'"],
+  ["T025", "property tests", "python3 .omk/harness-graph/test_properties.py"],
+  ["T026", "wiring patch artifact", "test -f .omk/harness-graph/out/wiring-patch.md && echo OK"],
+  ["T027", "CI workflow", "test -f .github/workflows/harness-graph.yml && echo OK"],
 ];
 
 let pass = 0;

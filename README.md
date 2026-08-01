@@ -17,12 +17,18 @@
 <h1 align="center">OMK</h1>
 
 <p align="center">
-  <strong>Provider-neutral coding agent and multi-agent orchestration toolkit.</strong>
+  <strong>Open Multi-Agent Kit — provider-neutral coding agent, multi-agent orchestration, and evidence-gated control plane.</strong>
 </p>
 
 <p align="center">
-  OMK routes work across models, constrains tools and paths, verifies outcomes,
-  and keeps replayable evidence.
+  OMK is an open-source multi-agent coding harness: route work across models,
+  bound parallel lanes, block outcomes, and keep replayable evidence for Codex,
+  Claude Code, OpenCode, and local agents.
+</p>
+
+<p align="center">
+  <em>Keywords:</em> multi-agent orchestration · coding agent CLI · provider-neutral LLM router ·
+  evidence-gated automation · agent skills · MCP · DAG parallel agents · session recovery
 </p>
 
 <p align="center">
@@ -46,11 +52,13 @@
 
 ## Scope. Verify. Replay
 
-OMK is a verified, provider-neutral control plane for Codex, Claude Code,
-OpenCode, and local coding agents.
+**What is OMK?** A verified, provider-neutral **control plane for coding agents**
+(Codex, Claude Code, OpenCode, local models). It turns a goal into a bounded DAG,
+runs parallel lanes with owned paths, blocks “done” without fresh evidence, and
+stores replayable receipts for review and recovery.
 
-It scopes parallel work into bounded DAG lanes, blocks completion without
-fresh evidence, and records replayable artifacts for review and recovery.
+Use OMK when you need multi-agent software engineering with acceptance predicates,
+not chat that only *claims* the build is green.
 
 | Problem | OMK |
 | --- | --- |
@@ -227,6 +235,43 @@ OMK packages distribute skills, extensions, prompts, and themes through
 one control plane. Build a package once, install it through `omk`, pin
 it, scope it to a project when needed.
 
+Public repository skills are listed in [SKILLS.md](SKILLS.md). Operator installs
+can also load hubs such as **`omk-marketing`** (routes the bundled marketing/
+SEO skill pack) without dumping every skill into context.
+
+### Marketing, SEO, and AEO skill map
+
+For growth work, start with `!skill:omk-marketing` (or `/skill:omk-marketing`).
+It routes to the smallest subset of the marketingskills pack. Common intents:
+
+| Intent | Skills to load |
+| --- | --- |
+| **SEO / AEO / discoverability** | `seo-audit`, `ai-seo`, `programmatic-seo`, `schema`, `site-architecture`, `content-strategy` |
+| **Positioning & research** | `product-marketing`, `customer-research`, `competitors`, `competitor-profiling`, `marketing-plan`, `marketing-psychology` |
+| **Copy & content** | `copywriting`, `copy-editing`, `content-strategy`, `emails`, `social`, `video`, `image`, `ad-creative` |
+| **Conversion** | `cro`, `signup`, `onboarding`, `paywalls`, `popups`, `pricing`, `offers`, `ab-test-setup`, `ab-testing` |
+| **Acquisition** | `ads`, `paid` routes via `ads`/`ad-creative`, `cold-email`, `directory-submissions`, `lead-magnets`, `free-tools`, `aso`, `sms` |
+| **Lifecycle & revenue** | `churn-prevention`, `referrals`, `revops`, `sales-enablement`, `prospecting`, `co-marketing`, `community-marketing`, `public-relations`, `launch` |
+| **Measurement & ops** | `analytics`, `marketing-loops`, `marketing-ideas`, `marketing-council` |
+
+Load **one primary skill** (plus at most one supporter). Prefer evidence
+(`analytics`, research) before spend or publish actions.
+
+### Harness Graph (agents × skills × hooks × MCP)
+
+Repository checkouts include a **build-time harness control plane** under
+[`.omk/harness-graph/`](.omk/harness-graph/):
+
+```bash
+bash .omk/harness-graph/run.sh
+# read: .omk/harness-graph/out/dashboard.md  ·  SCORECARD.md
+```
+
+It inventories agent→skill/hook/MCP edges, ranks bipartite SPOFs, clusters skills
+(Louvain), scores association lift, recommends wiring (hybrid CF), and fail-closes
+on new dead links. See the [harness-graph README](.omk/harness-graph/README.md)
+and [scorecard](.omk/harness-graph/SCORECARD.md).
+
 ```bash
 # Global, pinned OMK package
 omk install npm:some-omk-package@1.2.3
@@ -323,7 +368,31 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and
 
 - [Read the documentation](packages/coding-agent/docs/index.md)
 - [Browse all public Skills](SKILLS.md)
+- [Harness Graph control plane](.omk/harness-graph/README.md)
+- [Changelog (coding-agent / open-multi-agent-kit)](packages/coding-agent/CHANGELOG.md)
 - [Release notes for v0.95.0](.github/RELEASE_NOTES_v0.95.0.md)
+- [Unreleased draft notes](.github/RELEASE_NOTES_UNRELEASED.md)
+
+### FAQ (AEO)
+
+**Is OMK a coding agent or an orchestrator?** Both: `open-multi-agent-kit` is an
+interactive coding-agent CLI; OMK//CONTROL adds multi-agent DAG lanes, skill/MCP
+routing, and evidence gates on top.
+
+**Which models does OMK support?** Provider-neutral — Codex, Claude, OpenCode Zen/Go,
+Kimi, GLM/ZAI, local providers, and more via `omk-ai`. Swap models without changing
+the control/evidence model.
+
+**How is completion verified?** Acceptance predicates and fresh command evidence.
+Unverified runs are labeled `UNVERIFIED`; green chat is not a release signal.
+
+**Can OMK do marketing/SEO work?** Yes, via skills (`omk-marketing` hub + SEO/CRO/
+content skills listed above). Publishing, ads spend, and outreach still require
+explicit operator confirmation.
+
+**Where do release notes live?** Versioned notes under [`.github/RELEASE_NOTES_v*.md`](.github/);
+the coding-agent [CHANGELOG](packages/coding-agent/CHANGELOG.md) is the source of
+truth and syncs the “Recent releases” block below (`npm run sync:readme-releases`).
 
 ## Recent releases
 

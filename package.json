@@ -40,7 +40,15 @@
 		"release:patch": "node scripts/release.mjs patch",
 		"release:minor": "node scripts/release.mjs minor",
 		"release:major": "node scripts/release.mjs major",
+		"harness-graph": "bash .omk/harness-graph/run.sh",
+		"harness-graph:compact-index": "node .omk/harness-graph/compact-skills-index.mjs",
 		"prepare": "husky"
+	},
+	"knip": {
+		"ignore": [
+			".omk/harness-graph/**",
+			"vendor/**"
+		]
 	},
 	"devDependencies": {
 		"@anthropic-ai/sandbox-runtime": "0.0.26",

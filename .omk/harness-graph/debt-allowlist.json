@@ -1,0 +1,16 @@
+{
+  "$schema_comment": "Known harness debt the health gate may WARN on instead of FAIL. Remove entries only when the debt is actually fixed — never to silence a new regression.",
+  "version": 2,
+  "dead_hooks": {},
+  "dead_mcp": {},
+  "dead_skills": {},
+  "thresholds": {
+    "max_new_dead_skill_edges": 0,
+    "max_inactive_skill_edges": 0,
+    "max_malformed_agents": 0,
+    "max_orphan_active_skills": 150,
+    "max_mcp_top1_share": 0.35,
+    "max_hook_top1_share_excluding_allowed_dead": 0.40,
+    "require_acyclic": true
+  }
+}

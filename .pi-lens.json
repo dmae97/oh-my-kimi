@@ -1,0 +1,7 @@
+{
+  "ignore": [
+    ".omk/harness-graph/out/**",
+    "vendor/**",
+    "packages/coding-agent/CHANGELOG.md"
+  ]
+}

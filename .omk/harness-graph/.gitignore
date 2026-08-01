@@ -1,0 +1,17 @@
+# Generated reports (always rebuild via run.sh)
+/out/
+/out/**
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Editor / backups from --apply mutators
+*.bak
+*.bak-*
+*~
+*.swp
+DRIFT-*.md
+agents-backup-*.tgz

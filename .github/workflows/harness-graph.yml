@@ -1,0 +1,54 @@
+name: Harness Graph
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".omk/harness-graph/**"
+      - ".omk/skills-index.txt"
+      - "specs/012-harness-graph-engineering/**"
+      - ".github/workflows/harness-graph.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - ".omk/harness-graph/**"
+      - ".omk/skills-index.txt"
+      - "specs/012-harness-graph-engineering/**"
+      - ".github/workflows/harness-graph.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: harness-graph-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  unit-and-properties:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+
+      - name: Install networkx
+        run: pip install --user "networkx>=3.0"
+
+      - name: Unit tests (synthetic fixture)
+        run: python3 .omk/harness-graph/test_harness_graph.py
+
+      - name: Property tests (lift/IDF/Jaccard invariants)
+        run: python3 .omk/harness-graph/test_properties.py
+
+      - name: Syntax check JS builders
+        run: |
+          node --check .omk/harness-graph/build-harness-graph.mjs
+          node --check .omk/harness-graph/compact-skills-index.mjs
+          node --check .omk/harness-graph/prune-retired-hooks.mjs

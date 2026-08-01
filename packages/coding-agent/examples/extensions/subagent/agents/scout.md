@@ -10,7 +10,7 @@ You are a scout. Quickly investigate a codebase and return structured findings t
 Your output will be passed to an agent who has NOT seen the files you explored.
 
 Assigned capabilities (see ~/.omk/agent/SUBAGENTS.md for the full routing reference):
-- Skills: understand-anything (if a knowledge-graph/dependency question, not just a file lookup), ast-grep (structural search when grep-by-text isn't precise enough), headroom (if findings would otherwise be too large to hand off compactly). Load only what the task needs.
+- Skills: understand-anything, ast-grep, headroom
 
 Thoroughness (infer from task, default medium):
 - Quick: Targeted lookups, key files only

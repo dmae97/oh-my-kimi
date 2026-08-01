@@ -337,15 +337,54 @@ function queries(g, thresh = 0.5) {
 }
 
 function detectModelDrift() {
-  const src = [];
+  // Compare DEFAULT model surfaces only. Failover chains and prose examples
+  // ("Claude Code: model: opus") are different roles — treating them as the
+  // same axis produced permanent false-positive drift.
+  const defaults = [];
+  const notes = [];
   const st = readJSON(SETTINGS_JSON);
-  if (st) src.push({ source: "settings.json", model: [st.defaultProvider, st.defaultModel].filter(Boolean).join("/") || "?" });
-  const h = readText(path.join(HOME, ".agents/skills/harness/SKILL.md"));
-  if (h) { const m = /model:\s*["']?([a-z0-9.\-]+)/i.exec(h); if (m) src.push({ source: "harness/SKILL.md", model: m[1] }); }
-  const a = readText(path.join(HOME, ".omk/agent/AGENTS.md"));
-  if (a) { const m = /Failover:\s*([a-z0-9.\-]+)/i.exec(a); if (m) src.push({ source: "AGENTS.md failover", model: m[1] }); }
-  const distinct = [...new Set(src.map((s) => s.model))];
-  return { drift: distinct.length > 1, distinct, sources: src };
+  if (st) {
+    const model = [st.defaultProvider, st.defaultModel].filter(Boolean).join("/") || "?";
+    defaults.push({ source: "settings.json defaultModel", role: "default", model });
+  }
+  // Optional explicit pin files only (not free-prose skill docs).
+  for (const rel of [
+    path.join(AGENT_ROOT, "model.json"),
+    path.join(process.cwd(), ".omk/model.json"),
+  ]) {
+    const j = readJSON(rel);
+    if (j && (j.defaultModel || j.model)) {
+      defaults.push({
+        source: path.relative(HOME, rel),
+        role: "default",
+        model: j.defaultModel || j.model,
+      });
+    }
+  }
+  const a = readText(path.join(HOME, ".omk/agent/AGENTS.md")) || "";
+  for (const line of a.split("\n")) {
+    const fo = /^\s*>?\s*Failover:\s*(.+?)\s*$/i.exec(line);
+    if (fo) {
+      notes.push({
+        source: "AGENTS.md failover",
+        role: "failover",
+        model: fo[1].trim(),
+      });
+      break;
+    }
+  }
+  const h = readText(path.join(HOME, ".agents/skills/harness/SKILL.md")) || "";
+  // Only count a hard pin like `defaultModel: "x"` — not instructional prose.
+  const pin = /defaultModel:\s*["']([a-z0-9.\-\/]+)["']/i.exec(h);
+  if (pin) defaults.push({ source: "harness/SKILL.md defaultModel", role: "default", model: pin[1] });
+
+  const distinct = [...new Set(defaults.map((s) => s.model))];
+  return {
+    drift: distinct.length > 1,
+    distinct,
+    sources: defaults,
+    notes, // failover / advisory — informational, not drift
+  };
 }
 
 // --- Report ------------------------------------------------------------------
@@ -394,10 +433,15 @@ function report(q) {
   if (!q.collisions.length) p("(none above threshold)\n");
   else { p("| sim | agent A | agent B |\n|---:|---|---|"); for (const c of q.collisions) p(`| ${c.sim} | ${c.a} | ${c.b} |`); p(""); }
 
-  p("## 9. Model drift\n");
-  p(q.modelDrift.drift ? `⚠️ **DRIFT** — ${q.modelDrift.distinct.length} distinct: ${q.modelDrift.distinct.join(", ")}` : "✅ consistent");
-  p("\n| source | model |\n|---|---|");
-  for (const s of q.modelDrift.sources) p(`| ${s.source} | ${s.model} |`);
+  p("## 9. Model drift (default surfaces only)\n");
+  p(q.modelDrift.drift ? `⚠️ **DRIFT** — ${q.modelDrift.distinct.length} distinct defaults: ${q.modelDrift.distinct.join(", ")}` : "✅ default surfaces consistent");
+  p("\n| source | role | model |\n|---|---|---|");
+  for (const s of q.modelDrift.sources) p(`| ${s.source} | ${s.role || "default"} | ${s.model} |`);
+  if ((q.modelDrift.notes || []).length) {
+    p("\nFailover / advisory (not counted as drift):\n");
+    p("| source | role | model |\n|---|---|---|");
+    for (const s of q.modelDrift.notes) p(`| ${s.source} | ${s.role} | ${s.model} |`);
+  }
   p("");
   return L.join("\n");
 }

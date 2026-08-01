@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Harness Graph control plane** (`.omk/harness-graph/`): deterministic agents×skills×hooks×MCP inventory with 3-tier skill classification, bipartite SPOF criticality, Louvain communities, association-rule lift, hybrid CF wiring recommendations (`jaccard · idf · lift_boost`), fail-closed `health_gate.py` + debt allowlist, executive `dashboard.md`, review-only `wiring-patch`, synthetic unit + property tests, and CI workflow `.github/workflows/harness-graph.yml`.
+- **Harness Graph ops tooling**: `compact-skills-index.mjs` (demand-union index rebuild), `prune-retired-hooks.mjs` (retired hook capability cleanup), `apply-wiring-patch.py` (half-bundle completion checklist), session-start drift audit hook with optional `HARNESS_GRAPH_STRICT=1`.
+
+### Fixed
+
+- Harness Graph green-metric traps: runtime-derived hook/MCP catalogs (no hardcoded answer keys), bipartite SPOF instead of empty articulation tables, default-only model-drift axis (failover is advisory), skills-index no longer dumps the full on-disk universe into false orphan-active counts.
+
+### Docs
+
+- Root README: AEO/SEO-oriented positioning, FAQ, and marketing/growth skill keyword map (`omk-marketing` + marketingskills pack).
+- Spec/plan/scorecard for harness-graph engineering (`specs/012-harness-graph-engineering/`, `.omk/harness-graph/SCORECARD.md`).
+
 ## [0.95.0] - 2026-07-31
 
 ### Added

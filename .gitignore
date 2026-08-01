@@ -21,9 +21,21 @@ packages/*/dist-firefox/
 !.omk/git/.gitignore
 !.omk/npm/
 !.omk/npm/.gitignore
+# Harness-graph control plane: keep source scripts/docs; never commit generated artifacts.
 !.omk/harness-graph/
 !.omk/harness-graph/**
 .omk/harness-graph/out/
+.omk/harness-graph/out/**
+.omk/harness-graph/**/__pycache__/
+.omk/harness-graph/**/*.py[cod]
+.omk/harness-graph/**/*.bak
+.omk/harness-graph/**/*.bak-*
+.omk/harness-graph/**/*~
+.omk/harness-graph/**/DRIFT-*.md
+# Local compact-index / agent backups if ever dropped under the tree
+.omk/**/*.bak
+.omk/**/*.bak-*
+.omk/**/agents-backup-*.tgz
 !.omk/prompts/
 !.omk/prompts/**
 !.omk/skills/
