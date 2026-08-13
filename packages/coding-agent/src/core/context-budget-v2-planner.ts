@@ -37,8 +37,6 @@ import {
 	type TokenOptimizerRuntimeStatus,
 } from "./context-budget-v2-types.ts";
 
-// Inlined constant replacing the deleted legacy token-optimizer.ts module's
-// getTokenOptimizerRuntimeStatus(): a fixed, hardcoded compatibility status.
 const TOKEN_OPTIMIZER_RUNTIME_STATUS: TokenOptimizerRuntimeStatus = {
 	optimizerId: "legacy-token-optimizer",
 	status: "quarantined_compatibility",
@@ -65,6 +63,7 @@ export function planPromptContextBudgetV2(input: PromptContextBudgetInputV2): Pr
 		diagnostics,
 	);
 	const available = Math.max(0, maxTokens - responseReserve - safetyMargin);
+	const canUsePlanCache = !diagnostics.some((diagnostic) => diagnostic.reason === "invalid_budget");
 
 	const tierPolicy: Readonly<Record<ContextBudgetTierV2, TierBudgetPolicyV2>> = {
 		...DEFAULT_TIER_POLICY_V2,
@@ -106,12 +105,14 @@ export function planPromptContextBudgetV2(input: PromptContextBudgetInputV2): Pr
 		provider: input.cacheProvider,
 		ttlMs: input.cacheTtlMs,
 	});
-	const cachedPlan = readValidPlanCacheV2({
-		availableTokens: available,
-		cache,
-		key: planCacheKey,
-		planned: basePlanned,
-	});
+	const cachedPlan = canUsePlanCache
+		? readValidPlanCacheV2({
+				availableTokens: available,
+				cache,
+				key: planCacheKey,
+				planned: basePlanned,
+			})
+		: undefined;
 	if (cachedPlan) {
 		return cachedPlan;
 	}
@@ -208,12 +209,14 @@ export function planPromptContextBudgetV2(input: PromptContextBudgetInputV2): Pr
 		retrievalFallbacks,
 		observability,
 	};
-	writePlanCacheV2({
-		cache,
-		key: planCacheKey,
-		plan,
-		planned: basePlanned,
-	});
+	if (canUsePlanCache) {
+		writePlanCacheV2({
+			cache,
+			key: planCacheKey,
+			plan,
+			planned: basePlanned,
+		});
+	}
 	return plan;
 }
 

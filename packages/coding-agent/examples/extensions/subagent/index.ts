@@ -4,10 +4,11 @@
  * Spawns a separate `omk` process for each subagent invocation,
  * giving it an isolated context window.
  *
- * Supports three modes:
+ * Supports four modes:
  *   - Single: { agent: "name", task: "..." }
  *   - Parallel: { tasks: [{ agent: "name", task: "..." }, ...] }
  *   - Chain: { chain: [{ agent: "name", task: "... {previous} ..." }, ...] }
+ *   - Graph: { graph: [{ id: "research", agent: "scout", task: "...", dependsOn: [] }, ...] }
  *
  * Uses JSON mode to capture structured output from subagents.
  */
@@ -33,13 +34,24 @@ import {
 	parseEmbeddedCapabilities,
 	validateCapabilities,
 } from "./capabilities.ts";
-import { createExecutionBudget, type ExecutionBudget, remainingExecutionMs } from "./deadline-budget.ts";
+import {
+	createExecutionBudget,
+	type ExecutionBudget,
+	exceedsParallelTaskLimit,
+	remainingExecutionMs,
+	resolveSubagentExecutionPolicy,
+} from "./deadline-budget.ts";
 import { DeadlineProfileStore } from "./deadline-profile-store.ts";
 import { runManagedProcess } from "./managed-process.ts";
 import { emptyUsage, type SingleResult, type SubagentAttemptResult } from "./subagent-runtime-types.ts";
+import {
+	type GraphTask,
+	GraphValidationError,
+	planTaskGraph,
+	renderDependencyContext,
+	type TaskGraphPlan,
+} from "./workflow-graph.ts";
 
-const MAX_PARALLEL_TASKS = 8;
-const MAX_CONCURRENCY = 4;
 const COLLAPSED_ITEM_COUNT = 10;
 const PER_TASK_OUTPUT_CAP = 50 * 1024;
 const DEFAULT_EXECUTION_BUDGET_MS = 840_000;
@@ -173,6 +185,7 @@ function formatToolCall(
 }
 
 interface ExecutionBudgetDetails {
+	unbounded: boolean;
 	hardDeadlineMs: number;
 	elapsedMs: number;
 	remainingMs: number;
@@ -183,18 +196,24 @@ interface ExecutionBudgetDetails {
 }
 
 interface SubagentDetails {
-	mode: "single" | "parallel" | "chain";
+	mode: "single" | "parallel" | "chain" | "graph";
 	agentScope: AgentScope;
 	projectAgentsDir: string | null;
 	results: SingleResult[];
 	executionBudget: ExecutionBudgetDetails;
+	graph?: { waves: readonly (readonly string[])[]; completedNodeIds: readonly string[] };
 }
 
-function summarizeExecutionBudget(budget: ExecutionBudget, results: readonly SingleResult[]): ExecutionBudgetDetails {
+function summarizeExecutionBudget(
+	budget: ExecutionBudget,
+	results: readonly SingleResult[],
+	unbounded: boolean,
+): ExecutionBudgetDetails {
 	return {
-		hardDeadlineMs: budget.hardDeadlineMs,
+		unbounded,
+		hardDeadlineMs: unbounded ? 0 : budget.hardDeadlineMs,
 		elapsedMs: Date.now() - budget.startedAtMs,
-		remainingMs: remainingExecutionMs(budget),
+		remainingMs: unbounded ? 0 : remainingExecutionMs(budget),
 		estimatedTokens: results.reduce((sum, result) => sum + (result.deadline?.estimatedTokens ?? 0), 0),
 		plannedShards: results.reduce((sum, result) => sum + (result.deadline?.plannedShardIds.length ?? 0), 0),
 		completedShards: results.reduce((sum, result) => sum + (result.deadline?.completedShardIds.length ?? 0), 0),
@@ -263,15 +282,16 @@ async function mapWithConcurrencyLimit<TIn, TOut>(
 ): Promise<TOut[]> {
 	if (items.length === 0) return [];
 	const limit = Math.max(1, Math.min(concurrency, items.length));
-	const results: TOut[] = new Array(items.length);
+	const results: TOut[] = [];
 	let nextIndex = 0;
-	const workers = new Array(limit).fill(null).map(async () => {
-		while (true) {
+	const runWorker = async (): Promise<void> => {
+		while (nextIndex < items.length) {
 			const current = nextIndex++;
-			if (current >= items.length) return;
 			results[current] = await fn(items[current], current);
 		}
-	});
+	};
+	const workers: Promise<void>[] = [];
+	for (let worker = 0; worker < limit; worker++) workers.push(runWorker());
 	await Promise.all(workers);
 	return results;
 }
@@ -515,6 +535,7 @@ async function runSingleAgent(
 	signal: AbortSignal | undefined,
 	onUpdate: OnUpdateCallback | undefined,
 	makeDetails: (results: SingleResult[]) => SubagentDetails,
+	unbounded: boolean,
 	budget: ExecutionBudget,
 	profileStore: DeadlineProfileStore,
 	pendingSequentialTasks: number,
@@ -533,6 +554,18 @@ async function runSingleAgent(
 			step,
 		};
 	}
+	const reportUpdate: ResultUpdateCallback | undefined = onUpdate
+		? (partial) =>
+				onUpdate({
+					content: [{ type: "text", text: getResultOutput(partial) || "(running...)" }],
+					details: makeDetails([partial]),
+				})
+		: undefined;
+	if (unbounded) {
+		return (
+			await runSingleAgentAttempt(defaultCwd, agents, agentName, task, task, cwd, step, 0, signal, reportUpdate)
+		).result;
+	}
 	return await runAdaptiveAgent({
 		agentName,
 		agentSource: agent.source,
@@ -548,13 +581,7 @@ async function runSingleAgent(
 			minimumAttemptMs: MINIMUM_ATTEMPT_MS,
 			maxTokensPerShard: MAX_TOKENS_PER_TASK_SHARD,
 		},
-		onUpdate: onUpdate
-			? (partial) =>
-					onUpdate({
-						content: [{ type: "text", text: getResultOutput(partial) || "(running...)" }],
-						details: makeDetails([partial]),
-					})
-			: undefined,
+		onUpdate: reportUpdate,
 		runAttempt: async (input: RunAttemptInput) =>
 			await runSingleAgentAttempt(
 				defaultCwd,
@@ -583,6 +610,14 @@ const ChainItem = Type.Object({
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
 });
 
+const GraphItem = Type.Object({
+	id: Type.String({ description: "Unique task node id" }),
+	agent: Type.String({ description: "Name of the agent to invoke" }),
+	task: Type.String({ description: "Task; use {dependencies} to inject declared dependency outputs" }),
+	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
+	dependsOn: Type.Optional(Type.Array(Type.String(), { description: "Task node ids that must complete first" })),
+});
+
 const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
 	description: 'Which agent directories to use. Default: "user". Use "both" to include project-local agents.',
 	default: "user",
@@ -593,6 +628,7 @@ const SubagentParams = Type.Object({
 	task: Type.Optional(Type.String({ description: "Task to delegate (for single mode)" })),
 	tasks: Type.Optional(Type.Array(TaskItem, { description: "Array of {agent, task} for parallel execution" })),
 	chain: Type.Optional(Type.Array(ChainItem, { description: "Array of {agent, task} for sequential execution" })),
+	graph: Type.Optional(Type.Array(GraphItem, { description: "Validated dependency DAG executed in parallel waves" })),
 	agentScope: Type.Optional(AgentScopeSchema),
 	confirmProjectAgents: Type.Optional(
 		Type.Boolean({ description: "Prompt before running project-local agents. Default: true.", default: true }),
@@ -600,7 +636,7 @@ const SubagentParams = Type.Object({
 	executionBudgetMs: Type.Optional(
 		Type.Integer({
 			description:
-				"Internal wall-clock budget. Defaults to 840000ms, leaving cleanup time before the 900000ms tool timeout.",
+				"Internal wall-clock budget. Defaults to 840000ms outside Ultra; supplying it also bounds Ultra execution.",
 			minimum: 60_000,
 			maximum: MAX_EXECUTION_BUDGET_MS,
 			default: DEFAULT_EXECUTION_BUDGET_MS,
@@ -623,18 +659,27 @@ export default function (omk: ExtensionAPI) {
 		label: "Subagent",
 		description: [
 			"Delegate tasks to specialized subagents with isolated context.",
-			"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
-			"Long work is predictively sharded by token and wall-clock demand, checkpointed, and resumed only from unfinished work.",
+			"Modes: single, parallel, chain, or graph (validated dependency DAG with parallel waves and {dependencies} handoff).",
+			"Long work is predictively sharded by token and wall-clock demand, checkpointed, and resumed only from unfinished work; Ultra removes task-count and concurrency caps, plus the execution deadline unless executionBudgetMs is supplied.",
 			'Default agent scope is "user" (from ~/.omk/agent/agents).',
 			'To enable project-local agents in .omk/agents, set agentScope: "both" (or "project").',
 		].join(" "),
 		parameters: SubagentParams,
+		resolveTimeoutMs: (ctx) => (ctx.thinkingLevel === "ultra" ? 0 : undefined),
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const agentScope: AgentScope = params.agentScope ?? "user";
 			const discovery = discoverAgents(ctx.cwd, agentScope);
-			const agents = discovery.agents;
+			const selectedModel = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+			const agents = discovery.agents.map((agent) =>
+				agent.model || !selectedModel ? agent : { ...agent, model: selectedModel },
+			);
 			const confirmProjectAgents = params.confirmProjectAgents ?? true;
+			const executionPolicy = resolveSubagentExecutionPolicy(
+				ctx.thinkingLevel,
+				params.tasks?.length ?? params.graph?.length ?? 1,
+				params.executionBudgetMs !== undefined,
+			);
 			const executionBudget = createExecutionBudget({
 				hardDeadlineMs: params.executionBudgetMs ?? DEFAULT_EXECUTION_BUDGET_MS,
 				cleanupReserveMs: EXECUTION_CLEANUP_RESERVE_MS,
@@ -645,17 +690,20 @@ export default function (omk: ExtensionAPI) {
 
 			const hasChain = (params.chain?.length ?? 0) > 0;
 			const hasTasks = (params.tasks?.length ?? 0) > 0;
+			const hasGraph = (params.graph?.length ?? 0) > 0;
 			const hasSingle = Boolean(params.agent && params.task);
-			const modeCount = Number(hasChain) + Number(hasTasks) + Number(hasSingle);
+			const modeCount = Number(hasChain) + Number(hasTasks) + Number(hasGraph) + Number(hasSingle);
 
+			let graphDetails: SubagentDetails["graph"];
 			const makeDetails =
-				(mode: "single" | "parallel" | "chain") =>
+				(mode: SubagentDetails["mode"]) =>
 				(results: SingleResult[]): SubagentDetails => ({
 					mode,
 					agentScope,
 					projectAgentsDir: discovery.projectAgentsDir,
 					results,
-					executionBudget: summarizeExecutionBudget(executionBudget, results),
+					executionBudget: summarizeExecutionBudget(executionBudget, results, executionPolicy.unbounded),
+					...(mode === "graph" && graphDetails ? { graph: graphDetails } : {}),
 				});
 
 			if (modeCount !== 1) {
@@ -675,6 +723,7 @@ export default function (omk: ExtensionAPI) {
 				const requestedAgentNames = new Set<string>();
 				if (params.chain) for (const step of params.chain) requestedAgentNames.add(step.agent);
 				if (params.tasks) for (const t of params.tasks) requestedAgentNames.add(t.agent);
+				if (params.graph) for (const node of params.graph) requestedAgentNames.add(node.agent);
 				if (params.agent) requestedAgentNames.add(params.agent);
 
 				const projectAgentsRequested = Array.from(requestedAgentNames)
@@ -691,7 +740,9 @@ export default function (omk: ExtensionAPI) {
 					if (!ok)
 						return {
 							content: [{ type: "text", text: "Canceled: project-local agents not approved." }],
-							details: makeDetails(hasChain ? "chain" : hasTasks ? "parallel" : "single")([]),
+							details: makeDetails(hasChain ? "chain" : hasTasks ? "parallel" : hasGraph ? "graph" : "single")(
+								[],
+							),
 						};
 				}
 			}
@@ -729,6 +780,7 @@ export default function (omk: ExtensionAPI) {
 						signal,
 						chainUpdate,
 						makeDetails("chain"),
+						executionPolicy.unbounded,
 						executionBudget,
 						profileStore,
 						params.chain.length - i,
@@ -752,13 +804,104 @@ export default function (omk: ExtensionAPI) {
 				};
 			}
 
-			if (params.tasks && params.tasks.length > 0) {
-				if (params.tasks.length > MAX_PARALLEL_TASKS)
+			if (params.graph && params.graph.length > 0) {
+				let plan: TaskGraphPlan;
+				try {
+					plan = planTaskGraph(params.graph as GraphTask[]);
+				} catch (error) {
+					const message = error instanceof GraphValidationError ? error.message : "Invalid task graph";
+					return {
+						content: [{ type: "text", text: message }],
+						details: makeDetails("graph")([]),
+						isError: true,
+					};
+				}
+				if (exceedsParallelTaskLimit(executionPolicy, params.graph.length)) {
 					return {
 						content: [
 							{
 								type: "text",
-								text: `Too many parallel tasks (${params.tasks.length}). Max is ${MAX_PARALLEL_TASKS}.`,
+								text: `Too many graph tasks (${params.graph.length}). Max is ${executionPolicy.maxParallelTasks}.`,
+							},
+						],
+						details: makeDetails("graph")([]),
+					};
+				}
+
+				const results: SingleResult[] = [];
+				const outputs = new Map<string, string>();
+				const completedNodeIds: string[] = [];
+				graphDetails = { waves: plan.waves, completedNodeIds };
+				for (const [waveIndex, wave] of plan.waves.entries()) {
+					const waveResults = await mapWithConcurrencyLimit<string, { id: string; result: SingleResult }>(
+						[...wave],
+						executionPolicy.concurrency,
+						async (id) => {
+							const task = plan.tasks.get(id);
+							if (!task) throw new GraphValidationError(`node '${id}' disappeared after validation`);
+							const result = await runSingleAgent(
+								ctx.cwd,
+								agents,
+								task.agent,
+								renderDependencyContext(task, outputs),
+								task.cwd,
+								undefined,
+								signal,
+								undefined,
+								makeDetails("graph"),
+								executionPolicy.unbounded,
+								executionBudget,
+								profileStore,
+								plan.waves.length - waveIndex,
+							);
+							return { id, result };
+						},
+					);
+					for (const { id, result } of waveResults) {
+						results.push(result);
+						if (!isFailedResult(result)) {
+							outputs.set(id, getResultOutput(result));
+							completedNodeIds.push(id);
+						}
+					}
+					graphDetails = { waves: plan.waves, completedNodeIds: [...completedNodeIds] };
+					const failed = waveResults.filter(({ result }) => isFailedResult(result));
+					if (failed.length > 0) {
+						const failedIds = failed.map(({ id }) => id).join(", ");
+						return {
+							content: [
+								{
+									type: "text",
+									text: `Graph stopped after wave ${waveIndex + 1}; failed nodes: ${failedIds}. Downstream nodes were not started.`,
+								},
+							],
+							details: makeDetails("graph")(results),
+							isError: true,
+						};
+					}
+				}
+				const summaries = results.map((result, index) => {
+					const id = completedNodeIds[index] ?? `node-${index + 1}`;
+					return `### [${id}] completed\n\n${truncateParallelOutput(getResultOutput(result))}`;
+				});
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Graph: ${results.length}/${params.graph.length} completed in ${plan.waves.length} waves\n\n${summaries.join("\n\n---\n\n")}`,
+						},
+					],
+					details: makeDetails("graph")(results),
+				};
+			}
+
+			if (params.tasks && params.tasks.length > 0) {
+				if (exceedsParallelTaskLimit(executionPolicy, params.tasks.length))
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Too many parallel tasks (${params.tasks.length}). Max is ${executionPolicy.maxParallelTasks}.`,
 							},
 						],
 						details: makeDetails("parallel")([]),
@@ -793,31 +936,36 @@ export default function (omk: ExtensionAPI) {
 					}
 				};
 
-				const results = await mapWithConcurrencyLimit(params.tasks, MAX_CONCURRENCY, async (t, index) => {
-					const result = await runSingleAgent(
-						ctx.cwd,
-						agents,
-						t.agent,
-						t.task,
-						t.cwd,
-						undefined,
-						signal,
-						// Per-task update callback
-						(partial) => {
-							if (partial.details?.results[0]) {
-								allResults[index] = partial.details.results[0];
-								emitParallelUpdate();
-							}
-						},
-						makeDetails("parallel"),
-						executionBudget,
-						profileStore,
-						1,
-					);
-					allResults[index] = result;
-					emitParallelUpdate();
-					return result;
-				});
+				const results = await mapWithConcurrencyLimit(
+					params.tasks,
+					executionPolicy.concurrency,
+					async (t, index) => {
+						const result = await runSingleAgent(
+							ctx.cwd,
+							agents,
+							t.agent,
+							t.task,
+							t.cwd,
+							undefined,
+							signal,
+							// Per-task update callback
+							(partial) => {
+								if (partial.details?.results[0]) {
+									allResults[index] = partial.details.results[0];
+									emitParallelUpdate();
+								}
+							},
+							makeDetails("parallel"),
+							executionPolicy.unbounded,
+							executionBudget,
+							profileStore,
+							1,
+						);
+						allResults[index] = result;
+						emitParallelUpdate();
+						return result;
+					},
+				);
 
 				const successCount = results.filter((r) => !isFailedResult(r)).length;
 				const summaries = results.map((r) => {
@@ -849,6 +997,7 @@ export default function (omk: ExtensionAPI) {
 					signal,
 					onUpdate,
 					makeDetails("single"),
+					executionPolicy.unbounded,
 					executionBudget,
 					profileStore,
 					1,
@@ -895,6 +1044,18 @@ export default function (omk: ExtensionAPI) {
 						theme.fg("dim", ` ${preview}`);
 				}
 				if (args.chain.length > 3) text += `\n  ${theme.fg("muted", `... +${args.chain.length - 3} more`)}`;
+				return new Text(text, 0, 0);
+			}
+			if (args.graph && args.graph.length > 0) {
+				let text =
+					theme.fg("toolTitle", theme.bold("subagent ")) +
+					theme.fg("accent", `graph (${args.graph.length} nodes)`) +
+					theme.fg("muted", ` [${scope}]`);
+				for (const node of args.graph.slice(0, 3)) {
+					const dependencies = node.dependsOn?.length ? ` ← ${node.dependsOn.join(",")}` : "";
+					text += `\n  ${theme.fg("accent", node.id)}${theme.fg("dim", ` @${node.agent}${dependencies}`)}`;
+				}
+				if (args.graph.length > 3) text += `\n  ${theme.fg("muted", `... +${args.graph.length - 3} more`)}`;
 				return new Text(text, 0, 0);
 			}
 			if (args.tasks && args.tasks.length > 0) {
@@ -1014,6 +1175,24 @@ export default function (omk: ExtensionAPI) {
 				}
 				return total;
 			};
+
+			if (details.mode === "graph") {
+				const completed = details.graph?.completedNodeIds.length ?? 0;
+				const total =
+					details.graph?.waves.reduce((count, wave) => count + wave.length, 0) ?? details.results.length;
+				const waves = details.graph?.waves.length ?? 0;
+				const failed = details.results.some(isFailedResult);
+				const icon = failed ? theme.fg("error", "✗") : theme.fg("success", "✓");
+				let text = `${icon} ${theme.fg("toolTitle", theme.bold("graph "))}${theme.fg("accent", `${completed}/${total} nodes · ${waves} waves`)}`;
+				for (const [index, result] of details.results.entries()) {
+					const id = details.graph?.completedNodeIds[index] ?? result.agent;
+					const resultIcon = isFailedResult(result) ? theme.fg("error", "✗") : theme.fg("success", "✓");
+					text += `\n${theme.fg("muted", "─── ")}${theme.fg("accent", id)} ${resultIcon}`;
+					if (expanded) text += `\n${theme.fg("toolOutput", getResultOutput(result))}`;
+				}
+				if (!expanded) text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
+				return new Text(text, 0, 0);
+			}
 
 			if (details.mode === "chain") {
 				const successCount = details.results.filter((r) => r.exitCode === 0).length;

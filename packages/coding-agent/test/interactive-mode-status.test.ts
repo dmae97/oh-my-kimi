@@ -72,6 +72,101 @@ type ExtensionFixture = {
 	sourceInfo?: SourceInfo;
 };
 
+describe("InteractiveMode final session log", () => {
+	test("renders only conversation and tool messages at full terminal width", () => {
+		const calls: string[] = [];
+		const messages = [
+			{ role: "custom" },
+			{ role: "user" },
+			{ role: "assistant" },
+			{ role: "toolResult" },
+			{ role: "bashExecution" },
+			{ role: "compactionSummary" },
+			{ role: "branchSummary" },
+		];
+		const fakeThis = {
+			sessionManager: { buildSessionContext: () => ({ messages }) },
+			chatContainer: {
+				clear: () => calls.push("clear"),
+				render: (width: number) => {
+					calls.push(`render:${width}`);
+					return ["user message", "assistant response", "tool output"];
+				},
+			},
+			renderSessionContext: (context: { messages: Array<{ role: string }> }) => {
+				calls.push(`messages:${context.messages.map((message) => message.role).join(",")}`);
+			},
+			ui: { terminal: { columns: 120 } },
+		};
+		const buildFinalSessionLog = Reflect.get(InteractiveMode.prototype, "buildFinalSessionLog") as (
+			this: typeof fakeThis,
+		) => string[];
+
+		expect(buildFinalSessionLog.call(fakeThis)).toEqual(["user message", "assistant response", "tool output"]);
+		expect(calls).toEqual(["clear", "messages:user,assistant,toolResult,bashExecution", "render:120"]);
+	});
+
+	test("passes final session lines to TUI stop", () => {
+		const buildFinalSessionLog = vi.fn(() => ["user message", "assistant response"]);
+		const uiStop = vi.fn();
+		const fakeThis = {
+			unregisterSignalHandlers: vi.fn(),
+			settingsManager: { getShowTerminalProgress: () => false },
+			ui: { stop: uiStop },
+			loadingAnimation: undefined,
+			clearExtensionTerminalInputListeners: vi.fn(),
+			builtInHeader: undefined,
+			customHeader: undefined,
+			footer: { dispose: vi.fn() },
+			footerDataProvider: { dispose: vi.fn() },
+			metricsTimer: null,
+			unsubscribe: undefined,
+			isInitialized: true,
+			buildFinalSessionLog,
+		};
+		const stop = Reflect.get(InteractiveMode.prototype, "stop") as (
+			this: typeof fakeThis,
+			options?: { finalSessionLog?: boolean },
+		) => void;
+
+		stop.call(fakeThis, { finalSessionLog: true });
+
+		expect(buildFinalSessionLog).toHaveBeenCalledOnce();
+		expect(uiStop).toHaveBeenCalledWith({ finalLines: ["user message", "assistant response"] });
+		expect(fakeThis.isInitialized).toBe(false);
+	});
+
+	test("falls back to plain TUI stop when final session rendering fails", () => {
+		const buildFinalSessionLog = vi.fn(() => {
+			throw new Error("render failed");
+		});
+		const uiStop = vi.fn();
+		const fakeThis = {
+			unregisterSignalHandlers: vi.fn(),
+			settingsManager: { getShowTerminalProgress: () => false },
+			ui: { stop: uiStop },
+			loadingAnimation: undefined,
+			clearExtensionTerminalInputListeners: vi.fn(),
+			builtInHeader: undefined,
+			customHeader: undefined,
+			footer: { dispose: vi.fn() },
+			footerDataProvider: { dispose: vi.fn() },
+			metricsTimer: null,
+			unsubscribe: undefined,
+			isInitialized: true,
+			buildFinalSessionLog,
+		};
+		const stop = Reflect.get(InteractiveMode.prototype, "stop") as (
+			this: typeof fakeThis,
+			options?: { finalSessionLog?: boolean },
+		) => void;
+
+		expect(() => stop.call(fakeThis, { finalSessionLog: true })).not.toThrow();
+		expect(buildFinalSessionLog).toHaveBeenCalledOnce();
+		expect(uiStop).toHaveBeenCalledWith();
+	});
+});
+
 describe("InteractiveMode termination rendering", () => {
 	beforeAll(() => {
 		initTheme("dark");
@@ -402,6 +497,65 @@ describe("InteractiveMode.showExtensionCustom", () => {
 
 			closeOverlay("closed");
 			await overlayPromise;
+		} finally {
+			ui.stop();
+		}
+	});
+
+	test("overlay custom UI closes its own layer without stranding editor focus", async () => {
+		const terminal = new VirtualTerminal(80, 24);
+		const ui = new TUI(terminal);
+		const editorContainer = new Container();
+		const editor = new TestFocusableComponent("EDITOR");
+		const skillUi = new TestFocusableComponent("SKILL UI");
+		const nestedOverlay = new TestFocusableComponent("NESTED");
+		let closeSkillUi: (value: string) => void = () => {
+			throw new Error("closeSkillUi was not initialized");
+		};
+		const fakeThis = {
+			editor,
+			editorContainer,
+			keybindings: {},
+			ui,
+		};
+		const showExtensionCustom = <T>(
+			factory: (tui: TUI, theme: unknown, keybindings: unknown, done: (result: T) => void) => Component,
+			options?: { overlay?: boolean },
+		): Promise<T> =>
+			(InteractiveMode as any).prototype.showExtensionCustom.call(fakeThis, factory, options) as Promise<T>;
+
+		editorContainer.addChild(editor);
+		ui.addChild(editorContainer);
+		ui.setFocus(editor);
+		ui.start();
+		try {
+			const skillPromise = showExtensionCustom<string>(
+				(_tui, _theme, _keybindings, done) => {
+					closeSkillUi = done;
+					return skillUi;
+				},
+				{ overlay: true },
+			);
+			await flushTui(ui, terminal);
+
+			const nestedHandle = ui.showOverlay(nestedOverlay);
+			expect(nestedOverlay.focused).toBe(true);
+
+			closeSkillUi("done");
+			await skillPromise;
+			await flushTui(ui, terminal);
+
+			terminal.sendInput("x");
+			await flushTui(ui, terminal);
+			expect(nestedOverlay.inputs).toEqual(["x"]);
+			expect(skillUi.inputs).toEqual([]);
+			expect(nestedOverlay.focused).toBe(true);
+
+			nestedHandle.hide();
+			terminal.sendInput("y");
+			await flushTui(ui, terminal);
+			expect(editor.inputs).toEqual(["y"]);
+			expect(editor.focused).toBe(true);
 		} finally {
 			ui.stop();
 		}

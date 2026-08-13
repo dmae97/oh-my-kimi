@@ -133,7 +133,7 @@ describe("GPT-5.6 MoA", () => {
 
 		expect(requests.map((request) => request.model)).toEqual(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-sol"]);
 		expect(requests.every((request) => request.reasoningEffort === "xhigh")).toBe(true);
-		expect(requests.map((request) => request.hasTools)).toEqual([false, false, false]);
+		expect(requests.map((request) => request.hasTools)).toEqual([false, false, true]);
 		expect(publicTextDeltas).toEqual(["synthesized"]);
 		expect(result.model).toBe("gpt-5.6-moa");
 		expect(result.responseModel).toBe("gpt-5.6-sol");

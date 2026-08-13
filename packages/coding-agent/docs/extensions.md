@@ -7,6 +7,7 @@ Extensions are TypeScript modules that extend omk's behavior. They can subscribe
 > **Placement for /reload:** Put extensions in `~/.omk/agent/extensions/` (global) or `.omk/extensions/` (project-local) for auto-discovery. Use `omk -e ./path.ts` only for quick tests. Extensions in auto-discovered locations can be hot-reloaded with `/reload`.
 
 **Key capabilities:**
+
 - **Custom tools** - Register tools the LLM can call via `omk.registerTool()`
 - **Event interception** - Block or modify tool calls, inject context, customize compaction
 - **User interaction** - Prompt users via `ctx.ui` (select, confirm, input, notify)
@@ -16,6 +17,7 @@ Extensions are TypeScript modules that extend omk's behavior. They can subscribe
 - **Custom rendering** - Control how tool calls/results and messages appear in TUI
 
 **Example use cases:**
+
 - Permission gates (confirm before `rm -rf`, `sudo`, etc.)
 - Git checkpointing (stash at each turn, restore on branch)
 - Path protection (block writes to `.env`, `node_modules/`)
@@ -50,6 +52,7 @@ See [examples/extensions/](../examples/extensions/) for working implementations.
 - [Custom UI](#custom-ui)
 - [Error Handling](#error-handling)
 - [Mode Behavior](#mode-behavior)
+- [Plannotator Approval Bridge](#plannotator-approval-bridge)
 - [Examples Reference](#examples-reference)
 
 ## Quick Start
@@ -112,7 +115,7 @@ omk -e ./my-extension.ts
 Extensions are auto-discovered from:
 
 | Location | Scope |
-|----------|-------|
+| ---------- | ------- |
 | `~/.omk/agent/extensions/*.ts` | Global (all projects) |
 | `~/.omk/agent/extensions/*/index.ts` | Global (subdirectory) |
 | `.omk/extensions/*.ts` | Project-local |
@@ -138,7 +141,7 @@ To share extensions via npm or git as omk packages, see [packages.md](packages.m
 ## Available Imports
 
 | Package | Purpose |
-|---------|---------|
+| --------- | --------- |
 | `open-multi-agent-kit` | Extension types (`ExtensionAPI`, `ExtensionContext`, events) |
 | `typebox` | Schema definitions for tool parameters |
 | `omk-agent-core` | General agent framework types and utilities |
@@ -569,6 +572,7 @@ omk.on("message_end", async (event, ctx) => {
 Fired for tool execution lifecycle updates.
 
 In parallel tool mode:
+
 - `tool_execution_start` is emitted in assistant source order during the preflight phase
 - `tool_execution_update` events may interleave across tools
 - `tool_execution_end` is emitted in tool completion order after each tool is finalized
@@ -684,6 +688,7 @@ In the default parallel tool execution mode, sibling tool calls from the same as
 `event.input` is mutable. Mutate it in place to patch tool arguments before execution.
 
 Behavior guarantees:
+
 - Mutations to `event.input` affect the actual tool execution
 - Later `tool_call` handlers see mutations made by earlier handlers
 - No re-validation is performed after your mutation
@@ -743,6 +748,7 @@ Fired after tool execution finishes and before `tool_execution_end` plus the fin
 In parallel tool mode, `tool_result` and `tool_execution_end` may interleave in tool completion order, while final `toolResult` message events are still emitted later in assistant source order.
 
 `tool_result` handlers chain like middleware:
+
 - Handlers run in extension load order
 - Each handler sees the latest result after previous handler changes
 - Handlers can return partial patches (`content`, `details`, or `isError`); omitted fields keep their current values
@@ -810,6 +816,7 @@ omk.on("user_bash", (event, ctx) => {
 Fired when user input is received, after extension commands are checked but before skill and template expansion. The event sees the raw input text, so `/skill:foo` and `/template` are not yet expanded.
 
 **Processing order:**
+
 1. Extension commands (`/cmd`) checked first - if found, handler runs and input event is skipped
 2. `input` event fires - can intercept, transform, or handle
 3. If not handled: skill commands (`/skill:name`) expanded to skill content
@@ -848,6 +855,7 @@ omk.on("input", async (event, ctx) => {
 ```
 
 **Results:**
+
 - `continue` - pass through unchanged (default if handler returns nothing)
 - `transform` - modify text/images, then continue to expansion
 - `handled` - skip agent entirely (first handler to return this wins)
@@ -895,6 +903,7 @@ Access to models and API keys.
 The current agent abort signal, or `undefined` when no agent turn is active.
 
 Use this for abort-aware nested work started by extension handlers, for example:
+
 - `fetch(..., { signal: ctx.signal })`
 - model calls that accept `signal`
 - file or process helpers that accept `AbortSignal`
@@ -1039,6 +1048,7 @@ if (result.cancelled) {
 ```
 
 Options:
+
 - `parentSession`: parent session file to record in the new session header
 - `setup`: mutate the new session's `SessionManager` before `withSession` runs
 - `withSession`: run post-switch work against a fresh replacement-session context. Do not use captured old `omk` / command `ctx`; see [Session replacement lifecycle and footguns](#session-replacement-lifecycle-and-footguns).
@@ -1065,6 +1075,7 @@ if (cloneResult.cancelled) {
 ```
 
 Options:
+
 - `position`: `"before"` (default) forks before the selected user message, restoring that prompt into the editor
 - `position`: `"at"` duplicates the active path through the selected entry without restoring editor text
 - `withSession`: run post-switch work against a fresh replacement-session context. Do not use captured old `omk` / command `ctx`; see [Session replacement lifecycle and footguns](#session-replacement-lifecycle-and-footguns).
@@ -1083,6 +1094,7 @@ const result = await ctx.navigateTree("entry-id-456", {
 ```
 
 Options:
+
 - `summarize`: Whether to generate a summary of the abandoned branch
 - `customInstructions`: Custom instructions for the summarizer
 - `replaceInstructions`: If true, `customInstructions` replaces the default prompt instead of being appended
@@ -1104,6 +1116,7 @@ if (result.cancelled) {
 ```
 
 Options:
+
 - `withSession`: run post-switch work against a fresh replacement-session context. Do not use captured old `omk` / command `ctx`; see [Session replacement lifecycle and footguns](#session-replacement-lifecycle-and-footguns).
 
 To discover available sessions, use the static `SessionManager.list()` or `SessionManager.listAll()` methods:
@@ -1136,6 +1149,7 @@ omk.registerCommand("switch", {
 `withSession` receives a fresh `ReplacedSessionContext`, which extends `ExtensionCommandContext` with async `sendMessage()` and `sendUserMessage()` helpers bound to the replacement session.
 
 Lifecycle and footguns:
+
 - `withSession` runs only after the old session has emitted `session_shutdown`, the old runtime has been torn down, the replacement session has been rebound, and the new extension instance has already received `session_start`.
 - The callback still executes in the original closure, not inside the new extension instance. That means your old extension instance may already have run its shutdown cleanup before `withSession` starts.
 - Captured old `omk` / old command `ctx` session-bound objects are stale after replacement and will throw if used. Use only the `ctx` passed to `withSession` for session-bound work.
@@ -1189,6 +1203,7 @@ omk.registerCommand("reload-runtime", {
 ```
 
 Important behavior:
+
 - `await ctx.reload()` emits `session_shutdown` for the current extension runtime
 - It then reloads resources and emits `session_start` with `reason: "reload"` and `resources_discover` with reason `"reload"`
 - The currently running command handler still continues in the old call frame
@@ -1304,6 +1319,7 @@ omk.sendMessage({
 ```
 
 **Options:**
+
 - `deliverAs` - Delivery mode:
   - `"steer"` (default) - Queues the message while streaming. Delivered after the current assistant turn finishes executing its tool calls, before the next LLM call.
   - `"followUp"` - Waits for agent to finish. Delivered only when agent has no more tool calls.
@@ -1330,6 +1346,7 @@ omk.sendUserMessage("And then summarize", { deliverAs: "followUp" });
 ```
 
 **Options:**
+
 - `deliverAs` - Required when agent is streaming:
   - `"steer"` - Queues the message for delivery after the current assistant turn finishes executing its tool calls
   - `"followUp"` - Waits for agent to finish all tools
@@ -1525,6 +1542,7 @@ omk.setActiveTools(["read", "bash"]); // Switch to read-only
 `omk.getAllTools()` returns `name`, `description`, `parameters`, `promptGuidelines`, and `sourceInfo`.
 
 Typical `sourceInfo.source` values:
+
 - `builtin` for built-in tools
 - `sdk` for tools passed via `createAgentSession({ customTools })`
 - extension source metadata for tools registered by extensions
@@ -1619,6 +1637,7 @@ omk.registerProvider("corporate-ai", {
 ```
 
 **Config options:**
+
 - `name` - Display name for the provider in UI such as `/login`.
 - `baseUrl` - API endpoint URL. Required when defining models.
 - `apiKey` - API key literal, environment interpolation (`$ENV_VAR` or `${ENV_VAR}`), or leading `!command`. Required when defining models (unless `oauth` provided). `$$` escapes `$`, and `$!` escapes a literal `!` without triggering command execution.
@@ -1781,6 +1800,14 @@ omk.registerTool({
 });
 ```
 
+**Timeouts:** Set `timeoutMs` for a static tool timeout, or return a per-call value from `resolveTimeoutMs(ctx)`. A resolved value takes precedence over `timeoutMs` and `agent.toolTimeouts`; `undefined` falls back to them, while `0` disables the timer. The resolver runs against the current extension context before each call. Values must be integer milliseconds from `0` through `2147483647`; invalid values fail before execution.
+
+```typescript
+resolveTimeoutMs(ctx) {
+  return ctx.thinkingLevel === "ultra" ? 0 : undefined;
+}
+```
+
 **Signaling errors:** To mark a tool execution as failed (sets `isError: true` on the result and reports it to the LLM), throw an error from `execute`. Returning a value never sets the error flag regardless of what properties you include in the return object.
 
 **Early termination:** Return `terminate: true` from `execute()` to hint that the automatic follow-up LLM call should be skipped after the current tool batch. This only takes effect when every finalized tool result in that batch is terminating. See [examples/extensions/structured-output.ts](../examples/extensions/structured-output.ts) for a minimal example where the agent ends on a final structured-output tool call.
@@ -1854,6 +1881,7 @@ omk -e ./tool-override.ts
 ```
 
 Alternatively, use `--no-builtin-tools` to start without any built-in tools while keeping extension tools enabled:
+
 ```bash
 # No built-in tools, only extension tools
 omk --no-builtin-tools -e ./my-extension.ts
@@ -1868,6 +1896,7 @@ See [examples/extensions/tool-override.ts](../examples/extensions/tool-override.
 **Your implementation must match the exact result shape**, including the `details` type. The UI and session logic depend on these shapes for rendering and state tracking.
 
 Built-in tool implementations:
+
 - [read.ts](https://github.com/dmae97/omk/blob/main/packages/coding-agent/src/core/tools/read.ts) - `ReadToolDetails`
 - [bash.ts](https://github.com/dmae97/omk/blob/main/packages/coding-agent/src/core/tools/bash.ts) - `BashToolDetails`
 - [edit.ts](https://github.com/dmae97/omk/blob/main/packages/coding-agent/src/core/tools/edit.ts)
@@ -1928,6 +1957,7 @@ See [examples/extensions/ssh.ts](../examples/extensions/ssh.ts) for a complete S
 ### Output Truncation
 
 **Tools MUST truncate their output** to avoid overwhelming the LLM context. Large outputs can cause:
+
 - Context overflow errors (prompt too long)
 - Compaction failures
 - Degraded model performance
@@ -1970,6 +2000,7 @@ async execute(toolCallId, params, signal, onUpdate, ctx) {
 ```
 
 **Key points:**
+
 - Use `truncateHead` for content where the beginning matters (search results, file reads)
 - Use `truncateTail` for content where the end matters (logs, command output)
 - Always inform the LLM when output is truncated and where to find the full version
@@ -2020,6 +2051,7 @@ omk.registerTool({
 ```
 
 `renderCall` and `renderResult` each receive a `context` object with:
+
 - `args` - the current tool call arguments
 - `state` - shared row-local state across `renderCall` and `renderResult`
 - `lastComponent` - the previously returned component for that slot, if any
@@ -2090,11 +2122,13 @@ renderResult(result, { expanded }, theme, context) {
 ```
 
 Available functions:
+
 - `keyHint(keybinding, description)` - Formats a configured keybinding id such as `"app.tools.expand"` or `"tui.select.confirm"`
 - `keyText(keybinding)` - Returns the raw configured key text for a keybinding id
 - `rawKeyHint(key, description)` - Format a raw key string
 
 Use namespaced keybinding ids:
+
 - Coding-agent ids use the `app.*` namespace, for example `app.tools.expand`, `app.editor.external`, `app.session.rename`
 - Shared TUI ids use the `tui.*` namespace, for example `tui.select.confirm`, `tui.select.cancel`, `tui.input.tab`
 
@@ -2117,6 +2151,7 @@ Custom editors and `ctx.ui.custom()` components receive `keybindings: Keybinding
 #### Fallback
 
 If a slot renderer is not defined or throws:
+
 - `renderCall`: Shows the tool name
 - `renderResult`: Shows raw text from `content`
 
@@ -2125,6 +2160,7 @@ If a slot renderer is not defined or throws:
 Extensions can interact with users via `ctx.ui` methods and customize how messages/tools render.
 
 **For custom components, see [tui.md](tui.md)** which has copy-paste patterns for:
+
 - Selection dialogs (SelectList)
 - Async operations with cancel (BorderedLoader)
 - Settings toggles (SettingsList)
@@ -2173,6 +2209,7 @@ if (confirmed) {
 ```
 
 **Return values on timeout:**
+
 - `select()` returns `undefined`
 - `confirm()` returns `false`
 - `input()` returns `undefined`
@@ -2372,6 +2409,7 @@ if (result) {
 ```
 
 The callback receives:
+
 - `tui` - TUI instance (for screen dimensions, focus management)
 - `theme` - Current theme for styling
 - `keybindings` - App keybinding manager (for checking shortcuts)
@@ -2446,6 +2484,7 @@ export default function (omk: ExtensionAPI) {
 ```
 
 **Key points:**
+
 - Extend `CustomEditor` (not base `Editor`) to get app keybindings (escape to abort, ctrl+d, model switching)
 - Call `super.handleInput(data)` for keys you don't handle
 - Factory receives `theme` and `keybindings` from the app
@@ -2536,7 +2575,7 @@ const highlighted = highlightCode(code, lang, theme);
 ## Mode Behavior
 
 | Mode | `ctx.mode` | `ctx.hasUI` | Notes |
-|------|------------|-------------|-------|
+| ------ | ------------ | ------------- | ------- |
 | Interactive | `"tui"` | `true` | Full TUI with terminal rendering |
 | RPC (`--mode rpc`) | `"rpc"` | `true` | Dialogs and notifications via JSON protocol; `custom()` returns `undefined`. See [rpc.md](rpc.md) |
 | JSON (`--mode json`) | `"json"` | `false` | Event stream to stdout; UI methods are no-ops |
@@ -2544,13 +2583,32 @@ const highlighted = highlightCode(code, lang, theme);
 
 Use `ctx.mode === "tui"` before TUI-specific features (`custom()`, component factories, terminal input). Use `ctx.hasUI` before dialog and notification methods that work in both TUI and RPC modes.
 
+## Plannotator Approval Bridge
+
+[`plannotator-approval-bridge.ts`](../examples/extensions/plannotator-approval-bridge.ts) is an optional, non-executing approval adapter for the shared Plannotator event API. It sends a correlated `plannotator:request` with action `plan-review`, accepts only the matching `plannotator:review-result`, and persists an immutable receipt. It never dispatches a plan.
+
+Pin and inspect Plannotator before loading it:
+
+```bash
+omk package doctor npm:@plannotator/pi-extension@0.25.1
+omk install npm:@plannotator/pi-extension@0.25.1
+cp packages/coding-agent/examples/extensions/plannotator-approval-bridge.ts .omk/extensions/
+omk
+```
+
+Then run `/approval-review plans/auth.md` in TUI mode. The bridge fails closed in print, JSON, and RPC modes. Receipts are written with owner-only permissions under the current session directory and appended to the session as `approval-receipt-v1`. They bind the request ID, Plannotator review ID, session ID, decision, plan path, plan byte count, and SHA-256 digest. Feedback is stored only as a byte count and digest.
+
+The receipt does not authorize modified plan bytes. Any separate executor must call `verifyApprovalForExecution()` immediately before execution and require the current session, path, and content to match an approved receipt. The example intentionally has no executor.
+
+This command uses Plannotator's standalone plan-review API. If you also use Plannotator's own `/plannotator` plan mode and want to prevent its built-in automatic execution, set `"executionMode": "external"` in Plannotator's project configuration.
+
 ## Examples Reference
 
 All examples in [examples/extensions/](../examples/extensions/).
 
 | Example | Description | Key APIs |
-|---------|-------------|----------|
-| **Tools** |||
+| --------- | ------------- | ---------- |
+| **Tools** | | |
 | `hello.ts` | Minimal tool registration | `registerTool` |
 | `question.ts` | Tool with user interaction | `registerTool`, `ui.select` |
 | `questionnaire.ts` | Multi-step wizard tool | `registerTool`, `ui.custom` |
@@ -2559,7 +2617,7 @@ All examples in [examples/extensions/](../examples/extensions/).
 | `structured-output.ts` | Final structured-output tool with `terminate: true` | `registerTool`, terminating tool results |
 | `truncated-tool.ts` | Output truncation example | `registerTool`, `truncateHead` |
 | `tool-override.ts` | Override built-in read tool | `registerTool` (same name as built-in) |
-| **Commands** |||
+| **Commands** | | |
 | `pirate.ts` | Modify system prompt per-turn | `registerCommand`, `before_agent_start` |
 | `summarize.ts` | Conversation summary command | `registerCommand`, `ui.custom` |
 | `handoff.ts` | Cross-provider model handoff | `registerCommand`, `ui.editor`, `ui.custom` |
@@ -2567,11 +2625,12 @@ All examples in [examples/extensions/](../examples/extensions/).
 | `send-user-message.ts` | Inject user messages | `registerCommand`, `sendUserMessage` |
 | `reload-runtime.ts` | Reload command and LLM tool handoff | `registerCommand`, `ctx.reload()`, `sendUserMessage` |
 | `shutdown-command.ts` | Graceful shutdown command | `registerCommand`, `shutdown()` |
-| **Events & Gates** |||
+| **Events & Gates** | | |
 | `permission-gate.ts` | Block dangerous commands | `on("tool_call")`, `ui.confirm` |
 | `protected-paths.ts` | Block writes to specific paths | `on("tool_call")` |
 | `confirm-destructive.ts` | Confirm session changes | `on("session_before_switch")`, `on("session_before_fork")` |
 | `dirty-repo-guard.ts` | Warn on dirty git repo | `on("session_before_*")`, `exec` |
+| `plannotator-approval-bridge.ts` | Correlate browser decisions and persist non-executing immutable receipts | `omk.events`, `ApprovalReceiptStore`, `verifyApprovalForExecution` |
 | `input-transform.ts` | Transform user input | `on("input")` |
 | `input-transform-streaming.ts` | Streaming-aware input transform | `on("input")`, `streamingBehavior` |
 | `model-status.ts` | React to model changes | `on("model_select")`, `setStatus` |
@@ -2580,13 +2639,13 @@ All examples in [examples/extensions/](../examples/extensions/).
 | `claude-rules.ts` | Load rules from files | `on("session_start")`, `on("before_agent_start")` |
 | `prompt-customizer.ts` | Add context-aware tool guidance using `systemPromptOptions` | `on("before_agent_start")`, `BuildSystemPromptOptions` |
 | `file-trigger.ts` | File watcher triggers messages | `sendMessage` |
-| **Compaction & Sessions** |||
+| **Compaction & Sessions** | | |
 | `custom-compaction.ts` | Custom compaction summary | `on("session_before_compact")` |
 | `trigger-compact.ts` | Trigger compaction manually | `compact()` |
 | `git-checkpoint.ts` | Git stash on turns | `on("turn_start")`, `on("session_before_fork")`, `exec` |
 | `git-merge-and-resolve.ts` | Fetch, merge, and resolve conflicts | `on("agent_end")`, `exec`, `sendUserMessage` |
 | `auto-commit-on-exit.ts` | Commit on shutdown | `on("session_shutdown")`, `exec` |
-| **UI Components** |||
+| **UI Components** | | |
 | `status-line.ts` | Footer status indicator | `setStatus`, session events |
 | `working-indicator.ts` | Customize the streaming working indicator | `setWorkingIndicator`, `registerCommand` |
 | `github-issue-autocomplete.ts` | Add `#1234` issue completions on top of built-in autocomplete by preloading recent open issues from `gh issue list` | `addAutocompleteProvider`, `on("session_start")`, `exec` |
@@ -2600,30 +2659,30 @@ All examples in [examples/extensions/](../examples/extensions/).
 | `notify.ts` | Simple notifications | `ui.notify` |
 | `timed-confirm.ts` | Dialogs with timeout | `ui.confirm` with timeout/signal |
 | `mac-system-theme.ts` | Auto-switch theme | `setTheme`, `exec` |
-| **Complex Extensions** |||
+| **Complex Extensions** | | |
 | `plan-mode/` | Full plan mode implementation | All event types, `registerCommand`, `registerShortcut`, `registerFlag`, `setStatus`, `setWidget`, `sendMessage`, `setActiveTools` |
 | `preset.ts` | Saveable presets (model, tools, thinking) | `registerCommand`, `registerShortcut`, `registerFlag`, `setModel`, `setActiveTools`, `setThinkingLevel`, `appendEntry` |
 | `tools.ts` | Toggle tools on/off UI | `registerCommand`, `setActiveTools`, `SettingsList`, session events |
-| **Remote & Sandbox** |||
+| **Remote & Sandbox** | | |
 | `ssh.ts` | SSH remote execution | `registerFlag`, `on("user_bash")`, `on("before_agent_start")`, tool operations |
 | `interactive-shell.ts` | Persistent shell session | `on("user_bash")` |
 | `sandbox/` | Sandboxed tool execution | Tool operations |
 | `gondolin/` | Route built-in tools and `!` commands into a Gondolin micro-VM | Tool operations, built-in tool overrides, `on("user_bash")` |
 | `subagent/` | Spawn sub-agents | `registerTool`, `exec` |
-| **Games** |||
+| **Games** | | |
 | `snake.ts` | Snake game | `registerCommand`, `ui.custom`, keyboard handling |
 | `space-invaders.ts` | Space Invaders game | `registerCommand`, `ui.custom` |
 | `doom-overlay/` | Doom in overlay | `ui.custom` with overlay |
-| **Providers** |||
+| **Providers** | | |
 | `custom-provider-anthropic/` | Custom Anthropic proxy | `registerProvider` |
 | `custom-provider-gitlab-duo/` | GitLab Duo integration | `registerProvider` with OAuth |
-| **Messages & Communication** |||
+| **Messages & Communication** | | |
 | `message-renderer.ts` | Custom message rendering | `registerMessageRenderer`, `sendMessage` |
 | `event-bus.ts` | Inter-extension events | `omk.events` |
-| **Session Metadata** |||
+| **Session Metadata** | | |
 | `session-name.ts` | Name sessions for selector | `setSessionName`, `getSessionName` |
 | `bookmark.ts` | Bookmark entries for /tree | `setLabel` |
-| **Misc** |||
+| **Misc** | | |
 | `inline-bash.ts` | Inline bash in tool calls | `on("tool_call")` |
 | `bash-spawn-hook.ts` | Adjust bash command, cwd, and env before execution | `createBashTool`, `spawnHook` |
 | `with-deps/` | Extension with npm dependencies | Package structure with `package.json` |

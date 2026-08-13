@@ -97,7 +97,7 @@ export const ROUTER_FEEDBACK_TASK_CLASSES: readonly RouterFeedbackTaskClass[] = 
 	"review",
 	"plan",
 ];
-const ROUTER_FEEDBACK_LEVELS: readonly RouterFeedbackLevel[] = [
+export const ROUTER_FEEDBACK_LEVELS: readonly RouterFeedbackLevel[] = [
 	"minimal",
 	"low",
 	"medium",
@@ -175,7 +175,7 @@ export function isRouterFeedbackRecord(value: unknown): value is RouterFeedbackR
 	return true;
 }
 
-/** Default ledger path: `<agentDir>/router-feedback/ledger.jsonl` (owner-only, never repo-local). */
+/** Legacy shared ledger path. Agent sessions use repository-scoped defaults unless explicitly overridden. */
 export function getDefaultRouterFeedbackLedgerPath(): string {
 	return join(getAgentDir(), "router-feedback", "ledger.jsonl");
 }

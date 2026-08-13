@@ -87,9 +87,19 @@ Precedence:
 
 Resolved levels are clamped to the model's capabilities: models without `xhigh`/`max` are capped at their highest supported level, and models without reasoning support bypass the router entirely.
 
-The v4 learning path is available only through the global `reasoningRouterLearning` setting and is off by default. When `reasoningRouterLearning.enabled` is `true`, `/think auto` loads one validated bias snapshot for the session, applies a bounded `-2..2` ladder-step bias, and appends a privacy-safe feedback record containing only bounded enums, booleans, and buckets. Project-local settings cannot enable or redirect this feature, and the ledger never stores raw prompts, file paths, diffs, session identifiers, model/provider payloads, tool output, or hook output.
+The v4 learning path is available only through the global `reasoningRouterLearning` setting and is off by default. When enabled, `/think auto` loads one validated, session-pinned bias snapshot, applies a bounded `-2..2` ladder-step bias, and appends a privacy-safe record containing only bounded enums, booleans, and buckets. A later explicit `/think <level>` choice adds one directional `s1-override` record for the same decision. Project-local settings cannot enable the feature, and records never contain raw prompts, repository paths, diffs, session identifiers, provider payloads, tool output, or hook output.
 
-The Adaptorch advisory bridge module still ships as default-off groundwork only. It has no settings key, command, transport, or session call site yet, so it does not affect `/think auto` until a future transport and security review explicitly wire it.
+Default ledgers and snapshots are isolated by an opaque hash of the canonical repository or git worktree root. Compile the current repository's accumulated records between sessions:
+
+```bash
+omk router-feedback compile-bias --cwd /path/to/repository
+```
+
+Compilation is deterministic. It creates a randomized same-directory temporary file exclusively, enforces POSIX mode `0600`, then atomically renames it over the snapshot; this is atomic replacement, not `fsync`-backed crash durability, and explicit output paths should use a trusted directory. Snapshot loading fails closed on malformed or internally inconsistent cells, including any nonzero bias backed by fewer than five strong records. A session pins either a snapshot or a miss on its first learning-enabled auto turn, so later compilations are observed only by sessions that have not yet attempted that load. Fixed `biasSnapshotPath` or `feedbackLedgerPath` session settings remain explicit compatibility overrides and can intentionally share state across repositories; pass matching `--out` or `--ledger` paths to the compiler when using them.
+
+The ledger intentionally keeps causal buckets instead of free-form memories or raw trajectories. This follows CLIN's causal-abstraction approach ([arXiv:2310.10134](https://arxiv.org/abs/2310.10134)) and session-boundary updates from the Red Queen Gödel Machine ([arXiv:2606.26294](https://arxiv.org/abs/2606.26294)); CTIM-Rover found that repository-level episodic memories could add distracting noise and failed to improve its base coding agent ([arXiv:2505.23422](https://arxiv.org/abs/2505.23422)).
+
+The Adaptorch advisory bridge is also global-only and default-off. Its timeout, TTL, consult-budget, and circuit-breaker lifecycle is wired, but the current advisory transport is a no-op and cannot change the router level.
 
 ## Message Queue
 
@@ -242,7 +252,7 @@ cat README.md | omk -p "Summarize this text"
 | `--provider <name>` | Provider, such as `anthropic`, `openai`, or `google` |
 | `--model <pattern>` | Model pattern or ID; supports `provider/id` and optional `:<thinking>` |
 | `--api-key <key>` | API key, overriding environment variables |
-| `--thinking <level>` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh` |
+| `--thinking <level>` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra` |
 | `--models <patterns>` | Comma-separated patterns for Ctrl+P cycling |
 | `--list-models [search]` | List available models |
 

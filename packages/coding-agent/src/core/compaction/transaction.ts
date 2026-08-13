@@ -26,12 +26,28 @@ const CANONICAL_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}
 const METADATA_CONTROL_PATTERN = /[\u0000-\u001f\u007f]/u;
 const CONTENT_CONTROL_PATTERN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u;
 const CREDENTIAL_SHAPE_PATTERN =
-	/-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:^|[\s"'`:])bearer\s+[A-Za-z0-9._~+/-]{8,}|(?:api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|password|passwd|client[-_ ]?secret|secret[-_ ]?(?:key|token))\s*[:=]\s*["']?[^\s"',;]{3,}|(?:sk|ghp|gho|ghu|ghs|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{8,}/iu;
+	/-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:^|[\s"'`:])bearer\s+[A-Za-z0-9._~+/-]{8,}|(?:api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|password|passwd|client[-_ ]?secret|secret[-_ ]?(?:key|token))\s*[:=]\s*["']?[^\s"',;]{3,}|(?<![A-Za-z0-9])(?:sk|ghp|gho|ghu|ghs|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{8,}|(?<![A-Za-z0-9])AKIA[A-Z0-9]{16}(?![A-Z0-9])|(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}(?![A-Za-z0-9_-])|(?<![A-Za-z0-9_-])gAAAAA[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])|(?<![A-Za-z0-9])v2:[A-Za-z0-9_+/=-]{20,}/iu;
 const REDACTED_ASSIGNMENT_PATTERN =
 	/\s*[:=]\s*(?:"\[REDACTED\]"(?![A-Za-z0-9_+/-])|'\[REDACTED\]'(?![A-Za-z0-9_+/-])|\[REDACTED\](?![A-Za-z0-9._~+/-]))/giu;
+const CREDENTIAL_SHAPE_MASK_PATTERN = new RegExp(CREDENTIAL_SHAPE_PATTERN.source, "giu");
 
-function containsCredentialShape(value: string): boolean {
+export function containsCredentialShape(value: string): boolean {
 	return CREDENTIAL_SHAPE_PATTERN.test(value.replace(REDACTED_ASSIGNMENT_PATTERN, ""));
+}
+
+/**
+ * Deterministically mask credential-shaped spans so sanitized text always
+ * satisfies this module's fail-closed content validators. Producers (compaction
+ * summaries, preserved provenance) must route generated text through this
+ * before validation; otherwise a paranoid validator match would abort the
+ * entire compaction and strand an overflowed session.
+ */
+export function redactCredentialShapedContent(value: string): string {
+	let result = value;
+	for (let pass = 0; pass < 8 && containsCredentialShape(result); pass += 1) {
+		result = result.replace(CREDENTIAL_SHAPE_MASK_PATTERN, "[REDACTED]");
+	}
+	return containsCredentialShape(result) ? "[REDACTED]" : result;
 }
 
 export interface SessionFileIdentity {

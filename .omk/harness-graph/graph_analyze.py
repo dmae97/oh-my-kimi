@@ -172,7 +172,10 @@ def edge_concentration(G: nx.DiGraph) -> dict[str, Any]:
 def cycles(G: nx.DiGraph) -> list[list[str]]:
     cyc: list[list[str]] = []
     for comp in nx.strongly_connected_components(G):
-        if len(comp) > 1:
+        # A singleton strongly connected component is still cyclic when the
+        # node has a self-loop. Omitting it lets the acyclicity health gate pass
+        # malformed dependency graphs.
+        if len(comp) > 1 or any(G.has_edge(node, node) for node in comp):
             cyc.append(sorted(G.nodes[n]["name"] for n in comp))
     return cyc[:20]
 

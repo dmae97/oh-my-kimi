@@ -5,6 +5,8 @@
 
 import {
 	type AssistantMessage,
+	type AssistantMessageEvent,
+	type AssistantMessageEventStream,
 	type Context,
 	EventStream,
 	type Model,
@@ -12,9 +14,14 @@ import {
 	type ToolResultMessage,
 	validateToolArguments,
 } from "omk-ai";
-import { bindToolIdentity, isPlainArguments } from "./builtin-tool-resource-claims.ts";
+import { bindToolIdentity } from "./builtin-tool-resource-claims.ts";
 import { partitionToolBatchWaves } from "./parallel-tool-batch.ts";
-import { scheduleDagLevels } from "./tool-dag-scheduler.ts";
+import {
+	applyConcurrencyCap,
+	type DagSchedulePlan,
+	type ScheduleDagLevelsOptions,
+	scheduleDagLevels,
+} from "./tool-dag-scheduler.ts";
 import {
 	awaitWithAbort,
 	createErrorToolResult,
@@ -26,6 +33,7 @@ import {
 	parseJsonValue,
 	stampToolResultEnvelope,
 } from "./tool-execution-boundary.ts";
+import type { ClaimableToolCall } from "./tool-resource-claims.ts";
 import { resolveToolTimeoutMs, runToolCallWithTimeout } from "./tool-timeout.ts";
 import {
 	createSyntheticToolResult,
@@ -36,6 +44,7 @@ import {
 	type AgentContext,
 	type AgentEvent,
 	type AgentLoopConfig,
+	type AgentLoopTurnUpdate,
 	type AgentMessage,
 	type AgentTool,
 	type AgentToolCall,
@@ -325,6 +334,141 @@ function assertContinuableTranscript(messages: AgentMessage[]): void {
 	);
 }
 
+/** Throw when the tool transcript could not be accepted by a provider. */
+function assertValidToolTranscript(messages: AgentMessage[], describe: (summary: string) => string): void {
+	const integrityReport = inspectTranscriptIntegrity(messages);
+	if (integrityReport.ok) {
+		return;
+	}
+	const summary = integrityReport.issues.map((issue) => `${issue.kind}:${issue.toolCallId}`).join(", ");
+	throw new Error(describe(summary));
+}
+
+/** Inject queued steering messages into the transcript before the next assistant turn. */
+async function injectPendingMessages(
+	pendingMessages: AgentMessage[],
+	currentContext: AgentContext,
+	newMessages: AgentMessage[],
+	emit: AgentEventSink,
+): Promise<void> {
+	for (const message of pendingMessages) {
+		await emit({ type: "message_start", message });
+		await emit({ type: "message_end", message });
+		currentContext.messages.push(message);
+		newMessages.push(message);
+	}
+}
+
+/** Close every emitted tool call with a synthetic terminal result and end the run. */
+async function closeRunOnTerminalStop(
+	currentContext: AgentContext,
+	message: AssistantMessage,
+	toolCalls: AgentToolCall[],
+	newMessages: AgentMessage[],
+	emit: AgentEventSink,
+): Promise<void> {
+	const toolResults: ToolResultMessage[] = [];
+	const reason =
+		message.stopReason === "aborted"
+			? "Operation aborted"
+			: "Skipped because the provider terminated before tool execution";
+	const disposition = message.stopReason === "aborted" ? "aborted" : "skipped";
+	for (const toolCall of toolCalls) {
+		const result = createImmutableSnapshot(
+			createSyntheticToolResult(toolCall.id, toolCall.name, reason, Date.now(), disposition),
+		);
+		currentContext.messages.push(result);
+		newMessages.push(result);
+		toolResults.push(result);
+		await emitToolResultMessage(result, emit);
+	}
+	await emit({ type: "turn_end", message, toolResults });
+	await emit({ type: "agent_end", messages: newMessages });
+}
+
+/** Drain an optional message queue, normalizing absent queues to an empty list. */
+async function drainMessageQueue(queue?: () => Promise<AgentMessage[]>): Promise<AgentMessage[]> {
+	return queue === undefined ? [] : await queue();
+}
+
+/** Validate an optional per-run provider-turn budget. */
+function validateMaxTurns(maxTurns: number | undefined): number | undefined {
+	if (maxTurns === undefined) return undefined;
+	if (!Number.isSafeInteger(maxTurns) || maxTurns < 1) {
+		throw new RangeError("maxTurns must be a positive safe integer");
+	}
+	return maxTurns;
+}
+
+/** Reject ambiguous provider-emitted tool transcripts before any tool executes. */
+function assertEmittedTranscriptUnambiguous(messages: AgentMessage[]): void {
+	const emittedAmbiguities = inspectTranscriptIntegrity(messages).issues.filter(
+		(issue) => issue.kind !== "missing_result",
+	);
+	if (emittedAmbiguities.length === 0) {
+		return;
+	}
+	const summary = emittedAmbiguities.map((issue) => `${issue.kind}:${issue.toolCallId}`).join(", ");
+	throw new Error(`Refusing tool execution: invalid emitted tool transcript (${summary}).`);
+}
+
+type ToolBatchTurnOutcome =
+	| { kind: "continue"; toolResults: ToolResultMessage[]; hasMoreToolCalls: boolean; stopRun: boolean }
+	| { kind: "ended" };
+
+/** Execute one assistant batch, closing unresolved calls and ending the run on abort. */
+async function runToolBatchForTurn(
+	currentContext: AgentContext,
+	message: AssistantMessage,
+	toolCalls: AgentToolCall[],
+	config: AgentLoopConfig,
+	signal: AbortSignal | undefined,
+	emit: AgentEventSink,
+	newMessages: AgentMessage[],
+	dagScheduleCache: DagScheduleCache,
+): Promise<ToolBatchTurnOutcome> {
+	const executedToolBatch = await executeToolCalls(currentContext, message, config, signal, emit, dagScheduleCache);
+	const toolResults = [...executedToolBatch.messages];
+	if (signal?.aborted) {
+		// Close only unresolved calls, preserving finalized results, then stop
+		// before hooks, queues, or another provider request.
+		const synthesized = await closeAbortedToolBatch(currentContext, toolCalls, toolResults, emit);
+		toolResults.push(...synthesized);
+		for (const result of toolResults) newMessages.push(result);
+		await emit({ type: "turn_end", message, toolResults });
+		await emit({ type: "agent_end", messages: newMessages });
+		return { kind: "ended" };
+	}
+	for (const result of toolResults) newMessages.push(result);
+	return {
+		kind: "continue",
+		toolResults,
+		hasMoreToolCalls: !executedToolBatch.terminate,
+		stopRun: executedToolBatch.stopRun ?? false,
+	};
+}
+
+/** Merge a prepareNextTurn snapshot into the active context and loop config. */
+function applyNextTurnSnapshot(
+	currentContext: AgentContext,
+	config: AgentLoopConfig,
+	snapshot: AgentLoopTurnUpdate,
+): { context: AgentContext; config: AgentLoopConfig } {
+	return {
+		context: snapshot.context ?? currentContext,
+		config: {
+			...config,
+			model: snapshot.model ?? config.model,
+			reasoning:
+				snapshot.thinkingLevel === undefined
+					? config.reasoning
+					: snapshot.thinkingLevel === "off"
+						? undefined
+						: snapshot.thinkingLevel,
+		},
+	};
+}
+
 /**
  * Main loop logic shared by agentLoop and agentLoopContinue.
  */
@@ -339,8 +483,11 @@ async function runLoop(
 	let currentContext = initialContext;
 	let config = initialConfig;
 	let firstTurn = true;
+	let turnsStarted = 0;
+	const maxTurns = validateMaxTurns(initialConfig.maxTurns);
+	const dagScheduleCache: DagScheduleCache = new Map();
 	// Check for steering messages at start (user may have typed while waiting)
-	let pendingMessages: AgentMessage[] = (await config.getSteeringMessages?.()) || [];
+	let pendingMessages = await drainMessageQueue(config.getSteeringMessages);
 
 	// Outer loop: continues when queued follow-up messages arrive after agent would stop
 	while (true) {
@@ -350,53 +497,27 @@ async function runLoop(
 		while (hasMoreToolCalls || pendingMessages.length > 0) {
 			if (!firstTurn) {
 				await emit({ type: "turn_start" });
-			} else {
-				firstTurn = false;
 			}
+			firstTurn = false;
 
 			// Process pending messages (inject before next assistant response)
 			if (pendingMessages.length > 0) {
-				for (const message of pendingMessages) {
-					await emit({ type: "message_start", message });
-					await emit({ type: "message_end", message });
-					currentContext.messages.push(message);
-					newMessages.push(message);
-				}
+				await injectPendingMessages(pendingMessages, currentContext, newMessages, emit);
 				pendingMessages = [];
 			}
 
 			// Stream assistant response
+			turnsStarted++;
 			const message = await streamAssistantResponse(currentContext, config, signal, emit, streamFn);
 			newMessages.push(message);
 
 			// Provider output is untrusted protocol input. Reject duplicate call IDs
 			// and every other ambiguous turn before any tool can execute.
-			const emittedIntegrity = inspectTranscriptIntegrity(currentContext.messages);
-			const emittedAmbiguities = emittedIntegrity.issues.filter((issue) => issue.kind !== "missing_result");
-			if (emittedAmbiguities.length > 0) {
-				const summary = emittedAmbiguities.map((issue) => `${issue.kind}:${issue.toolCallId}`).join(", ");
-				throw new Error(`Refusing tool execution: invalid emitted tool transcript (${summary}).`);
-			}
+			assertEmittedTranscriptUnambiguous(currentContext.messages);
 
 			const toolCalls = message.content.filter((c) => c.type === "toolCall");
 			if (message.stopReason === "error" || message.stopReason === "aborted") {
-				const toolResults: ToolResultMessage[] = [];
-				const reason =
-					message.stopReason === "aborted"
-						? "Operation aborted"
-						: "Skipped because the provider terminated before tool execution";
-				const disposition = message.stopReason === "aborted" ? "aborted" : "skipped";
-				for (const toolCall of toolCalls) {
-					const result = createImmutableSnapshot(
-						createSyntheticToolResult(toolCall.id, toolCall.name, reason, Date.now(), disposition),
-					);
-					currentContext.messages.push(result);
-					newMessages.push(result);
-					toolResults.push(result);
-					await emitToolResultMessage(result, emit);
-				}
-				await emit({ type: "turn_end", message, toolResults });
-				await emit({ type: "agent_end", messages: newMessages });
+				await closeRunOnTerminalStop(currentContext, message, toolCalls, newMessages, emit);
 				return;
 			}
 
@@ -404,27 +525,30 @@ async function runLoop(
 			let stopAfterToolBatch = false;
 			hasMoreToolCalls = false;
 			if (toolCalls.length > 0) {
-				const executedToolBatch = await executeToolCalls(currentContext, message, config, signal, emit);
-				toolResults.push(...executedToolBatch.messages);
-				hasMoreToolCalls = !executedToolBatch.terminate;
-				stopAfterToolBatch = executedToolBatch.stopRun ?? false;
-
-				if (signal?.aborted) {
-					// Close only unresolved calls, preserving finalized results, then stop
-					// before hooks, queues, or another provider request.
-					const synthesized = await closeAbortedToolBatch(currentContext, toolCalls, toolResults, emit);
-					toolResults.push(...synthesized);
-					for (const result of toolResults) newMessages.push(result);
-					await emit({ type: "turn_end", message, toolResults });
-					await emit({ type: "agent_end", messages: newMessages });
+				const batchOutcome = await runToolBatchForTurn(
+					currentContext,
+					message,
+					toolCalls,
+					config,
+					signal,
+					emit,
+					newMessages,
+					dagScheduleCache,
+				);
+				if (batchOutcome.kind === "ended") {
 					return;
 				}
-
-				for (const result of toolResults) newMessages.push(result);
+				toolResults.push(...batchOutcome.toolResults);
+				hasMoreToolCalls = batchOutcome.hasMoreToolCalls;
+				stopAfterToolBatch = batchOutcome.stopRun;
 			}
 
 			await emit({ type: "turn_end", message, toolResults });
 			if (stopAfterToolBatch) {
+				await emit({ type: "agent_end", messages: newMessages });
+				return;
+			}
+			if (maxTurns !== undefined && turnsStarted >= maxTurns) {
 				await emit({ type: "agent_end", messages: newMessages });
 				return;
 			}
@@ -437,17 +561,9 @@ async function runLoop(
 			};
 			const nextTurnSnapshot = await config.prepareNextTurn?.(nextTurnContext);
 			if (nextTurnSnapshot) {
-				currentContext = nextTurnSnapshot.context ?? currentContext;
-				config = {
-					...config,
-					model: nextTurnSnapshot.model ?? config.model,
-					reasoning:
-						nextTurnSnapshot.thinkingLevel === undefined
-							? config.reasoning
-							: nextTurnSnapshot.thinkingLevel === "off"
-								? undefined
-								: nextTurnSnapshot.thinkingLevel,
-				};
+				const applied = applyNextTurnSnapshot(currentContext, config, nextTurnSnapshot);
+				currentContext = applied.context;
+				config = applied.config;
 			}
 
 			if (
@@ -462,11 +578,11 @@ async function runLoop(
 				return;
 			}
 
-			pendingMessages = (await config.getSteeringMessages?.()) || [];
+			pendingMessages = await drainMessageQueue(config.getSteeringMessages);
 		}
 
 		// Agent would stop here. Check for follow-up messages.
-		const followUpMessages = (await config.getFollowUpMessages?.()) || [];
+		const followUpMessages = await drainMessageQueue(config.getFollowUpMessages);
 		if (followUpMessages.length > 0) {
 			// Set as pending so inner loop processes them
 			pendingMessages = followUpMessages;
@@ -484,6 +600,56 @@ async function runLoop(
  * Stream an assistant response from the LLM.
  * This is where AgentMessage[] gets transformed to Message[] for the LLM.
  */
+/** True when a content part is an image block (internal {type:"image"} shape). */
+function isImageContentPart(part: unknown): boolean {
+	return typeof part === "object" && part !== null && (part as { type?: unknown }).type === "image";
+}
+
+/**
+ * Vision-route model: the Codex OAuth model used to serve turns whose transcript
+ * carries image blocks while the session model is text-only.
+ *
+ * `contextWindow`/`maxTokens` are NOT inherited from the session model — they
+ * describe the actual Codex backend limits (400K window), which callers rely on
+ * for compaction thresholds and overflow detection.
+ */
+export const VISION_ROUTE_MODEL = {
+	provider: "openai-codex",
+	id: "gpt-5.6-luna",
+	name: "GPT-5.6 Luna",
+	api: "openai-codex-responses",
+	baseUrl: "https://chatgpt.com/backend-api",
+	reasoning: true,
+	input: ["text", "image"] as const,
+	contextWindow: 400000,
+	maxTokens: 128000,
+} as const;
+
+/** True when the given model is the auto-routed vision model. */
+export function isVisionRouteModel(model: { provider?: string; id?: string } | undefined | null): boolean {
+	return model?.provider === VISION_ROUTE_MODEL.provider && model?.id === VISION_ROUTE_MODEL.id;
+}
+
+/**
+ * Build the vision-route model for a session model that cannot see images.
+ * Preserves the session model's identity/headers so auth resolution keeps
+ * working, but overrides provider/API/window with the Codex vision model.
+ */
+export function getVisionRouteModel(model: Model<any>): Model<any> {
+	return {
+		...model,
+		provider: VISION_ROUTE_MODEL.provider,
+		id: VISION_ROUTE_MODEL.id,
+		name: VISION_ROUTE_MODEL.name,
+		api: VISION_ROUTE_MODEL.api,
+		baseUrl: VISION_ROUTE_MODEL.baseUrl,
+		reasoning: VISION_ROUTE_MODEL.reasoning,
+		input: [...VISION_ROUTE_MODEL.input],
+		contextWindow: VISION_ROUTE_MODEL.contextWindow,
+		maxTokens: VISION_ROUTE_MODEL.maxTokens,
+	};
+}
+
 async function streamAssistantResponse(
 	context: AgentContext,
 	config: AgentLoopConfig,
@@ -494,24 +660,21 @@ async function streamAssistantResponse(
 	// Validate the full transcript before every provider request. This fails
 	// fast for `assistant(A,B) -> result(A)` and any duplicate/orphan/interleaved
 	// structure that the provider would otherwise reject opaquely.
-	const integrityReport = inspectTranscriptIntegrity(context.messages);
-	if (!integrityReport.ok) {
-		const summary = integrityReport.issues.map((issue) => `${issue.kind}:${issue.toolCallId}`).join(", ");
-		throw new Error(
+	assertValidToolTranscript(
+		context.messages,
+		(summary) =>
 			`Refusing provider request: invalid tool transcript (${summary}). ` +
-				"Append terminal tool results or repair the transcript before retrying.",
-		);
-	}
+			"Append terminal tool results or repair the transcript before retrying.",
+	);
 
 	// Apply context transform if configured (AgentMessage[] → AgentMessage[])
 	let messages = context.messages;
 	if (config.transformContext) {
 		messages = await config.transformContext(messages, signal);
-		const transformedIntegrity = inspectTranscriptIntegrity(messages);
-		if (!transformedIntegrity.ok) {
-			const summary = transformedIntegrity.issues.map((issue) => `${issue.kind}:${issue.toolCallId}`).join(", ");
-			throw new Error(`Refusing provider request: transformed context has an invalid tool transcript (${summary}).`);
-		}
+		assertValidToolTranscript(
+			messages,
+			(summary) => `Refusing provider request: transformed context has an invalid tool transcript (${summary}).`,
+		);
 	}
 
 	// Convert to LLM-compatible messages (AgentMessage[] → Message[])
@@ -520,71 +683,46 @@ async function streamAssistantResponse(
 	// Build LLM context
 	const llmContext: Context = {
 		systemPrompt: context.systemPrompt,
+		systemPromptCacheBoundary: context.systemPromptCacheBoundary,
+		systemPromptCacheBoundaryBypass: context.systemPromptCacheBoundaryBypass,
 		messages: llmMessages,
 		tools: context.tools,
 	};
 
 	const streamFunction = streamFn || streamSimple;
 
-	// Resolve API key (important for expiring tokens)
-	const resolvedApiKey =
-		(config.getApiKey ? await config.getApiKey(config.model.provider) : undefined) || config.apiKey;
+	// Auto-route image-bearing turns to a vision-capable model (openai-codex/gpt-5.6-luna).
+	// DeepSeek and other text-only providers reject image_url parts with a 400
+	// ("unknown variant `image_url`, expected `text`"), so when the transcript
+	// carries image blocks and the configured model has no vision input, swap the
+	// whole request to the codex OAuth model for this turn only.
+	const llmHasImages = llmMessages.some(
+		(m) => Array.isArray(m.content) && m.content.some((p: unknown) => isImageContentPart(p)),
+	);
+	let routeModel = config.model;
+	if (llmHasImages && !(config.model.input ?? []).includes("image")) {
+		routeModel = getVisionRouteModel(config.model);
+	}
 
-	const response = await streamFunction(config.model, llmContext, {
+	// Resolve API key (important for expiring tokens)
+	const resolvedApiKey = (config.getApiKey ? await config.getApiKey(routeModel.provider) : undefined) || config.apiKey;
+
+	const response = await streamFunction(routeModel, llmContext, {
 		...config,
 		apiKey: resolvedApiKey,
 		signal,
 	});
 
-	let partialMessage: AssistantMessage | null = null;
-	let addedPartial = false;
+	return consumeAssistantStream(response, context, emit);
+}
 
-	for await (const event of response) {
-		switch (event.type) {
-			case "start":
-				partialMessage = event.partial;
-				context.messages.push(partialMessage);
-				addedPartial = true;
-				await emit({ type: "message_start", message: { ...partialMessage } });
-				break;
-
-			case "text_start":
-			case "text_delta":
-			case "text_end":
-			case "thinking_start":
-			case "thinking_delta":
-			case "thinking_end":
-			case "toolcall_start":
-			case "toolcall_delta":
-			case "toolcall_end":
-				if (partialMessage) {
-					partialMessage = event.partial;
-					context.messages[context.messages.length - 1] = partialMessage;
-					await emit({
-						type: "message_update",
-						assistantMessageEvent: event,
-						message: { ...partialMessage },
-					});
-				}
-				break;
-
-			case "done":
-			case "error": {
-				const finalMessage = await response.result();
-				if (addedPartial) {
-					context.messages[context.messages.length - 1] = finalMessage;
-				} else {
-					context.messages.push(finalMessage);
-				}
-				if (!addedPartial) {
-					await emit({ type: "message_start", message: { ...finalMessage } });
-				}
-				await emit({ type: "message_end", message: finalMessage });
-				return finalMessage;
-			}
-		}
-	}
-
+/** Commit the final assistant message to the transcript and emit its lifecycle. */
+async function commitFinalAssistantMessage(
+	response: AssistantMessageEventStream,
+	context: AgentContext,
+	addedPartial: boolean,
+	emit: AgentEventSink,
+): Promise<AssistantMessage> {
 	const finalMessage = await response.result();
 	if (addedPartial) {
 		context.messages[context.messages.length - 1] = finalMessage;
@@ -596,6 +734,54 @@ async function streamAssistantResponse(
 	return finalMessage;
 }
 
+/** Forward a partial assistant update into the transcript and event sink. */
+async function forwardPartialUpdate(
+	event: Extract<AssistantMessageEvent, { partial: AssistantMessage }>,
+	partialMessage: AssistantMessage | null,
+	context: AgentContext,
+	emit: AgentEventSink,
+): Promise<AssistantMessage | null> {
+	if (!partialMessage) {
+		return partialMessage;
+	}
+	const updated = event.partial;
+	context.messages[context.messages.length - 1] = updated;
+	await emit({
+		type: "message_update",
+		assistantMessageEvent: event,
+		message: { ...updated },
+	});
+	return updated;
+}
+
+/** Consume the assistant event stream, maintaining the partial message in the transcript. */
+async function consumeAssistantStream(
+	response: AssistantMessageEventStream,
+	context: AgentContext,
+	emit: AgentEventSink,
+): Promise<AssistantMessage> {
+	let partialMessage: AssistantMessage | null = null;
+	let addedPartial = false;
+
+	for await (const event of response) {
+		switch (event.type) {
+			case "start":
+				partialMessage = event.partial;
+				context.messages.push(partialMessage);
+				addedPartial = true;
+				await emit({ type: "message_start", message: { ...partialMessage } });
+				break;
+			case "done":
+			case "error":
+				return commitFinalAssistantMessage(response, context, addedPartial, emit);
+			default:
+				partialMessage = await forwardPartialUpdate(event, partialMessage, context, emit);
+		}
+	}
+
+	return commitFinalAssistantMessage(response, context, addedPartial, emit);
+}
+
 /**
  * Execute tool calls from an assistant message.
  */
@@ -605,12 +791,21 @@ async function executeToolCalls(
 	config: AgentLoopConfig,
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
+	dagScheduleCache: DagScheduleCache,
 ): Promise<ExecutedToolCallBatch> {
 	const toolCalls = assistantMessage.content.filter((c) => c.type === "toolCall");
 	// dag-v2 is opt-in only. An explicit sequential execution mode takes
 	// precedence and continues through the established waves-v1 path below.
 	if (config.toolScheduler === "dag-v2" && config.toolExecution !== "sequential") {
-		return executeToolCallsDagLevels(currentContext, assistantMessage, toolCalls, config, signal, emit);
+		return executeToolCallsDagLevels(
+			currentContext,
+			assistantMessage,
+			toolCalls,
+			config,
+			signal,
+			emit,
+			dagScheduleCache,
+		);
 	}
 	const hasSequentialToolCall = toolCalls.some(
 		(tc) => currentContext.tools?.find((t) => t.name === tc.name)?.executionMode === "sequential",
@@ -621,13 +816,16 @@ async function executeToolCalls(
 			toolPolicies.set(tool.name, tool.executionMode);
 		}
 	}
-	const batchWaves = partitionToolBatchWaves(
-		toolCalls.map((tc) => ({ name: tc.name, arguments: tc.arguments as Record<string, unknown> })),
-		{
-			cwd: config.cwd ?? process.cwd(),
-			toolPolicies,
-			allowUnknownParallel: (toolName) => toolPolicies.get(toolName) === "parallel",
-		},
+	const batchWaves = applyConcurrencyCap(
+		partitionToolBatchWaves(
+			toolCalls.map((tc) => ({ name: tc.name, arguments: tc.arguments as Record<string, unknown> })),
+			{
+				cwd: config.cwd ?? process.cwd(),
+				toolPolicies,
+				allowUnknownParallel: (toolName) => toolPolicies.get(toolName) === "parallel",
+			},
+		),
+		config.maxToolConcurrency,
 	);
 	if (
 		config.toolExecution === "sequential" ||
@@ -646,7 +844,9 @@ async function executeToolCalls(
  * Execute a partitioned tool-call batch wave by wave: waves run in source
  * order, calls inside a multi-call wave run concurrently, and solo waves run
  * sequentially. Waves are contiguous index runs, so the returned tool result
- * messages keep the model's original tool-call order.
+ * messages keep the model's original tool-call order. An all-terminating wave
+ * skips every later call with a synthesized "skipped" result and ends the
+ * run, matching the dag-v2 level-termination contract.
  */
 async function executeToolCallsInWaves(
 	currentContext: AgentContext,
@@ -658,7 +858,8 @@ async function executeToolCallsInWaves(
 	emit: AgentEventSink,
 ): Promise<ExecutedToolCallBatch> {
 	const messages: ToolResultMessage[] = [];
-	const waveTerminates: boolean[] = [];
+	let terminated = false;
+	let executedCount = 0;
 	for (const wave of waves) {
 		const waveCalls = wave.map((index) => toolCalls[index]);
 		const executedWave =
@@ -666,22 +867,166 @@ async function executeToolCallsInWaves(
 				? await executeToolCallsSequential(currentContext, assistantMessage, waveCalls, config, signal, emit)
 				: await executeToolCallsParallel(currentContext, assistantMessage, waveCalls, config, signal, emit);
 		messages.push(...executedWave.messages);
-		waveTerminates.push(executedWave.terminate);
+		executedCount += wave.length;
+		if (executedWave.terminate) {
+			terminated = true;
+			for (const toolCall of toolCalls.slice(executedCount)) {
+				const skipped = createImmutableSnapshot(
+					createSyntheticToolResult(
+						toolCall.id,
+						toolCall.name,
+						"Skipped because the preceding tool wave requested termination",
+						Date.now(),
+						"skipped",
+					),
+				);
+				currentContext.messages.push(skipped);
+				messages.push(skipped);
+				await emitToolResultMessage(skipped, emit);
+			}
+			break;
+		}
 		if (signal?.aborted) break;
 	}
 	return {
 		messages,
-		terminate: waveTerminates.length > 0 && waveTerminates.every(Boolean),
+		terminate: terminated,
 	};
+}
+
+/** Bounded per-run memo for DAG schedules; plans are pure functions of the keyed inputs. */
+type DagScheduleCache = Map<string, DagSchedulePlan>;
+
+const DAG_SCHEDULE_CACHE_LIMIT = 64;
+
+/**
+ * Canonical key covering every input claim resolution depends on. A custom
+ * `resourceKeyResolver` function cannot be fingerprinted, so callers skip the
+ * memo entirely when one is configured. Within a run, tool definitions (and
+ * their `resourceClaims` closures) are stable, so name/mode/claims-presence
+ * fingerprints are sufficient.
+ */
+function dagScheduleCacheKey(toolCalls: readonly ClaimableToolCall[], options: ScheduleDagLevelsOptions): string {
+	const policies = [...(options.toolPolicies?.entries() ?? [])].sort(([left], [right]) =>
+		left < right ? -1 : left > right ? 1 : 0,
+	);
+	const registered = (options.registeredTools ?? []).map((tool) => [
+		tool.name,
+		tool.executionMode ?? "",
+		typeof tool.resourceClaims === "function" ? "1" : "0",
+	]);
+	return JSON.stringify([
+		toolCalls.map((call) => [call.name, call.arguments ?? null]),
+		options.cwd,
+		options.strictExtensionClaims === true,
+		options.maxConcurrency ?? null,
+		policies,
+		registered,
+	]);
+}
+
+/**
+ * Schedule with a per-run memo. Identical batches (provider retries, stubborn
+ * re-emissions) re-resolve path identities and custom claims; the plan is a
+ * pure function of the canonical inputs, so replaying it is safe. Returns
+ * `null` when the underlying schedule was aborted. Cached levels are handed
+ * out as copies because callers append to and reorder them.
+ */
+export async function scheduleDagLevelsMemo(
+	toolCalls: readonly ClaimableToolCall[],
+	options: ScheduleDagLevelsOptions,
+	signal: AbortSignal | undefined,
+	cache: DagScheduleCache,
+): Promise<DagSchedulePlan | null> {
+	if (options.resourceKeyResolver) {
+		const scheduled = await awaitWithAbort(() => scheduleDagLevels(toolCalls, options), signal);
+		return scheduled.kind === "aborted" ? null : scheduled.value;
+	}
+	const key = dagScheduleCacheKey(toolCalls, options);
+	const cached = cache.get(key);
+	if (cached) {
+		cache.delete(key);
+		cache.set(key, cached);
+		return { levels: cached.levels.map((level) => level.slice()), planKey: cached.planKey };
+	}
+	const scheduled = await awaitWithAbort(() => scheduleDagLevels(toolCalls, options), signal);
+	if (scheduled.kind === "aborted") {
+		return null;
+	}
+	if (cache.size >= DAG_SCHEDULE_CACHE_LIMIT) {
+		const oldest = cache.keys().next();
+		if (!oldest.done) {
+			cache.delete(oldest.value);
+		}
+	}
+	cache.set(key, { levels: scheduled.value.levels.map((level) => level.slice()), planKey: scheduled.value.planKey });
+	return scheduled.value;
+}
+
+/**
+ * Schedule planned calls into candidate DAG levels. Immediate plans fail
+ * before any tool executes, so they carry no claims and fold into the first
+ * level instead of degrading the whole batch to sequential singleton levels.
+ * Unresolvable argument payloads stay in the schedule and fail closed into
+ * exclusive barriers inside claim resolution.
+ */
+async function schedulePlannedDagLevels(
+	plans: Array<PlannedToolCall | ImmediateToolCallOutcome>,
+	toolPolicies: ReadonlyMap<string, "sequential" | "parallel">,
+	boundTools: AgentTool<any>[],
+	config: AgentLoopConfig,
+	signal: AbortSignal | undefined,
+	dagScheduleCache: DagScheduleCache,
+): Promise<number[][]> {
+	const schedulableSourceIndices: number[] = [];
+	const claimableCalls: ClaimableToolCall[] = [];
+	const immediateSourceIndices: number[] = [];
+	plans.forEach((plan, sourceIndex) => {
+		if (plan.kind === "planned") {
+			schedulableSourceIndices.push(sourceIndex);
+			claimableCalls.push({ id: plan.toolCall.id, name: plan.toolCall.name, arguments: plan.args });
+		} else {
+			immediateSourceIndices.push(sourceIndex);
+		}
+	});
+	const scheduled = await scheduleDagLevelsMemo(
+		claimableCalls,
+		{
+			cwd: config.cwd ?? process.cwd(),
+			toolPolicies,
+			registeredTools: boundTools,
+			strictExtensionClaims: config.strictExtensionClaims,
+			maxConcurrency: config.maxToolConcurrency,
+			resourceKeyResolver: config.resourceKeyResolver,
+		},
+		signal,
+		dagScheduleCache,
+	);
+	if (scheduled === null) {
+		return [];
+	}
+	const levels = scheduled.levels.map((level) => level.map((position) => schedulableSourceIndices[position]));
+	if (immediateSourceIndices.length === 0) {
+		return levels;
+	}
+	if (levels.length === 0) {
+		return [[...immediateSourceIndices]];
+	}
+	levels[0] = [...levels[0], ...immediateSourceIndices].sort((left, right) => left - right);
+	return levels;
 }
 
 /**
  * Execute a tool-call batch using the dag-v2 scheduler.
  *
- * Initial planning applies only the pure argument compatibility shim. Each
- * candidate level authorizes calls, re-resolves claims from exact final args,
- * and emits lifecycle starts only when a final safe sublevel begins. Results
- * remain globally buffered and are emitted in source order.
+ * Schedule every planned call through the DAG: immediate plans fail before
+ * any tool executes, so they carry no claims and fold into the first level
+ * instead of degrading the whole batch to sequential singleton levels.
+ * Unresolvable argument payloads stay in the schedule and fail closed into
+ * exclusive barriers inside claim resolution. Each candidate level authorizes
+ * calls, re-resolves claims from exact final args, and emits lifecycle starts
+ * only when a final safe sublevel begins. Results remain globally buffered
+ * and are emitted in source order.
  */
 async function executeToolCallsDagLevels(
 	currentContext: AgentContext,
@@ -690,6 +1035,7 @@ async function executeToolCallsDagLevels(
 	config: AgentLoopConfig,
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
+	dagScheduleCache: DagScheduleCache,
 ): Promise<ExecutedToolCallBatch> {
 	const plans = toolCalls.map((toolCall) => planToolCall(currentContext, toolCall));
 	const boundTools = plans.flatMap((plan) => (plan.kind === "planned" ? [plan.tool] : []));
@@ -698,32 +1044,7 @@ async function executeToolCallsDagLevels(
 		if (tool.executionMode && !toolPolicies.has(tool.name)) toolPolicies.set(tool.name, tool.executionMode);
 	}
 
-	const claimableCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }> = [];
-	for (const plan of plans) {
-		if (plan.kind === "immediate" || !isPlainArguments(plan.args)) {
-			claimableCalls.length = 0;
-			break;
-		}
-		claimableCalls.push({ id: plan.toolCall.id, name: plan.toolCall.name, arguments: plan.args });
-	}
-	let levels: number[][];
-	if (claimableCalls.length === toolCalls.length) {
-		const scheduled = await awaitWithAbort(
-			() =>
-				scheduleDagLevels(claimableCalls, {
-					cwd: config.cwd ?? process.cwd(),
-					toolPolicies,
-					registeredTools: boundTools,
-					strictExtensionClaims: config.strictExtensionClaims,
-					maxConcurrency: config.maxToolConcurrency,
-					resourceKeyResolver: config.resourceKeyResolver,
-				}),
-			signal,
-		);
-		levels = scheduled.kind === "aborted" ? [] : scheduled.value.levels;
-	} else {
-		levels = toolCalls.map((_toolCall, sourceIndex) => [sourceIndex]);
-	}
+	const levels = await schedulePlannedDagLevels(plans, toolPolicies, boundTools, config, signal, dagScheduleCache);
 
 	const finalizedByIndex: Array<FinalizedToolCallOutcome | undefined> = new Array(toolCalls.length).fill(undefined);
 	let skippedReason: string | undefined;
@@ -741,6 +1062,7 @@ async function executeToolCallsDagLevels(
 			config,
 			signal,
 			emit,
+			dagScheduleCache,
 		);
 		for (const outcome of executedLevel.outcomes) finalizedByIndex[outcome.sourceIndex] = outcome.finalized;
 		if (signal?.aborted) break;
@@ -796,6 +1118,35 @@ async function executeToolCallsDagLevels(
 
 type DagLevelOutcome = { sourceIndex: number; finalized: FinalizedToolCallOutcome };
 
+/** Re-plan final claims for a runnable candidate level from exact post-hook arguments. */
+async function rescheduleRunnableLevels(
+	runnable: Array<{ sourceIndex: number; preparation: PreparedToolCall }>,
+	toolPolicies: ReadonlyMap<string, "sequential" | "parallel">,
+	config: AgentLoopConfig,
+	signal: AbortSignal | undefined,
+	dagScheduleCache: DagScheduleCache,
+): Promise<number[][] | null> {
+	const finalClaimableCalls = runnable.map(({ preparation }) => ({
+		id: preparation.toolCall.id,
+		name: preparation.toolCall.name,
+		arguments: preparation.args,
+	}));
+	const scheduled = await scheduleDagLevelsMemo(
+		finalClaimableCalls,
+		{
+			cwd: config.cwd ?? process.cwd(),
+			toolPolicies,
+			registeredTools: runnable.map(({ preparation }) => preparation.tool),
+			strictExtensionClaims: config.strictExtensionClaims,
+			maxConcurrency: config.maxToolConcurrency,
+			resourceKeyResolver: config.resourceKeyResolver,
+		},
+		signal,
+		dagScheduleCache,
+	);
+	return scheduled === null ? null : scheduled.levels;
+}
+
 /** Authorize one candidate DAG level, re-plan final claims, and run its safe sublevels. */
 async function runDagLevelCalls(
 	currentContext: AgentContext,
@@ -807,6 +1158,7 @@ async function runDagLevelCalls(
 	config: AgentLoopConfig,
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
+	dagScheduleCache: DagScheduleCache,
 ): Promise<{ outcomes: DagLevelOutcome[]; stoppedByUnsettledTimeout: boolean }> {
 	const outcomes: DagLevelOutcome[] = [];
 	const runnable: Array<{ sourceIndex: number; preparation: PreparedToolCall }> = [];
@@ -834,38 +1186,12 @@ async function runDagLevelCalls(
 		if (signal?.aborted) return { outcomes, stoppedByUnsettledTimeout: false };
 	}
 
-	const finalClaimableCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }> = [];
-	for (const { preparation } of runnable) {
-		if (!isPlainArguments(preparation.args)) {
-			finalClaimableCalls.length = 0;
-			break;
-		}
-		finalClaimableCalls.push({
-			id: preparation.toolCall.id,
-			name: preparation.toolCall.name,
-			arguments: preparation.args,
-		});
-	}
-
-	let executionLevels: number[][];
-	if (finalClaimableCalls.length === runnable.length) {
-		const scheduled = await awaitWithAbort(
-			() =>
-				scheduleDagLevels(finalClaimableCalls, {
-					cwd: config.cwd ?? process.cwd(),
-					toolPolicies,
-					registeredTools: runnable.map(({ preparation }) => preparation.tool),
-					strictExtensionClaims: config.strictExtensionClaims,
-					maxConcurrency: config.maxToolConcurrency,
-					resourceKeyResolver: config.resourceKeyResolver,
-				}),
-			signal,
-		);
-		if (scheduled.kind === "aborted") return { outcomes, stoppedByUnsettledTimeout: false };
-		executionLevels = scheduled.value.levels;
-	} else {
-		executionLevels = runnable.map((_entry, index) => [index]);
-	}
+	// Re-plan final claims from the exact post-hook arguments. Non-plain
+	// payloads stay in the schedule and fail closed into exclusive barriers
+	// inside claim resolution rather than degrading the level to sequential
+	// singletons.
+	const executionLevels = await rescheduleRunnableLevels(runnable, toolPolicies, config, signal, dagScheduleCache);
+	if (executionLevels === null) return { outcomes, stoppedByUnsettledTimeout: false };
 
 	for (const executionLevel of executionLevels) {
 		if (signal?.aborted) break;
@@ -905,6 +1231,12 @@ async function runDagLevelCalls(
 type ExecutedToolCallBatch = {
 	messages: ToolResultMessage[];
 	terminate: boolean;
+	/**
+	 * End the whole run without another provider request. Only the dag-v2
+	 * scheduler produces this (unsettled-timeout guard); the sequential,
+	 * parallel, and waves paths deliberately continue after an unsettled
+	 * timeout — the divergence is pinned by the tool-timeout loop tests.
+	 */
 	stopRun?: boolean;
 };
 

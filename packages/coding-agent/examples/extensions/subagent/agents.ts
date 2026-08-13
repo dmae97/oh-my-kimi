@@ -78,10 +78,17 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 			continue;
 		}
 
-		const tools = frontmatter.tools
-			?.split(",")
-			.map((t: string) => t.trim())
-			.filter(Boolean);
+		const rawTools = frontmatter.tools as unknown;
+		// ponytail: frontmatter `tools:` is either a CSV string or a YAML map ({read: true}) — accept both
+		const tools =
+			typeof rawTools === "string"
+				? rawTools
+						.split(",")
+						.map((t: string) => t.trim())
+						.filter(Boolean)
+				: rawTools && typeof rawTools === "object"
+					? Object.keys(rawTools)
+					: undefined;
 
 		const capabilities = parseCapabilities(frontmatter);
 		const enforceCapabilities = parseEnforceFlag(frontmatter.enforceCapabilities);

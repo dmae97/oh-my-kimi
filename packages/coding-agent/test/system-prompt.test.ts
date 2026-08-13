@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { type BuildSystemPromptOptions, buildSystemPrompt } from "../src/core/system-prompt.ts";
+import { type BuildSystemPromptOptions, buildSystemPrompt, buildSystemPromptPlan } from "../src/core/system-prompt.ts";
 
 describe("buildSystemPrompt", () => {
 	describe("empty tools", () => {
@@ -58,6 +58,31 @@ describe("buildSystemPrompt", () => {
 			);
 		});
 	});
+	describe("provider cache boundary", () => {
+		test("keeps stable instructions in the prefix and dynamic resources in the suffix", () => {
+			const base: BuildSystemPromptOptions = {
+				selectedTools: ["read"],
+				toolSnippets: { read: "Read file contents" },
+				contextFiles: [{ path: "/project/AGENTS.md", content: "Rule version one." }],
+				skills: [],
+				cwd: "/project-one",
+			};
+			const first = buildSystemPromptPlan(base);
+			const second = buildSystemPromptPlan({
+				...base,
+				contextFiles: [{ path: "/project/AGENTS.md", content: "Rule version two." }],
+				cwd: "/project-two",
+			});
+
+			expect(first.prompt).toBe(buildSystemPrompt(base));
+			expect(first.prompt.slice(0, first.cacheBoundary)).toBe(second.prompt.slice(0, second.cacheBoundary));
+			expect(first.prompt.slice(0, first.cacheBoundary)).toContain("<runtime_trust_boundary>");
+			expect(first.prompt.slice(0, first.cacheBoundary)).not.toContain("Rule version one.");
+			expect(first.prompt.slice(first.cacheBoundary)).toContain("Rule version one.");
+			expect(first.prompt.slice(first.cacheBoundary)).toContain("Current working directory: /project-one");
+		});
+	});
+
 	describe("runtime trust boundary", () => {
 		test("appears once before loaded resources in default and custom prompt modes", () => {
 			const base: BuildSystemPromptOptions = {

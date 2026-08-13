@@ -132,4 +132,36 @@ describe("provider/model deadline learning", () => {
 		expect(recommendAttemptCutoff(codex, { fallbackMs: 600_000, minimumMs: 1, maximumMs: 800_000 })).toBe(180_000);
 		expect(recommendAttemptCutoff(anthropic, { fallbackMs: 600_000, minimumMs: 1, maximumMs: 800_000 })).toBe(60_000);
 	});
+
+	it("does not let a short probe collapse a larger task to the minimum cutoff", () => {
+		const db = updateDeadlineProfiles(undefined, {
+			provider: "openai-codex",
+			model: "gpt-5.6",
+			outcome: "completed",
+			elapsedMs: 10_000,
+			estimatedTokens: 10,
+			workUnits: 1,
+		});
+		const profile = getDeadlineProfile(db, "openai-codex", "gpt-5.6");
+		const demand = estimateTaskDemand(
+			[
+				"Review the release candidate:",
+				"1. Inspect the manifest.",
+				"2. Verify fixture hashes.",
+				"3. Run formatter checks.",
+				"4. Run parity tests.",
+				"5. Review production diffs.",
+				"6. Report the verdict.",
+			].join("\n"),
+		);
+
+		expect(
+			recommendAttemptCutoff(profile, {
+				fallbackMs: 600_000,
+				minimumMs: 30_000,
+				maximumMs: 800_000,
+				predictedMs: demand.predictedMs,
+			}),
+		).toBe(demand.predictedMs);
+	});
 });

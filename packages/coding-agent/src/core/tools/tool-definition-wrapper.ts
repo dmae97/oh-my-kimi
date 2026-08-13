@@ -1,6 +1,16 @@
 import type { AgentTool } from "omk-agent-core";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
 
+const MAX_TOOL_TIMEOUT_MS = 2_147_483_647;
+
+function validateExtensionToolTimeout(timeoutMs: number | undefined, toolName: string): number | undefined {
+	if (timeoutMs === undefined) return undefined;
+	if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > MAX_TOOL_TIMEOUT_MS) {
+		throw new Error(`Invalid timeout for extension tool "${toolName}"`);
+	}
+	return timeoutMs;
+}
+
 /** Wrap a ToolDefinition into an AgentTool for the core runtime. */
 export function wrapToolDefinition<TDetails = unknown>(
 	definition: ToolDefinition<any, TDetails>,
@@ -13,6 +23,11 @@ export function wrapToolDefinition<TDetails = unknown>(
 		parameters: definition.parameters,
 		prepareArguments: definition.prepareArguments,
 		executionMode: definition.executionMode,
+		get timeoutMs() {
+			const ctx = ctxFactory?.();
+			const timeoutMs = (ctx ? definition.resolveTimeoutMs?.(ctx) : undefined) ?? definition.timeoutMs;
+			return validateExtensionToolTimeout(timeoutMs, definition.name);
+		},
 		execute: (toolCallId, params, signal, onUpdate) =>
 			definition.execute(toolCallId, params, signal, onUpdate, ctxFactory?.() as ExtensionContext),
 	};
@@ -40,6 +55,7 @@ export function createToolDefinitionFromAgentTool(tool: AgentTool<any>): ToolDef
 		parameters: tool.parameters as any,
 		prepareArguments: tool.prepareArguments,
 		executionMode: tool.executionMode,
+		timeoutMs: tool.timeoutMs,
 		execute: async (toolCallId, params, signal, onUpdate) => tool.execute(toolCallId, params, signal, onUpdate),
 	};
 }

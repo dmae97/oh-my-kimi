@@ -33,7 +33,7 @@ Alibaba Model Studio Token Plan is recognized as **QWEN TOKEN PLAN** but shows `
 
 - Requires ChatGPT Plus or Pro subscription
 - Officially endorsed by OpenAI: [Codex for OSS](https://developers.openai.com/community/codex-for-oss)
-- `gpt-5.6-moa` is a tool-free virtual model that runs bounded GPT-5.6 Sol and Terra advisers concurrently, then streams a Sol synthesis. It performs three inference calls per turn, caps adviser/synthesis output independently, and is intended for analysis, review, and answer synthesis; use Sol or Terra directly when tools are required.
+- `gpt-5.6-moa` runs bounded, tool-free GPT-5.6 Sol and Terra advisers concurrently, then streams a Sol synthesis with the active tools and tool history. Synthesis tool calls enter the normal agent loop; each follow-up model turn repeats the three-call workflow. Adviser and synthesis output remain independently capped.
 - The Codex backend accepts `xhigh` as its highest literal reasoning effort. OMK's `max` and `ultra` tiers map to `xhigh`; `ultra` on the MoA model additionally represents the Sol/Terra delegation workflow.
 
 ```bash

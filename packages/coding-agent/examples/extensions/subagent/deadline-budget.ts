@@ -1,5 +1,27 @@
 export type DeadlineSampleOutcome = "completed" | "cutoff" | "aborted" | "failed";
 
+export interface SubagentExecutionPolicy {
+	readonly unbounded: boolean;
+	readonly maxParallelTasks: number | undefined;
+	readonly concurrency: number;
+}
+
+export function resolveSubagentExecutionPolicy(
+	thinkingLevel: string | undefined,
+	parallelTaskCount: number,
+	executionBudgetExplicit = false,
+): SubagentExecutionPolicy {
+	const taskCount = Math.max(1, Math.floor(parallelTaskCount));
+	if (thinkingLevel === "ultra") {
+		return { unbounded: !executionBudgetExplicit, maxParallelTasks: undefined, concurrency: taskCount };
+	}
+	return { unbounded: false, maxParallelTasks: 8, concurrency: Math.min(4, taskCount) };
+}
+
+export function exceedsParallelTaskLimit(policy: SubagentExecutionPolicy, taskCount: number): boolean {
+	return policy.maxParallelTasks !== undefined && taskCount > policy.maxParallelTasks;
+}
+
 export interface TaskDemand {
 	readonly estimatedTokens: number;
 	readonly workUnits: number;
@@ -78,6 +100,7 @@ interface RecommendCutoffOptions {
 	readonly fallbackMs: number;
 	readonly minimumMs: number;
 	readonly maximumMs: number;
+	readonly predictedMs?: number;
 }
 
 const EXPLICIT_ACTION_LINE = /^\s*(?:\d+[.)]|\[[ xX]\])\s+(.+?)\s*$/;
@@ -216,7 +239,8 @@ export function recommendAttemptCutoff(profile: DeadlineProfile | undefined, opt
 	const candidates = [options.fallbackMs];
 	if (completed !== undefined) candidates.push(Math.round(completed * 1.5));
 	if (cutoff !== undefined) candidates.push(Math.round(cutoff * 0.75));
-	return Math.max(options.minimumMs, Math.min(options.maximumMs, ...candidates));
+	const recommendedMs = Math.max(options.predictedMs ?? 0, Math.min(...candidates));
+	return Math.max(options.minimumMs, Math.min(options.maximumMs, recommendedMs));
 }
 
 function extractActionUnit(line: string): string | undefined {

@@ -47,17 +47,17 @@ highest valid value, `xhigh`. The CLI help must list every accepted level, inclu
 
 **What**: Add `openai-codex/gpt-5.6-moa` under the existing OAuth provider. For each turn, run Sol
 and Terra concurrently without tools, then ask Sol to synthesize their bounded analyses into the single
-public stream. The complete virtual-model workflow is tool-free; use Sol or Terra directly for tool execution.
+public stream. The synthesis receives the active tool contract and participates in the normal agent tool loop.
 Reuse the existing `openai-codex` credential and transport implementation; do not add a provider,
 dependency, or credential path.
-**Verify**: mocked SSE tests prove two adviser requests precede one synthesis request, virtual
-identity is retained, all requests remain tool-free, failures/abort terminate coherently, and usage
-includes all three calls.
+**Verify**: mocked SSE tests prove two tool-free adviser requests precede one tool-capable synthesis
+request, virtual identity is retained, tool events reach the agent loop, failures/abort terminate coherently,
+and usage includes all three calls.
 
 **Acceptance**:
 1. `getModel("openai-codex", "gpt-5.6-moa")` exists and supports `ultra` mapped to `xhigh`.
 2. Sol and Terra advisers begin before synthesis and receive no tools.
-3. No adviser or synthesis request carries tools, tool transport history, or payload overrides; historical calls/results are flattened as inert context and returned tool-call events fail closed before public emission.
+3. Advisers carry no tools or tool transport history; synthesis preserves declared tools and historical tool calls/results, suppresses payload overrides, and forwards tool-call events to the normal agent loop.
 4. Adviser failure is strict all-or-nothing and aborts the sibling request; caller abort takes precedence.
 5. Final usage/cost and `totalTokens` sum terminal-reported usage from all three requests, including failed and length-capped calls whenever the provider supplies it.
 6. Adviser text is exactly capped at 24,000 characters; every delta, partial, and terminal result is bounded, oversized open streams are aborted, and the virtual context window reserves synthesis headroom.
@@ -76,6 +76,19 @@ includes all three calls.
 alignment check in spec 010 using current passing Biome evidence.
 **Verify**: docs mention virtual-model behavior and no released changelog section changes.
 
+### Requirement 4 - Unbounded Ultra subagents (Priority: P1)
+
+**What**: When the current thinking level is `ultra`, remove the subagent extension's task-count,
+concurrency, execution-budget, per-attempt, and outer tool-call deadlines. Keep explicit caller abort,
+process failure, provider/network behavior, and all non-Ultra limits unchanged.
+
+**Acceptance**:
+1. Ultra parallel mode accepts all requested tasks and starts them without an extension concurrency cap.
+2. Ultra runs one subprocess attempt per logical task with no timer or deadline metadata.
+3. The extension dynamically resolves its outer tool timeout to `0` only in Ultra.
+4. Ctrl+C/AbortSignal still terminates and reaps child process trees.
+5. Non-Ultra retains max 8 tasks, 4 concurrent processes, predictive sharding, and bounded retries.
+
 ## Expected Files
 
 - `packages/ai/src/providers/openai-codex-moa.ts`
@@ -93,6 +106,13 @@ alignment check in spec 010 using current passing Biome evidence.
 - `packages/ai/test/openai-codex-thinking.test.ts`
 - `packages/coding-agent/src/cli/args.ts`
 - `packages/coding-agent/test/args.test.ts`
+- `packages/coding-agent/src/core/extensions/types.ts`
+- `packages/coding-agent/src/core/tools/tool-definition-wrapper.ts`
+- `packages/coding-agent/test/tool-definition-wrapper.test.ts`
+- `packages/coding-agent/examples/extensions/subagent/index.ts`
+- `packages/coding-agent/examples/extensions/subagent/deadline-budget.ts`
+- `packages/coding-agent/examples/extensions/subagent/subagent-execution-policy.test.ts`
+- `packages/coding-agent/examples/extensions/subagent/subagent-extension-smoke.test.ts`
 - `packages/ai/CHANGELOG.md`
 - `packages/coding-agent/CHANGELOG.md`
 - `packages/coding-agent/docs/providers.md`
@@ -100,11 +120,11 @@ alignment check in spec 010 using current passing Biome evidence.
 ## Verification Commands
 
 - `(cd packages/ai && node ../../node_modules/vitest/dist/cli.js --run test/openai-codex-response-failures.test.ts test/openai-codex-terminal-status.test.ts test/openai-codex-moa.test.ts test/openai-codex-moa-safety.test.ts test/openai-codex-moa-tool-history.test.ts test/openai-codex-moa-usage.test.ts test/openai-codex-thinking.test.ts)`
-- `(cd packages/coding-agent && node ../../node_modules/vitest/dist/cli.js --run test/args.test.ts)`
+- `(cd packages/coding-agent && node ../../node_modules/vitest/dist/cli.js --run test/args.test.ts test/tool-definition-wrapper.test.ts examples/extensions/subagent/subagent-execution-policy.test.ts examples/extensions/subagent/subagent-extension-smoke.test.ts)`
 - `npm --prefix pi-extensions run check`
 - `npm run check`
 - `npm run build`
-- live no-session, no-tools calls for Sol/Terra/MoA
+- live no-session MoA tool call plus Ultra subagent execution
 
 ## Assumptions
 

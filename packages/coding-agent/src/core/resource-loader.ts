@@ -10,6 +10,7 @@ export type { ResourceCollision, ResourceDiagnostic } from "./diagnostics.ts";
 import { canonicalizePath, isLocalPath, resolvePath } from "../utils/paths.ts";
 import { createEventBus, type EventBus } from "./event-bus.ts";
 import commandSafetyGate from "./extensions/builtin/command-safety-gate.ts";
+import todoChecklist from "./extensions/builtin/todo-checklist.ts";
 import { createExtensionRuntime, loadExtensionFromFactory, loadExtensions } from "./extensions/loader.ts";
 import type { Extension, ExtensionFactory, ExtensionRuntime, LoadExtensionsResult } from "./extensions/types.ts";
 import { DefaultPackageManager, type PathMetadata } from "./package-manager.ts";
@@ -19,6 +20,14 @@ import { SettingsManager } from "./settings-manager.ts";
 import type { Skill } from "./skills.ts";
 import { loadSkills } from "./skills.ts";
 import { createSourceInfo, type SourceInfo } from "./source-info.ts";
+
+/** Values that turn a built-in extension off via its environment variable. */
+const DISABLED_ENV_VALUES = new Set(["0", "false", "off", "disable", "disabled"]);
+
+/** `true` when an env var is explicitly set to a disabling value. Unset means enabled. */
+function isDisabledByEnv(value: string | undefined): boolean {
+	return value !== undefined && DISABLED_ENV_VALUES.has(value.trim().toLowerCase());
+}
 
 export interface ContextFile {
 	path: string;
@@ -478,6 +487,22 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.disposeExtensionEventSubscriptions();
 
 		const extensionsResult = await loadExtensions(extensionPaths, this.cwd, this.eventBus);
+
+		// Keep exactly one visible task list. A user-installed `todo` extension owns
+		// the checklist UI; otherwise fall back to OMK's built-in `update_todo`.
+		// Set OMK_TODO_CHECKLIST=0 to disable the built-in explicitly.
+		const hasTodoExtension = extensionsResult.extensions.some((extension) => extension.tools.has("todo"));
+		if (!isDisabledByEnv(process.env.OMK_TODO_CHECKLIST) && !hasTodoExtension) {
+			const todoExtension = await loadExtensionFromFactory(
+				todoChecklist,
+				this.cwd,
+				this.eventBus,
+				extensionsResult.runtime,
+				"<builtin:todo-checklist>",
+			);
+			extensionsResult.extensions.unshift(todoExtension);
+		}
+
 		// Built-in command-safety gate runs FIRST (unless YOLO / OMK_COMMAND_SAFETY=0).
 		// tool_call block short-circuits on first block; user_bash on first truthy result.
 		const yoloOff =
@@ -485,9 +510,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 			process.env.OMK_YOLO === "true" ||
 			process.env.OMK_DISABLE_COMMAND_SAFETY === "1" ||
 			process.env.OMK_DISABLE_COMMAND_SAFETY === "true" ||
-			["0", "false", "off", "disable", "disabled"].includes(
-				String(process.env.OMK_COMMAND_SAFETY ?? "").toLowerCase(),
-			);
+			isDisabledByEnv(process.env.OMK_COMMAND_SAFETY);
 		if (!yoloOff) {
 			const commandSafetyExtension = await loadExtensionFromFactory(
 				commandSafetyGate,

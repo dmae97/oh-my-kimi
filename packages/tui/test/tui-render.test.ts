@@ -223,6 +223,56 @@ describe("TUI resize handling", () => {
 
 		tui.stop();
 	});
+
+	it("preserves scrollback on full re-renders (WSL/Windows Terminal regression)", async () => {
+		// Every fullRender(true) path used to emit \x1b[3J (clear scrollback),
+		// which on WSL/Windows Terminal wiped the user's scrollback and snapped
+		// the viewport to the top on routine width/height changes.
+		for (const setup of [
+			async (terminal: LoggingVirtualTerminal) => {
+				const tui = new TUI(terminal);
+				const component = new TestComponent();
+				tui.addChild(component);
+				component.lines = ["Line 0", "Line 1", "Line 2"];
+				tui.start();
+				await terminal.waitForRender();
+				terminal.clearWrites();
+				terminal.resize(60, 10); // width change → fullRender(true)
+				await terminal.waitForRender();
+				tui.stop();
+			},
+			async (terminal: LoggingVirtualTerminal) => {
+				const tui = new TUI(terminal);
+				const component = new TestComponent();
+				tui.addChild(component);
+				component.lines = ["Line 0", "Line 1", "Line 2"];
+				tui.start();
+				await terminal.waitForRender();
+				terminal.clearWrites();
+				terminal.resize(40, 15); // height change → fullRender(true)
+				await terminal.waitForRender();
+				tui.stop();
+			},
+			async (terminal: LoggingVirtualTerminal) => {
+				const tui = new TUI(terminal);
+				tui.setClearOnShrink(true);
+				const component = new TestComponent();
+				tui.addChild(component);
+				component.lines = Array.from({ length: 20 }, (_, i) => `Line ${i}`);
+				tui.start();
+				await terminal.waitForRender();
+				terminal.clearWrites();
+				component.lines = ["Line 0", "Line 1"]; // shrink → fullRender(true)
+				tui.requestRender();
+				await terminal.waitForRender();
+				tui.stop();
+			},
+		] as const) {
+			const terminal = new LoggingVirtualTerminal(40, 10);
+			await setup(terminal);
+			assert.ok(!terminal.getWrites().includes("\x1b[3J"), "full re-render must preserve scrollback (no \\x1b[3J)");
+		}
+	});
 });
 
 describe("TUI content shrinkage", () => {
@@ -587,5 +637,40 @@ describe("TUI differential rendering", () => {
 		]);
 
 		tui.stop();
+	});
+});
+
+describe("TUI final frame", () => {
+	it("replaces the active frame with final lines when stopping", async () => {
+		const terminal = new VirtualTerminal(40, 8);
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		component.lines = ["OMK HEADER", "assistant transcript", "EDITOR>"];
+		tui.addChild(component);
+		tui.start();
+		await terminal.waitForRender();
+
+		tui.stop({ finalLines: ["user message", "assistant transcript"] });
+		await terminal.flush();
+
+		const viewport = terminal.getViewport().join("\n");
+		assert.match(viewport, /user message/);
+		assert.match(viewport, /assistant transcript/);
+		assert.doesNotMatch(viewport, /OMK HEADER|EDITOR>/);
+	});
+
+	it("accepts an empty final frame", async () => {
+		const terminal = new VirtualTerminal(40, 8);
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		component.lines = ["OMK HEADER", "EDITOR>"];
+		tui.addChild(component);
+		tui.start();
+		await terminal.waitForRender();
+
+		tui.stop({ finalLines: [] });
+		await terminal.flush();
+
+		assert.doesNotMatch(terminal.getViewport().join("\n"), /OMK HEADER|EDITOR>/);
 	});
 });

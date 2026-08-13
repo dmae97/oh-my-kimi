@@ -32,6 +32,7 @@ interface PackageManagerInternals {
 		args: string[],
 		options?: { cwd?: string; timeoutMs?: number; env?: Record<string, string> },
 	): Promise<string>;
+	runNpmCommand(args: string[], options?: { cwd?: string }): Promise<void>;
 	getLocalGitUpdateTarget(installedPath: string): Promise<{ ref: string; head: string; fetchArgs: string[] }>;
 	parseSource(
 		source: string,
@@ -598,6 +599,65 @@ Content`,
 			);
 		});
 
+		it("should resolve package.json pi resources when omk is absent", async () => {
+			const pkgDir = join(tempDir, "pi-package");
+			const extensionPath = join(pkgDir, "index.ts");
+			const helperPath = join(pkgDir, "helper.ts");
+			const skillPath = join(pkgDir, "skills", "pi-skill", "SKILL.md");
+			mkdirSync(join(pkgDir, "skills", "pi-skill"), { recursive: true });
+			writeFileSync(extensionPath, "export default function() {}");
+			writeFileSync(helperPath, "export const helper = true;");
+			writeFileSync(skillPath, "---\nname: pi-skill\ndescription: Pi skill\n---\n");
+			writeFileSync(
+				join(pkgDir, "package.json"),
+				JSON.stringify({ pi: { extensions: ["./"], skills: ["./skills"] } }),
+			);
+
+			const result = await packageManager.resolveExtensionSources([pkgDir]);
+
+			expect(result.extensions.some((resource) => resource.path === extensionPath && resource.enabled)).toBe(true);
+			expect(result.extensions.some((resource) => resource.path === helperPath)).toBe(false);
+			expect(result.skills.some((resource) => resource.path === skillPath && resource.enabled)).toBe(true);
+		});
+
+		it("should prefer omk resource entries over package.json pi", async () => {
+			const pkgDir = join(tempDir, "dual-manifest-package");
+			const omkPath = join(pkgDir, "omk.ts");
+			const piPath = join(pkgDir, "pi.ts");
+			mkdirSync(pkgDir, { recursive: true });
+			writeFileSync(omkPath, "export default function() {}");
+			writeFileSync(piPath, "export default function() {}");
+			writeFileSync(
+				join(pkgDir, "package.json"),
+				JSON.stringify({
+					omk: { extensions: ["./omk.ts"] },
+					pi: { extensions: ["./pi.ts"] },
+				}),
+			);
+
+			const result = await packageManager.resolveExtensionSources([pkgDir]);
+
+			expect(result.extensions.some((resource) => resource.path === omkPath)).toBe(true);
+			expect(result.extensions.some((resource) => resource.path === piPath)).toBe(false);
+		});
+
+		it("should reject malformed authoritative manifests instead of using fallback conventions", async () => {
+			const pkgDir = join(tempDir, "malformed-authoritative-package");
+			mkdirSync(join(pkgDir, "extensions"), { recursive: true });
+			writeFileSync(join(pkgDir, "extensions", "fallback.ts"), "export default function() {}");
+			writeFileSync(
+				join(pkgDir, "package.json"),
+				JSON.stringify({ omk: { extensions: "./extensions" }, pi: { extensions: ["./legacy.ts"] } }),
+			);
+
+			const result = await packageManager.resolveExtensionSources([pkgDir]);
+
+			expect(result.extensions).toEqual([]);
+			expect(result.skills).toEqual([]);
+			expect(result.prompts).toEqual([]);
+			expect(result.themes).toEqual([]);
+		});
+
 		it("should keep omk manifest entries with leading tilde package-relative", async () => {
 			const pkgDir = join(tempDir, "tilde-manifest-package");
 			const directExtensionPath = join(pkgDir, "~extensions", "main.ts");
@@ -710,6 +770,55 @@ Content`,
 	});
 
 	describe("npmCommand", () => {
+		it("should inspect npm packages with npm pack and lifecycle scripts disabled", async () => {
+			const managerWithInternals = packageManager as unknown as PackageManagerInternals;
+			const runCommandCaptureSpy = vi
+				.spyOn(managerWithInternals, "runCommandCapture")
+				.mockRejectedValue(new Error("stop after capturing safe argv"));
+
+			await expect(packageManager.preparePackageInspection("npm:@scope/example@1.2.3")).rejects.toThrow(
+				"stop after capturing safe argv",
+			);
+
+			expect(runCommandCaptureSpy).toHaveBeenCalledTimes(1);
+			const [, args] = runCommandCaptureSpy.mock.calls[0] as [string, string[], unknown];
+			expect(args).toContain("pack");
+			expect(args).toContain("@scope/example@1.2.3");
+			expect(args).toContain("--ignore-scripts");
+			expect(args.indexOf("--")).toBeLessThan(args.indexOf("@scope/example@1.2.3"));
+			expect(args).not.toContain("install");
+		});
+
+		it("should inspect git packages without installing dependencies", async () => {
+			const managerWithInternals = packageManager as unknown as PackageManagerInternals;
+			const runNpmCommandSpy = vi.spyOn(managerWithInternals, "runNpmCommand");
+			vi.spyOn(managerWithInternals, "runCommand").mockImplementation(async (command, args) => {
+				expect(command).toBe("git");
+				expect(args[0]).toBe("clone");
+				expect(args[1]).toBe("--");
+				const target = args[args.length - 1];
+				if (!target) throw new Error("Missing git clone target");
+				mkdirSync(target, { recursive: true });
+				writeFileSync(join(target, "package.json"), JSON.stringify({ pi: { extensions: ["./index.ts"] } }));
+				writeFileSync(join(target, "index.ts"), "export default function () {};");
+			});
+
+			const result = await packageManager.preparePackageInspection("git:github.com/example/doctor-fixture");
+
+			expect(result.resources.extensions).toHaveLength(1);
+			expect(runNpmCommandSpy).not.toHaveBeenCalled();
+		});
+
+		it("should reject option-like git refs before spawning git", async () => {
+			const managerWithInternals = packageManager as unknown as PackageManagerInternals;
+			const runCommandSpy = vi.spyOn(managerWithInternals, "runCommand");
+
+			await expect(
+				packageManager.preparePackageInspection("git:github.com/example/doctor-fixture@--upload-pack=bad"),
+			).rejects.toThrow(/unsupported option/u);
+			expect(runCommandSpy).not.toHaveBeenCalled();
+		});
+
 		it("should use npmCommand argv for npm installs", async () => {
 			settingsManager = SettingsManager.inMemory({
 				npmCommand: ["mise", "exec", "node@20", "--", "npm"],

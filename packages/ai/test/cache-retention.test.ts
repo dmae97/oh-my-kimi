@@ -1,3 +1,4 @@
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getModel } from "../src/models.ts";
 import { streamAnthropic } from "../src/providers/anthropic.ts";
@@ -124,6 +125,92 @@ describe("Cache Retention (OMK_CACHE_RETENTION)", () => {
 
 			expect(capturedPayload).not.toBeNull();
 			expect(capturedPayload.system[0].cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+		});
+
+		it("caches only the stable system prefix and sends tools deterministically", async () => {
+			const baseModel = getModel("anthropic", "claude-haiku-4-5");
+			const proxyModel = { ...baseModel, baseUrl: "https://my-proxy.example.com/v1" };
+			const stablePrefix = "Stable operator instructions.";
+			let capturedPayload:
+				| {
+						system?: Array<{ text: string; cache_control?: { type: string } }>;
+						tools?: Array<{ name: string; cache_control?: { type: string } }>;
+				  }
+				| undefined;
+			const boundaryContext: Context = {
+				systemPrompt: `${stablePrefix}\nDynamic turn resources.`,
+				systemPromptCacheBoundary: stablePrefix.length,
+				messages: [{ role: "user", content: "Hello", timestamp: Date.now() }],
+				tools: [
+					{ name: "zeta", description: "last", parameters: Type.Object({ z: Type.String() }) },
+					{ name: "alpha", description: "first", parameters: Type.Object({ a: Type.String() }) },
+				],
+			};
+
+			const stream = streamAnthropic(proxyModel, boundaryContext, {
+				apiKey: "fake-key",
+				onPayload: stopAfterPayload((payload) => {
+					capturedPayload = payload as typeof capturedPayload;
+				}),
+			});
+			for await (const event of stream) {
+				if (event.type === "error") break;
+			}
+
+			expect(capturedPayload?.system).toEqual([
+				{ type: "text", text: stablePrefix, cache_control: { type: "ephemeral" } },
+				{ type: "text", text: "\nDynamic turn resources." },
+			]);
+			expect(capturedPayload?.tools?.map((tool) => tool.name)).toEqual(["alpha", "zeta"]);
+			expect(capturedPayload?.tools?.[0]?.cache_control).toBeUndefined();
+			expect(capturedPayload?.tools?.[1]?.cache_control).toEqual({ type: "ephemeral" });
+
+			const fullyStablePrompt = "Fully stable operator instructions.";
+			let fullyStablePayload: NonNullable<typeof capturedPayload> | undefined;
+			const fullyStableStream = streamAnthropic(
+				proxyModel,
+				{
+					...boundaryContext,
+					systemPrompt: fullyStablePrompt,
+					systemPromptCacheBoundary: fullyStablePrompt.length,
+				},
+				{
+					apiKey: "fake-key",
+					onPayload: stopAfterPayload((payload) => {
+						fullyStablePayload = payload as typeof fullyStablePayload;
+					}),
+				},
+			);
+			for await (const event of fullyStableStream) {
+				if (event.type === "error") break;
+			}
+
+			expect(fullyStablePayload?.system).toEqual([
+				{ type: "text", text: fullyStablePrompt, cache_control: { type: "ephemeral" } },
+			]);
+
+			const replacementPrompt = "Extension-controlled replacement.";
+			let bypassedPayload: NonNullable<typeof capturedPayload> | undefined;
+			const bypassedStream = streamAnthropic(
+				proxyModel,
+				{
+					...boundaryContext,
+					systemPrompt: replacementPrompt,
+					systemPromptCacheBoundary: undefined,
+					systemPromptCacheBoundaryBypass: true,
+				},
+				{
+					apiKey: "fake-key",
+					onPayload: stopAfterPayload((payload) => {
+						bypassedPayload = payload as typeof bypassedPayload;
+					}),
+				},
+			);
+			for await (const event of bypassedStream) {
+				if (event.type === "error") break;
+			}
+
+			expect(bypassedPayload?.system).toEqual([{ type: "text", text: replacementPrompt }]);
 		});
 
 		it("should omit ttl when supportsLongCacheRetention is false", async () => {

@@ -38,6 +38,8 @@ const tasteSkillFolders = [
 ];
 const tastePinnedCommit = "b17742737e796305d829b3ad39eda3add0d79060";
 const cavemanPinnedCommit = "0d95a81d35a9f2d123a5e9430d1cfc43d55f1bb0";
+const addyAgentSkillsPinnedCommit = "7829ffd90d973b6325f5f12f1b1226dcace74443";
+const addyEngineRoot = join(skillsRoot, "omk-engine");
 const blockedNamePattern = /\bstrix\b/i;
 const blockedSlidesGrabPattern = /\bslides[-_]?grab\b/i;
 
@@ -364,6 +366,59 @@ function checkPonytailSkills() {
 	}
 }
 
+function checkAddyAgentSkillsAdaptation() {
+	const label = "omk-engine (addyosmani/agent-skills adaptation)";
+	const skillPath = join(addyEngineRoot, "SKILL.md");
+	const sourcePath = join(addyEngineRoot, "SOURCE.md");
+	const licensePath = join(addyEngineRoot, "LICENSE-ADDYOSMANI");
+
+	if (!existsSync(skillPath)) {
+		fail(`${label}: missing ${skillPath}`);
+		return;
+	}
+	const parsed = readSkillFrontmatter(skillPath);
+	if (!parsed) {
+		fail(`${label}: ${skillPath} has no valid frontmatter block`);
+		return;
+	}
+
+	const { raw, body } = parsed;
+	if (frontmatterValue(raw, "name") !== "omk-engine") {
+		fail(`${label}: frontmatter name must be "omk-engine"`);
+	}
+	if (!frontmatterHasDescription(raw)) fail(`${label}: frontmatter description is missing or empty`);
+	if (frontmatterValue(raw, "adapted-from") !== "https://github.com/addyosmani/agent-skills") {
+		fail(`${label}: metadata.adapted-from must pin the reviewed upstream repository`);
+	}
+	if (frontmatterValue(raw, "adapted-commit") !== addyAgentSkillsPinnedCommit) {
+		fail(`${label}: metadata.adapted-commit must equal ${addyAgentSkillsPinnedCommit}`);
+	}
+	checkLicenseFile(addyEngineRoot, frontmatterValue(raw, "license"), label);
+
+	const pin = sourceMdPinnedCommit(sourcePath, label);
+	if (pin && pin !== addyAgentSkillsPinnedCommit) {
+		fail(`${label}: SOURCE.md pin ${pin} does not match ${addyAgentSkillsPinnedCommit}`);
+	}
+	if (!existsSync(licensePath)) {
+		fail(`${label}: missing ${licensePath}`);
+	} else {
+		const license = readFileSync(licensePath, "utf8");
+		if (!/MIT License/.test(license) || !/Addy Osmani/.test(license)) {
+			fail(`${label}: ${licensePath} must retain the upstream MIT notice and copyright holder`);
+		}
+	}
+
+	for (const required of [
+		"## Verification-first engineering cycle",
+		"## Operating rules",
+		"at most three repair/review cycles",
+		"Do not install the upstream pack wholesale",
+	]) {
+		if (!body.includes(required)) fail(`${label}: SKILL.md is missing required adapted contract: ${required}`);
+	}
+	assertOnlyFiles(addyEngineRoot, new Set(["SKILL.md", "SOURCE.md", "LICENSE-ADDYOSMANI"]), label);
+}
+
 function checkNoBlockedVendoredSkills() {
 	function walk(directory) {
 		for (const entry of listEntries(directory)) {
@@ -436,6 +491,7 @@ checkCloneWebsiteSkill();
 checkPonytailSkills();
 checkTasteSkillPack();
 checkCavemanSkill();
+checkAddyAgentSkillsAdaptation();
 checkNoBlockedVendoredSkills();
 checkPinnedDepsIgnoreScope();
 

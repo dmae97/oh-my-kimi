@@ -234,6 +234,22 @@ describe("SessionManager custom flat session directory", () => {
 		const continuedA = SessionManager.continueRecent(projectA, tempDir);
 		expect(continuedA.getSessionFile()).toBe(sessionA);
 	});
+
+	it("lists session ids from headers without parsing session bodies", async () => {
+		const sessionA = createPersistedSession(projectA, "from A");
+		const sessionB = createPersistedSession(projectB, "from B");
+		appendFileSync(sessionA, "this is not valid JSON\n");
+		writeFileSync(join(tempDir, "invalid.jsonl"), "not a session header\n");
+
+		const ids = await SessionManager.listAllSessionIds(tempDir);
+
+		expect(ids).toEqual(
+			new Set([
+				SessionManager.open(sessionA, tempDir).getSessionId(),
+				SessionManager.open(sessionB, tempDir).getSessionId(),
+			]),
+		);
+	});
 });
 
 describe("SessionManager.setSessionFile with corrupted files", () => {

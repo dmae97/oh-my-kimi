@@ -12,6 +12,7 @@ import {
 } from "../../src/core/agent-session-runtime.ts";
 import { AuthStorage } from "../../src/core/auth-storage.ts";
 import { SessionManager } from "../../src/core/session-manager.ts";
+import { SessionOwnerLeaseHeldError } from "../../src/core/session-owner-lease.ts";
 import type {
 	ExtensionAPI,
 	ExtensionFactory,
@@ -627,11 +628,15 @@ describe("AgentSessionRuntime characterization", () => {
 			agentDir: tempDir,
 			sessionManager: SessionManager.create(secondDir),
 		});
+		let otherRuntimeDisposed = false;
 		cleanups.push(async () => {
-			await otherRuntime.dispose();
+			if (!otherRuntimeDisposed) await otherRuntime.dispose();
 		});
 		await otherRuntime.session.prompt("other");
 		const otherSessionFile = otherRuntime.session.sessionFile!;
+		await expect(runtime.switchSession(otherSessionFile)).rejects.toThrow(SessionOwnerLeaseHeldError);
+		await otherRuntime.dispose();
+		otherRuntimeDisposed = true;
 
 		await runtime.switchSession(otherSessionFile);
 
@@ -699,13 +704,16 @@ describe("AgentSessionRuntime characterization", () => {
 			agentDir: tempDir,
 			sessionManager: SessionManager.create(otherDir),
 		});
+		let otherRuntimeDisposed = false;
 		cleanups.push(async () => {
-			await otherRuntime.dispose();
+			if (!otherRuntimeDisposed) await otherRuntime.dispose();
 		});
 		await otherRuntime.session.setModel(faux.getModel("faux-2")!);
 		otherRuntime.session.setThinkingLevel("off");
 		await otherRuntime.session.prompt("hello");
 		const targetSessionFile = otherRuntime.session.sessionFile!;
+		await otherRuntime.dispose();
+		otherRuntimeDisposed = true;
 
 		await runtime.switchSession(targetSessionFile);
 

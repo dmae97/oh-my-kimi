@@ -12,6 +12,15 @@ import type { PlannedItemV2 } from "./context-budget-v2-scoring.ts";
 import type { ContextBudgetCacheProviderV2, PromptContextBudgetPlanV2 } from "./context-budget-v2-types.ts";
 
 export {
+	CONTEXT_BUDGET_DISK_CACHE_SCHEMA_VERSION,
+	createDiskContextBudgetCacheProviderV2,
+	DEFAULT_DISK_CACHE_FLUSH_DEBOUNCE_MS,
+	DEFAULT_DISK_CACHE_MAX_BYTES,
+	DEFAULT_DISK_CACHE_MAX_ENTRIES,
+	type DiskContextBudgetCacheOptionsV2,
+	DiskContextBudgetCacheProviderV2,
+} from "./context-budget-v2-cache-disk.ts";
+export {
 	buildContextBudgetExactRepresentationCacheKeyV2,
 	buildContextBudgetMaterializedRepresentationCacheKeyV2,
 	buildContextBudgetMaterializedRepresentationCandidateKeyV2,

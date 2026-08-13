@@ -62,6 +62,10 @@ export function renderSystemPromptBudgetedResources(
 		tokenCounter,
 		cacheProvider: input.options.cacheProvider,
 	});
+	if (items.length === 0 && !plan.emergency && plan.observability.diagnosticReasons.length === 0) {
+		return { text: renderEmptyBudgetNote(plan), plan };
+	}
+
 	const included = new Set(plan.includedItemIds);
 	const filtered = deduplicatePointerFull(items, included);
 	const text = filtered
@@ -76,9 +80,19 @@ export function renderSystemPromptBudgetedResources(
 	return { text: text ? `${text}\n${note}` : note, plan };
 }
 
+function renderEmptyBudgetNote(plan: PromptContextBudgetPlanV2): string {
+	return [
+		"<context_budget>",
+		`  <policy>${escapeXml(plan.policyVersion)}</policy>`,
+		`  <cache_decision plan_hit="${plan.observability.cache.planCache.hit ? "true" : "false"}" />`,
+		renderTokenOptimizerStatus(plan, "  "),
+		"</context_budget>",
+	].join("\n");
+}
+
 function renderBudgetNote(plan: PromptContextBudgetPlanV2, baseTokens: number): string {
 	const omitted = plan.omittedItemIds.length;
-	const { cache, counts, diagnosticReasons, tokenOptimizer, tokens } = plan.observability;
+	const { cache, counts, diagnosticReasons, tokens } = plan.observability;
 	const selectedCacheHits =
 		cache.representationCache.exactHits +
 		cache.representationCache.semanticHits +
@@ -105,11 +119,16 @@ function renderBudgetNote(plan: PromptContextBudgetPlanV2, baseTokens: number): 
 		`    <tokens available="${formatObservableInteger(tokens.available)}" used="${formatObservableInteger(tokens.used)}" raw="${formatObservableInteger(tokens.raw)}" omitted="${formatObservableInteger(tokens.omitted)}" token_savings="${formatObservableInteger(tokens.tokenSavings)}" />`,
 		`    <cache_decision plan_hit="${cache.planCache.hit ? "true" : "false"}" selected_hits="${formatObservableInteger(selectedCacheHits)}" misses="${formatObservableInteger(cache.representationCache.misses)}" stale_rejects="${formatObservableInteger(cache.representationCache.staleRejects)}" negative_hits="${formatObservableInteger(cache.representationCache.negativeHits)}" writes="${formatObservableInteger(cache.representationCache.writes)}" />`,
 		renderedDiagnosticReasons,
-		`    <token_optimizer optimizer_id="${escapeXml(tokenOptimizer.optimizerId)}" status="${escapeXml(tokenOptimizer.status)}" active="${tokenOptimizer.active ? "true" : "false"}" active_context_budget_optimizer="${escapeXml(tokenOptimizer.activeContextBudgetOptimizer)}" compatibility_only="${tokenOptimizer.compatibilityOnly ? "true" : "false"}" />`,
+		renderTokenOptimizerStatus(plan, "    "),
 		"  </decision_observability>",
 		"  <note>Some low-priority resource inventory may be represented by pointers. Use read on referenced paths when needed.</note>",
 		"</context_budget>",
 	].join("\n");
+}
+
+function renderTokenOptimizerStatus(plan: PromptContextBudgetPlanV2, indent: string): string {
+	const { tokenOptimizer } = plan.observability;
+	return `${indent}<token_optimizer optimizer_id="${escapeXml(tokenOptimizer.optimizerId)}" status="${escapeXml(tokenOptimizer.status)}" active="${tokenOptimizer.active ? "true" : "false"}" active_context_budget_optimizer="${escapeXml(tokenOptimizer.activeContextBudgetOptimizer)}" compatibility_only="${tokenOptimizer.compatibilityOnly ? "true" : "false"}" />`;
 }
 
 function formatObservableInteger(value: number): string {

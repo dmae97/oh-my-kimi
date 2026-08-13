@@ -8,7 +8,6 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import chalk from "chalk";
 import { spawn, spawnSync } from "child_process";
 import type { AgentMessage, ThinkingLevel } from "omk-agent-core";
 import {
@@ -2634,12 +2633,13 @@ export class InteractiveMode {
 
 		return new Promise((resolve, reject) => {
 			let component: Component & { dispose?(): void };
+			let overlayHandle: OverlayHandle | undefined;
 			let closed = false;
 
 			const close = (result: T) => {
 				if (closed) return;
 				closed = true;
-				if (isOverlay) this.ui.hideOverlay();
+				if (isOverlay) overlayHandle?.hide();
 				else restoreEditor();
 				// Note: both branches above already call requestRender
 				resolve(result);
@@ -2668,9 +2668,9 @@ export class InteractiveMode {
 							const w = (component as { width?: number }).width;
 							return w ? { width: w } : undefined;
 						};
-						const handle = this.ui.showOverlay(component, resolveOptions());
+						overlayHandle = this.ui.showOverlay(component, resolveOptions());
 						// Expose handle to caller for visibility control
-						options?.onHandle?.(handle);
+						options?.onHandle?.(overlayHandle);
 					} else {
 						this.editorContainer.clear();
 						this.editorContainer.addChild(component);
@@ -3667,6 +3667,20 @@ export class InteractiveMode {
 		this.renderSessionContext(context);
 	}
 
+	private buildFinalSessionLog(): string[] {
+		this.chatContainer.clear();
+		const context = this.sessionManager.buildSessionContext();
+		const messages = context.messages.filter(
+			(message) =>
+				message.role === "user" ||
+				message.role === "assistant" ||
+				message.role === "toolResult" ||
+				message.role === "bashExecution",
+		);
+		this.renderSessionContext({ ...context, messages });
+		return this.chatContainer.render(this.ui.terminal.columns);
+	}
+
 	// =========================================================================
 	// Key handlers
 	// =========================================================================
@@ -3719,13 +3733,8 @@ export class InteractiveMode {
 		// This prevents escape sequences from leaking to the parent shell over slow SSH.
 		await this.ui.terminal.drainInput(1000);
 
-		this.stop();
+		this.stop({ finalSessionLog: true });
 		await this.runtimeHost.dispose();
-
-		const resumeCommand = formatResumeCommand(this.sessionManager);
-		if (resumeCommand) {
-			process.stdout.write(`${chalk.dim("To resume this session:")} ${resumeCommand}\n`);
-		}
 
 		process.exit(0);
 	}
@@ -4509,9 +4518,7 @@ export class InteractiveMode {
 	}
 
 	private applyThinkingLevel(level: ThinkingLevel): void {
-		// A concrete level is an explicit user override: always return to manual mode.
-		this.session.setThinkingMode("manual");
-		this.session.setThinkingLevel(level);
+		this.session.setUserThinkingLevel(level);
 		this.footer.invalidate();
 		this.updateEditorBorderColor();
 		this.showStatus(`Thinking: ${this.session.thinkingLevel}`);
@@ -5815,7 +5822,23 @@ export class InteractiveMode {
 		if (stats.tokens.cacheWrite > 0) {
 			info += `${theme.fg("dim", "Cache Write:")} ${stats.tokens.cacheWrite.toLocaleString()}\n`;
 		}
+		if (stats.promptCache.providerEligibleInputTokens > 0) {
+			info += `${theme.fg("dim", "Cache Hit Rate:")} ${(stats.promptCache.providerHitRate * 100).toFixed(1)}%\n`;
+		}
 		info += `${theme.fg("dim", "Total:")} ${stats.tokens.total.toLocaleString()}\n`;
+		if (
+			stats.promptCache.stablePrefixCharacters > 0 ||
+			stats.promptCache.keyChanges > 0 ||
+			stats.promptCache.boundaryBypasses > 0
+		) {
+			info += `\n${theme.bold("Prompt Cache Diagnostics")}\n`;
+			info += `${theme.fg("dim", "Stable Prefix:")} ${stats.promptCache.stablePrefixCharacters.toLocaleString()} chars\n`;
+			info += `${theme.fg("dim", "Key Changes:")} ${stats.promptCache.keyChanges.toLocaleString()}\n`;
+			info += `${theme.fg("dim", "Boundary Bypasses:")} ${stats.promptCache.boundaryBypasses.toLocaleString()}\n`;
+			if (stats.promptCache.lastBreakReason) {
+				info += `${theme.fg("dim", "Last Break:")} ${stats.promptCache.lastBreakReason}\n`;
+			}
+		}
 
 		if (stats.cost > 0) {
 			info += `\n${theme.bold("Cost")}\n`;
@@ -6187,7 +6210,7 @@ export class InteractiveMode {
 		}
 	}
 
-	stop(): void {
+	stop(options: { finalSessionLog?: boolean } = {}): void {
 		this.unregisterSignalHandlers();
 		if (this.settingsManager.getShowTerminalProgress()) {
 			this.ui.terminal.setProgress(false);
@@ -6197,6 +6220,16 @@ export class InteractiveMode {
 			this.loadingAnimation = undefined;
 		}
 		this.clearExtensionTerminalInputListeners();
+
+		let finalLines: string[] | undefined;
+		if (options.finalSessionLog) {
+			try {
+				finalLines = this.buildFinalSessionLog();
+			} catch {
+				// Preserve terminal cleanup if transcript reconstruction fails.
+			}
+		}
+
 		disposeComponent(this.builtInHeader);
 		disposeComponent(this.customHeader);
 		this.footer.dispose();
@@ -6209,7 +6242,11 @@ export class InteractiveMode {
 			this.unsubscribe();
 		}
 		if (this.isInitialized) {
-			this.ui.stop();
+			if (finalLines === undefined) {
+				this.ui.stop();
+			} else {
+				this.ui.stop({ finalLines });
+			}
 			this.isInitialized = false;
 		}
 	}

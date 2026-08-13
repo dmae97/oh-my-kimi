@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getModel } from "../src/models.ts";
 import { streamOpenAICompletions } from "../src/providers/openai-completions.ts";
-import type { Model } from "../src/types.ts";
+import type { Context, Model } from "../src/types.ts";
 
 interface FakeOpenAIClientOptions {
 	apiKey: string;
@@ -95,15 +95,12 @@ describe("openai-completions prompt caching", () => {
 			headers?: Record<string, string>;
 		},
 		model: Model<"openai-completions"> = createModel(),
+		context: Context = {
+			systemPrompt: "sys",
+			messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
+		},
 	) {
-		await streamOpenAICompletions(
-			model,
-			{
-				systemPrompt: "sys",
-				messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
-			},
-			{ apiKey: "test-key", ...options },
-		).result();
+		await streamOpenAICompletions(model, context, { apiKey: "test-key", ...options }).result();
 
 		return {
 			payload: mockState.lastParams,
@@ -116,6 +113,39 @@ describe("openai-completions prompt caching", () => {
 
 		expect(payload?.prompt_cache_key).toBe("session-123");
 		expect(payload?.prompt_cache_retention).toBeUndefined();
+	});
+
+	it("uses a stable-prefix key across sessions while preserving session affinity separately", async () => {
+		const stablePrefix = "stable system";
+		const model = createModel({ compat: { sendSessionAffinityHeaders: true } });
+		const first = await captureRequest({ sessionId: "session-one" }, model, {
+			systemPrompt: `${stablePrefix}\ndynamic one`,
+			systemPromptCacheBoundary: stablePrefix.length,
+			messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
+		});
+		const second = await captureRequest({ sessionId: "session-two" }, model, {
+			systemPrompt: `${stablePrefix}\ndynamic two`,
+			systemPromptCacheBoundary: stablePrefix.length,
+			messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
+		});
+
+		expect(first.payload?.prompt_cache_key).toBe(second.payload?.prompt_cache_key);
+		expect(first.payload?.prompt_cache_key).toMatch(/^omk-/);
+		expect(first.payload?.prompt_cache_key).not.toBe("session-one");
+		expect(first.headers.session_id).toBe("session-one");
+		expect(second.headers.session_id).toBe("session-two");
+	});
+
+	it("omits prompt_cache_key for an explicit system-prompt boundary bypass", async () => {
+		const model = createModel({ compat: { sendSessionAffinityHeaders: true } });
+		const { payload, headers } = await captureRequest({ sessionId: "session-bypass" }, model, {
+			systemPrompt: "extension-controlled replacement",
+			systemPromptCacheBoundaryBypass: true,
+			messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
+		});
+
+		expect(payload?.prompt_cache_key).toBeUndefined();
+		expect(headers.session_id).toBe("session-bypass");
 	});
 
 	it("sets prompt_cache_retention to 24h for direct OpenAI requests when cacheRetention is long", async () => {

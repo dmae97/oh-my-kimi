@@ -96,6 +96,31 @@ describe("AgentSession.getSessionStats", () => {
 		}
 	});
 
+	it("reports observed provider prompt-cache hit rate", () => {
+		const { session, sessionManager } = createSession();
+
+		try {
+			const assistant = createAssistantMessage("cached", 1_000, 2);
+			assistant.usage = {
+				...assistant.usage,
+				input: 200,
+				cacheRead: 600,
+				cacheWrite: 200,
+				totalTokens: 1_000,
+			};
+			sessionManager.appendMessage(createUserMessage("hello", 1));
+			sessionManager.appendMessage(assistant);
+			syncAgentMessages(session, sessionManager);
+
+			const stats = session.getSessionStats();
+			expect(stats.promptCache.providerEligibleInputTokens).toBe(1_000);
+			expect(stats.promptCache.providerHitRate).toBe(0.6);
+			expect(stats.promptCache.stablePrefixCharacters).toBeGreaterThan(0);
+		} finally {
+			session.dispose();
+		}
+	});
+
 	it("reports unknown current context usage immediately after compaction", () => {
 		const { session, sessionManager } = createSession();
 

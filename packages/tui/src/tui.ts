@@ -677,7 +677,10 @@ export class TUI extends Container {
 		this.terminal.write("\x1b[16t");
 	}
 
-	stop(): void {
+	stop(options: { finalLines?: string[] } = {}): void {
+		if (options.finalLines !== undefined) {
+			this.doRender(options.finalLines);
+		}
 		this.stopped = true;
 		if (this.renderTimer) {
 			clearTimeout(this.renderTimer);
@@ -1177,7 +1180,7 @@ export class TUI extends Container {
 		return null;
 	}
 
-	private doRender(): void {
+	private doRender(finalLines?: string[]): void {
 		if (this.stopped) return;
 		const width = this.terminal.columns;
 		const height = this.terminal.rows;
@@ -1196,10 +1199,10 @@ export class TUI extends Container {
 		// Render all components to get new lines. Children render at the content
 		// width (terminal minus the reserved right gutter); overlays composite at
 		// full-terminal coordinates below, so pinned rails own the gutter columns.
-		let newLines = this.render(width - this.resolveRightGutter(width, height));
+		let newLines = finalLines ?? this.render(width - this.resolveRightGutter(width, height));
 
 		// Composite overlays into the rendered lines (before differential compare)
-		if (this.overlayStack.length > 0) {
+		if (finalLines === undefined && this.overlayStack.length > 0) {
 			newLines = this.compositeOverlays(newLines, width, height);
 		}
 
@@ -1208,13 +1211,19 @@ export class TUI extends Container {
 
 		newLines = this.applyLineResets(newLines);
 
-		// Helper to clear scrollback and viewport and render all new lines
+		// Helper to optionally clear the visible viewport and render all new lines
 		const fullRender = (clear: boolean): void => {
 			this.fullRedrawCount += 1;
 			let buffer = "\x1b[?2026h"; // Begin synchronized output
 			if (clear) {
 				buffer += this.deleteKittyImages(this.previousKittyImageIds);
-				buffer += "\x1b[2J\x1b[H\x1b[3J"; // Clear screen, home, then clear scrollback
+				// Clear the visible screen and move to home, but PRESERVE scrollback.
+				// \x1b[3J (clear scrollback) used to be emitted here — on WSL/Windows
+				// Terminal every width/height change or viewport reset wiped the
+				// user's scrollback and snapped the viewport to the top. Scrollback
+				// clearing belongs to an explicit user action (e.g. clear), not to
+				// routine re-renders.
+				buffer += "\x1b[2J\x1b[H";
 			}
 			for (let i = 0; i < newLines.length; i++) {
 				if (i > 0) buffer += "\r\n";
@@ -1273,7 +1282,12 @@ export class TUI extends Container {
 		// Content shrunk below the working area and no overlays - re-render to clear empty rows
 		// (overlays need the padding, so only do this when no overlays are active)
 		// Configurable via setClearOnShrink() or OMK_CLEAR_ON_SHRINK=0 env var
-		if (this.clearOnShrink && newLines.length < this.maxLinesRendered && this.overlayStack.length === 0) {
+		if (
+			finalLines === undefined &&
+			this.clearOnShrink &&
+			newLines.length < this.maxLinesRendered &&
+			this.overlayStack.length === 0
+		) {
 			logRedraw(`clearOnShrink (maxLinesRendered=${this.maxLinesRendered})`);
 			fullRender(true);
 			return;
@@ -1330,6 +1344,7 @@ export class TUI extends Container {
 				if (lineDiff > 0) buffer += `\x1b[${lineDiff}B`;
 				else if (lineDiff < 0) buffer += `\x1b[${-lineDiff}A`;
 				buffer += "\r";
+				if (newLines.length === 0) buffer += "\x1b[2K";
 				// Clear extra lines without scrolling
 				const extraLines = this.previousLines.length - newLines.length;
 				if (extraLines > height) {

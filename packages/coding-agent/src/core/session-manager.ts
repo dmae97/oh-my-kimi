@@ -825,10 +825,15 @@ export class SessionManager {
 		sessionFile: string | undefined,
 		persist: boolean,
 		newSessionOptions?: NewSessionOptions,
+		ownerLease?: SessionOwnerLease,
 	) {
 		this.cwd = resolvePath(cwd);
 		this.sessionDir = normalizePath(sessionDir);
 		this.persist = persist;
+		if (ownerLease && sessionFile && !ownerLease.owns(sessionFile)) {
+			throw new TypeError("Session owner lease does not identify this session file");
+		}
+		this.ownerLease = ownerLease;
 		if (persist && this.sessionDir && !existsSync(this.sessionDir)) ensureDurableDirectorySync(this.sessionDir);
 
 		if (sessionFile) {
@@ -871,7 +876,7 @@ export class SessionManager {
 			const header = entries[0];
 			if (header.type !== "session") throw new Error("Session file has no valid header");
 			const sessionId = header.id;
-			const lastLoaded = entries.at(-1);
+			const lastLoaded = entries[entries.length - 1];
 			const loadedLeafId =
 				lastLoaded && lastLoaded.type !== "session" && typeof lastLoaded.id === "string" ? lastLoaded.id : null;
 			const needsMigration = (header.version ?? 1) < CURRENT_SESSION_VERSION;
@@ -887,7 +892,7 @@ export class SessionManager {
 				if (!sameDurableSessionHead(current, acceptedBeforeMigration)) throw new SessionManagerStaleWriteError();
 				atomicRewriteFileSync(explicitPath, serializeFileEntries(entries));
 			}
-			const lastEntry = entries.at(-1);
+			const lastEntry = entries[entries.length - 1];
 			const leafId = lastEntry && lastEntry.type !== "session" ? lastEntry.id : null;
 			return {
 				entries,
@@ -1003,7 +1008,7 @@ export class SessionManager {
 				}
 			}
 			const bytes = new TextEncoder().encode(serializeFileEntries(this.fileEntries));
-			const lastEntry = this.fileEntries.at(-1);
+			const lastEntry = this.fileEntries[this.fileEntries.length - 1];
 			return createSessionRevisionToken({
 				sessionId: this.sessionId,
 				completeBytes: bytes.byteLength,
@@ -1046,6 +1051,10 @@ export class SessionManager {
 
 	getQuarantineReport(): SessionQuarantineReport | null {
 		return this.quarantineReport;
+	}
+
+	getOwnerLease(): SessionOwnerLease | undefined {
+		return this.ownerLease;
 	}
 
 	setOwnerLease(lease: SessionOwnerLease | undefined): void {
@@ -1502,7 +1511,7 @@ export class SessionManager {
 					atomicRewriteFileSync(newSessionFile, serializeFileEntries(candidateEntries));
 					acceptedDurableHead = sessionDurableHeadFromFile(
 						newSessionFile,
-						labelEntries.at(-1)?.id ?? lastEntryId,
+						labelEntries[labelEntries.length - 1]?.id ?? lastEntryId,
 						candidateEntries,
 					);
 				} finally {
@@ -1557,13 +1566,18 @@ export class SessionManager {
 	 * @param sessionDir Optional session directory for /new or /branch. If omitted, derives from file's parent.
 	 * @param cwdOverride Optional cwd override instead of the session header cwd.
 	 */
-	static open(path: string, sessionDir?: string, cwdOverride?: string): SessionManager {
+	static open(
+		path: string,
+		sessionDir?: string,
+		cwdOverride?: string,
+		ownerLease?: SessionOwnerLease,
+	): SessionManager {
 		const resolvedPath = resolvePath(path);
 		const header = readSessionHeader(resolvedPath);
 		const cwd = cwdOverride ?? header?.cwd ?? process.cwd();
 		// If no sessionDir provided, derive from file's parent directory
 		const dir = sessionDir ? normalizePath(sessionDir) : resolve(resolvedPath, "..");
-		return new SessionManager(cwd, dir, resolvedPath, true);
+		return new SessionManager(cwd, dir, resolvedPath, true, undefined, ownerLease);
 	}
 
 	/**
@@ -1659,6 +1673,40 @@ export class SessionManager {
 		);
 		sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
 		return sessions;
+	}
+
+	/** List session IDs without parsing full transcripts. */
+	static async listAllSessionIds(sessionDir?: string): Promise<Set<string>> {
+		const root = sessionDir ? normalizePath(sessionDir) : getSessionsDir();
+		try {
+			if (!existsSync(root)) return new Set();
+			const dirs = sessionDir
+				? [root]
+				: (await readdir(root, { withFileTypes: true }))
+						.filter((entry) => entry.isDirectory())
+						.map((entry) => join(root, entry.name));
+			const files = (
+				await Promise.all(
+					dirs.map(async (dir) => {
+						try {
+							return (await readdir(dir))
+								.filter((file) => file.endsWith(".jsonl"))
+								.map((file) => join(dir, file));
+						} catch {
+							return [];
+						}
+					}),
+				)
+			).flat();
+			const ids = new Set<string>();
+			for (const file of files) {
+				const header = readSessionHeader(file);
+				if (header) ids.add(header.id);
+			}
+			return ids;
+		} catch {
+			return new Set();
+		}
 	}
 
 	/**

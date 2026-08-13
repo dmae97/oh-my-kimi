@@ -121,6 +121,28 @@ describe("Agent", () => {
 		expect(agent.state.thinkingLevel).toBe("low");
 	});
 
+	it("should forward maxTurns and leave follow-ups queued after the turn budget", async () => {
+		let providerCalls = 0;
+		const agent = new Agent({
+			maxTurns: 1,
+			streamFn: () => {
+				providerCalls++;
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("done") });
+				});
+				return stream;
+			},
+		});
+		agent.followUp({ role: "user", content: "run later", timestamp: Date.now() });
+
+		await agent.prompt("start");
+
+		expect(providerCalls).toBe(1);
+		expect(agent.maxTurns).toBe(1);
+		expect(agent.hasQueuedMessages()).toBe(true);
+	});
+
 	it("should subscribe to events", () => {
 		const agent = new Agent();
 
@@ -522,6 +544,33 @@ describe("Agent", () => {
 
 		await agent.prompt("hello again");
 		expect(receivedSessionId).toBe("session-def");
+	});
+
+	it("forwards the stable system prompt cache boundary to providers", async () => {
+		const stablePrefix = "stable instructions";
+		let receivedBoundary: number | undefined;
+		let receivedBoundaryBypass: boolean | undefined;
+		const agent = new Agent({
+			initialState: {
+				systemPrompt: `${stablePrefix}\ndynamic resources`,
+				systemPromptCacheBoundary: stablePrefix.length,
+				systemPromptCacheBoundaryBypass: false,
+			},
+			streamFn: (_model, context) => {
+				receivedBoundary = context.systemPromptCacheBoundary;
+				receivedBoundaryBypass = context.systemPromptCacheBoundaryBypass;
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("ok") });
+				});
+				return stream;
+			},
+		});
+
+		await agent.prompt("hello");
+
+		expect(receivedBoundary).toBe(stablePrefix.length);
+		expect(receivedBoundaryBypass).toBe(false);
 	});
 
 	it("forwards dag scheduler and concurrency controls to the loop", async () => {

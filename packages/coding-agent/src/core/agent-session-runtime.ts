@@ -293,12 +293,14 @@ export class AgentSessionRuntime {
 				return { cancelled: false, selectedText };
 			}
 
-			const sessionManager = SessionManager.open(currentSessionFile, sessionDir);
+			const ownerLease = this.session.sessionManager.getOwnerLease();
+			const sessionManager = SessionManager.open(currentSessionFile, sessionDir, undefined, ownerLease);
 			const forkedSessionPath = sessionManager.createBranchedSession(targetLeafId);
 			if (!forkedSessionPath) {
 				throw new Error("Failed to create forked session");
 			}
 			await this.teardownCurrent("fork", sessionManager.getSessionFile());
+			if (sessionManager.getOwnerLease() === ownerLease) sessionManager.setOwnerLease(undefined);
 			this.apply(
 				await this.createRuntime({
 					cwd: sessionManager.getCwd(),

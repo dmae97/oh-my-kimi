@@ -78,7 +78,22 @@ describe("regression #3592: no-builtin-tools keeps extension tools enabled", () 
 				.getAllTools()
 				.map((tool) => tool.name)
 				.sort(),
-		).toEqual(["bash", "diagnostics", "dynamic_tool", "edit", "find", "grep", "ls", "read", "write"]);
+		).toEqual([
+			"bash",
+			"diagnostics",
+			"dynamic_tool",
+			"edit",
+			"find",
+			"grep",
+			"ls",
+			"read",
+			// Built-in update_todo is still *listed*: noTools governs what is active,
+			// not what the registry knows about.
+			"update_todo",
+			"write",
+		]);
+		// Only the user's extension tool stays active. update_todo ships with the
+		// harness, so it follows the built-in policy the caller just disabled.
 		expect(session.getActiveToolNames()).toEqual(["dynamic_tool"]);
 		expect(session.systemPrompt).toContain("- dynamic_tool: Run dynamic test behavior");
 		expect(session.systemPrompt).not.toContain("- read:");

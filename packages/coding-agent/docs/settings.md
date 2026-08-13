@@ -17,7 +17,7 @@ Edit directly or use `/settings` for common options.
 | --------- | ------ | --------- | ------------- |
 | `defaultProvider` | string | - | Default provider (e.g., `"anthropic"`, `"openai"`) |
 | `defaultModel` | string | - | Default model ID |
-| `defaultThinkingLevel` | string | - | `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"` |
+| `defaultThinkingLevel` | string | - | `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`, `"ultra"` |
 | `hideThinkingBlock` | boolean | `false` | Hide thinking blocks in output |
 | `thinkingBudgets` | object | - | Custom token budgets per thinking level |
 | `reasoningRouterLearning` | object | - | Opt-in v4 router learning bias (global settings file only) |
@@ -41,16 +41,16 @@ Edit directly or use `/settings` for common options.
 ```json
 {
   "reasoningRouterLearning": {
-    "enabled": false,
-    "biasSnapshotPath": "~/.omk/agent/router-bias.json",
-    "feedbackLedgerPath": "~/.omk/agent/router-feedback.jsonl"
+    "enabled": false
   }
 }
 ```
 
+This opt-in remains global-only, but its default data is isolated per repository or git worktree under `~/.omk/agent/router-feedback/repositories/<opaque-scope>/`. The scope is derived from the canonical worktree root and never stores the raw path. Set `biasSnapshotPath` or `feedbackLedgerPath` only when intentionally overriding that isolation with fixed paths.
+
 #### adaptorchBridge
 
-Advisory-only hint source for the v4 auto thinking-level resolver. Read from the **global** settings file only — a project-scope `.omk/settings.json` value is ignored by design. Default is fully off; the bridge is circuit-breaker protected and TTL-cached, and its hint can only nudge the resolved level by a bounded ±2 steps.
+Global-only, default-off lifecycle for a future v4 advisory source. The timeout, TTL, consult-budget, and circuit-breaker controls are wired, but the current transport is a no-op and cannot change the resolved level. A project-scope `.omk/settings.json` value is ignored by design.
 
 ```json
 {
@@ -156,7 +156,7 @@ This setting is global-only: `.omk/settings.json` cannot enable or disable it. U
 | `agent.toolTimeoutMs` | number | `0` | Fallback tool execution timeout in milliseconds; `0` disables the fallback timer |
 | `agent.toolTimeouts` | object | built-in defaults | Per-tool-name timeout overrides; `0` disables that tool's timer |
 
-Built-in defaults are 30 seconds for `read`, `grep`, `find`, and `ls`; 60 seconds for `edit` and `write`; and 300 seconds for `bash`. Explicit `agent.toolTimeouts` entries override these defaults. Extension/custom tools without a per-name value use `agent.toolTimeoutMs`. Timeout values must be integer milliseconds from `0` through `2147483647`.
+Built-in defaults are 30 seconds for `read`, `grep`, `find`, and `ls`; 60 seconds for `edit` and `write`; and 300 seconds for `bash`. Explicit `agent.toolTimeouts` entries override these defaults. Extension tools may override settings per call with `resolveTimeoutMs(ctx)`; otherwise custom tools without a per-name value use `agent.toolTimeoutMs`. Timeout values must be integer milliseconds from `0` through `2147483647`.
 
 ```json
 {

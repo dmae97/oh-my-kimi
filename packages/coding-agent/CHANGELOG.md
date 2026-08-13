@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Extension tools can resolve timeouts from current context. The subagent extension uses this to remove task-count, concurrency, execution-budget, attempt, and outer tool-timeout caps in Ultra while preserving explicit cancellation and non-Ultra limits.
+- The startup control panel now identifies the product with `WELCOME TO OMK` instead of legacy Pi agent branding.
+- Context-budget prompts use compact metadata for valid zero-resource plans while retaining cache-state and legacy optimizer compatibility telemetry; diagnostic and non-empty plans keep full observability, and invalid budgets bypass the plan cache so diagnostics cannot be hidden by a prior hit.
+- The workspace context-budget cache scans every persisted key/value, keeps credential-shaped entries in memory only, and removes unsafe legacy snapshots instead of persisting secret-shaped text.
+- Exact context representations now reuse content-addressed cache entries across different queries and budget sizes instead of forcing avoidable misses.
+- Opt-in reasoning-router learning now isolates default ledgers and compiled bias snapshots per repository or git worktree, captures explicit manual thinking-level overrides as bounded feedback, and keeps updates behind the shipped, deterministic `omk router-feedback compile-bias` between-session command. Snapshot loading rejects nonzero biases below the strong-evidence threshold, unsafe or inconsistent counts, and duplicate cells; compilation uses an exclusive randomized temporary file before atomic rename.
+
 ## [0.95.1] - 2026-08-01
 
 ### Added

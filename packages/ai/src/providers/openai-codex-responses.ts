@@ -43,7 +43,7 @@ import {
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord } from "../utils/headers.ts";
 import { GPT_56_MOA_MODEL_ID, streamOpenAICodexMoa } from "./openai-codex-moa.ts";
-import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
+import { resolveOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
 import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.ts";
 import { buildBaseOptions } from "./simple-options.ts";
 
@@ -499,7 +499,7 @@ function buildRequestBody(
 		input: messages,
 		text: { verbosity: options?.textVerbosity || "low" },
 		include: ["reasoning.encrypted_content"],
-		prompt_cache_key: clampOpenAIPromptCacheKey(options?.sessionId),
+		prompt_cache_key: resolveOpenAIPromptCacheKey(context, options?.sessionId, `${model.provider}/${model.id}`),
 	};
 
 	if (options?.temperature !== undefined) {

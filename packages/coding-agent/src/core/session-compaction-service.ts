@@ -24,9 +24,10 @@ import {
 	createCompactionTransaction,
 	decideCompactionCommit,
 	evaluateCompactionBarrier,
+	redactCredentialShapedContent,
 	validateCompactionEnvelope,
 } from "./compaction/transaction.ts";
-import { redactSensitiveText } from "./redaction.ts";
+import { redactSensitiveTextForced } from "./redaction.ts";
 import type { SessionIntegrityReport } from "./session-integrity.ts";
 import { inspectSessionIntegrity } from "./session-integrity.ts";
 import type { CompactionEntry, SessionEntry, SessionManager } from "./session-manager.ts";
@@ -101,7 +102,7 @@ export class SessionCompactionService {
 			latestCompactionIndex < 0 ? 0 : firstKeptIndex < 0 ? latestCompactionIndex : firstKeptIndex,
 		);
 		const firstEntry = sourceEntries[0];
-		const lastEntry = sourceEntries.at(-1);
+		const lastEntry = sourceEntries[sourceEntries.length - 1];
 		if (!firstEntry || !lastEntry || report.activeLeafId === null) {
 			const barrier = evaluateCompactionBarrier(report, [...this.deps.pendingToolCallIds()]);
 			if (barrier.status !== "ready") throw this.barrierError(barrier);
@@ -185,7 +186,7 @@ export class SessionCompactionService {
 		const digests: string[] = [];
 		for (const entry of this.deps.sessionManager.getEntries()) {
 			if (entry.type !== "compaction" || typeof entry.details !== "object" || entry.details === null) continue;
-			if (!Object.hasOwn(entry.details, "compactionEnvelope")) continue;
+			if (Object.getOwnPropertyDescriptor(entry.details, "compactionEnvelope") === undefined) continue;
 			const envelope = validateCompactionEnvelope(Reflect.get(entry.details, "compactionEnvelope"));
 			if (envelope.summary !== entry.summary) {
 				throw new Error(`Compaction entry ${entry.id} has invalid provenance. Run the session doctor.`);
@@ -222,9 +223,11 @@ export class SessionCompactionService {
 		for (let index = capture.report.activeMessages.length - 1; index >= 0; index -= 1) {
 			const message = capture.report.activeMessages[index];
 			if (message?.role !== "user") continue;
-			const candidate = sanitizeBinaryOutput(redactSensitiveText(this.deps.getUserMessageText(message)).trim())
-				.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, "")
-				.slice(0, 16_384);
+			const candidate = redactCredentialShapedContent(
+				sanitizeBinaryOutput(redactSensitiveTextForced(this.deps.getUserMessageText(message)).trim())
+					.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, "")
+					.slice(0, 16_384),
+			);
 			if (candidate.length > 0) latestIntent = candidate;
 			break;
 		}
@@ -257,7 +260,7 @@ export class SessionCompactionService {
 			branch: null,
 			worktree: this.deps.cwd,
 			modelHistory,
-			nextAction: latestIntent.slice(0, 4096) || "Continue the current session",
+			nextAction: redactCredentialShapedContent(latestIntent.slice(0, 4096)) || "Continue the current session",
 		};
 	}
 

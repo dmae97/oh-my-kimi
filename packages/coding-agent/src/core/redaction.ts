@@ -1,5 +1,14 @@
 /** Mask high-confidence credentials before user text reaches the model or session. */
 
+/**
+ * Opt-out switch for local/self-hosted setups that deliberately paste their own
+ * credentials into the agent. Set PI_DISABLE_INPUT_REDACTION=1 (alias
+ * OMK_DISABLE_REDACTION=1) to pass text through unchanged. Read once at load.
+ */
+const INPUT_REDACTION_DISABLED = /^(?:1|true|yes|on)$/i.test(
+	process.env.PI_DISABLE_INPUT_REDACTION ?? process.env.OMK_DISABLE_REDACTION ?? "",
+);
+
 const REDACTED = "[REDACTED]";
 const SECRET_VALUE_NAME =
 	"(?:(?:[a-z0-9]+[_-])?(?:api[_-]?key|x-api-key|access[_-]?token|refresh[_-]?token|client[_-]?secret|token|secret|password))";
@@ -28,7 +37,7 @@ const KNOWN_CREDENTIAL_PATTERNS = [
  * context. This deliberately avoids generic entropy-based matching so ordinary
  * identifiers and prose remain unchanged.
  */
-export function redactSensitiveText(text: string): string {
+function applySensitiveTextRedaction(text: string): string {
 	let redacted = text
 		.replace(
 			QUOTED_SECRET_VALUE_PATTERN,
@@ -41,4 +50,13 @@ export function redactSensitiveText(text: string): string {
 		redacted = redacted.replace(pattern, REDACTED);
 	}
 	return redacted;
+}
+
+export function redactSensitiveText(text: string): string {
+	return INPUT_REDACTION_DISABLED ? text : applySensitiveTextRedaction(text);
+}
+
+/** Redact credentials at persistence/report boundaries even when interactive input redaction is disabled. */
+export function redactSensitiveTextForced(text: string): string {
+	return applySensitiveTextRedaction(text);
 }

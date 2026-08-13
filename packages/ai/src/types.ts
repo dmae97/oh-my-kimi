@@ -361,6 +361,13 @@ export interface Tool<TParameters extends TSchema = TSchema> {
 
 export interface Context {
 	systemPrompt?: string;
+	/**
+	 * UTF-16 offset ending the stable, provider-cacheable system-prompt prefix.
+	 * Providers that do not support explicit cache breakpoints ignore it.
+	 */
+	systemPromptCacheBoundary?: number;
+	/** Suppress explicit stable-prefix cache affinity/markers for a dynamic prompt replacement. */
+	systemPromptCacheBoundaryBypass?: boolean;
 	messages: Message[];
 	tools?: Tool[];
 }

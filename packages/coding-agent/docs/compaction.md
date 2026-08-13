@@ -3,6 +3,7 @@
 LLMs have limited context windows. When conversations grow too long, omk uses compaction to summarize older content while preserving recent work. This page covers both auto-compaction and branch summarization.
 
 **Source files** ([omk-mono](https://github.com/dmae97/omk)):
+
 - [`packages/coding-agent/src/core/compaction/compaction.ts`](https://github.com/dmae97/omk/blob/main/packages/coding-agent/src/core/compaction/compaction.ts) - Auto-compaction logic
 - [`packages/coding-agent/src/core/compaction/branch-summarization.ts`](https://github.com/dmae97/omk/blob/main/packages/coding-agent/src/core/compaction/branch-summarization.ts) - Branch summarization
 - [`packages/coding-agent/src/core/compaction/utils.ts`](https://github.com/dmae97/omk/blob/main/packages/coding-agent/src/core/compaction/utils.ts) - Shared utilities (file tracking, serialization)
@@ -21,6 +22,24 @@ OMK has two summarization mechanisms:
 | Branch summarization | `/tree` navigation | Preserve context when switching branches |
 
 Both use the same structured summary format and track file operations cumulatively.
+
+## Context Reduction and Prompt Caching
+
+OMK uses three separate layers; their token counts must not be conflated:
+
+1. **Context Budget V2** selects, compresses, points to, or omits loaded context files and skill descriptions before a provider request. Its plan and representation caches avoid repeated local work. Exact representations are content-addressed across queries and budget sizes; query-dependent materialized summaries remain isolated.
+2. **Provider prompt caching** discounts or reuses an unchanged request prefix. Provider usage is recorded separately as `cacheRead` and `cacheWrite`; these are observed provider values, not synthetic compaction savings.
+3. **Compaction** replaces old conversation turns with a durable summary after context usage crosses the configured threshold.
+
+The system-prompt builder records a stable cache boundary immediately after OMK's base instructions, operator append, and runtime trust boundary. Loaded context files, prompt-selected skills, active-skill bodies, date, and working directory remain in the dynamic suffix. Provider behavior is then:
+
+- **Anthropic Messages**, when prompt caching is enabled, sends the stable prefix and dynamic suffix as separate system text blocks and puts `cache_control` only on the stable block. Tool definitions are canonicalized and sorted, with a cache marker on the final deterministic tool.
+- **OpenAI-family transports** (Responses, supported Chat Completions, Codex Responses, and Azure Responses) keep the complete prompt text but derive `prompt_cache_key` affinity from the stable prefix plus canonical tool schemas when their cache settings allow it. Session IDs remain available for request/session affinity. Direct `omk-ai` callers without boundary metadata retain session-derived cache-key behavior where supported.
+- If an extension replaces the built system prompt, OMK sets an explicit boundary bypass unless the replacement is byte-identical. Anthropic omits the system-prefix cache marker and OpenAI-family requests omit content/session-derived cache affinity for that turn, preventing a dynamic or extension-controlled replacement from being treated as stable content.
+
+`/session` reports provider cache-read/cache-write tokens, provider cache-hit rate (`cacheRead / (input + cacheRead + cacheWrite)`), stable-prefix size, key changes, boundary bypasses, and the last local break reason. These diagnostics explain local cache-affinity changes; only provider-returned usage proves an actual cache hit.
+
+This follows the stable-prefix/dynamic-suffix pattern used by OpenClaw's pinned [`system-prompt-cache-boundary.ts`](https://github.com/openclaw/openclaw/blob/78486e27511c945a01c7e719b7e271e437ffb7a2/packages/ai/src/utils/system-prompt-cache-boundary.ts), while carrying the boundary as typed request metadata instead of an in-band marker. OpenClaw's [`prompt-cache-observability.ts`](https://github.com/openclaw/openclaw/blob/78486e27511c945a01c7e719b7e271e437ffb7a2/src/agents/embedded-agent-runner/prompt-cache-observability.ts) and [`live-cache-regression-runner.ts`](https://github.com/openclaw/openclaw/blob/78486e27511c945a01c7e719b7e271e437ffb7a2/src/agents/live-cache-regression-runner.ts) are the reference patterns for digest and live-regression diagnostics. OMK unit tests verify payload shape and key stability; no live cache-hit claim is made without provider evidence.
 
 ## Compaction
 
@@ -46,7 +65,7 @@ reservedBudget = reservedOutputTokens + reservedToolResultTokens + safetyMarginT
 If the reserved budget exceeds the context window, the reserve boundary is ignored and only the usage-ratio boundary applies. All numeric token reserves must be non-negative safe integers; ratios must be finite and in `(0, 1]`. Invalid values fail session creation instead of silently weakening the policy.
 
 | Setting | Default | Description |
-|---------|---------|-------------|
+| --------- | --------- | ------------- |
 | `reserveTokens` | `16384` | Legacy/default output reserve; used as `reservedOutputTokens` when that value is not set |
 | `reservedOutputTokens` | `reserveTokens` | Tokens reserved for the LLM response |
 | `reservedToolResultTokens` | `0` | Tokens reserved for pending tool results |
@@ -56,7 +75,7 @@ If the reserved budget exceeds the context window, the reserve boundary is ignor
 | `rearmRatio` | `0.75 × maxUsageRatio` | Ratio below which a triggered compaction can rearm |
 | `emergencyRatio` | `0.98` | Emergency compaction ratio |
 
-You can also trigger manually with `/compact [instructions]`, where optional instructions focus the summary.
+You can also trigger manually with `/compact [instructions]`, where optional instructions focus the summary. If a run is active, manual compaction waits for abort-driven terminal events, including tool results, to persist before capturing the transcript.
 
 ### Model Selection
 
@@ -136,12 +155,14 @@ Split turn (one huge turn exceeds budget):
 ```
 
 For split turns, omk generates two summaries and merges them:
+
 1. **History summary**: Previous context (if any)
 2. **Turn prefix summary**: The early part of the split turn
 
 ### Cut Point Rules
 
 Valid cut points are:
+
 - User messages
 - Assistant messages
 - BashExecution messages
@@ -211,6 +232,7 @@ After navigation with summary:
 ### Cumulative File Tracking
 
 Both compaction and branch summarization track files cumulatively. When generating a summary, omk extracts file operations from:
+
 - Tool calls in the messages being summarized
 - Previous compaction or branch summary `details` (if any)
 
@@ -425,7 +447,7 @@ Configure compaction in `~/.omk/agent/settings.json` or `<project-dir>/.omk/sett
 ```
 
 | Setting | Default | Description |
-|---------|---------|-------------|
+| --------- | --------- | ------------- |
 | `enabled` | `true` | Enable auto-compaction |
 | `model` | session model | Authenticated canonical `provider/model` used only for compaction |
 | `reserveTokens` | `16384` | Legacy/default output reserve |

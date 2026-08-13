@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- GPT-5.6 MoA keeps Sol/Terra advisers tool-free but now gives Sol synthesis the active tool contract and tool history, forwarding synthesis tool calls through the normal agent loop.
+
+### Fixed
+
+- Every `glm-5.2` model entry (zai, zai-coding-cn, opencode, opencode-go, openrouter, vercel-ai-gateway, fireworks, together, huggingface, nvidia, cloudflare workers-ai/ai-gateway) now carries an explicit `thinkingLevelMap` that exposes the `max` thinking level (`max: "max"`), so `/thinking max` and the `Ctrl+T` selector reach the API as `reasoning_effort: "max"` instead of being capped at `high`. Z.AI GLM-5.2 entries also re-enable `compat.supportsReasoningEffort` so the effort is actually transmitted. The prior fix only covered `opencode`/`opencode-go` and was lost on the next catalog regeneration; the map now lives in `generate-models.ts` so it survives regeneration, and a regression test covers every registry entry.
+
 ## [0.95.1] - 2026-08-01
 
 ## [0.95.0] - 2026-07-31

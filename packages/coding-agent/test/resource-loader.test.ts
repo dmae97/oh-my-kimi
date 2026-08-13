@@ -235,7 +235,7 @@ Project skill`,
 
 			const extensionsResult = loader.getExtensions();
 			const discoveredExtensions = extensionsResult.extensions.filter(
-				(extension) => extension.path !== "<builtin:command-safety>",
+				(extension) => !extension.path.startsWith("<builtin:"),
 			);
 			expect(discoveredExtensions).toHaveLength(1);
 			expect(extensionsResult.errors).toEqual([]);
@@ -284,7 +284,7 @@ Project skill`,
 
 			const extensionsResult = loader.getExtensions();
 			const discoveredExtensions = extensionsResult.extensions.filter(
-				(extension) => extension.path !== "<builtin:command-safety>",
+				(extension) => !extension.path.startsWith("<builtin:"),
 			);
 			expect(discoveredExtensions).toHaveLength(2);
 			expect(extensionsResult.errors.some((e) => e.error.includes('Command "/deploy" conflicts'))).toBe(false);
@@ -749,7 +749,7 @@ export default function(pi: ExtensionAPI) {
 
 			const extensionsResult = loader.getExtensions();
 			const discoveredExtensions = extensionsResult.extensions.filter(
-				(extension) => extension.path !== "<builtin:command-safety>",
+				(extension) => !extension.path.startsWith("<builtin:"),
 			);
 			expect(discoveredExtensions[0]?.path).toBe(explicitExtPath);
 

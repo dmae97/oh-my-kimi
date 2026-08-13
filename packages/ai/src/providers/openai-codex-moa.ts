@@ -181,9 +181,9 @@ export function streamOpenAICodexMoa({
 			const terraText = boundedAdviserText(advisers[1]);
 			if (!solText || !terraText) throw new MoaAdvisorError();
 			const synthesisContext: Context = {
-				...adviserContext,
+				...context,
 				messages: [
-					...adviserContext.messages,
+					...context.messages,
 					{
 						role: "user",
 						content: `${SYNTHESIS_INSTRUCTION}\n\n${JSON.stringify({ sol: solText, terra: terraText })}`,
@@ -200,15 +200,6 @@ export function streamOpenAICodexMoa({
 					(event) => forwardSynthesisEvent({ event, stream, model, advisers }),
 				);
 				if (options?.signal?.aborted) throw new Error("Request was aborted");
-				if (synthesisResult.toolViolationMessage) {
-					forwardSynthesisEvent({
-						event: { type: "error", reason: "error", error: synthesisResult.toolViolationMessage },
-						stream,
-						model,
-						advisers,
-					});
-					return;
-				}
 				if (synthesisResult.cappedMessage) {
 					stream.push({
 						type: "done",

@@ -144,7 +144,11 @@ export async function executeBashWithOperations(
 			await discardTempFile();
 		}
 		if (tempFileStream) {
-			tempFileStream.end();
+			// end() is async — wait for flush so fullOutputPath is complete
+			// when the caller reads it (flaky empty/partial file under load).
+			await new Promise<void>((resolve) => {
+				tempFileStream!.end(() => resolve());
+			});
 		}
 		const cancelled = options?.signal?.aborted ?? false;
 
@@ -167,7 +171,9 @@ export async function executeBashWithOperations(
 				await discardTempFile();
 			}
 			if (tempFileStream) {
-				tempFileStream.end();
+				await new Promise<void>((resolve) => {
+					tempFileStream!.end(() => resolve());
+				});
 			}
 			return {
 				output: truncationResult.truncated ? truncationResult.content : fullOutput,

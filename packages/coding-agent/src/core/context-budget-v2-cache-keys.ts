@@ -19,6 +19,24 @@ type ContextBudgetRepresentationFingerprintInputV2 = Pick<
 	"compressorId" | "estimatedTokens" | "fidelity" | "kind" | "sourceRef" | "summaryHash" | "text"
 >;
 
+/**
+ * Cache-key inputs shared by the plan cache and the representation cache.
+ *
+ * Scope contract (deliberate asymmetry — see the two builders below):
+ * - **Plan keys are session-scoped.** A plan is a selection over the whole
+ *   transcript and runtime state, so {@link invalidationSnapshotHash} (fork id,
+ *   worktree fingerprint, steering/repair/settings counters) is part of the key.
+ * - **Representation keys are content-addressed.** A rendered representation is
+ *   fully identified by its source content plus the rendering policy, so the
+ *   invalidation snapshot is deliberately *excluded*. Folding a per-session
+ *   `forkId` into representation keys made every new session miss every entry
+ *   (structurally unreachable reuse, not a cold cache), while adding no safety:
+ *   `validateContextBudgetRepresentationCacheEntryV2` independently re-checks
+ *   source hash, fingerprint, model, tokenizer, policy version, and
+ *   TTL on every read, and worktree/model/redaction/safety changes already move
+ *   the key through `sourceHash` / `modelId` / `redactionPolicyHash` /
+ *   `safetyProfileHash`.
+ */
 export interface ContextBudgetCacheKeyBaseV2 {
 	readonly namespace: string;
 	readonly modelId: string;
@@ -91,6 +109,10 @@ export function buildContextBudgetRepresentationCacheKeyV2(
 	return buildContextBudgetExactRepresentationCacheKeyV2(input);
 }
 
+/**
+ * Exact representation key. Content-addressed: identical content + rendering
+ * policy yields one key across queries, budgets, sessions, forks, and worktrees.
+ */
 export function buildContextBudgetExactRepresentationCacheKeyV2(
 	input: ContextBudgetCacheKeyBaseV2 & {
 		readonly representationKind: ContextRepresentationKindV2;
@@ -100,13 +122,10 @@ export function buildContextBudgetExactRepresentationCacheKeyV2(
 	},
 ): string {
 	return `context-representation-exact:${sha256Canonical({
-		budgetBucket: input.budgetBucket,
 		compressorId: input.compressorId ?? NO_COMPRESSOR_ID,
-		invalidationSnapshotHash: input.invalidationSnapshotHash ?? "none",
 		modelId: input.modelId,
 		namespace: input.namespace,
 		policyVersion: input.policyVersion,
-		queryIntentHash: input.queryIntentHash,
 		redactionPolicyHash: input.redactionPolicyHash,
 		representationFingerprint: input.representationFingerprint ?? "none",
 		representationKind: input.representationKind,
@@ -128,7 +147,6 @@ export function buildContextBudgetMaterializedRepresentationCacheKeyV2(
 		budgetBucket: input.budgetBucket,
 		compressorId: input.compressorId ?? NO_COMPRESSOR_ID,
 		compressorPolicyHash: input.compressorPolicyHash ?? DEFAULT_MATERIALIZED_COMPRESSOR_POLICY_HASH_V2,
-		invalidationSnapshotHash: input.invalidationSnapshotHash ?? "none",
 		modelId: input.modelId,
 		namespace: input.namespace,
 		policyVersion: input.policyVersion,

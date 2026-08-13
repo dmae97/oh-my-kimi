@@ -73,8 +73,8 @@ export async function runAdaptiveAgent(options: RunAdaptiveAgentOptions): Promis
 	const startedAtMs = Date.now();
 	let identity = parseProviderModel(options.model);
 	let profile = await options.profileStore.profileFor(identity.provider, identity.model);
-	const initialCutoff = cutoffFor(profile, options, remainingExecutionMs(options.budget));
 	const demand = estimateTaskDemand(options.logicalTask);
+	const initialCutoff = cutoffFor(profile, options, remainingExecutionMs(options.budget), demand.predictedMs);
 	const shards = planTaskShards(options.logicalTask, demand, {
 		attemptCutoffMs: initialCutoff,
 		maxTaskShards: options.budget.maxTaskShards,
@@ -109,7 +109,7 @@ export async function runAdaptiveAgent(options: RunAdaptiveAgentOptions): Promis
 			let checkpoint: typeof lastCheckpoint;
 			while (true) {
 				const pendingShards = shards.length - completedShardIds.length;
-				const recommended = cutoffFor(profile, options, remainingExecutionMs(taskBudget));
+				const recommended = cutoffFor(profile, options, remainingExecutionMs(taskBudget), demand.predictedMs);
 				const allocation = allocateAttemptBudget({
 					budget: taskBudget,
 					pendingSequentialTasks: 1,
@@ -231,10 +231,16 @@ export async function runAdaptiveAgent(options: RunAdaptiveAgentOptions): Promis
 	return aggregate;
 }
 
-function cutoffFor(profile: DeadlineProfile | undefined, options: RunAdaptiveAgentOptions, maximumMs: number): number {
+function cutoffFor(
+	profile: DeadlineProfile | undefined,
+	options: RunAdaptiveAgentOptions,
+	maximumMs: number,
+	predictedMs: number,
+): number {
 	return recommendAttemptCutoff(profile, {
 		fallbackMs: options.policy.fallbackAttemptMs,
 		minimumMs: Math.min(options.policy.minimumAttemptMs, maximumMs),
 		maximumMs: Math.max(1, maximumMs),
+		predictedMs,
 	});
 }

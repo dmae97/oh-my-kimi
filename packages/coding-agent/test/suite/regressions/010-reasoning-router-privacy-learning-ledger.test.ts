@@ -29,6 +29,7 @@ import {
 	BIAS_STRONG_THRESHOLD,
 	compileBiasSnapshot,
 	getBiasStepsForCell,
+	parseRouterBiasSnapshot,
 } from "../../../src/core/reasoning-router-bias.ts";
 import {
 	type AppendRouterFeedbackOptions,
@@ -312,6 +313,14 @@ describe("goal 009 lane L: compileBiasSnapshot determinism", () => {
 });
 
 describe("goal 009 lane L: compileBiasSnapshot bounds and nStrong threshold", () => {
+	function strongSnapshot() {
+		return compileBiasSnapshot(
+			Array.from({ length: BIAS_STRONG_THRESHOLD }, () =>
+				baseRecord({ signal: "s1-override", outcome: "up", acceptedLevel: "high" }),
+			),
+		);
+	}
+
 	it("keeps bias at zero when nStrong is below the threshold", () => {
 		const records: RouterFeedbackRecord[] = Array.from({ length: BIAS_STRONG_THRESHOLD - 1 }, () =>
 			baseRecord({
@@ -326,6 +335,68 @@ describe("goal 009 lane L: compileBiasSnapshot bounds and nStrong threshold", ()
 		expect(snapshot.biasCells).toHaveLength(1);
 		expect(snapshot.biasCells[0].biasSteps).toBe(0);
 		expect(snapshot.biasCells[0].nStrong).toBe(BIAS_STRONG_THRESHOLD - 1);
+	});
+
+	it("rejects a persisted nonzero bias below the strong-evidence threshold", () => {
+		const snapshot = strongSnapshot();
+		const cell = snapshot.biasCells[0];
+		if (!cell) throw new Error("expected compiled bias cell");
+		const tampered = {
+			...snapshot,
+			biasCells: [
+				{
+					...cell,
+					nStrong: BIAS_STRONG_THRESHOLD - 1,
+					nTotal: BIAS_STRONG_THRESHOLD - 1,
+				},
+			],
+		};
+
+		expect(parseRouterBiasSnapshot(JSON.stringify(tampered))).toBeNull();
+	});
+
+	it("rejects persisted counts outside the safe-integer range", () => {
+		const snapshot = strongSnapshot();
+		const cell = snapshot.biasCells[0];
+		if (!cell) throw new Error("expected compiled bias cell");
+		const unsafeCount = Number.MAX_SAFE_INTEGER + 1;
+
+		expect(
+			parseRouterBiasSnapshot(
+				JSON.stringify({
+					...snapshot,
+					consideredCount: unsafeCount,
+					biasCells: [{ ...cell, nTotal: unsafeCount }],
+				}),
+			),
+		).toBeNull();
+	});
+
+	it("rejects duplicate persisted bias cells", () => {
+		const snapshot = strongSnapshot();
+		const cell = snapshot.biasCells[0];
+		if (!cell) throw new Error("expected compiled bias cell");
+
+		expect(
+			parseRouterBiasSnapshot(
+				JSON.stringify({ ...snapshot, consideredCount: cell.nTotal * 2, biasCells: [cell, { ...cell }] }),
+			),
+		).toBeNull();
+	});
+
+	it("rejects persisted cell totals inconsistent with consideredCount", () => {
+		const snapshot = strongSnapshot();
+		const cell = snapshot.biasCells[0];
+		if (!cell) throw new Error("expected compiled bias cell");
+
+		expect(
+			parseRouterBiasSnapshot(JSON.stringify({ ...snapshot, biasCells: [{ ...cell, nTotal: cell.nTotal + 1 }] })),
+		).toBeNull();
+	});
+
+	it("round-trips a compiler-produced snapshot through strict parsing", () => {
+		const snapshot = strongSnapshot();
+		expect(parseRouterBiasSnapshot(JSON.stringify(snapshot))).toEqual(snapshot);
 	});
 
 	it("reaches the maximum positive bias for an overwhelming up-signal cell", () => {

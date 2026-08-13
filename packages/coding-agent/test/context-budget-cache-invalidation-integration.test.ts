@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	buildContextBudgetExactRepresentationCacheKeyV2,
 	buildContextBudgetMaterializedRepresentationCacheKeyV2,
 	CONTEXT_BUDGET_POLICY_VERSION_V2,
 	createContextBudgetCacheKeyBaseV2,
@@ -88,26 +89,70 @@ describe("context-budget invalidation cache-key integration", () => {
 		expect(planPromptContextBudgetV2(withoutExplicitSnapshot).observability.cache.planCache.hit).toBe(false);
 	});
 
-	it("changes materialized representation keys when invalidation provenance changes", () => {
-		const before = initialSnapshot();
-		const after = applyContextCacheInvalidation(before, { type: "settings" }).snapshot;
-		const keyFor = (snapshot: typeof before) => {
-			const keyBase = createContextBudgetCacheKeyBaseV2({
-				budgetBucket: "100",
-				modelId: "model-a",
-				namespace: "context-budget-v2",
-				policyVersion: CONTEXT_BUDGET_POLICY_VERSION_V2,
-				query: "stable query",
-				cacheInvalidationSnapshot: snapshot,
-			});
-			return buildContextBudgetMaterializedRepresentationCacheKeyV2({
+	// Representation keys are content-addressed on purpose. Folding the
+	// invalidation snapshot (which carries a per-session forkId) into them made
+	// every new session miss every persisted entry — reuse was structurally
+	// unreachable, not merely cold. Staleness is still caught on read by
+	// validateContextBudgetRepresentationCacheEntryV2, and a genuinely different
+	// source/model/policy already moves the key through its own components.
+	const representationKeyFor = (snapshot: ReturnType<typeof initialSnapshot>, overrides?: { modelId?: string }) => {
+		const keyBase = createContextBudgetCacheKeyBaseV2({
+			budgetBucket: "100",
+			modelId: overrides?.modelId ?? "model-a",
+			namespace: "context-budget-v2",
+			policyVersion: CONTEXT_BUDGET_POLICY_VERSION_V2,
+			query: "stable query",
+			cacheInvalidationSnapshot: snapshot,
+		});
+		return {
+			exact: buildContextBudgetExactRepresentationCacheKeyV2({
+				...keyBase,
+				representationKind: "summary",
+				sourceHash: "source-a",
+				representationFingerprint: "fingerprint-a",
+			}),
+			materialized: buildContextBudgetMaterializedRepresentationCacheKeyV2({
 				...keyBase,
 				representationKind: "summary",
 				sourceHash: "source-a",
 				targetTokenBucket: 100,
-			});
+			}),
 		};
+	};
 
-		expect(keyFor(before)).not.toBe(keyFor(after));
+	it("keeps representation keys stable across every invalidation event", () => {
+		const base = initialSnapshot();
+		const expected = representationKeyFor(base);
+		let snapshot = base;
+		for (const event of EVENTS) {
+			snapshot = applyContextCacheInvalidation(snapshot, event).snapshot;
+			const actual = representationKeyFor(snapshot);
+			expect(actual.exact, event.type).toBe(expected.exact);
+			expect(actual.materialized, event.type).toBe(expected.materialized);
+		}
+	});
+
+	it("keeps representation keys stable across a new session fork id", () => {
+		const sessionA = createContextCacheInvalidationSnapshot({
+			forkId: "session-a",
+			worktreeFingerprint: "worktree-a",
+			activeModelId: "model-a",
+			compactionModelId: "compact-a",
+		});
+		const sessionB = createContextCacheInvalidationSnapshot({
+			forkId: "session-b",
+			worktreeFingerprint: "worktree-a",
+			activeModelId: "model-a",
+			compactionModelId: "compact-a",
+		});
+		expect(representationKeyFor(sessionB)).toEqual(representationKeyFor(sessionA));
+	});
+
+	it("still separates representation keys by model, the axis that actually changes output", () => {
+		const snapshot = initialSnapshot();
+		const a = representationKeyFor(snapshot);
+		const b = representationKeyFor(snapshot, { modelId: "model-b" });
+		expect(b.exact).not.toBe(a.exact);
+		expect(b.materialized).not.toBe(a.materialized);
 	});
 });

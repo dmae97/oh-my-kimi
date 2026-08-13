@@ -151,6 +151,17 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	model: Model<any>;
 
 	/**
+	 * Maximum provider turns allowed in one loop invocation.
+	 *
+	 * Each assistant response counts as one turn, including responses that call tools.
+	 * When the limit is reached, the current assistant response and tool batch finish normally,
+	 * then the loop emits `agent_end` without preparing another turn or polling message queues.
+	 * Undefined preserves the historical unbounded behavior. Configured values must be positive
+	 * safe integers; invalid values reject the run before any provider request.
+	 */
+	maxTurns?: number;
+
+	/**
 	 * Converts AgentMessage[] to LLM-compatible Message[] before each LLM call.
 	 *
 	 * Each AgentMessage must be converted to a UserMessage, AssistantMessage, or ToolResultMessage
@@ -394,6 +405,10 @@ export type AgentMessage = Message | CustomAgentMessages[keyof CustomAgentMessag
 export interface AgentState {
 	/** System prompt sent with each model request. */
 	systemPrompt: string;
+	/** UTF-16 offset ending the stable provider-cacheable system-prompt prefix. */
+	systemPromptCacheBoundary?: number;
+	/** Suppress explicit stable-prefix cache affinity/markers for a dynamic prompt replacement. */
+	systemPromptCacheBoundaryBypass?: boolean;
 	/** Active model used for future turns. */
 	model: Model<any>;
 	/** Requested reasoning level for future turns. */
@@ -668,6 +683,10 @@ export type ToolLateSettlementOutcome = "resolved" | "rejected";
 export interface AgentContext {
 	/** System prompt included with the request. */
 	systemPrompt: string;
+	/** UTF-16 offset ending the stable provider-cacheable system-prompt prefix. */
+	systemPromptCacheBoundary?: number;
+	/** Suppress explicit stable-prefix cache affinity/markers for a dynamic prompt replacement. */
+	systemPromptCacheBoundaryBypass?: boolean;
 	/** Transcript visible to the model. */
 	messages: AgentMessage[];
 	/** Tools available for this run. */

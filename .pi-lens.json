@@ -1,4 +1,5 @@
 {
+  "maxProjectFiles": 5000,
   "ignore": [
     ".omk/harness-graph/out/**",
     "vendor/**",

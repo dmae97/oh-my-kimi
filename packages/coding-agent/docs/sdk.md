@@ -5,6 +5,7 @@
 The SDK provides programmatic access to omk's agent capabilities. Use it to embed omk in other applications, build custom interfaces, or integrate with automated workflows.
 
 **Example use cases:**
+
 - Build a custom UI (web, desktop, mobile)
 - Integrate agent capabilities into existing applications
 - Create automated pipelines with agent reasoning
@@ -112,6 +113,7 @@ interface AgentSession {
   thinkingLevel: ThinkingLevel;
   messages: AgentMessage[];
   isStreaming: boolean;
+  getSessionStats(): SessionStats;
 
   // In-place tree navigation within the current session file
   navigateTree(targetId: string, options?: { summarize?: boolean; customInstructions?: string; replaceInstructions?: boolean; label?: string }): Promise<{ editorText?: string; cancelled: boolean }>;
@@ -127,6 +129,8 @@ interface AgentSession {
   dispose(): void;
 }
 ```
+
+`getSessionStats()` returns message, token, and cost totals. Its `promptCache` field includes provider-eligible input tokens, provider hit rate (`cacheRead / (input + cacheRead + cacheWrite)`), stable-prefix characters, cache-key changes, boundary bypasses, and the last local break reason. These values diagnose cache-affinity changes; only provider-reported `cacheRead` proves a hit.
 
 Session replacement APIs such as new-session, resume, fork, and import live on `AgentSessionRuntime`, not on `AgentSession`.
 
@@ -250,6 +254,7 @@ await session.prompt("After you're done, also check X", { streamingBehavior: "fo
 ```
 
 **Behavior:**
+
 - **Extension commands** (e.g., `/mycommand`): Execute immediately, even during streaming. They manage their own LLM interaction via `omk.sendMessage()`.
 - **File-based prompt templates** (from `.md` files): Expanded to their content before sending or queueing.
 - **During streaming without `streamingBehavior`**: Throws an error. Use `steer()` or `followUp()` directly, or specify the option.
@@ -280,6 +285,8 @@ const state = session.agent.state;
 // state.model: Model - current model
 // state.thinkingLevel: ThinkingLevel - current thinking level
 // state.systemPrompt: string - system prompt
+// state.systemPromptCacheBoundary?: number - stable-prefix UTF-16 offset
+// state.systemPromptCacheBoundaryBypass?: boolean - suppress explicit cache affinity/markers
 // state.tools: AgentTool[] - available tools
 // state.streamingMessage?: AgentMessage - current partial assistant message
 // state.errorMessage?: string - latest assistant error
@@ -293,6 +300,8 @@ session.agent.state.tools = tools; // copies the top-level array
 // Wait for agent to finish processing
 await session.agent.waitForIdle();
 ```
+
+The cache boundary must be a positive safe integer no greater than `systemPrompt.length`. Missing, invalid, or bypassed boundaries suppress explicit stable-prefix cache metadata. Providers may still ignore valid metadata, so inspect provider usage before claiming a hit.
 
 ### Events
 
@@ -380,6 +389,7 @@ const { session } = await createAgentSession({
 ```
 
 `cwd` is used by `DefaultResourceLoader` for:
+
 - Project extensions (`.omk/extensions/`)
 - Project skills:
   - `.omk/skills/`
@@ -389,6 +399,7 @@ const { session } = await createAgentSession({
 - Session directory naming
 
 `agentDir` is used by `DefaultResourceLoader` for:
+
 - Global extensions (`extensions/`)
 - Global skills:
   - `skills/` under `agentDir` (for example `~/.omk/agent/skills/`)
@@ -438,6 +449,7 @@ const { session } = await createAgentSession({
 ```
 
 If no model is provided:
+
 1. Tries to restore from session (if continuing)
 2. Uses default from settings
 3. Falls back to first available model
@@ -447,6 +459,7 @@ If no model is provided:
 ### API Keys and OAuth
 
 API key resolution priority (handled by AuthStorage):
+
 1. Runtime overrides (via `setRuntimeApiKey`, not persisted)
 2. Stored credentials in `auth.json` (API keys or OAuth tokens)
 3. Environment variables (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.)
@@ -498,6 +511,8 @@ await loader.reload();
 
 const { session } = await createAgentSession({ resourceLoader: loader });
 ```
+
+OMK records a stable cache boundary before loaded context files, selected skill content, the date, and the working directory. A turn-level extension that replaces the built prompt bypasses explicit stable-prefix caching unless it returns the prompt unchanged. See [Compaction & Branch Summarization](compaction.md#context-reduction-and-prompt-caching) for provider behavior and diagnostics.
 
 > See [examples/sdk/03-custom-prompt.ts](../examples/sdk/03-custom-prompt.ts)
 
@@ -847,12 +862,14 @@ const { session } = await createAgentSession({
 ```
 
 **Static factories:**
+
 - `SettingsManager.create(cwd?, agentDir?)` - Load from files
 - `SettingsManager.inMemory(settings?)` - No file I/O
 
 **Project-specific settings:**
 
 Settings load from two locations and merge:
+
 1. Global: `~/.omk/agent/settings.json`
 2. Project: `<cwd>/.omk/settings.json`
 
@@ -1120,12 +1137,14 @@ omk --mode rpc --no-session
 See [RPC documentation](rpc.md) for the JSON protocol.
 
 The SDK is preferred when:
+
 - You want type safety
 - You're in the same Node.js process
 - You need direct access to agent state
 - You want to customize tools/extensions programmatically
 
 RPC mode is preferred when:
+
 - You're integrating from another language
 - You want process isolation
 - You're building a language-agnostic client
@@ -1134,14 +1153,14 @@ RPC mode is preferred when:
 
 Execution-bound evidence records a declared verification command and reported outcome between two artifact-set snapshots, then binds that record to a tamper-evident ledger. `VerifiedEvidenceExecutor` never executes the declared command. `executeVerifiedBash()` invokes caller-supplied `BashOperations`; `executeVerifiedLocalBash()` derives the shell identity and runner from OMK's built-in local backend.
 
-**Default path (opt-out):** when an AgentSession has a replay ledger (persisted sessions create one automatically), LLM-callable `bash` and interactive/RPC `executeBash` bind through `executeVerifiedBash` with `executor: "bash-tool"` and receipts under `<sessionFile>.evidence/receipts` (or `cwd/.omk/session-evidence/<goalId>/receipts` for ephemeral sessions). Session workspace scope is git-aware: inside a worktree, the receipt binds the toplevel plus the sorted dirty set (capped at 32 paths, 1 s TTL). Set `OMK_VERIFIED_BASH=0` to restore the legacy unverified path. Custom `createBashTool()` calls stay unverified unless the caller wraps operations with `createVerifiedBashOperations()`. CI still runs release-consistency through `executeVerifiedLocalBash()` with `executor: "ci-runner"`.
+**Default path (opt-out):** when an AgentSession has a replay ledger (persisted sessions create one automatically), LLM-callable `bash` and interactive/RPC `executeBash` bind through `executeVerifiedBash` with `executor: "bash-tool"` and receipts under `<sessionFile>.evidence/receipts` (or `cwd/.omk/session-evidence/<goalId>/receipts` for ephemeral sessions). Session workspace scope is git-aware: inside a worktree, the receipt binds the toplevel plus up to 32 sorted dirty file paths (1 s TTL). Git status expands ordinary untracked directories to files; untracked nested repositories remain outside the parent scope. Set `OMK_VERIFIED_BASH=0` to restore the legacy unverified path. Custom `createBashTool()` calls stay unverified unless the caller wraps operations with `createVerifiedBashOperations()`. CI still runs release-consistency through `executeVerifiedLocalBash()` with `executor: "ci-runner"`.
 
 **Default sandbox (opt-out):** session bash also carries a default `audit`-mode sandbox preflight (workspace-write policy rooted at the session cwd). The spawn stays unwrapped, but every decision is appended to the replay ledger as a `sandbox_audit` event, giving a tamper-evident audit trail. `OMK_BASH_SANDBOX=enforce` activates the real OS backend — macOS `sandbox-exec` seatbelt or Linux `bwrap` bubblewrap — and fails closed when neither is installed; `OMK_BASH_SANDBOX=0` disables the preflight entirely.
 
 ### Recorded and invoked inputs
 
 | Input | SDK behavior |
-|-------|--------------|
+| ------- | -------------- |
 | `request.command` (`EvidenceCommandDescriptor`) | Validates, hashes, and records the structured descriptor; never executes it |
 | `request.executor` (`"bash-tool" \| "ci-runner" \| "mcp" \| "internal"`) | Records a label only |
 | `request.workspaceScope` (`WorkspaceScope`) | Captures the selected artifact set before and after the callback |
@@ -1196,7 +1215,7 @@ Ledger and receipt publication are fail-closed but not one filesystem transactio
 `EvidenceGate` (default `receiptMode: "prefer"`) gates a `TaskContract` against its satisfied receipts. Pass `executor.createGateOptions()` so the gate resolves receipts, ledger events, and workspace fingerprints from the same store and ledger.
 
 | Mode | Soft missing data | Tamper-grade mismatch | Legacy `hash` / `command` |
-|------|-------------------|-----------------------|----------------------------|
+| ------ | ------------------- | ----------------------- | ---------------------------- |
 | `strict` | blocked | blocked | n/a |
 | `prefer` (default) | conditional | blocked | n/a |
 | `legacy` | receipt checks skipped | receipt checks skipped | checked by legacy options (enabled by default) |

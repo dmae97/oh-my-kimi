@@ -2,11 +2,12 @@
 
 # OMK Packages
 
-OMK packages bundle extensions, skills, prompt templates, and themes so you can share them through npm or git. A package can declare resources in `package.json` under the `omk` key, or use conventional directories.
+OMK packages bundle extensions, skills, prompt templates, and themes so you can share them through npm or git. A package can declare resources in `package.json` under `omk` or the compatible `pi` key, or use conventional directories.
 
 ## Table of Contents
 
 - [Install and Manage](#install-and-manage)
+- [Pi Compatibility and Package Doctor](#pi-compatibility-and-package-doctor)
 - [Package Sources](#package-sources)
 - [Creating a OMK Package](#creating-a-omk-package)
 - [Package Structure](#package-structure)
@@ -28,6 +29,7 @@ omk install ./relative/path/to/package
 
 omk remove npm:@foo/bar
 omk list                     # show installed packages from settings
+omk package doctor npm:@foo/bar@1.0.0  # static compatibility report as JSON
 omk update                   # update omk, update packages, and reconcile pinned git refs
 omk update --extensions      # update packages and reconcile pinned git refs only
 omk update --self            # update omk only
@@ -46,6 +48,24 @@ To try a package without installing it, use `--extension` or `-e`. This installs
 omk -e npm:@foo/bar
 omk -e git:github.com/user/repo
 ```
+
+## Pi Compatibility and Package Doctor
+
+OMK reads package manifests in strict priority order: `omk`, then `pi`, then conventional directories. The first present manifest is authoritative. If it is malformed, OMK reports the error instead of silently falling back. When both keys exist, `omk` wins and the doctor reports that `pi` was shadowed.
+
+A Pi extension directory entry such as `"extensions": ["./"]` resolves to its `index.ts`, `index.js`, `index.mjs`, or `index.cjs`. It is not recursively treated as a directory of independent extensions.
+
+Inspect a local, npm, or git source before installing it:
+
+```bash
+omk package doctor ./local-package
+omk package doctor npm:@scope/package@1.2.3 > package-doctor.json
+omk package doctor git:github.com/user/repo@v1
+```
+
+The command emits a versioned JSON report and returns `0` when no compatibility error is found, `1` for an incompatible package or inspection failure, and `2` for invalid CLI usage. It checks manifest precedence, declared resources, legacy Pi runtime imports, `.pi` storage paths, lifecycle event names, headless UI guards, and resume signals.
+
+The doctor never imports extension modules. For npm sources it downloads the registry tarball with `npm pack --ignore-scripts` and extracts bounded regular files without installing dependencies. Git inspection clones without running `npm install`. These static checks are advisory and do not make third-party code trusted.
 
 ## Package Sources
 
@@ -91,6 +111,7 @@ ssh://git@github.com/user/repo@v1
 - When reconciliation changes the checkout, omk resets and cleans the clone, then runs `npm install` if `package.json` exists.
 
 **SSH examples:**
+
 ```bash
 # git@host:path shorthand (requires git: prefix)
 omk install git:git@github.com:user/repo
@@ -113,7 +134,7 @@ Local paths point to files or directories on disk and are added to settings with
 
 ## Creating a OMK Package
 
-Add a `omk` manifest to `package.json` or use conventional directories. Include the `omk-package` keyword for discoverability.
+Add an `omk` manifest to `package.json` or use conventional directories. OMK also reads a Pi-compatible `pi` manifest when `omk` is absent. Include the `omk-package` keyword for discoverability.
 
 ```json
 {
@@ -155,7 +176,7 @@ If both are set, video takes precedence.
 
 ### Convention Directories
 
-If no `omk` manifest is present, omk auto-discovers resources from these directories:
+If neither an `omk` nor a `pi` manifest is present, omk auto-discovers resources from these directories:
 
 - `extensions/` loads `.ts` and `.js` files
 - `skills/` recursively finds `SKILL.md` folders and loads top-level `.md` files as skills
@@ -164,7 +185,7 @@ If no `omk` manifest is present, omk auto-discovers resources from these directo
 
 ## Dependencies
 
-Third party runtime dependencies belong in `dependencies` in `package.json`. Dependencies that do not register extensions, skills, prompt templates, or themes also belong in `dependencies`. When omk installs a package from npm or git, it runs `npm install`, so those dependencies are installed automatically.
+Third party runtime dependencies belong in `dependencies` in `package.json`. Dependencies that do not register extensions, skills, prompt templates, or themes also belong in `dependencies`. Normal npm and git installation installs runtime dependencies automatically. `omk package doctor` is different: it does not install dependencies or execute lifecycle scripts.
 
 OMK bundles core packages for extensions and skills. If you import any of these, list them in `peerDependencies` with a `"*"` range and do not bundle them: `omk-ai`, `omk-agent-core`, `open-multi-agent-kit`, `omk-tui`, `typebox`.
 

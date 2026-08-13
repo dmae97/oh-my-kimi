@@ -45,7 +45,7 @@ description: "DAG tasks for GPT-5.6 MoA and Codex ultra repair"
 
 ## Phase 3: Core implementation
 
-- [x] T005 Implement tool-free MoA helper, bounded requests, fail-fast cancellation, and provider dispatch
+- [x] T005 Implement tool-isolated MoA advisers, tool-capable synthesis, bounded requests, fail-fast cancellation, and provider dispatch
   > role: coder
   > deps: T004
   > files: [`packages/ai/src/providers/openai-codex-moa.ts`, `packages/ai/src/providers/openai-codex-responses.ts`]
@@ -77,5 +77,20 @@ description: "DAG tasks for GPT-5.6 MoA and Codex ultra repair"
   > deps: T007
   > files: []
   > verify: `npm run check && npm run build`
+  > gate: command-pass
+  > risk: high
+
+## Phase 5: Tool-capable MoA and Ultra subagents
+
+- [x] T009 Forward declared tools, tool history, and synthesis tool events through the MoA agent loop
+  > files: [`packages/ai/src/providers/openai-codex-moa.ts`, `packages/ai/src/providers/openai-codex-moa-stream-limits.ts`, focused MoA tests]
+  > verify: focused MoA suite
+  > gate: command-pass
+  > risk: high
+
+- [x] T010 Remove subagent count/concurrency/deadline caps only in Ultra and run live QA
+  > evidence: focused subagent tests 67/67 across the runtime suite; Ultra smoke completed 9 tasks without deadline metadata; coding-agent 4,326/4,326 passed with bounded test-worker concurrency; live Ultra orchestration exceeded the caller's 840-second harness timer without an extension cutoff and left no child process behind after cancellation
+  > files: [`packages/coding-agent/src/core/extensions/types.ts`, `packages/coding-agent/src/core/tools/tool-definition-wrapper.ts`, `packages/coding-agent/examples/extensions/subagent/`]
+  > verify: focused subagent tests, full checks/build, live Ultra probes
   > gate: command-pass
   > risk: high

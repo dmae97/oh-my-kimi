@@ -84,3 +84,12 @@ describe("parseEnforceFlag coercion (via discoverAgents)", () => {
 		}
 	});
 });
+
+describe("bundled agent model delegation", () => {
+	it("omits model pins so bundled agents inherit the parent session model", () => {
+		for (const name of ["scout", "planner", "reviewer", "worker"]) {
+			const source = fs.readFileSync(path.join(import.meta.dirname, "agents", `${name}.md`), "utf8");
+			expect(source, `${name} must not pin a model`).not.toMatch(/^model:/m);
+		}
+	});
+});

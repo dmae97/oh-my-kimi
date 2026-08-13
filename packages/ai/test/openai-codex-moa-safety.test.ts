@@ -134,7 +134,7 @@ describe("GPT-5.6 MoA safety boundaries", () => {
 		expect(result.errorMessage).toBe("Request was aborted");
 	});
 
-	it("keeps every MoA request tool-free even when a payload hook tries to add tools", async () => {
+	it("keeps advisers tool-free while synthesis receives only declared tools", async () => {
 		const toolFlags: boolean[] = [];
 		const onPayload = vi.fn((payload: unknown) =>
 			typeof payload === "object" && payload !== null ? { ...payload, tools: [{ type: "function" }] } : payload,
@@ -156,7 +156,7 @@ describe("GPT-5.6 MoA safety boundaries", () => {
 			{ apiKey: mockToken(), onPayload, transport: "sse" },
 		).result();
 
-		expect(toolFlags).toEqual([false, false, false]);
+		expect(toolFlags).toEqual([false, false, true]);
 		expect(onPayload).not.toHaveBeenCalled();
 	});
 

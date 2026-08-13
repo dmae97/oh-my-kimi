@@ -510,7 +510,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			// =================================================================
 
 			case "set_thinking_level": {
-				session.setThinkingLevel(command.level);
+				session.setUserThinkingLevel(command.level);
 				return success(id, "set_thinking_level");
 			}
 

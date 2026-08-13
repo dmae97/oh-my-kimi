@@ -1146,6 +1146,111 @@ describe("agentLoop with AgentMessage", () => {
 		]);
 	});
 
+	it("should stop after maxTurns without starting another provider request", async () => {
+		const toolSchema = Type.Object({ value: Type.String() });
+		const executed: string[] = [];
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				executed.push(params.value);
+				return {
+					content: [{ type: "text", text: `echoed: ${params.value}` }],
+					details: { value: params.value },
+				};
+			},
+		};
+		const context: AgentContext = { systemPrompt: "", messages: [], tools: [tool] };
+		const prepareNextTurn = vi.fn(async () => undefined);
+		const shouldStopAfterTurn = vi.fn(async () => false);
+		const getSteeringMessages = vi.fn(async () => []);
+		const getFollowUpMessages = vi.fn(async () => [createUserMessage("must remain queued")]);
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			maxTurns: 2,
+			prepareNextTurn,
+			shouldStopAfterTurn,
+			getSteeringMessages,
+			getFollowUpMessages,
+		};
+
+		let llmCalls = 0;
+		const stream = agentLoop([createUserMessage("start")], context, config, undefined, () => {
+			llmCalls++;
+			const mockStream = new MockAssistantStream();
+			queueMicrotask(() => {
+				if (llmCalls <= 2) {
+					mockStream.push({
+						type: "done",
+						reason: "toolUse",
+						message: createAssistantMessage(
+							[
+								{
+									type: "toolCall",
+									id: `tool-${llmCalls}`,
+									name: "echo",
+									arguments: { value: `turn-${llmCalls}` },
+								},
+							],
+							"toolUse",
+						),
+					});
+				} else {
+					mockStream.push({
+						type: "done",
+						reason: "stop",
+						message: createAssistantMessage([{ type: "text", text: "unexpected third turn" }]),
+					});
+				}
+			});
+			return mockStream;
+		});
+
+		const events: AgentEvent[] = [];
+		for await (const event of stream) events.push(event);
+
+		expect(llmCalls).toBe(2);
+		expect(executed).toEqual(["turn-1", "turn-2"]);
+		expect(events.filter((event) => event.type === "turn_start")).toHaveLength(2);
+		expect(events.filter((event) => event.type === "turn_end")).toHaveLength(2);
+		expect(events.filter((event) => event.type === "agent_end")).toHaveLength(1);
+		expect(prepareNextTurn).toHaveBeenCalledTimes(1);
+		expect(shouldStopAfterTurn).toHaveBeenCalledTimes(1);
+		expect(getSteeringMessages).toHaveBeenCalledTimes(2);
+		expect(getFollowUpMessages).not.toHaveBeenCalled();
+	});
+
+	it.each([0, -1, 1.5, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1])(
+		"should reject invalid maxTurns value %s before a provider request",
+		async (maxTurns) => {
+			const context: AgentContext = { systemPrompt: "", messages: [], tools: [] };
+			const config: AgentLoopConfig = {
+				model: createModel(),
+				convertToLlm: identityConverter,
+				maxTurns,
+			};
+			const streamFn = vi.fn(() => {
+				const mockStream = new MockAssistantStream();
+				queueMicrotask(() => {
+					mockStream.push({
+						type: "done",
+						reason: "stop",
+						message: createAssistantMessage([{ type: "text", text: "must not run" }]),
+					});
+				});
+				return mockStream;
+			});
+
+			await expect(
+				runAgentLoop([createUserMessage("start")], context, config, async () => undefined, undefined, streamFn),
+			).rejects.toThrow("maxTurns must be a positive safe integer");
+			expect(streamFn).not.toHaveBeenCalled();
+		},
+	);
+
 	it("should stop after a tool batch when every tool result sets terminate=true", async () => {
 		const toolSchema = Type.Object({ value: Type.String() });
 		const tool: AgentTool<typeof toolSchema, { value: string }> = {
@@ -1309,6 +1414,74 @@ describe("agentLoop with AgentMessage", () => {
 		}
 
 		expect(llmCalls).toBe(1);
+	});
+
+	it("skips later waves with synthesized results after an all-terminating wave", async () => {
+		const toolSchema = Type.Object({ value: Type.String() });
+		const echo: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			executionMode: "parallel",
+			async execute(_toolCallId, params) {
+				return {
+					content: [{ type: "text", text: `echoed: ${params.value}` }],
+					details: { value: params.value },
+					terminate: true,
+				};
+			},
+		};
+		let blockerRan = false;
+		const blocker: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "bash",
+			label: "Blocker",
+			description: "Solo-wave tool that must not run after termination",
+			parameters: toolSchema,
+			async execute() {
+				blockerRan = true;
+				return { content: [{ type: "text", text: "ran" }], details: { value: "c" } };
+			},
+		};
+
+		const context: AgentContext = {
+			systemPrompt: "",
+			messages: [],
+			tools: [echo, blocker],
+		};
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+		};
+
+		let llmCalls = 0;
+		const stream = agentLoop([createUserMessage("go")], context, config, undefined, () => {
+			llmCalls++;
+			const mockStream = new MockAssistantStream();
+			queueMicrotask(() => {
+				const message = createAssistantMessage(
+					[
+						{ type: "toolCall", id: "echo-1", name: "echo", arguments: { value: "a" } },
+						{ type: "toolCall", id: "echo-2", name: "echo", arguments: { value: "b" } },
+						{ type: "toolCall", id: "blocker-1", name: "bash", arguments: { value: "c" } },
+					],
+					"toolUse",
+				);
+				mockStream.push({ type: "done", reason: "toolUse", message });
+			});
+			return mockStream;
+		});
+
+		for await (const _event of stream) {
+			// consume
+		}
+		const messages = await stream.result();
+
+		expect(blockerRan).toBe(false);
+		expect(llmCalls).toBe(1);
+		const results = messages.filter((message): message is ToolResultMessage => message.role === "toolResult");
+		expect(results.map((result) => result.toolCallId)).toEqual(["echo-1", "echo-2", "blocker-1"]);
+		expect(results[2]?.details).toMatchObject({ omk: { disposition: "skipped", executionStarted: false } });
 	});
 
 	it("should close an aborted sequential tool batch with one terminal result per call", async () => {
@@ -1934,7 +2107,7 @@ describe("agentLoopContinue with AgentMessage", () => {
 				model: createModel(),
 				convertToLlm: (messages) =>
 					messages.flatMap((message) => {
-						if (Reflect.get(message, "role") !== "custom") return identityConverter([message]);
+						if ((Reflect.get(message, "role") as unknown) !== "custom") return identityConverter([message]);
 						const text = Reflect.get(message, "text");
 						return typeof text === "string" ? [{ role: "user", content: text, timestamp: Date.now() }] : [];
 					}),
@@ -2251,6 +2424,74 @@ describe("agentLoop dag-v2 scheduler", () => {
 			"toolResult",
 			"assistant",
 		]);
+	});
+
+	it("keeps claimable calls parallel when another call fails planning", async () => {
+		const toolSchema = Type.Object({ value: Type.String() });
+		let active = 0;
+		let maxActive = 0;
+		const slow: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "slow",
+			label: "Slow",
+			description: "Slow parallel tool",
+			parameters: toolSchema,
+			executionMode: "parallel",
+			async execute(_toolCallId, params) {
+				active++;
+				maxActive = Math.max(maxActive, active);
+				await new Promise((resolve) => setTimeout(resolve, 25));
+				active--;
+				return {
+					content: [{ type: "text", text: `slow:${params.value}` }],
+					details: { value: params.value },
+				};
+			},
+		};
+
+		const context: AgentContext = {
+			systemPrompt: "",
+			messages: [],
+			tools: [slow],
+		};
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			toolScheduler: "dag-v2",
+		};
+
+		const stream = agentLoop([createUserMessage("go")], context, config, undefined, () => {
+			const mockStream = new MockAssistantStream();
+			queueMicrotask(() => {
+				mockStream.push({
+					type: "done",
+					reason: "toolUse",
+					message: createAssistantMessage(
+						[
+							{ type: "toolCall", id: "slow-1", name: "slow", arguments: { value: "a" } },
+							{ type: "toolCall", id: "ghost", name: "ghost", arguments: { value: "b" } },
+							{ type: "toolCall", id: "slow-2", name: "slow", arguments: { value: "c" } },
+						],
+						"toolUse",
+					),
+				});
+			});
+			return mockStream;
+		});
+
+		const events: AgentEvent[] = [];
+		for await (const event of stream) {
+			events.push(event);
+		}
+		const messages = await stream.result();
+
+		// The immediate unknown-tool outcome folds into the schedule instead of
+		// degrading the batch: both claimable calls share one concurrent level.
+		expect(maxActive).toBe(2);
+		const startedIds = events.flatMap((event) => (event.type === "tool_execution_start" ? [event.toolCallId] : []));
+		expect(startedIds).toEqual(["slow-1", "slow-2"]);
+		const results = messages.filter((message): message is ToolResultMessage => message.role === "toolResult");
+		expect(results.map((result) => result.toolCallId)).toEqual(["slow-1", "ghost", "slow-2"]);
+		expect(results[1]?.details).toMatchObject({ omk: { disposition: "failed", executionStarted: false } });
 	});
 
 	it("honors sequential execution before dag-v2 for disjoint blocking calls", async () => {

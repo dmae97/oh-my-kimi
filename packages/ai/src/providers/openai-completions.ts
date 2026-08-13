@@ -36,8 +36,9 @@ import { retryProviderRequest } from "../utils/provider-retry.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
-import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
+import { resolveOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
 import { buildBaseOptions } from "./simple-options.ts";
+import { stableTools } from "./tool-schema.ts";
 import { transformMessages } from "./transform-messages.ts";
 
 /**
@@ -516,7 +517,7 @@ function buildParams(
 		prompt_cache_key:
 			(model.baseUrl.includes("api.openai.com") && cacheRetention !== "none") ||
 			(cacheRetention === "long" && compat.supportsLongCacheRetention)
-				? clampOpenAIPromptCacheKey(options?.sessionId)
+				? resolveOpenAIPromptCacheKey(context, options?.sessionId, `${model.provider}/${model.id}`)
 				: undefined,
 		prompt_cache_retention: cacheRetention === "long" && compat.supportsLongCacheRetention ? "24h" : undefined,
 	};
@@ -803,21 +804,32 @@ export function convertMessages(
 					content: sanitizeSurrogates(msg.content),
 				});
 			} else {
-				const content: ChatCompletionContentPart[] = msg.content.map((item): ChatCompletionContentPart => {
+				const supportsImages = model.input.includes("image");
+				const content: ChatCompletionContentPart[] = [];
+				let omittedImages = false;
+				for (const item of msg.content) {
 					if (item.type === "text") {
-						return {
+						content.push({
 							type: "text",
 							text: sanitizeSurrogates(item.text),
-						} satisfies ChatCompletionContentPartText;
-					} else {
-						return {
+						} satisfies ChatCompletionContentPartText);
+					} else if (supportsImages) {
+						content.push({
 							type: "image_url",
 							image_url: {
 								url: `data:${item.mimeType};base64,${item.data}`,
 							},
-						} satisfies ChatCompletionContentPartImage;
+						} satisfies ChatCompletionContentPartImage);
+					} else {
+						omittedImages = true;
 					}
-				});
+				}
+				if (omittedImages) {
+					content.push({
+						type: "text",
+						text: "[Image]",
+					} satisfies ChatCompletionContentPartText);
+				}
 				if (content.length === 0) continue;
 				params.push({
 					role: "user",
@@ -1003,7 +1015,7 @@ function convertTools(
 	tools: Tool[],
 	compat: ResolvedOpenAICompletionsCompat,
 ): OpenAI.Chat.Completions.ChatCompletionTool[] {
-	return tools.map((tool) => ({
+	return stableTools(tools).map((tool) => ({
 		type: "function",
 		function: {
 			name: tool.name,

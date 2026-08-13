@@ -15,13 +15,15 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, dirname } from "node:path";
+import { basename, dirname, join as joinPath } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { Agent, AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "omk-agent-core";
+import { getVisionRouteModel, isVisionRouteModel } from "omk-agent-core";
 import type { Api, AssistantMessage, ImageContent, Message, Model, TextContent } from "omk-ai";
 import {
 	clampThinkingLevel,
 	cleanupSessionResources,
+	deriveContextPromptCacheKey,
 	getSupportedThinkingLevels,
 	isContextOverflow,
 	modelsAreEqual,
@@ -29,6 +31,7 @@ import {
 	resetApiProviders,
 	streamSimple,
 } from "omk-ai";
+import { APP_NAME, VERSION } from "../config.ts";
 import type { ReplayLedgerManager } from "../guardrails/evidence-system.ts";
 import type { VerifiedEvidenceExecutor } from "../guardrails/verified-executor.ts";
 import { theme } from "../modes/interactive/theme/theme.ts";
@@ -65,12 +68,15 @@ import {
 	resolveCompactionModel,
 } from "./compaction/index.ts";
 import { compactionEmitWillRetry } from "./compaction/resume-policy.ts";
-
 import {
 	estimateToolResultReserve,
 	type ToolResultClass,
 	type ToolResultReserveRequest,
 } from "./context-budget-reserved-tokens.ts";
+import {
+	createDiskContextBudgetCacheProviderV2,
+	DiskContextBudgetCacheProviderV2,
+} from "./context-budget-v2-cache-disk.ts";
 import {
 	applyContextCacheInvalidation,
 	type ContextCacheInvalidationEvent,
@@ -112,6 +118,48 @@ import { emitSessionShutdownEvent } from "./extensions/runner.ts";
 import { assertTextChatModelForCompletion } from "./grok-harness.ts";
 import { grokPlaybookAppendForProvider } from "./grok-playbook.ts";
 import { decideLoadoutAccess, type LoadoutAccessPolicy } from "./loadout-access-policy.ts";
+import { loadMcpServerConfigs } from "./mcp/config.ts";
+import { McpManager, type McpServerConfig, type McpServerStatus } from "./mcp/manager.ts";
+import { buildRuntimeProvenance } from "./runtime-provenance.ts";
+import { type ToolCallMetric, TurnMetricsSink } from "./turn-metrics.ts";
+
+/** Values that disable a session-level feature through its environment variable. */
+const DISABLED_ENV_VALUES = new Set(["0", "false", "off", "disable", "disabled"]);
+
+function isDisabledEnvValue(value: string | undefined): boolean {
+	return value !== undefined && DISABLED_ENV_VALUES.has(value.trim().toLowerCase());
+}
+
+/** In-flight metric accumulation for the current turn. */
+interface TurnMetricsState {
+	readonly startedAtEpochMs: number;
+	readonly toolCalls: ToolCallMetric[];
+	readonly toolStarts: Map<string, number>;
+	/** `provider/model` the turn was requested with, captured at turn start. */
+	readonly requestedModel: string | null;
+	/** `"auto"` in auto mode, else the thinking level captured at turn start. */
+	readonly requestedThinking: string;
+}
+
+type RouterAutoDecision = Pick<
+	RouterFeedbackRecord,
+	"routerVersion" | "laneType" | "predictedClass" | "resolvedLevel" | "lenBucket" | "hadFence" | "hadDiff"
+>;
+
+/** Extract the first text block of a tool result, for failure classification only. */
+function firstTextContent(result: unknown): string | undefined {
+	const content = (result as { content?: unknown } | undefined)?.content;
+	if (!Array.isArray(content)) return undefined;
+	for (const block of content) {
+		if (block && typeof block === "object" && (block as { type?: unknown }).type === "text") {
+			const text = (block as { text?: unknown }).text;
+			if (typeof text === "string") return text;
+		}
+	}
+	return undefined;
+}
+
+import { redactCredentialShapedContent } from "./compaction/transaction.ts";
 import type { CustomMessage } from "./messages.ts";
 import type { ModelRegistry } from "./model-registry.ts";
 import { findExactModelReferenceMatch } from "./model-resolver.ts";
@@ -124,18 +172,21 @@ import {
 	resolveProviderResilience,
 	stickySafetyBlockMessage,
 } from "./provider-resilience.ts";
+import { getBiasStepsForCell, parseRouterBiasSnapshot, type RouterBiasSnapshot } from "./reasoning-router-bias.ts";
 import {
-	getBiasStepsForCell,
-	getDefaultRouterBiasSnapshotPath,
-	parseRouterBiasSnapshot,
-	type RouterBiasSnapshot,
-} from "./reasoning-router-bias.ts";
-import { classifyTaskV4, resolveThinkingLevelV4WithUncertainty, type TaskClassV4 } from "./reasoning-router-v4.ts";
-import { redactSensitiveText } from "./redaction.ts";
+	classifyTaskV4,
+	deriveRouterFeedbackFeaturesV4,
+	type RouterFeedbackFeaturesV4,
+	resolveThinkingLevelV4WithUncertainty,
+	TASK_CLASS_THINKING_LEVELS_V4,
+	type TaskClassV4,
+} from "./reasoning-router-v4.ts";
+import { redactSensitiveText, redactSensitiveTextForced } from "./redaction.ts";
+import { getRepositoryRouterLearningPaths, type RepositoryRouterLearningPaths } from "./repository-learning-scope.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
 import {
 	appendRouterFeedbackRecord,
-	type RouterFeedbackLenBucket,
+	ROUTER_FEEDBACK_LEVELS,
 	type RouterFeedbackRecord,
 } from "./router-feedback-collector.ts";
 import type { RunJournalAuditDetails, RunJournalAuditEvent, RunJournalRecord } from "./run-journal.ts";
@@ -145,6 +196,7 @@ import { SessionBashService } from "./session-bash-service.ts";
 import { SessionCompactionService } from "./session-compaction-service.ts";
 import type { BranchSummaryEntry, SessionManager } from "./session-manager.ts";
 import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.ts";
+import { acquireSessionOwnerLeaseSync, type SessionOwnerLease } from "./session-owner-lease.ts";
 import {
 	classifySessionTermination,
 	type SessionProcessSignal,
@@ -154,7 +206,7 @@ import {
 import type { SettingsManager } from "./settings-manager.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
-import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.ts";
+import { type BuildSystemPromptOptions, buildSystemPromptPlan } from "./system-prompt.ts";
 import { type BashOperations, type BashSandboxPreflight, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
@@ -379,6 +431,14 @@ export interface SessionStats {
 		cacheWrite: number;
 		total: number;
 	};
+	promptCache: {
+		providerEligibleInputTokens: number;
+		providerHitRate: number;
+		keyChanges: number;
+		boundaryBypasses: number;
+		stablePrefixCharacters: number;
+		lastBreakReason?: string;
+	};
 	cost: number;
 	contextUsage?: ContextUsage;
 }
@@ -421,7 +481,11 @@ function pendingToolResultClass(name: string, args: unknown): ToolResultClass {
 const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high"];
 
 function normalizeToolNames(toolNames: readonly string[]): string[] {
-	return [...new Set(toolNames.map((name) => name.trim()).filter((name) => name !== ""))].sort();
+	return [...new Set(toolNames.map((name) => name.trim()).filter((name) => name !== ""))].sort((left, right) => {
+		if (left < right) return -1;
+		if (left > right) return 1;
+		return 0;
+	});
 }
 
 function toolNameSetsEqual(left: readonly string[], right: readonly string[]): boolean {
@@ -481,7 +545,8 @@ function clonePlainSnapshot(
 
 	try {
 		if (Array.isArray(value)) {
-			const copy: unknown[] = new Array(value.length);
+			const copy: unknown[] = [];
+			copy.length = value.length;
 			copies.set(value, copy);
 			for (const key of Reflect.ownKeys(value)) {
 				if (key === "length") continue;
@@ -572,6 +637,7 @@ export class AgentSession {
 	 */
 	private _reasoningRouterBiasSnapshot: RouterBiasSnapshot | null = null;
 	private _reasoningRouterBiasSnapshotLoaded = false;
+	private _lastAutoRouterDecision: RouterAutoDecision | undefined;
 
 	/**
 	 * AdaptOrch advisory bridge (default-off, global-only opt-in via
@@ -623,7 +689,12 @@ export class AgentSession {
 	private _resourceLoader: ResourceLoader;
 	private _customTools: ToolDefinition[];
 	private _baseToolDefinitions: Map<string, ToolDefinition> = new Map();
+	private _mcpManager: McpManager | undefined;
+	private _mcpToolNames: Set<string> = new Set();
+	private _turnMetricsSink: TurnMetricsSink | undefined;
+	private _turnMetricsState: TurnMetricsState | undefined;
 	private _cwd: string;
+	private _repositoryRouterLearningPaths: RepositoryRouterLearningPaths | undefined;
 	private _extensionRunnerRef?: { current?: ExtensionRunner };
 	private _initialActiveToolNames?: string[];
 	private _allowedToolNames?: Set<string>;
@@ -641,6 +712,7 @@ export class AgentSession {
 
 	// Required durable run/audit chain, persisted next to the session file.
 	private readonly _runJournalStore: RunJournalStore;
+	private _ownedSessionOwnerLease: SessionOwnerLease | undefined;
 	private _activeRunId: string | null = null;
 	private _pendingRuntimeTerminationCause: SessionTerminationCause | undefined;
 	private _activeRunToolTermination:
@@ -670,7 +742,13 @@ export class AgentSession {
 
 	// Base system prompt (without extension appends) - used to apply fresh appends each turn
 	private _baseSystemPrompt = "";
+	private _baseSystemPromptCacheBoundary: number | undefined;
 	private _baseSystemPromptOptions!: BuildSystemPromptOptions;
+	private _promptCacheKey: string | undefined;
+	private _promptCacheKeyChanges = 0;
+	private _promptCacheBoundaryBypasses = 0;
+	private _promptCacheStablePrefixCharacters = 0;
+	private _promptCacheLastBreakReason: string | undefined;
 
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
@@ -735,34 +813,55 @@ export class AgentSession {
 			recordCommit: () => this._recordCompactionCommitForHysteresis(),
 		});
 		const sessionFile = this.sessionManager.getSessionFile();
-		this._runJournalStore = RunJournalStore.open({
-			...(sessionFile ? { journalPath: `${sessionFile}.runjournal` } : {}),
-			sessionId: this.sessionManager.getSessionId(),
-		});
-		const startupRecords = this._runJournalStore.records;
-		const startupTerminal = startupRecords[startupRecords.length - 1];
-		if (startupTerminal?.event === "run_recovered") {
-			this._lastTermination = startupTerminal.termination;
-		}
-
-		// Always subscribe to agent events for internal handling
-		// (session persistence, extensions, auto-compaction, retry logic)
-		this._unsubscribeAgent = this.agent.subscribe(this._handleAgentEvent);
-		this._installAgentToolHooks();
-
-		// Durable transcript-repair audit for a repair applied on open/resume.
-		if (this._transcriptRepair) {
-			this._invalidateContextBudgetCache({ type: "transcriptRepair" });
-			this._appendRunJournalAudit("transcript_repaired", {
-				insertedToolCallIds: [...this._transcriptRepair.insertedToolCallIds],
-				reason: this._transcriptRepair.reason,
+		let ownerLease = this.sessionManager.getOwnerLease();
+		try {
+			if (sessionFile && !ownerLease) {
+				ownerLease = acquireSessionOwnerLeaseSync(sessionFile);
+				this._ownedSessionOwnerLease = ownerLease;
+				this.sessionManager.setOwnerLease(ownerLease);
+			}
+			this._runJournalStore = RunJournalStore.open({
+				...(sessionFile ? { journalPath: `${sessionFile}.runjournal` } : {}),
+				sessionId: this.sessionManager.getSessionId(),
+				...(ownerLease ? { ownerLease } : {}),
 			});
-		}
+			const startupRecords = this._runJournalStore.records;
+			const startupTerminal = startupRecords[startupRecords.length - 1];
+			if (startupTerminal?.event === "run_recovered") {
+				this._lastTermination = startupTerminal.termination;
+			}
 
-		this._buildRuntime({
-			activeToolNames: this._initialActiveToolNames,
-			includeAllExtensionTools: true,
-		});
+			// Always subscribe to agent events for internal handling
+			// (session persistence, extensions, auto-compaction, retry logic)
+			this._unsubscribeAgent = this.agent.subscribe(this._handleAgentEvent);
+			this._installAgentToolHooks();
+
+			// Durable transcript-repair audit for a repair applied on open/resume.
+			if (this._transcriptRepair) {
+				this._invalidateContextBudgetCache({ type: "transcriptRepair" });
+				this._appendRunJournalAudit("transcript_repaired", {
+					insertedToolCallIds: [...this._transcriptRepair.insertedToolCallIds],
+					reason: this._transcriptRepair.reason,
+				});
+			}
+
+			this._buildRuntime({
+				activeToolNames: this._initialActiveToolNames,
+				includeAllExtensionTools: true,
+			});
+		} catch (error) {
+			const ownedLease = this._ownedSessionOwnerLease;
+			if (ownedLease) {
+				try {
+					ownedLease.release();
+					if (this.sessionManager.getOwnerLease() === ownedLease) this.sessionManager.setOwnerLease(undefined);
+					this._ownedSessionOwnerLease = undefined;
+				} catch {
+					throw new Error("AgentSession initialization cleanup failed");
+				}
+			}
+			throw error;
+		}
 	}
 
 	/** Model registry for API key resolution and model discovery */
@@ -928,9 +1027,14 @@ export class AgentSession {
 		event: Extract<AgentEvent, { type: "agent_end" }>,
 	): SessionTermination {
 		const timestamp = new Date().toISOString();
-		const assistant = [...event.messages]
-			.reverse()
-			.find((message): message is AssistantMessage => message.role === "assistant");
+		let assistant: AssistantMessage | undefined;
+		for (let index = event.messages.length - 1; index >= 0; index -= 1) {
+			const message = event.messages[index];
+			if (message?.role === "assistant") {
+				assistant = message;
+				break;
+			}
+		}
 		let cause: SessionTerminationCause;
 		let message: string;
 		let sideEffects: "none" | "possible" = this._sessionRiskLevel === "elevated" ? "possible" : "none";
@@ -960,6 +1064,11 @@ export class AgentSession {
 			message = "Run completed.";
 		}
 
+		let provider = this.model?.provider;
+		if (assistant?.provider) provider = assistant.provider;
+		let model = this.model?.id;
+		if (assistant?.model) model = assistant.model;
+
 		return classifySessionTermination({
 			sessionId: this.sessionId,
 			runId,
@@ -968,12 +1077,8 @@ export class AgentSession {
 			message,
 			cause,
 			sideEffects,
-			...(assistant?.provider
-				? { provider: assistant.provider }
-				: this.model
-					? { provider: this.model.provider }
-					: {}),
-			...(assistant?.model ? { model: assistant.model } : this.model ? { model: this.model.id } : {}),
+			...(provider ? { provider } : {}),
+			...(model ? { model } : {}),
 			...(toolCallId ? { toolCallId } : {}),
 			...(toolName ? { toolName } : {}),
 		});
@@ -1008,12 +1113,12 @@ export class AgentSession {
 		const cause = this._runtimeFailureCause(error);
 		const runId = this._activeRunId ?? `runtime-${randomUUID()}`;
 		const timestamp = new Date().toISOString();
-		const message =
-			cause.area === "persistence"
-				? "A required runtime persistence operation failed."
-				: cause.area === "compaction"
-					? "Runtime compaction failed."
-					: "The AgentSession runtime failed before completing the run.";
+		let message = "The AgentSession runtime failed before completing the run.";
+		if (cause.area === "persistence") {
+			message = "A required runtime persistence operation failed.";
+		} else if (cause.area === "compaction") {
+			message = "Runtime compaction failed.";
+		}
 		let termination = classifySessionTermination({
 			sessionId: this.sessionId,
 			runId,
@@ -1406,9 +1511,13 @@ export class AgentSession {
 			);
 		}
 
+		const matchingIndex = matchingIndexes[0];
+		if (matchingIndex === undefined) {
+			throw new Error("Finalized message was not found in agent state");
+		}
 		const finalizedReplacement = createImmutableMessageSnapshot(replacement);
-		const nextMessages = messages.slice();
-		nextMessages[matchingIndexes[0]!] = finalizedReplacement;
+		const nextMessages = [...messages];
+		nextMessages[matchingIndex] = finalizedReplacement;
 		this.agent.state.messages = nextMessages;
 		return finalizedReplacement;
 	}
@@ -1421,6 +1530,13 @@ export class AgentSession {
 		} else if (event.type === "agent_end") {
 			await this._extensionRunner.emit({ type: "agent_end", messages: event.messages });
 		} else if (event.type === "turn_start") {
+			this._turnMetricsState = {
+				startedAtEpochMs: Date.now(),
+				toolCalls: [],
+				toolStarts: new Map(),
+				requestedModel: this.model ? `${this.model.provider}/${this.model.id}` : null,
+				requestedThinking: this.thinkingMode === "auto" ? "auto" : this.thinkingLevel,
+			};
 			const extensionEvent: TurnStartEvent = {
 				type: "turn_start",
 				turnIndex: this._turnIndex,
@@ -1428,6 +1544,7 @@ export class AgentSession {
 			};
 			await this._extensionRunner.emit(extensionEvent);
 		} else if (event.type === "turn_end") {
+			this._recordTurnMetrics(event.message);
 			const extensionEvent: TurnEndEvent = {
 				type: "turn_end",
 				turnIndex: this._turnIndex,
@@ -1460,6 +1577,7 @@ export class AgentSession {
 				this._messageEndReplacements.set(event, finalizedReplacement);
 			}
 		} else if (event.type === "tool_execution_start") {
+			this._turnMetricsState?.toolStarts.set(event.toolCallId, Date.now());
 			const extensionEvent: ToolExecutionStartEvent = {
 				type: "tool_execution_start",
 				toolCallId: event.toolCallId,
@@ -1477,6 +1595,7 @@ export class AgentSession {
 			};
 			await this._extensionRunner.emit(extensionEvent);
 		} else if (event.type === "tool_execution_end") {
+			this._recordToolMetric(event.toolCallId, event.toolName, event.isError === true, event.result);
 			const extensionEvent: ToolExecutionEndEvent = {
 				type: "tool_execution_end",
 				toolCallId: event.toolCallId,
@@ -1485,6 +1604,79 @@ export class AgentSession {
 				isError: event.isError,
 			};
 			await this._extensionRunner.emit(extensionEvent);
+		}
+	}
+
+	/**
+	 * Turn metrics sink for this session, created on first use.
+	 *
+	 * Writes to `<cwd>/.omk/metrics/`. Set `OMK_TURN_METRICS=0` to disable, or
+	 * `OMK_TURN_METRICS_DIR` to relocate. Returns `undefined` when disabled, so
+	 * every call site is a no-op rather than a branch.
+	 */
+	private _metricsSink(): TurnMetricsSink | undefined {
+		if (isDisabledEnvValue(process.env.OMK_TURN_METRICS)) return undefined;
+		if (!this._turnMetricsSink) {
+			const dir = process.env.OMK_TURN_METRICS_DIR ?? joinPath(this._cwd, ".omk", "metrics");
+			this._turnMetricsSink = new TurnMetricsSink({ dir });
+		}
+		return this._turnMetricsSink;
+	}
+
+	private _recordToolMetric(toolCallId: string, toolName: string, isError: boolean, result: unknown): void {
+		const state = this._turnMetricsState;
+		if (!state) return;
+		const startedAt = state.toolStarts.get(toolCallId);
+		state.toolStarts.delete(toolCallId);
+		state.toolCalls.push({
+			name: toolName,
+			durationMs: startedAt === undefined ? 0 : Date.now() - startedAt,
+			ok: !isError,
+			...(isError ? { error: firstTextContent(result) } : {}),
+		});
+	}
+
+	/** Persist one turn. Metrics are advisory: a failure here never affects the turn. */
+	private _recordTurnMetrics(message: AgentMessage): void {
+		const state = this._turnMetricsState;
+		this._turnMetricsState = undefined;
+		if (!state) return;
+		const sink = this._metricsSink();
+		if (!sink) return;
+		const assistant = message.role === "assistant" ? message : undefined;
+		const usage = assistant?.usage;
+		const selectedModel = this.model ? `${this.model.provider}/${this.model.id}` : null;
+		const runtimeProvenance = buildRuntimeProvenance({
+			requestedModel: state.requestedModel,
+			selectedModel,
+			responseModel: assistant?.responseModel ?? (assistant ? `${assistant.provider}/${assistant.model}` : null),
+			requestedThinking: state.requestedThinking,
+			effectiveThinking: this.thinkingLevel,
+			source: "session",
+		});
+		try {
+			sink.record({
+				sessionId: this.sessionId,
+				turnIndex: this._turnIndex,
+				provider: this.model?.provider,
+				model: this.model?.id,
+				startedAtEpochMs: state.startedAtEpochMs,
+				endedAtEpochMs: Date.now(),
+				stopReason: assistant?.stopReason,
+				runtimeProvenance,
+				usage: usage
+					? {
+							input: usage.input,
+							output: usage.output,
+							cacheRead: usage.cacheRead,
+							cacheWrite: usage.cacheWrite,
+							costUsd: usage.cost.total,
+						}
+					: undefined,
+				toolCalls: state.toolCalls,
+			});
+		} catch {
+			// Never let observability break a turn.
 		}
 	}
 
@@ -1532,21 +1724,60 @@ export class AgentSession {
 	 */
 	dispose(): void {
 		try {
-			this.abortRetry();
-			this.abortCompaction();
-			this.abortBranchSummary();
-			this.abortBash();
-			this.agent.abort();
-		} catch {
-			// Dispose must succeed even if an abort hook throws.
-		}
+			try {
+				this.abortRetry();
+				this.abortCompaction();
+				this.abortBranchSummary();
+				this.abortBash();
+				this.agent.abort();
+			} catch {
+				// Dispose must succeed even if an abort hook throws.
+			}
 
-		this._extensionRunner.invalidate(
-			"This extension ctx is stale after session replacement or reload. Do not use a captured extension API or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
-		);
-		this._disconnectFromAgent();
-		this._eventListeners = [];
-		cleanupSessionResources(this.sessionId);
+			this._extensionRunner.invalidate(
+				"This extension ctx is stale after session replacement or reload. Do not use a captured extension API or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
+			);
+			this._disconnectFromAgent();
+			this._eventListeners = [];
+			if (this._contextBudgetCacheProvider instanceof DiskContextBudgetCacheProviderV2) {
+				// Persist whatever the session rendered; a failed flush is never fatal.
+				this._contextBudgetCacheProvider.close();
+			}
+			this._mcpManager?.close();
+			this._mcpManager = undefined;
+			cleanupSessionResources(this.sessionId);
+		} finally {
+			const ownerLease = this._ownedSessionOwnerLease;
+			if (ownerLease) {
+				ownerLease.release();
+				if (this.sessionManager.getOwnerLease() === ownerLease) this.sessionManager.setOwnerLease(undefined);
+				this._ownedSessionOwnerLease = undefined;
+			}
+		}
+	}
+
+	/**
+	 * Build the context-budget cache provider for this session.
+	 *
+	 * Defaults to a workspace-layer provider persisted under `<cwd>/.omk/cache`,
+	 * so a second session reuses representations the first one already rendered
+	 * (representation keys are content-addressed; see
+	 * `context-budget-v2-cache-keys.ts`). Set
+	 * `OMK_CONTEXT_GOVERNOR_CACHE=memory` to opt out, or
+	 * `OMK_CONTEXT_GOVERNOR_CACHE_DIR` to relocate the snapshot.
+	 */
+	private _createContextBudgetCacheProvider(): ContextBudgetCacheProviderV2 {
+		if (process.env.OMK_CONTEXT_GOVERNOR_CACHE === "memory") {
+			return createMemoryContextBudgetCacheProviderV2("session");
+		}
+		const dir =
+			process.env.OMK_CONTEXT_GOVERNOR_CACHE_DIR ?? joinPath(this._cwd, ".omk", "cache", "context-budget-v2");
+		try {
+			return createDiskContextBudgetCacheProviderV2({ dir, layer: "workspace" });
+		} catch {
+			// An unusable cache directory must not take the session down.
+			return createMemoryContextBudgetCacheProviderV2("session");
+		}
 	}
 
 	// =========================================================================
@@ -1646,6 +1877,9 @@ export class AgentSession {
 		// Rebuild base system prompt with new tool set
 		this._baseSystemPrompt = this._rebuildSystemPrompt(validToolNames);
 		this.agent.state.systemPrompt = this._baseSystemPrompt;
+		this.agent.state.systemPromptCacheBoundary = this._baseSystemPromptCacheBoundary;
+		this.agent.state.systemPromptCacheBoundaryBypass = false;
+		this._recordPromptCachePlan("tool-set");
 	}
 
 	/**
@@ -1756,8 +1990,8 @@ export class AgentSession {
 		// Scan recent messages (last 3) for the most recent user message
 		const recent = messages.slice(-3);
 		for (let i = recent.length - 1; i >= 0; i--) {
-			const msg = recent[i]!;
-			if (!("role" in msg) || msg.role !== "user") {
+			const msg = recent[i];
+			if (!msg || !("role" in msg) || msg.role !== "user") {
 				continue;
 			}
 			const content = (msg as { content: string | (TextContent | ImageContent)[] }).content;
@@ -1766,9 +2000,7 @@ export class AgentSession {
 				return trimmed.length > 0 ? trimmed : undefined;
 			}
 			if (Array.isArray(content)) {
-				const textParts = content
-					.filter((c): c is TextContent => "type" in c && c.type === "text")
-					.map((c) => c.text);
+				const textParts = content.flatMap((item) => (item.type === "text" ? [item.text] : []));
 				const joined = textParts.join("\n").trim();
 				return joined.length > 0 ? joined : undefined;
 			}
@@ -1824,7 +2056,7 @@ export class AgentSession {
 				parsePositiveIntegerEnv("OMK_CONTEXT_GOVERNOR_RESPONSE_RESERVE_TOKENS") ?? LEGACY_RESPONSE_RESERVE_TOKENS;
 		}
 
-		const cacheProvider = this._contextBudgetCacheProvider ?? createMemoryContextBudgetCacheProviderV2("session");
+		const cacheProvider = this._contextBudgetCacheProvider ?? this._createContextBudgetCacheProvider();
 		cacheProvider.setInvalidationSnapshot?.(this._contextCacheInvalidationSnapshot);
 		this._contextBudgetCacheProvider = cacheProvider;
 
@@ -1860,6 +2092,36 @@ export class AgentSession {
 		}
 		const ratio = overrideRatio ?? RESPONSE_RESERVE_RATIO;
 		return Math.max(Math.floor(contextWindow * ratio), LEGACY_RESPONSE_RESERVE_TOKENS);
+	}
+
+	private _recordPromptCachePlan(reason: string): void {
+		const boundary = this.agent.state.systemPromptCacheBoundary;
+		const scope = this.model ? `${this.model.provider}/${this.model.id}` : "unknown";
+		const nextKey = deriveContextPromptCacheKey(
+			{
+				systemPrompt: this.agent.state.systemPrompt,
+				systemPromptCacheBoundary: boundary,
+				systemPromptCacheBoundaryBypass: this.agent.state.systemPromptCacheBoundaryBypass,
+				messages: [],
+				tools: this.agent.state.tools,
+			},
+			scope,
+		);
+		if (!nextKey) {
+			this._promptCacheBoundaryBypasses += 1;
+			this._promptCacheStablePrefixCharacters = 0;
+			if (this._promptCacheKey !== undefined) {
+				this._promptCacheLastBreakReason = reason;
+			}
+			this._promptCacheKey = undefined;
+			return;
+		}
+		if (this._promptCacheKey !== undefined && this._promptCacheKey !== nextKey) {
+			this._promptCacheKeyChanges += 1;
+			this._promptCacheLastBreakReason = reason;
+		}
+		this._promptCacheKey = nextKey;
+		this._promptCacheStablePrefixCharacters = boundary ?? 0;
 	}
 
 	private _rebuildSystemPrompt(toolNames: string[]): string {
@@ -1900,7 +2162,9 @@ export class AgentSession {
 			promptGuidelines,
 			contextBudget: this._getContextBudgetOptions(),
 		};
-		return buildSystemPrompt(this._baseSystemPromptOptions);
+		const built = buildSystemPromptPlan(this._baseSystemPromptOptions);
+		this._baseSystemPromptCacheBoundary = built.cacheBoundary;
+		return built.prompt;
 	}
 
 	// =========================================================================
@@ -2110,13 +2374,13 @@ export class AgentSession {
 				...(promptActiveSkillNames.length > 0 ? { activeSkillNames: promptActiveSkillNames } : {}),
 				...(promptActiveSkillSource ? { activeSkillSource: promptActiveSkillSource } : {}),
 			};
-			const turnSystemPrompt = buildSystemPrompt(turnSystemPromptOptions);
+			const turnSystemPrompt = buildSystemPromptPlan(turnSystemPromptOptions);
 
 			// Emit before_agent_start extension event
 			const result = await this._extensionRunner.emitBeforeAgentStart(
 				expandedText,
 				currentImages,
-				turnSystemPrompt,
+				turnSystemPrompt.prompt,
 				turnSystemPromptOptions,
 			);
 			// Add all custom messages from extensions
@@ -2132,13 +2396,21 @@ export class AgentSession {
 					});
 				}
 			}
-			// Apply extension-modified system prompt, or reset to base
+			// Apply extension-modified system prompt, or reset to the turn plan.
 			if (result?.systemPrompt) {
+				const preservesCacheBoundary = result.systemPrompt === turnSystemPrompt.prompt;
 				this.agent.state.systemPrompt = result.systemPrompt;
+				this.agent.state.systemPromptCacheBoundary = preservesCacheBoundary
+					? turnSystemPrompt.cacheBoundary
+					: undefined;
+				this.agent.state.systemPromptCacheBoundaryBypass = !preservesCacheBoundary;
 			} else {
-				// Ensure we're using the base prompt (in case previous turn had modifications)
-				this.agent.state.systemPrompt = turnSystemPrompt;
+				// Ensure we're using the turn prompt (in case the previous turn had modifications).
+				this.agent.state.systemPrompt = turnSystemPrompt.prompt;
+				this.agent.state.systemPromptCacheBoundary = turnSystemPrompt.cacheBoundary;
+				this.agent.state.systemPromptCacheBoundaryBypass = false;
 			}
+			this._recordPromptCachePlan(result?.systemPrompt ? "extension-override" : "turn-plan");
 
 			await this._checkProjectedCompaction(messages);
 		} catch (error) {
@@ -2629,6 +2901,18 @@ export class AgentSession {
 		}
 	}
 
+	/** Apply an explicit user choice and retain it as bounded router feedback. */
+	setUserThinkingLevel(level: ThinkingLevel): void {
+		const overridesAuto = this._thinkingMode === "auto";
+		this.setThinkingMode("manual");
+		this.setThinkingLevel(level);
+		if (overridesAuto) {
+			this._recordUserThinkingOverride(this.thinkingLevel);
+		} else {
+			this._lastAutoRouterDecision = undefined;
+		}
+	}
+
 	/**
 	 * Set the thinking mode. "auto" resolves a level per turn via the reasoning
 	 * router; "manual" keeps the explicitly selected level. The mode persists for
@@ -2657,21 +2941,20 @@ export class AgentSession {
 	 * context-pressure bucket, routed through the confidence-bearing v4 classifier
 	 * and its uncertainty-aware resolver. No
 	 * `laneType` applies to the main session (always "none"/`undefined`);
-	 * `hint` is permanently `null` -- the Adaptorch advisory bridge has no
-	 * transport wired into the session (out of this lane's scope; see
-	 * adaptorch-bridge.ts). `bias` stays `0` unless BOTH hold: (a) the global,
+	 * the default-off Adaptorch bridge is wired but its current transport returns
+	 * no advisory hint. `bias` stays `0` unless BOTH hold: (a) the global,
 	 * owner-only `reasoningRouterLearning.enabled` setting is `true` (default
 	 * off; a project-scope `.omk/settings.json` value for this key is never
 	 * consulted -- see settings-manager.ts), and (b) a compiled
 	 * `RouterBiasSnapshot` was found and passed strict validation at the
-	 * configured/default path, loaded and cached ("pinned") at most once per
-	 * session (see `_getReasoningRouterBiasSnapshot`). When learning is
-	 * enabled, exactly one bounded "accepted" feedback record (no raw prompt/
-	 * path/diff/session/model/provider/tool/hook content; see
-	 * router-feedback-collector.ts's exact ten-key schema) is appended to the
-	 * local ledger after every v4 auto-turn resolution, for a future, separate
-	 * offline compile step to learn from -- this lane never records an
-	 * override/fail/hook-outcome signal, only the neutral "accepted" one. The
+	 * configured path or opaque repository/worktree-scoped default, loaded and
+	 * cached ("pinned") at most once per session (see
+	 * `_getReasoningRouterBiasSnapshot`). When learning is enabled, one bounded
+	 * "accepted" record (no raw prompt/path/diff/session/model/provider/tool/hook
+	 * content; see router-feedback-collector.ts's exact ten-key schema) is
+	 * appended after every v4 auto-turn. A later explicit user level records one
+	 * bounded `s1-override` direction for the same cell. Both remain inert until
+	 * a future, separate offline compile step. The
 	 * resolver's own confidence-band/fallback-reason escalation (see
 	 * reasoning-router-v4.ts) still applies on top of the base+lane+bias
 	 * target, so a low-confidence or fallback-decided verdict can still only
@@ -2679,18 +2962,22 @@ export class AgentSession {
 	 */
 	private _applyAutoThinkingLevelV4(promptText: string): void {
 		const availableLevels = this.getAvailableThinkingLevels();
-		const verdict = classifyTaskV4({
-			prompt: promptText,
-			history: this._taskClassHistory,
-			pressureBucket: this._computePressureBucket(),
-		});
+		const features = deriveRouterFeedbackFeaturesV4(promptText);
+		const verdict = classifyTaskV4(
+			{
+				prompt: promptText,
+				history: this._taskClassHistory,
+				pressureBucket: this._computePressureBucket(),
+			},
+			undefined,
+			features,
+		);
 
 		this._taskClassHistory.unshift(verdict.taskClass);
 		if (this._taskClassHistory.length > 8) this._taskClassHistory.length = 8;
 
 		const learningEnabled = this.settingsManager.getReasoningRouterLearningEnabled();
 		const snapshot = learningEnabled ? this._getReasoningRouterBiasSnapshot() : null;
-		const features = this._deriveRouterFeedbackFeatures(promptText);
 		const bias =
 			snapshot === null
 				? 0
@@ -2710,22 +2997,23 @@ export class AgentSession {
 			this._getAdaptorchHint(verdict, features),
 		);
 
+		this._lastAutoRouterDecision = undefined;
 		if (learningEnabled && resolved !== "off") {
-			const record: RouterFeedbackRecord = {
+			const decision: RouterAutoDecision = {
 				routerVersion: "v4",
 				laneType: "none",
 				predictedClass: verdict.taskClass,
 				resolvedLevel: resolved,
-				acceptedLevel: resolved,
-				signal: "s2-accept",
-				outcome: "accepted",
 				lenBucket: features.lenBucket,
 				hadFence: features.hadFence,
 				hadDiff: features.hadDiff,
 			};
-			appendRouterFeedbackRecord(record, {
-				enabled: true,
-				ledgerPath: this.settingsManager.getReasoningRouterLearningFeedbackLedgerPath(),
+			this._lastAutoRouterDecision = decision;
+			this._appendRouterFeedback({
+				...decision,
+				acceptedLevel: resolved,
+				signal: "s2-accept",
+				outcome: "accepted",
 			});
 		}
 
@@ -2737,22 +3025,49 @@ export class AgentSession {
 		this._emit({ type: "thinking_level_changed", level: resolved });
 	}
 
+	private _getRepositoryRouterLearningPaths(): RepositoryRouterLearningPaths {
+		if (this._repositoryRouterLearningPaths === undefined) {
+			this._repositoryRouterLearningPaths = getRepositoryRouterLearningPaths(this._cwd);
+		}
+		return this._repositoryRouterLearningPaths;
+	}
+
+	private _appendRouterFeedback(record: RouterFeedbackRecord): void {
+		appendRouterFeedbackRecord(record, {
+			enabled: this.settingsManager.getReasoningRouterLearningEnabled(),
+			ledgerPath:
+				this.settingsManager.getReasoningRouterLearningFeedbackLedgerPath() ??
+				this._getRepositoryRouterLearningPaths().ledgerPath,
+		});
+	}
+
+	private _recordUserThinkingOverride(acceptedLevel: ThinkingLevel): void {
+		const decision = this._lastAutoRouterDecision;
+		this._lastAutoRouterDecision = undefined;
+		if (!this.settingsManager.getReasoningRouterLearningEnabled() || !decision || acceptedLevel === "off") return;
+
+		const resolvedIndex = ROUTER_FEEDBACK_LEVELS.indexOf(decision.resolvedLevel);
+		const acceptedIndex = ROUTER_FEEDBACK_LEVELS.indexOf(acceptedLevel);
+		const outcome = acceptedIndex > resolvedIndex ? "up" : acceptedIndex < resolvedIndex ? "down" : "same";
+		this._appendRouterFeedback({
+			...decision,
+			acceptedLevel,
+			signal: "s1-override",
+			outcome,
+		});
+	}
+
 	/**
-	 * Loads and strictly validates the compiled reasoning-router bias snapshot
-	 * for the opt-in v4 learning path (Goal 010 Lane I), at most once per
-	 * session ("pinned"): the first call attempts the read and caches whatever
-	 * it finds (including a `null` miss/failure); every later call in the same
-	 * session reuses that cached result without touching disk again. Returns
-	 * `null` when no file exists at the configured/default path, the file
-	 * cannot be read, or its contents fail `parseRouterBiasSnapshot`'s schema
-	 * validation -- never throws.
+	 * Strictly load the compiled bias snapshot once per session. The first call
+	 * pins either a valid snapshot or a null miss; later calls never touch disk.
 	 */
 	private _getReasoningRouterBiasSnapshot(): RouterBiasSnapshot | null {
 		if (this._reasoningRouterBiasSnapshotLoaded) return this._reasoningRouterBiasSnapshot;
 		this._reasoningRouterBiasSnapshotLoaded = true;
 
 		const path =
-			this.settingsManager.getReasoningRouterLearningBiasSnapshotPath() ?? getDefaultRouterBiasSnapshotPath();
+			this.settingsManager.getReasoningRouterLearningBiasSnapshotPath() ??
+			this._getRepositoryRouterLearningPaths().biasSnapshotPath;
 		try {
 			if (existsSync(path)) {
 				this._reasoningRouterBiasSnapshot = parseRouterBiasSnapshot(readFileSync(path, "utf-8"));
@@ -2761,38 +3076,6 @@ export class AgentSession {
 			this._reasoningRouterBiasSnapshot = null;
 		}
 		return this._reasoningRouterBiasSnapshot;
-	}
-
-	/**
-	 * Locally derives the same three bounded, privacy-safe feedback-ledger
-	 * features (`lenBucket`, `hadFence`, `hadDiff`) the v4 classifier computes
-	 * internally (reasoning-router-v4.ts keeps those helpers file-private, so
-	 * they cannot be imported here). Mirrors reasoning-router-v4.ts's
-	 * length-bucket, `hasCodeFence`, and `hasDiffMarkers` helpers. Operates on the same trimmed prompt text
-	 * the classifier scores; never returns raw prompt content or its exact
-	 * length, only the clamped [0,7] bucket and two booleans.
-	 */
-	private _deriveRouterFeedbackFeatures(promptText: string): {
-		lenBucket: RouterFeedbackLenBucket;
-		hadFence: boolean;
-		hadDiff: boolean;
-	} {
-		const trimmed = promptText.trim();
-
-		let lenBucket = 0;
-		let remaining = trimmed.length + 1;
-		while (remaining > 1 && lenBucket < 7) {
-			remaining >>= 1;
-			lenBucket++;
-		}
-
-		const hadFence = trimmed.includes("```");
-		const hadDiff =
-			/^@@[^\n]*@@/m.test(trimmed) ||
-			/^diff --git /m.test(trimmed) ||
-			(/^\+(?!\+)/m.test(trimmed) && /^-(?!-)/m.test(trimmed));
-
-		return { lenBucket: lenBucket as RouterFeedbackLenBucket, hadFence, hadDiff };
 	}
 
 	/**
@@ -2829,7 +3112,7 @@ export class AgentSession {
 	 */
 	private _getAdaptorchHint(
 		verdict: { taskClass: TaskClassV4 },
-		features: { lenBucket: RouterFeedbackLenBucket; hadFence: boolean; hadDiff: boolean },
+		features: RouterFeedbackFeaturesV4,
 	): { level: import("omk-agent-core").ThinkingLevel; confidence: number } | null {
 		if (!this.settingsManager.getAdaptorchBridgeEnabled()) return null;
 
@@ -2874,20 +3157,7 @@ export class AgentSession {
 		const confidenceMap: Record<string, number> = { low: 0.5, medium: 0.75, high: 0.95 };
 		const confidence = confidenceMap[hint.confidenceBand] ?? 0.5;
 
-		// Map taskClass -> ThinkingLevel via the same rule table the resolver uses
-		const levelMap: Record<string, import("omk-agent-core").ThinkingLevel> = {
-			trivial: "minimal",
-			"simple-edit": "low",
-			"code-gen": "medium",
-			debug: "high",
-			refactor: "high",
-			review: "high",
-			plan: "xhigh",
-		};
-		const level = levelMap[hint.taskClass];
-		if (level === undefined) return null;
-
-		return { level, confidence };
+		return { level: TASK_CLASS_THINKING_LEVELS_V4[hint.taskClass], confidence };
 	}
 
 	/**
@@ -2901,8 +3171,13 @@ export class AgentSession {
 		const currentIndex = levels.indexOf(this.thinkingLevel);
 		const nextIndex = (currentIndex + 1) % levels.length;
 		const nextLevel = levels[nextIndex];
+		const overridesAuto = this._thinkingMode === "auto";
 
 		this.setThinkingLevel(nextLevel);
+		if (overridesAuto) {
+			this.setThinkingMode("manual");
+			this._recordUserThinkingOverride(nextLevel);
+		}
 		return nextLevel;
 	}
 
@@ -2919,7 +3194,7 @@ export class AgentSession {
 	 * Check if current model supports thinking/reasoning.
 	 */
 	supportsThinking(): boolean {
-		return !!this.model?.reasoning;
+		return Boolean(this.model?.reasoning);
 	}
 
 	private _getThinkingLevelForModelSwitch(explicitLevel?: ThinkingLevel): ThinkingLevel {
@@ -3088,8 +3363,8 @@ export class AgentSession {
 	 * @param customInstructions Optional instructions for the compaction summary
 	 */
 	async compact(customInstructions?: string): Promise<CompactionResult> {
-		this._disconnectFromAgent();
 		await this.abort();
+		this._disconnectFromAgent();
 		this._compactionAbortController = new AbortController();
 		this._emit({ type: "compaction_start", reason: "manual" });
 		let committedCompaction = false;
@@ -3174,7 +3449,7 @@ export class AgentSession {
 			}
 
 			const compactionResult: CompactionResult = {
-				summary: redactSensitiveText(summary),
+				summary: redactCredentialShapedContent(redactSensitiveTextForced(summary)),
 				firstKeptEntryId,
 				tokensBefore,
 				details,
@@ -3202,6 +3477,9 @@ export class AgentSession {
 			const message = error instanceof Error ? error.message : String(error);
 			const aborted = message === "Compaction cancelled" || (error instanceof Error && error.name === "AbortError");
 			const stale = /stale|session changed during compaction|already compacted/i.test(message);
+			let compactionCode: "aborted" | "stale" | "failed" = "failed";
+			if (aborted) compactionCode = "aborted";
+			else if (stale) compactionCode = "stale";
 			const timestamp = new Date().toISOString();
 			this._publishTermination(
 				classifySessionTermination({
@@ -3210,7 +3488,7 @@ export class AgentSession {
 					timestamp,
 					source: "observed",
 					message: this._terminationMessage(message, "Manual compaction failed."),
-					cause: { area: "compaction", code: aborted ? "aborted" : stale ? "stale" : "failed" },
+					cause: { area: "compaction", code: compactionCode },
 					sideEffects: committedCompaction ? "confirmed" : "none",
 					...(this.model ? { provider: this.model.provider, model: this.model.id } : {}),
 				}),
@@ -3245,11 +3523,47 @@ export class AgentSession {
 		this._branchSummaryAbortController?.abort();
 	}
 
+	/** True when the transcript carries image content that forces a vision-route turn. */
+	private _transcriptHasImages(messages: AgentMessage[]): boolean {
+		return messages.some((m) => {
+			const content = (m as { content?: unknown }).content;
+			if (!Array.isArray(content)) return false;
+			return content.some((part: unknown) => {
+				return typeof part === "object" && part !== null && (part as { type?: string }).type === "image";
+			});
+		});
+	}
+
+	/**
+	 * Effective context window for the upcoming turn.
+	 * Image-bearing turns with a text-only session model are auto-routed to the
+	 * vision model (gpt-5.6-luna, 400K) — that window is the real limit. Text-only
+	 * turns keep the session model's (typically much larger) window.
+	 */
+	private _effectiveTurnContextWindow(pendingMessages: AgentMessage[], sessionWindow: number): number {
+		// Vision routing keys off the full transcript, not just the pending turn:
+		// images retained in history keep every subsequent request on the vision model.
+		const hasImages =
+			this._transcriptHasImages(this.agent.state.messages) || this._transcriptHasImages(pendingMessages);
+		const model = this.model;
+		if (!hasImages || !model || (model.input ?? []).includes("image")) {
+			return sessionWindow;
+		}
+		return Math.min(sessionWindow, getVisionRouteModel(model).contextWindow);
+	}
+
 	private async _checkProjectedCompaction(pendingMessages: AgentMessage[]): Promise<boolean> {
 		const settings = this.settingsManager.getCompactionSettings();
 		if (!settings.enabled || pendingMessages.length === 0) return false;
 
-		const contextWindow = this.model?.contextWindow ?? 0;
+		const sessionWindow = this.model?.contextWindow ?? 0;
+		if (sessionWindow <= 0) return false;
+		// Image-bearing turns are served by the auto-routed vision model, not the
+		// session model. Its window (not the session model's) is the real limit the
+		// provider enforces, so threshold compaction must use it or the vision
+		// request overflows (context_length_exceeded) before deepseek-based
+		// compaction would fire.
+		const contextWindow = this._effectiveTurnContextWindow(pendingMessages, sessionWindow);
 		if (contextWindow <= 0) return false;
 
 		const messages = [...this.agent.state.messages, ...pendingMessages];
@@ -3267,7 +3581,7 @@ export class AgentSession {
 
 		const decision = this._runtimeCompactionDecision(estimate.tokens, contextWindow, settings);
 		if (decision.compact) {
-			return await this._runThresholdCompaction(decision.emergency);
+			return this._runThresholdCompaction(decision.emergency);
 		}
 		return false;
 	}
@@ -3298,6 +3612,14 @@ export class AgentSession {
 		// shouldn't trigger compaction for the new model.
 		const sameModel =
 			this.model && assistantMessage.provider === this.model.provider && assistantMessage.model === this.model.id;
+		// Image-bearing turns are auto-routed to a vision-capable model (gpt-5.6-luna)
+		// while the session model stays text-only (deepseek). An overflow from that
+		// routed model must still count as the session's own overflow: compaction is
+		// the fix, and the raw context_length_exceeded error must never reach the user.
+		const visionRouteOverflow =
+			this.model != null &&
+			!(this.model.input ?? []).includes("image") &&
+			isVisionRouteModel({ provider: assistantMessage.provider, id: assistantMessage.model });
 
 		// Skip compaction checks if this assistant message is older than the latest
 		// compaction boundary. This prevents a stale pre-compaction usage/error
@@ -3310,7 +3632,7 @@ export class AgentSession {
 		}
 
 		// Case 1: Overflow - LLM returned context overflow error
-		if (sameModel && isContextOverflow(assistantMessage, contextWindow)) {
+		if ((sameModel || visionRouteOverflow) && isContextOverflow(assistantMessage, contextWindow)) {
 			if (this._overflowRecoveryAttempted) {
 				this._emit({
 					type: "compaction_end",
@@ -3331,7 +3653,7 @@ export class AgentSession {
 			if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
 				this.agent.state.messages = messages.slice(0, -1);
 			}
-			return await this._runAutoCompaction("overflow", true);
+			return this._runAutoCompaction("overflow", true);
 		}
 
 		// Case 2: Threshold - context is getting large
@@ -3359,7 +3681,7 @@ export class AgentSession {
 		}
 		const decision = this._runtimeCompactionDecision(contextTokens, contextWindow, settings);
 		if (decision.compact) {
-			return await this._runThresholdCompaction(decision.emergency);
+			return this._runThresholdCompaction(decision.emergency);
 		}
 		return false;
 	}
@@ -3501,7 +3823,7 @@ export class AgentSession {
 			}
 
 			const result: CompactionResult = {
-				summary: redactSensitiveText(summary),
+				summary: redactCredentialShapedContent(redactSensitiveTextForced(summary)),
 				firstKeptEntryId,
 				tokensBefore,
 				details,
@@ -3631,6 +3953,9 @@ export class AgentSession {
 		this._resourceLoader.extendResources(extensionPaths);
 		this._baseSystemPrompt = this._rebuildSystemPrompt(this.getActiveToolNames());
 		this.agent.state.systemPrompt = this._baseSystemPrompt;
+		this.agent.state.systemPromptCacheBoundary = this._baseSystemPromptCacheBoundary;
+		this.agent.state.systemPromptCacheBoundaryBypass = false;
+		this._recordPromptCachePlan("resource-reload");
 	}
 
 	private buildExtensionResourcePaths(entries: Array<{ path: string; extensionPath: string }>): Array<{
@@ -3804,6 +4129,52 @@ export class AgentSession {
 		);
 	}
 
+	/**
+	 * Connect configured MCP servers and register their tools for this session.
+	 *
+	 * Connection is lazy by construction: nothing is spawned until this is called,
+	 * and a server that fails to start is reported in the returned status instead
+	 * of taking the session down. Calling it twice replaces the previously
+	 * attached MCP tools rather than duplicating them.
+	 *
+	 * Returns per-server status so a caller can surface failures; an empty
+	 * configuration returns an empty array without spawning anything.
+	 */
+	async attachMcpServers(options?: {
+		servers?: readonly McpServerConfig[];
+		callTimeoutMs?: number;
+	}): Promise<McpServerStatus[]> {
+		const servers = options?.servers ?? loadMcpServerConfigs(this._cwd);
+		this._mcpManager?.close();
+		this._mcpManager = undefined;
+		this._customTools = this._customTools.filter((definition) => !this._mcpToolNames.has(definition.name));
+		this._mcpToolNames = new Set();
+		if (servers.length === 0) {
+			this._refreshToolRegistry();
+			return [];
+		}
+
+		const manager = new McpManager({
+			servers,
+			cwd: this._cwd,
+			clientInfo: { name: APP_NAME, version: VERSION },
+			callTimeoutMs: options?.callTimeoutMs,
+		});
+		this._mcpManager = manager;
+		const definitions = await manager.listToolDefinitions();
+		// A builtin always wins a name collision; MCP must never shadow `bash`.
+		const usable = definitions.filter((definition) => !this._baseToolDefinitions.has(definition.name));
+		this._mcpToolNames = new Set(usable.map((definition) => definition.name));
+		this._customTools = [...this._customTools, ...(usable as ToolDefinition[])];
+		this._refreshToolRegistry();
+		return manager.status();
+	}
+
+	/** Status of MCP servers attached to this session. Empty when none were attached. */
+	mcpServerStatus(): McpServerStatus[] {
+		return this._mcpManager?.status() ?? [];
+	}
+
 	private _refreshToolRegistry(options?: { activeToolNames?: string[]; includeAllExtensionTools?: boolean }): void {
 		const previousRegistryNames = new Set(this._toolRegistry.keys());
 		const previousActiveToolNames = this.getActiveToolNames();
@@ -3830,15 +4201,19 @@ export class AgentSession {
 		}
 
 		const definitionRegistry = new Map<string, ToolDefinitionEntry>(
-			Array.from(this._baseToolDefinitions.entries())
-				.filter(([name]) => isAllowedTool(name))
-				.map(([name, definition]) => [
-					name,
-					{
-						definition,
-						sourceInfo: createSyntheticSourceInfo(`<builtin:${name}>`, { source: "builtin" }),
-					},
-				]),
+			Array.from(this._baseToolDefinitions.entries()).flatMap(([name, definition]) =>
+				isAllowedTool(name)
+					? [
+							[
+								name,
+								{
+									definition,
+									sourceInfo: createSyntheticSourceInfo(`<builtin:${name}>`, { source: "builtin" }),
+								},
+							] as [string, ToolDefinitionEntry],
+						]
+					: [],
+			),
 		);
 		for (const tool of allCustomTools) {
 			definitionRegistry.set(tool.definition.name, {
@@ -3848,30 +4223,37 @@ export class AgentSession {
 		}
 		this._toolDefinitions = definitionRegistry;
 		this._toolPromptSnippets = new Map(
-			Array.from(definitionRegistry.values())
-				.map(({ definition }) => {
-					const snippet = this._normalizePromptSnippet(definition.promptSnippet);
-					return snippet ? ([definition.name, snippet] as const) : undefined;
-				})
-				.filter((entry): entry is readonly [string, string] => entry !== undefined),
+			Array.from(definitionRegistry.values()).flatMap(({ definition }) => {
+				const snippet = this._normalizePromptSnippet(definition.promptSnippet);
+				return snippet ? [[definition.name, snippet] as const] : [];
+			}),
 		);
 		this._toolPromptGuidelines = new Map(
-			Array.from(definitionRegistry.values())
-				.map(({ definition }) => {
-					const guidelines = this._normalizePromptGuidelines(definition.promptGuidelines);
-					return guidelines.length > 0 ? ([definition.name, guidelines] as const) : undefined;
-				})
-				.filter((entry): entry is readonly [string, string[]] => entry !== undefined),
+			Array.from(definitionRegistry.values()).flatMap(({ definition }) => {
+				const guidelines = this._normalizePromptGuidelines(definition.promptGuidelines);
+				return guidelines.length > 0 ? [[definition.name, guidelines] as const] : [];
+			}),
+		);
+		// Tools contributed by extensions the harness itself loads (`<builtin:*>`),
+		// as opposed to user/project/SDK extensions.
+		const builtinExtensionToolNames = new Set(
+			allCustomTools.flatMap((tool) => (tool.sourceInfo.path.startsWith("<builtin:") ? [tool.definition.name] : [])),
 		);
 		const runner = this._extensionRunner;
 		const wrappedExtensionTools = wrapRegisteredTools(allCustomTools, runner);
 		const wrappedBuiltInTools = wrapRegisteredTools(
-			Array.from(this._baseToolDefinitions.values())
-				.filter((definition) => isAllowedTool(definition.name))
-				.map((definition) => ({
-					definition,
-					sourceInfo: createSyntheticSourceInfo(`<builtin:${definition.name}>`, { source: "builtin" }),
-				})),
+			Array.from(this._baseToolDefinitions.values()).flatMap((definition) =>
+				isAllowedTool(definition.name)
+					? [
+							{
+								definition,
+								sourceInfo: createSyntheticSourceInfo(`<builtin:${definition.name}>`, {
+									source: "builtin",
+								}),
+							},
+						]
+					: [],
+			),
 			runner,
 		);
 
@@ -3903,7 +4285,13 @@ export class AgentSession {
 				}
 			}
 		} else if (options?.includeAllExtensionTools) {
+			// "Keep extension tools on" is about the *user's* extensions. Tools shipped
+			// by a built-in extension (e.g. update_todo) are part of the harness's own
+			// tool surface, so they follow the built-in policy: when the caller asked
+			// for no built-in tools, they stay off too.
+			const builtinToolsDisabled = options.activeToolNames?.length === 0;
 			for (const tool of wrappedExtensionTools) {
+				if (builtinToolsDisabled && builtinExtensionToolNames.has(tool.name)) continue;
 				nextActiveToolNames.push(tool.name);
 			}
 		} else if (!options?.activeToolNames) {
@@ -3940,45 +4328,48 @@ export class AgentSession {
 						loadoutAccessGuard({ operation: "write", toolName: "write", path }).allowed,
 				}
 			: {};
-		const baseToolDefinitions = this._baseToolsOverride
-			? Object.fromEntries(
+		const baseToolDefinitions = (() => {
+			if (this._baseToolsOverride) {
+				return Object.fromEntries(
 					Object.entries(this._baseToolsOverride).map(([name, tool]) => [
 						name,
 						createToolDefinitionFromAgentTool(tool),
 					]),
-				)
-			: createAllToolDefinitions(this._cwd, {
-					read: { autoResizeImages, ...loadoutReadOptions },
-					bash: {
-						commandPrefix: shellCommandPrefix,
-						shellPath,
-						...(loadoutAccessGuard ? { loadoutAccessGuard } : {}),
-						...(() => {
-							const sandboxPolicy = this._getBashSandboxPreflight();
-							return sandboxPolicy ? { sandboxPolicy } : {};
-						})(),
-						...(() => {
-							const evidenceExecutor = this._getVerifiedEvidenceExecutor();
-							if (!evidenceExecutor || !this._replayGoalId) return {};
-							const { shell } = getShellConfig(shellPath);
-							const inner = createLocalBashOperations({
-								...(shellPath !== undefined ? { shellPath } : {}),
-								sandboxPolicy: this._getBashSandboxPreflight(),
-							});
-							return {
-								operations: createVerifiedBashOperations(inner, {
-									evidenceExecutor,
-									goalId: this._replayGoalId,
-									...(this._replayLaneId !== undefined ? { laneId: this._replayLaneId } : {}),
-									shell,
-									workspaceScope: resolveSessionWorkspaceScope(this._cwd),
-								}),
-							};
-						})(),
-					},
-					edit: loadoutWriteOptions,
-					write: loadoutWriteOptions,
-				});
+				);
+			}
+			return createAllToolDefinitions(this._cwd, {
+				read: { autoResizeImages, ...loadoutReadOptions },
+				bash: {
+					commandPrefix: shellCommandPrefix,
+					shellPath,
+					...(loadoutAccessGuard ? { loadoutAccessGuard } : {}),
+					...(() => {
+						const sandboxPolicy = this._getBashSandboxPreflight();
+						return sandboxPolicy ? { sandboxPolicy } : {};
+					})(),
+					...(() => {
+						const evidenceExecutor = this._getVerifiedEvidenceExecutor();
+						if (!evidenceExecutor || !this._replayGoalId) return {};
+						const { shell } = getShellConfig(shellPath);
+						const inner = createLocalBashOperations({
+							...(shellPath !== undefined ? { shellPath } : {}),
+							sandboxPolicy: this._getBashSandboxPreflight(),
+						});
+						return {
+							operations: createVerifiedBashOperations(inner, {
+								evidenceExecutor,
+								goalId: this._replayGoalId,
+								...(this._replayLaneId !== undefined ? { laneId: this._replayLaneId } : {}),
+								shell,
+								workspaceScope: resolveSessionWorkspaceScope(this._cwd),
+							}),
+						};
+					})(),
+				},
+				edit: loadoutWriteOptions,
+				write: loadoutWriteOptions,
+			});
+		})();
 
 		this._baseToolDefinitions = new Map(
 			Object.entries(baseToolDefinitions).map(([name, tool]) => [name, tool as ToolDefinition]),
@@ -4112,7 +4503,8 @@ export class AgentSession {
 			{ provider: current.provider, id: current.id },
 			(c) => {
 				const next = this._modelRegistry.find(c.provider, c.id);
-				return !!next && this._modelRegistry.hasConfiguredAuth(next);
+				if (!next) return false;
+				return this._modelRegistry.hasConfiguredAuth(next);
 			},
 		);
 		if (!pick) {
@@ -4151,7 +4543,8 @@ export class AgentSession {
 				// Skip any model that already refused/failed this turn → advance the chain.
 				if (this._refusedModels.has(`${c.provider}/${c.id}`)) return false;
 				const next = this._modelRegistry.find(c.provider, c.id);
-				return !!next && this._modelRegistry.hasConfiguredAuth(next);
+				if (!next) return false;
+				return this._modelRegistry.hasConfiguredAuth(next);
 			},
 		);
 		if (!pick) return undefined;
@@ -4419,7 +4812,8 @@ export class AgentSession {
 			let summaryText: string | undefined;
 			let summaryDetails: unknown;
 			if (options.summarize && entriesToSummarize.length > 0 && !extensionSummary) {
-				const model = this.model!;
+				const model = this.model;
+				if (!model) throw new Error("No model available for summarization");
 				const { apiKey, headers } = await this._getRequiredRequestAuth(model);
 				const branchSummarySettings = this.settingsManager.getBranchSummarySettings();
 				const result = await generateBranchSummary(entriesToSummarize, {
@@ -4461,13 +4855,16 @@ export class AgentSession {
 			} else if (targetEntry.type === "custom_message") {
 				// Custom message: leaf = parent (null if root), text goes to editor
 				newLeafId = targetEntry.parentId;
-				editorText =
-					typeof targetEntry.content === "string"
-						? targetEntry.content
-						: targetEntry.content
-								.filter((c): c is { type: "text"; text: string } => c.type === "text")
-								.map((c) => c.text)
-								.join("");
+				if (typeof targetEntry.content === "string") {
+					editorText = targetEntry.content;
+				} else {
+					editorText = targetEntry.content
+						.flatMap((item) => {
+							if (item.type === "text") return [item.text];
+							return [];
+						})
+						.join("");
+				}
 			} else {
 				// Non-user message: leaf = selected node
 				newLeafId = targetId;
@@ -4548,8 +4945,7 @@ export class AgentSession {
 		if (typeof content === "string") return content;
 		if (Array.isArray(content)) {
 			return content
-				.filter((c): c is { type: "text"; text: string } => c.type === "text")
-				.map((c) => c.text)
+				.flatMap((item) => (item.type === "text" && typeof item.text === "string" ? [item.text] : []))
 				.join("");
 		}
 		return "";
@@ -4583,6 +4979,7 @@ export class AgentSession {
 			}
 		}
 
+		const providerEligibleInputTokens = totalInput + totalCacheRead + totalCacheWrite;
 		return {
 			sessionFile: this.sessionFile,
 			sessionId: this.sessionId,
@@ -4597,6 +4994,14 @@ export class AgentSession {
 				cacheRead: totalCacheRead,
 				cacheWrite: totalCacheWrite,
 				total: totalInput + totalOutput + totalCacheRead + totalCacheWrite,
+			},
+			promptCache: {
+				providerEligibleInputTokens,
+				providerHitRate: providerEligibleInputTokens > 0 ? totalCacheRead / providerEligibleInputTokens : 0,
+				keyChanges: this._promptCacheKeyChanges,
+				boundaryBypasses: this._promptCacheBoundaryBypasses,
+				stablePrefixCharacters: this._promptCacheStablePrefixCharacters,
+				...(this._promptCacheLastBreakReason ? { lastBreakReason: this._promptCacheLastBreakReason } : {}),
 			},
 			cost: totalCost,
 			contextUsage: this.getContextUsage(),
@@ -4664,7 +5069,7 @@ export class AgentSession {
 			cwd: this.sessionManager.getCwd(),
 		});
 
-		return await exportSessionToHtml(this.sessionManager, this.state, {
+		return exportSessionToHtml(this.sessionManager, this.state, {
 			outputPath,
 			themeName,
 			toolRenderer,
@@ -4720,21 +5125,21 @@ export class AgentSession {
 	 * @returns Text content, or undefined if no assistant message exists
 	 */
 	getLastAssistantText(): string | undefined {
-		const lastAssistant = this.messages
-			.slice()
-			.reverse()
-			.find((m) => {
-				if (m.role !== "assistant") return false;
-				const msg = m as AssistantMessage;
-				// Skip aborted messages with no content
-				if (msg.stopReason === "aborted" && msg.content.length === 0) return false;
-				return true;
-			});
+		let lastAssistant: AssistantMessage | undefined;
+		for (let index = this.messages.length - 1; index >= 0; index -= 1) {
+			const message = this.messages[index];
+			if (message?.role !== "assistant") continue;
+			const assistant = message as AssistantMessage;
+			// Skip aborted messages with no content
+			if (assistant.stopReason === "aborted" && assistant.content.length === 0) continue;
+			lastAssistant = assistant;
+			break;
+		}
 
 		if (!lastAssistant) return undefined;
 
 		let text = "";
-		for (const content of (lastAssistant as AssistantMessage).content) {
+		for (const content of lastAssistant.content) {
 			if (content.type === "text") {
 				text += content.text;
 			}

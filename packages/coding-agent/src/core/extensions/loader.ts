@@ -28,6 +28,8 @@ import { resolvePath } from "../../utils/paths.ts";
 import { createEventBus, type EventBus } from "../event-bus.ts";
 import type { ExecOptions } from "../exec.ts";
 import { execCommand } from "../exec.ts";
+import { readPackageManifest } from "../package-manifest.ts";
+import { LEGACY_PI_RUNTIME_ALIASES, type PiCompatibilityTarget } from "../pi-compat.ts";
 import { createSyntheticSourceInfo } from "../source-info.ts";
 import type {
 	Extension,
@@ -41,8 +43,23 @@ import type {
 	ToolDefinition,
 } from "./types.ts";
 
+const LEGACY_PI_VIRTUAL_TARGETS: Record<PiCompatibilityTarget, unknown> = {
+	"coding-agent": _bundledOmkCodingAgent,
+	"agent-core": _bundledOmkAgentCore,
+	"agent-core-node": _bundledOmkAgentCoreNode,
+	ai: _bundledOmkAi,
+	"ai-oauth": _bundledOmkAiOauth,
+	tui: _bundledOmkTui,
+};
+
 /** Modules available to extensions via virtualModules (for compiled Bun binary) */
 const VIRTUAL_MODULES: Record<string, unknown> = {
+	...Object.fromEntries(
+		Object.entries(LEGACY_PI_RUNTIME_ALIASES).map(([specifier, target]) => [
+			specifier,
+			LEGACY_PI_VIRTUAL_TARGETS[target],
+		]),
+	),
 	typebox: _bundledTypebox,
 	"typebox/compile": _bundledTypeboxCompile,
 	"typebox/value": _bundledTypeboxValue,
@@ -187,7 +204,21 @@ function getAliases(): Record<string, string> {
 		__dirname,
 	);
 
+	const legacyPiAliasTargets: Record<PiCompatibilityTarget, string> = {
+		"coding-agent": omkCodingAgentEntry,
+		"agent-core": omkAgentCoreEntry,
+		"agent-core-node": omkAgentCoreNodeEntry,
+		ai: omkAiEntry,
+		"ai-oauth": omkAiOauthEntry,
+		tui: omkTuiEntry,
+	};
 	_aliases = {
+		...Object.fromEntries(
+			Object.entries(LEGACY_PI_RUNTIME_ALIASES).map(([specifier, target]) => [
+				specifier,
+				legacyPiAliasTargets[target],
+			]),
+		),
 		"open-multi-agent-kit": omkCodingAgentEntry,
 		"omk-agent-core": omkAgentCoreEntry,
 		"omk-agent-core/node": omkAgentCoreNodeEntry,
@@ -564,24 +595,6 @@ export async function loadExtensions(paths: string[], cwd: string, eventBus?: Ev
 	};
 }
 
-interface OmkManifest {
-	extensions?: string[];
-	themes?: string[];
-	skills?: string[];
-	prompts?: string[];
-}
-
-function readOmkManifest(packageJsonPath: string): OmkManifest | null {
-	try {
-		const content = fs.readFileSync(packageJsonPath, "utf-8");
-		const pkg = JSON.parse(content) as { omk?: unknown };
-		const manifest = pkg.omk;
-		return manifest && typeof manifest === "object" ? (manifest as OmkManifest) : null;
-	} catch {
-		return null;
-	}
-}
-
 function isExtensionFile(name: string): boolean {
 	return name.endsWith(".ts") || name.endsWith(".js");
 }
@@ -590,27 +603,33 @@ function isExtensionFile(name: string): boolean {
  * Resolve extension entry points from a directory.
  *
  * Checks for:
- * 1. package.json with "omk.extensions" field -> returns declared paths
+ * 1. package.json with "omk.extensions" or "pi.extensions" (omk wins)
  * 2. index.ts or index.js -> returns the index file
  *
  * Returns resolved paths or null if no entry points found.
  */
 function resolveExtensionEntries(dir: string): string[] | null {
-	// Check for package.json with "omk" field first
 	const packageJsonPath = path.join(dir, "package.json");
 	if (fs.existsSync(packageJsonPath)) {
-		const manifest = readOmkManifest(packageJsonPath);
-		if (manifest?.extensions?.length) {
+		const resolvedManifest = readPackageManifest(packageJsonPath);
+		if (resolvedManifest && (resolvedManifest.key !== null || resolvedManifest.diagnostics.length > 0)) {
 			const entries: string[] = [];
-			for (const extPath of manifest.extensions) {
-				const resolvedExtPath = path.resolve(dir, extPath);
-				if (fs.existsSync(resolvedExtPath)) {
-					entries.push(resolvedExtPath);
+			for (const extPath of resolvedManifest.manifest?.extensions ?? []) {
+				const candidate = path.resolve(dir, extPath);
+				if (!fs.existsSync(candidate)) continue;
+				if (fs.statSync(candidate).isDirectory()) {
+					for (const indexName of ["index.ts", "index.js", "index.mjs", "index.cjs"]) {
+						const indexPath = path.join(candidate, indexName);
+						if (fs.existsSync(indexPath)) {
+							entries.push(indexPath);
+							break;
+						}
+					}
+				} else {
+					entries.push(candidate);
 				}
 			}
-			if (entries.length > 0) {
-				return entries;
-			}
+			return entries;
 		}
 	}
 

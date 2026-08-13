@@ -9,6 +9,7 @@ import {
 	createSessionRevisionToken,
 	decideCompactionCommit,
 	evaluateCompactionBarrier,
+	redactCredentialShapedContent,
 } from "../src/core/compaction/transaction.ts";
 
 vi.mock("omk-agent-core", () => currentAgentCore);
@@ -1046,6 +1047,66 @@ describe("createCompactionEnvelope", () => {
 				summarySha256: validSummarySha256(),
 			}),
 		).toThrow(/credential/);
+	});
+
+	it("accepts prose containing hyphenated sk-suffixed words", () => {
+		const prose = "fix the task-scheduler and risk-assessment modules";
+		const txn = minimalTransaction({
+			preserved: {
+				latestIntent: prose,
+				openTasks: [],
+				laneIds: [],
+				acceptancePredicateIds: [],
+				evidenceReceiptIds: [],
+				blockerReasons: [],
+				repairEventIds: [],
+				branch: null,
+				worktree: null,
+				modelHistory: [],
+				nextAction: prose,
+			},
+		});
+		expect(txn.preserved.latestIntent).toBe(prose);
+		const decision: CompactionCommitDecision = {
+			decision: "commit",
+			reason: "exact_match",
+			transactionId: txn.transactionId,
+			revision: txn.baseRevision,
+			source: txn.source,
+		};
+		expect(() =>
+			createCompactionEnvelope({
+				transaction: txn,
+				decision,
+				summary: prose,
+				summarySha256: validSummarySha256(),
+			}),
+		).not.toThrow();
+	});
+
+	it("masks credential-shaped spans until content validators pass", () => {
+		const masked = redactCredentialShapedContent(
+			"deploy with bearer abc123def456 then passwd: hunter2-value and sk-abc123def456ghi789",
+		);
+		expect(masked).toContain("[REDACTED]");
+		expect(masked).not.toContain("abc123def456");
+		expect(masked).not.toContain("hunter2-value");
+		const txn = minimalTransaction();
+		const decision: CompactionCommitDecision = {
+			decision: "commit",
+			reason: "exact_match",
+			transactionId: txn.transactionId,
+			revision: txn.baseRevision,
+			source: txn.source,
+		};
+		expect(() =>
+			createCompactionEnvelope({
+				transaction: txn,
+				decision,
+				summary: masked,
+				summarySha256: validSummarySha256(),
+			}),
+		).not.toThrow();
 	});
 
 	it("accepts a redacted credential placeholder in a summary", () => {

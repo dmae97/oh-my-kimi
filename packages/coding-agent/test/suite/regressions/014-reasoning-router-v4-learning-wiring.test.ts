@@ -17,12 +17,13 @@ import {
 	parseRouterBiasSnapshot,
 	type RouterBiasSnapshot,
 } from "../../../src/core/reasoning-router-bias.ts";
-import { classifyTaskV4, resolveThinkingLevelV4WithUncertainty } from "../../../src/core/reasoning-router-v4.ts";
 import {
-	isRouterFeedbackRecord,
-	type RouterFeedbackLenBucket,
-	type RouterFeedbackRecord,
-} from "../../../src/core/router-feedback-collector.ts";
+	classifyTaskV4,
+	deriveRouterFeedbackFeaturesV4,
+	resolveThinkingLevelV4WithUncertainty,
+} from "../../../src/core/reasoning-router-v4.ts";
+import { getRepositoryRouterLearningPaths } from "../../../src/core/repository-learning-scope.ts";
+import { isRouterFeedbackRecord, type RouterFeedbackRecord } from "../../../src/core/router-feedback-collector.ts";
 import { InteractiveMode } from "../../../src/modes/interactive/interactive-mode.ts";
 import { createHarness, type Harness, type HarnessOptions } from "../harness.ts";
 
@@ -32,23 +33,6 @@ const SPELLING_PROMPT = "correct the spelling of 'recieve' to 'receive'";
 const PLAN_PROMPT = "plan the architecture roadmap for the storage layer";
 
 const FULL_LEVEL_SET: readonly ThinkingLevel[] = ["minimal", "low", "medium", "high", "xhigh", "max"];
-
-/**
- * Copied verbatim from agent-session.ts's private `_deriveRouterFeedbackFeatures`
- * (file-private, not exported), so the synthetic bias-snapshot cells built in
- * this file key-match a real session's own appended feedback records exactly
- * -- pure integer right-shifts, no floating-point `log2` drift risk.
- */
-function computeLenBucket(promptText: string): RouterFeedbackLenBucket {
-	const trimmed = promptText.trim();
-	let lenBucket = 0;
-	let remaining = trimmed.length + 1;
-	while (remaining > 1 && lenBucket < 7) {
-		remaining >>= 1;
-		lenBucket++;
-	}
-	return lenBucket as RouterFeedbackLenBucket;
-}
 
 function readJsonlRecords(path: string): unknown[] {
 	return readFileSync(path, "utf-8")
@@ -74,6 +58,7 @@ function buildSingleCellSnapshot(
 	count: number = BIAS_STRONG_THRESHOLD + 1,
 ): RouterBiasSnapshot {
 	const predictedClass = classifyTaskV4({ prompt }).taskClass;
+	const feedbackFeatures = deriveRouterFeedbackFeaturesV4(prompt);
 	const records: RouterFeedbackRecord[] = Array.from({ length: count }, () => ({
 		routerVersion: "v4",
 		laneType: "none",
@@ -82,9 +67,7 @@ function buildSingleCellSnapshot(
 		acceptedLevel: outcome === "up" ? "high" : "minimal",
 		signal: "s1-override",
 		outcome,
-		lenBucket: computeLenBucket(prompt),
-		hadFence: false,
-		hadDiff: false,
+		...feedbackFeatures,
 	}));
 	return compileBiasSnapshot(records, { routerVersion: "v4" });
 }
@@ -130,6 +113,7 @@ afterEach(() => {
 		const dir = scratchDirs.pop();
 		if (dir) rmSync(dir, { recursive: true, force: true });
 	}
+	vi.unstubAllEnvs();
 });
 
 function scratchDir(): string {
@@ -270,7 +254,7 @@ describe("goal 010 lane T: opt-in learning, no snapshot present — same resolut
 			acceptedLevel: "low",
 			signal: "s2-accept",
 			outcome: "accepted",
-			lenBucket: computeLenBucket(SPELLING_PROMPT),
+			lenBucket: deriveRouterFeedbackFeaturesV4(SPELLING_PROMPT).lenBucket,
 			hadFence: false,
 			hadDiff: false,
 		});
@@ -351,6 +335,37 @@ describe("goal 010 lane T: opt-in learning with a valid bias snapshot — escala
 	});
 });
 
+describe("goal 010 lane T: bias snapshots and misses stay pinned within a session", () => {
+	it("does not reload a snapshot after the first learning-enabled auto turn", async () => {
+		const dir = scratchDir();
+		const biasSnapshotPath = join(dir, "snapshot.json");
+		const feedbackLedgerPath = join(dir, "ledger.jsonl");
+		writeSnapshotFile(biasSnapshotPath, buildSingleCellSnapshot(SPELLING_PROMPT, "up"));
+		const { harness, context } = await createThinkSubmitContext({
+			reasoningRouterLearning: { enabled: true, biasSnapshotPath, feedbackLedgerPath },
+		});
+		await submit(context, "/think auto");
+		expect(await promptAndReadLevel(harness, SPELLING_PROMPT)).toBe("high");
+
+		writeSnapshotFile(biasSnapshotPath, buildSingleCellSnapshot(SPELLING_PROMPT, "down"));
+		expect(await promptAndReadLevel(harness, SPELLING_PROMPT)).toBe("high");
+	});
+
+	it("does not load a snapshot created after the session pinned a miss", async () => {
+		const dir = scratchDir();
+		const biasSnapshotPath = join(dir, "snapshot.json");
+		const feedbackLedgerPath = join(dir, "ledger.jsonl");
+		const { harness, context } = await createThinkSubmitContext({
+			reasoningRouterLearning: { enabled: true, biasSnapshotPath, feedbackLedgerPath },
+		});
+		await submit(context, "/think auto");
+		expect(await promptAndReadLevel(harness, SPELLING_PROMPT)).toBe("low");
+
+		writeSnapshotFile(biasSnapshotPath, buildSingleCellSnapshot(SPELLING_PROMPT, "up"));
+		expect(await promptAndReadLevel(harness, SPELLING_PROMPT)).toBe("low");
+	});
+});
+
 describe("goal 010 lane T: opt-in learning with an invalid or corrupted on-disk snapshot — ignored, falls back to unbiased resolution (end-to-end)", () => {
 	const invalidSnapshotCases: Array<[string, string]> = [
 		["unparsable JSON text", "{not valid json"],
@@ -386,7 +401,7 @@ describe("goal 010 lane T: opt-in learning with an invalid or corrupted on-disk 
 					{
 						predictedClass: "simple-edit",
 						laneType: "none",
-						lenBucket: computeLenBucket(SPELLING_PROMPT),
+						lenBucket: deriveRouterFeedbackFeaturesV4(SPELLING_PROMPT).lenBucket,
 						hadFence: false,
 						hadDiff: false,
 						biasSteps: 3,
@@ -447,6 +462,28 @@ describe("goal 010 lane T: parseRouterBiasSnapshot rejects the same malformed sn
 	});
 });
 
+describe("repository-scoped default learning paths", () => {
+	it("loads the current repository snapshot and appends feedback without explicit path overrides", async () => {
+		// Given
+		const agentDir = scratchDir();
+		vi.stubEnv("OMK_CODING_AGENT_DIR", agentDir);
+		const { harness, context } = await createThinkSubmitContext({
+			reasoningRouterLearning: { enabled: true },
+		});
+		const paths = getRepositoryRouterLearningPaths(harness.tempDir, agentDir);
+		writeSnapshotFile(paths.biasSnapshotPath, buildSingleCellSnapshot(SPELLING_PROMPT, "up"));
+
+		// When
+		await submit(context, "/think auto");
+		const level = await promptAndReadLevel(harness, SPELLING_PROMPT);
+
+		// Then
+		expect(level).toBe("high");
+		expect(readJsonlRecords(paths.ledgerPath)).toHaveLength(1);
+		expect(existsSync(join(agentDir, "router-feedback", "ledger.jsonl"))).toBe(false);
+	});
+});
+
 describe("goal 010 lane T: manual /think low after auto still wins, even against an actively non-zero bias", () => {
 	it('/think low exits auto and pins the level at "low" even though the active snapshot would otherwise escalate the same prompt to "high"', async () => {
 		const dir = scratchDir();
@@ -464,8 +501,73 @@ describe("goal 010 lane T: manual /think low after auto still wins, even against
 		await submit(context, "/think low");
 		expect(harness.session.thinkingMode).toBe("manual");
 
+		const records = readJsonlRecords(feedbackLedgerPath);
+		expect(records).toHaveLength(2);
+		expect(records[1]).toMatchObject({
+			signal: "s1-override",
+			predictedClass: "simple-edit",
+			resolvedLevel: "high",
+			acceptedLevel: "low",
+			outcome: "down",
+		});
+		expect(isRouterFeedbackRecord(records[1])).toBe(true);
+
 		expect(await promptAndReadLevel(harness, SPELLING_PROMPT)).toBe("low");
 		expect(context.showError).not.toHaveBeenCalled();
+	});
+
+	it("routes the RPC explicit-level command through the override-aware setter", () => {
+		const rpcSource = readFileSync(new URL("../../../src/modes/rpc/rpc-mode.ts", import.meta.url), "utf8");
+		expect(rpcSource).toMatch(
+			/case "set_thinking_level":[\s\S]*?session\.setUserThinkingLevel\(command\.level\);[\s\S]*?case /u,
+		);
+	});
+
+	it.each([
+		{ level: "high", outcome: "up" },
+		{ level: "low", outcome: "same" },
+	] satisfies readonly { readonly level: ThinkingLevel; readonly outcome: "up" | "same" }[])(
+		"records an explicit $level choice as a bounded $outcome signal",
+		async ({ level, outcome }) => {
+			// Given
+			const dir = scratchDir();
+			const feedbackLedgerPath = join(dir, "ledger.jsonl");
+			const { harness, context } = await createThinkSubmitContext({
+				reasoningRouterLearning: { enabled: true, feedbackLedgerPath },
+			});
+			await submit(context, "/think auto");
+			expect(await promptAndReadLevel(harness, SPELLING_PROMPT)).toBe("low");
+
+			// When
+			await submit(context, `/think ${level}`);
+
+			// Then
+			const records = readJsonlRecords(feedbackLedgerPath);
+			expect(records[1]).toMatchObject({ signal: "s1-override", acceptedLevel: level, outcome });
+		},
+	);
+
+	it("records Ctrl+T cycling out of auto mode as an explicit override", async () => {
+		// Given
+		const dir = scratchDir();
+		const feedbackLedgerPath = join(dir, "ledger.jsonl");
+		const { harness, context } = await createThinkSubmitContext({
+			reasoningRouterLearning: { enabled: true, feedbackLedgerPath },
+		});
+		await submit(context, "/think auto");
+		expect(await promptAndReadLevel(harness, SPELLING_PROMPT)).toBe("low");
+
+		// When
+		const cycledLevel = harness.session.cycleThinkingLevel();
+
+		// Then
+		expect(cycledLevel).toBe("medium");
+		expect(harness.session.thinkingMode).toBe("manual");
+		expect(readJsonlRecords(feedbackLedgerPath)[1]).toMatchObject({
+			signal: "s1-override",
+			acceptedLevel: "medium",
+			outcome: "up",
+		});
 	});
 });
 

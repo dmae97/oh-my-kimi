@@ -5,8 +5,11 @@ Delegate tasks to specialized subagents with isolated context windows.
 ## Features
 
 - **Isolated context**: Each subagent runs in a separate `omk` process
+- **Session model inheritance**: Agents without `model` use the parent session's currently selected model; an explicit `model` pins the child
 - **Streaming output**: See tool calls and progress as they happen
 - **Parallel streaming**: All parallel tasks stream updates simultaneously
+- **Validated task graphs**: Dependency DAGs fail closed on duplicate/unknown/cyclic nodes and execute in deterministic parallel waves
+- **Explicit handoffs**: Graph nodes receive only declared dependency output and only when their task includes `{dependencies}`
 - **Markdown rendering**: Final output rendered with proper formatting (expanded view)
 - **Usage tracking**: Shows turns, tokens, cost, and context usage per agent
 - **Abort support**: Ctrl+C propagates to the entire detached subagent process tree
@@ -14,6 +17,7 @@ Delegate tasks to specialized subagents with isolated context windows.
 - **Checkpoint resume**: A cutoff resumes only the unfinished shard with bounded prior evidence
 - **Cutoff learning**: Completion/cutoff history is persisted per provider and model under the agent state directory
 - **Bounded cost**: At most 3 semantic shards and 1 resume across the whole logical task by default
+- **Ultra execution**: Removes task-count, concurrency, internal deadline, and outer tool-timeout caps; Ctrl+C cancellation still propagates
 
 ## Structure
 
@@ -49,7 +53,7 @@ mkdir -p ~/.omk/agent/extensions/subagent
 src="$(pwd)/packages/coding-agent/examples/extensions/subagent"
 for f in index.ts agents.ts agent-capability-router.ts capabilities.ts domain-profiles.ts \
   adaptive-agent-runtime.ts adaptive-result.ts checkpoint-runtime.ts deadline-budget.ts \
-  deadline-profile-store.ts managed-process.ts subagent-runtime-types.ts; do
+  deadline-profile-store.ts managed-process.ts subagent-runtime-types.ts workflow-graph.ts; do
   ln -sf "$src/$f" ~/.omk/agent/extensions/subagent/$f
 done
 
@@ -107,15 +111,18 @@ Use a chain: first have scout find the read tool, then have planner suggest impr
 | Mode | Parameter | Description |
 |------|-----------|-------------|
 | Single | `{ agent, task }` | One logical task; the runtime may split it into bounded semantic shards |
-| Parallel | `{ tasks: [...] }` | Multiple logical tasks run concurrently (max 8, 4 concurrent) |
+| Parallel | `{ tasks: [...] }` | Multiple logical tasks; non-Ultra allows max 8 and 4 concurrent, while Ultra starts all requested tasks concurrently |
 | Chain | `{ chain: [...] }` | Sequential with `{previous}` placeholder and a fair deadline share per remaining step |
+| Graph | `{ graph: [{ id, agent, task, dependsOn? }] }` | Validated dependency DAG; ready nodes run in parallel waves, and any failed wave blocks downstream nodes |
+
+Graph nodes opt in to dependency output by placing `{dependencies}` in `task`. The runtime injects only outputs named in that node's `dependsOn`; without the placeholder, no prior output is appended. Each dependency handoff is capped at 16 KiB. This keeps large or unrelated context from leaking across nodes.
 
 Optional execution controls:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `executionBudgetMs` | `840000` | Internal hard budget, leaving 60 seconds before a configured 900000 ms tool timeout |
-| `maxResumeAttempts` | `1` | Retries only the active unfinished shard; accepted range is 0-2 |
+| `executionBudgetMs` | `840000` | Non-Ultra internal hard budget; when explicitly supplied it also bounds Ultra execution, otherwise Ultra is unbounded |
+| `maxResumeAttempts` | `1` | Retries only the active unfinished shard; accepted range is 0-2 and ignored by unbounded Ultra execution |
 
 ## Output Display
 
@@ -152,11 +159,12 @@ Agents are markdown files with YAML frontmatter:
 name: my-agent
 description: What this agent does
 tools: read, grep, find, ls
-model: claude-haiku-4-5
 ---
 
 System prompt for the agent goes here.
 ```
+
+`model` is optional. Omit it to inherit the model currently selected in the parent session; set it only when the agent must be pinned to a specific model.
 
 **Locations:**
 - `~/.omk/agent/agents/*.md` - User-level (always loaded)
@@ -168,10 +176,10 @@ Project agents override user agents with the same name when `agentScope: "both"`
 
 | Agent | Purpose | Model | Tools |
 |-------|---------|-------|-------|
-| `scout` | Fast codebase recon | Haiku | read, grep, find, ls, bash |
-| `planner` | Implementation plans | Sonnet | read, grep, find, ls |
-| `reviewer` | Code review | Sonnet | read, grep, find, ls, bash |
-| `worker` | General-purpose | Sonnet | (all default) |
+| `scout` | Fast codebase recon | Parent session | read, grep, find, ls, bash |
+| `planner` | Implementation plans | Parent session | read, grep, find, ls |
+| `reviewer` | Code review | Parent session | read, grep, find, ls, bash |
+| `worker` | General-purpose | Parent session | (all default) |
 
 ## Workflow Prompts
 
@@ -186,8 +194,10 @@ Project agents override user agents with the same name when `agentScope: "both"`
 - **Exit code != 0**: Tool returns error with stderr/output
 - **stopReason "error"**: LLM error propagated with error message
 - **stopReason "aborted"**: User abort (Ctrl+C) terminates and reaps the subprocess tree
-- **stopReason "deadline"**: Internal cutoff returns elapsed/deadline/checkpoint/resume metadata instead of reaching the outer tool timeout
+- **stopReason "deadline"**: Outside Ultra, an internal cutoff returns elapsed/deadline/checkpoint/resume metadata instead of reaching the outer tool timeout
+- **Ultra**: No scheduler or attempt deadline is armed; provider, network, OS, and explicit caller cancellation still apply
 - **Chain mode**: Stops at first failing step, reports which step failed, and preserves completed earlier steps
+- **Graph mode**: Rejects malformed graphs before spawn; a failed wave prevents all downstream starts and preserves completed node evidence
 - **Duplicate prevention**: A cutoff with no new checkpoint or streamed evidence is not retried
 
 ## Limitations
@@ -195,6 +205,6 @@ Project agents override user agents with the same name when `agentScope: "both"`
 - Output truncated to last 10 items in collapsed view (expand to see all)
 - Parallel model-visible output is capped at 50 KB per task; full results remain in tool details
 - Agents discovered fresh on each invocation (allows editing mid-session)
-- Parallel mode limited to 8 tasks, 4 concurrent
+- Outside Ultra, parallel mode is limited to 8 tasks and 4 concurrent processes; Ultra has no extension-imposed count or concurrency cap and can consume substantial host/provider resources
 - Automatic semantic pre-sharding requires an explicit numbered/checklist action list; indivisible prose is checkpointed and resumed as one shard
 - Checkpoints are best-effort child artifacts plus runtime-captured stream evidence; workspace side effects remain the source of truth after a cutoff

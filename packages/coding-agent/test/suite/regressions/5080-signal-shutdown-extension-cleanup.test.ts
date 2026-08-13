@@ -1,9 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import chalk from "chalk";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { APP_NAME } from "../../../src/config.ts";
 import type { SessionManager } from "../../../src/core/session-manager.ts";
 import { InteractiveMode } from "../../../src/modes/interactive/interactive-mode.ts";
 
@@ -21,7 +19,7 @@ type ShutdownThis = {
 	unregisterSignalHandlers: () => void;
 	runtimeHost: { dispose: () => Promise<void> };
 	ui: { terminal: { drainInput: (ms: number) => Promise<void> } };
-	stop: () => void;
+	stop: (options?: { finalSessionLog?: boolean }) => void;
 	sessionManager: SessionManager;
 };
 
@@ -81,8 +79,8 @@ function createContext(order: string[], sessionManager = createSessionManager())
 				}),
 			},
 		},
-		stop: vi.fn(() => {
-			order.push("stop");
+		stop: vi.fn((options?: { finalSessionLog?: boolean }) => {
+			order.push(options?.finalSessionLog ? "stop:final" : "stop:plain");
 		}),
 		sessionManager,
 	};
@@ -114,7 +112,7 @@ describe("InteractiveMode.shutdown ordering (#5080)", () => {
 
 		await callShutdown(context, { fromSignal: true });
 
-		expect(order).toEqual(["dispose", "drainInput", "stop"]);
+		expect(order).toEqual(["dispose", "drainInput", "stop:plain"]);
 		expect(context.isShuttingDown).toBe(true);
 		expect(context.unregisterSignalHandlers).toHaveBeenCalledTimes(1);
 	});
@@ -128,10 +126,10 @@ describe("InteractiveMode.shutdown ordering (#5080)", () => {
 
 		await callShutdown(context);
 
-		expect(order).toEqual(["drainInput", "stop", "dispose"]);
+		expect(order).toEqual(["drainInput", "stop:final", "dispose"]);
 	});
 
-	test("interactive quit prints a resume hint for persisted sessions", async () => {
+	test("interactive quit does not print a resume hint", async () => {
 		vi.spyOn(process, "exit").mockImplementation((() => {
 			throw new ProcessExitError();
 		}) as typeof process.exit);
@@ -144,10 +142,8 @@ describe("InteractiveMode.shutdown ordering (#5080)", () => {
 
 		await callShutdown(context);
 
-		expect(order).toEqual(["drainInput", "stop", "dispose"]);
-		expect(stdoutWrite).toHaveBeenCalledWith(
-			`${chalk.dim("To resume this session:")} ${APP_NAME} --session test-session\n`,
-		);
+		expect(order).toEqual(["drainInput", "stop:final", "dispose"]);
+		expect(stdoutWrite).not.toHaveBeenCalled();
 	});
 
 	test("signal-triggered shutdown does not print a resume hint", async () => {

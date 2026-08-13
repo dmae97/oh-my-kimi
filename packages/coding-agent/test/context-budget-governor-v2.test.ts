@@ -330,6 +330,13 @@ describe("context budget governor v2", () => {
 				tokenSavings: plan.rawTokens - plan.usedTokens,
 			},
 			planHash: plan.planHash,
+			tokenOptimizer: {
+				optimizerId: "legacy-token-optimizer",
+				status: "quarantined_compatibility",
+				active: false,
+				activeContextBudgetOptimizer: "context-budget-v2",
+				compatibilityOnly: true,
+			},
 			cache: {
 				planCache: {
 					hit: false,
@@ -352,13 +359,6 @@ describe("context budget governor v2", () => {
 					savedByCompression: plan.rawTokens - plan.usedTokens - plan.omittedTokens,
 					savedByOmission: plan.omittedTokens,
 				},
-			},
-			tokenOptimizer: {
-				optimizerId: "legacy-token-optimizer",
-				status: "quarantined_compatibility",
-				active: false,
-				activeContextBudgetOptimizer: "context-budget-v2",
-				compatibilityOnly: true,
 			},
 		});
 		const metadata = JSON.stringify(plan.observability);

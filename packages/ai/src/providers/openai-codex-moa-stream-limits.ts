@@ -89,7 +89,6 @@ export function terminalMessage(event: AssistantMessageEvent): AssistantMessage 
 export interface BoundedSynthesisResult {
 	readonly terminalForwarded: boolean;
 	readonly cappedMessage: AssistantMessage | undefined;
-	readonly toolViolationMessage: AssistantMessage | undefined;
 }
 
 export async function drainBoundedSynthesis(
@@ -99,24 +98,9 @@ export async function drainBoundedSynthesis(
 ): Promise<BoundedSynthesisResult> {
 	let terminalForwarded = false;
 	let cappedMessage: AssistantMessage | undefined;
-	let toolViolationMessage: AssistantMessage | undefined;
 	let generated = 0;
 	for await (const event of stream) {
 		const terminal = terminalMessage(event);
-		const eventMessage = terminal ?? ("partial" in event ? event.partial : undefined);
-		if (toolViolationMessage) {
-			if (terminal) {
-				toolViolationMessage = terminal;
-				break;
-			}
-			continue;
-		}
-		if (event.type.startsWith("toolcall_") || eventMessage?.content.some((content) => content.type === "toolCall")) {
-			toolViolationMessage = eventMessage;
-			limitAbort.abort();
-			if (terminal) break;
-			continue;
-		}
 		if (cappedMessage) {
 			if (terminal) cappedMessage = { ...cappedMessage, usage: terminal.usage };
 			if (terminal) break;
@@ -147,7 +131,7 @@ export async function drainBoundedSynthesis(
 		generated += increment;
 		if (terminalForwarded) break;
 	}
-	return { terminalForwarded, cappedMessage, toolViolationMessage };
+	return { terminalForwarded, cappedMessage };
 }
 
 export async function drainBoundedAdviser(

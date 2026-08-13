@@ -58,7 +58,7 @@ export interface RouterBiasSnapshot {
 	readonly consideredCount: number;
 	/** Count of records excluded from this snapshot (schema-invalid, or router-version mismatch). */
 	readonly droppedCount: number;
-	/** Bias cells, sorted deterministically. Empty when there is no ledger data or no cell reaches the threshold. */
+	/** Bias cells, sorted deterministically. Sub-threshold cells remain visible with zero bias. */
 	readonly biasCells: readonly RouterBiasCell[];
 }
 
@@ -256,7 +256,7 @@ function hasExactKeySet(value: Record<string, unknown>, allowedSortedKeys: reado
 }
 
 function isBoundedNonNegativeInteger(value: unknown): value is number {
-	return typeof value === "number" && Number.isInteger(value) && value >= 0;
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
 /**
@@ -265,9 +265,9 @@ function isBoundedNonNegativeInteger(value: unknown): value is number {
  * `isRouterFeedbackRecord` (`ROUTER_FEEDBACK_TASK_CLASSES`,
  * `ROUTER_FEEDBACK_LANE_TYPES`, `ROUTER_FEEDBACK_LEN_BUCKETS`) so this
  * validator cannot silently drift from the ledger's own schema. `nStrong` is
- * additionally required to never exceed `nTotal` (true by construction for
- * every cell `compileBiasSnapshot` can produce; a cheap sanity bound against
- * a hand-tampered file).
+ * additionally required to never exceed `nTotal`, and a nonzero bias requires
+ * the compiler's strong-evidence threshold. Both hold for every cell the
+ * compiler can produce and fail closed for a hand-tampered file.
  */
 export function isRouterBiasCell(value: unknown): value is RouterBiasCell {
 	if (!isPlainObject(value)) return false;
@@ -281,14 +281,16 @@ export function isRouterBiasCell(value: unknown): value is RouterBiasCell {
 	if (!isBoundedNonNegativeInteger(value.nStrong)) return false;
 	if (!isBoundedNonNegativeInteger(value.nTotal)) return false;
 	if ((value.nStrong as number) > (value.nTotal as number)) return false;
+	if (value.biasSteps !== 0 && (value.nStrong as number) < BIAS_STRONG_THRESHOLD) return false;
 	return true;
 }
 
 /**
  * Strict runtime validator for a compiled bias snapshot. Exact five-key
- * allowlist; `biasCells` must be an array whose every element passes
- * `isRouterBiasCell`. Never trusts on-disk content: any unexpected shape,
- * extra key, or out-of-range value returns `false` rather than throwing.
+ * allowlist; `biasCells` must be unique, every element must pass
+ * `isRouterBiasCell`, and their totals must equal `consideredCount`. Never
+ * trusts on-disk content: inconsistent counts, unexpected shapes, extra keys,
+ * or out-of-range values return `false` rather than throwing.
  */
 export function isRouterBiasSnapshot(value: unknown): value is RouterBiasSnapshot {
 	if (!isPlainObject(value)) return false;
@@ -298,10 +300,17 @@ export function isRouterBiasSnapshot(value: unknown): value is RouterBiasSnapsho
 	if (!isBoundedNonNegativeInteger(value.consideredCount)) return false;
 	if (!isBoundedNonNegativeInteger(value.droppedCount)) return false;
 	if (!Array.isArray(value.biasCells)) return false;
+	const cellKeys = new Set<string>();
+	let totalRecords = 0;
 	for (const cell of value.biasCells) {
 		if (!isRouterBiasCell(cell)) return false;
+		const key = cellKeyString(cell);
+		if (cellKeys.has(key)) return false;
+		cellKeys.add(key);
+		if (totalRecords > Number.MAX_SAFE_INTEGER - cell.nTotal) return false;
+		totalRecords += cell.nTotal;
 	}
-	return true;
+	return totalRecords === value.consideredCount;
 }
 
 /**
@@ -322,13 +331,8 @@ export function parseRouterBiasSnapshot(raw: string): RouterBiasSnapshot | null 
 }
 
 /**
- * Default compiled-bias-snapshot path:
- * `<agentDir>/router-feedback/weights/router-bias-snapshot.<version>.json` —
- * matches `compile-bias-snapshot.ts`'s own default `--out` naming exactly, so
- * a snapshot compiled offline for `version` is found here with no extra
- * configuration. Owner-only agent dir, never repo-local (mirrors
- * `getDefaultRouterFeedbackLedgerPath`). Defaults to "v4", the router version
- * this lane wires bias *consumption* for.
+ * Legacy shared snapshot path. Agent sessions and the shipped compiler now use
+ * repository-scoped defaults unless a caller explicitly selects a fixed path.
  */
 export function getDefaultRouterBiasSnapshotPath(version: RouterFeedbackVersion = "v4"): string {
 	return join(getAgentDir(), "router-feedback", "weights", `router-bias-snapshot.${version}.json`);

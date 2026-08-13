@@ -18,7 +18,10 @@ import { listModels } from "./cli/list-models.ts";
 import { selectSession } from "./cli/session-picker.ts";
 import { handleCodexBarQuotaCommand } from "./codexbar-cli.ts";
 import { runDoctorProviderCli } from "./commands/doctor-provider-cli.ts";
+import { runPackageDoctorCli } from "./commands/package-doctor-cli.ts";
+import { runRouterFeedbackCli } from "./commands/router-feedback-cli.ts";
 import { runSessionDoctorCli } from "./commands/session-doctor-cli.ts";
+import { runStatsCli } from "./commands/stats-cli.ts";
 import { ENV_SESSION_DIR, expandTildePath, getAgentDir, getPackageDir, VERSION } from "./config.ts";
 import { type CreateAgentSessionRuntimeFactory, createAgentSessionRuntime } from "./core/agent-session-runtime.ts";
 import {
@@ -581,6 +584,12 @@ export async function main(args: string[], options?: MainOptions) {
 		cleanupWindowsSelfUpdateQuarantine(getPackageDir());
 	}
 
+	const packageDoctor = await runPackageDoctorCli(args);
+	if (packageDoctor.handled) {
+		process.exitCode = packageDoctor.exitCode;
+		return;
+	}
+
 	if (await handlePackageCommand(args)) {
 		return;
 	}
@@ -602,6 +611,18 @@ export async function main(args: string[], options?: MainOptions) {
 	const doctorProvider = await runDoctorProviderCli(args);
 	if (doctorProvider.handled) {
 		process.exitCode = doctorProvider.exitCode;
+		return;
+	}
+
+	const stats = runStatsCli(args);
+	if (stats.handled) {
+		process.exitCode = stats.exitCode;
+		return;
+	}
+
+	const routerFeedback = runRouterFeedbackCli(args);
+	if (routerFeedback.handled) {
+		process.exitCode = routerFeedback.exitCode;
 		return;
 	}
 

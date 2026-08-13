@@ -239,6 +239,13 @@ Public repository skills are listed in [SKILLS.md](SKILLS.md). Operator installs
 can also load hubs such as **`omk-marketing`** (routes the bundled marketing/
 SEO skill pack) without dumping every skill into context.
 
+MCP is a **runtime client**, not just a health view: configured stdio servers are
+started on demand and their tools are registered into the session as
+`<server>__<tool>`. Connection is lazy, and a server that fails to start is
+reported without affecting the rest of the session. See
+[docs/mcp.md](packages/coding-agent/docs/mcp.md), or run
+`node scripts/mcp-smoke.mjs` to see what your configuration actually resolves to.
+
 ### Marketing, SEO, and AEO skill map
 
 For growth work, start with `!skill:omk-marketing` (or `/skill:omk-marketing`).

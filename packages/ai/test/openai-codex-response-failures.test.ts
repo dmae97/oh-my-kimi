@@ -1,3 +1,4 @@
+import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getModel } from "../src/models.ts";
 import { streamOpenAICodexResponses } from "../src/providers/openai-codex-responses.ts";
@@ -44,6 +45,50 @@ function sseResponse(text: string): Response {
 				role: "assistant",
 				status: "completed",
 				content: [{ type: "output_text", text }],
+			},
+		},
+		{
+			type: "response.completed",
+			response: {
+				status: "completed",
+				usage: {
+					input_tokens: 1,
+					output_tokens: 1,
+					total_tokens: 2,
+					input_tokens_details: { cached_tokens: 0 },
+				},
+			},
+		},
+	];
+	return new Response(`${events.map((event) => `data: ${JSON.stringify(event)}`).join("\n\n")}\n\n`, {
+		status: 200,
+		headers: { "content-type": "text/event-stream" },
+	});
+}
+
+function toolCallSseResponse(): Response {
+	const argumentsJson = JSON.stringify({ path: "README.md" });
+	const events = [
+		{
+			type: "response.output_item.added",
+			item: {
+				type: "function_call",
+				id: "fc_test",
+				call_id: "call_test",
+				name: "read",
+				arguments: "",
+			},
+		},
+		{ type: "response.function_call_arguments.delta", delta: argumentsJson },
+		{ type: "response.function_call_arguments.done", arguments: argumentsJson },
+		{
+			type: "response.output_item.done",
+			item: {
+				type: "function_call",
+				id: "fc_test",
+				call_id: "call_test",
+				name: "read",
+				arguments: argumentsJson,
 			},
 		},
 		{
@@ -194,44 +239,38 @@ describe("OpenAI Codex response failures", () => {
 		},
 	);
 
-	it("rejects synthesis tool-call output before it reaches the public stream", async () => {
+	it("forwards synthesis tool-call events to the agent loop", async () => {
 		let requests = 0;
 		vi.stubGlobal(
 			"fetch",
 			vi.fn(async () => {
 				requests++;
-				if (requests <= 2) return sseResponse("analysis");
-				const events = [
-					{
-						type: "response.output_item.added",
-						item: {
-							type: "function_call",
-							id: "call_item",
-							call_id: "call_1",
-							name: "read",
-							arguments: "",
-						},
-					},
-					{ type: "response.function_call_arguments.delta", delta: '{"path":"secret"}' },
-				];
-				return new Response(`${events.map((event) => `data: ${JSON.stringify(event)}`).join("\n\n")}\n\n`, {
-					status: 200,
-					headers: { "content-type": "text/event-stream" },
-				});
+				return requests <= 2 ? sseResponse("analysis") : toolCallSseResponse();
 			}),
 		);
 
-		const stream = streamOpenAICodexResponses(getModel("openai-codex", "gpt-5.6-moa"), context, {
-			apiKey: mockToken(),
-			transport: "sse",
-		});
-		const eventTypes: string[] = [];
-		for await (const event of stream) eventTypes.push(event.type);
+		const stream = streamOpenAICodexResponses(
+			getModel("openai-codex", "gpt-5.6-moa"),
+			{
+				...context,
+				tools: [{ name: "read", description: "Read", parameters: Type.Object({ path: Type.String() }) }],
+			},
+			{ apiKey: mockToken(), transport: "sse" },
+		);
+		const toolEvents: string[] = [];
+		for await (const event of stream) {
+			if (event.type.startsWith("toolcall_")) toolEvents.push(event.type);
+		}
 		const result = await stream.result();
 
-		expect(eventTypes.some((type) => type.startsWith("toolcall_"))).toBe(false);
-		expect(result.stopReason).toBe("error");
-		expect(result.errorMessage).toBe("MoA synthesis failed");
+		expect(toolEvents).toEqual(["toolcall_start", "toolcall_delta", "toolcall_end"]);
+		expect(result.stopReason).toBe("toolUse");
+		expect(result.content).toContainEqual({
+			type: "toolCall",
+			id: "call_test|fc_test",
+			name: "read",
+			arguments: { path: "README.md" },
+		});
 	});
 
 	it("removes retry sleep abort listeners after a successful delay", async () => {

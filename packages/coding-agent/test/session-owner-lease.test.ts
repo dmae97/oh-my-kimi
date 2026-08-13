@@ -1,8 +1,13 @@
 import { appendFileSync, linkSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Agent } from "omk-agent-core";
+import { getModel } from "omk-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AgentSession } from "../src/core/agent-session.ts";
 import { atomicRewriteFileSync } from "../src/core/atomic-session-file.ts";
+import { AuthStorage } from "../src/core/auth-storage.ts";
+import { ModelRegistry } from "../src/core/model-registry.ts";
 import { RunJournalStore } from "../src/core/run-journal-store.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import {
@@ -10,7 +15,8 @@ import {
 	inspectSessionOwnerLeaseSync,
 	SessionOwnerLeaseHeldError,
 } from "../src/core/session-owner-lease.ts";
-import { assistantMsg, userMsg } from "./utilities.ts";
+import { SettingsManager } from "../src/core/settings-manager.ts";
+import { assistantMsg, createTestResourceLoader, userMsg } from "./utilities.ts";
 
 const cleanupFault = vi.hoisted(() => ({
 	operation: "" as "" | "rename" | "unlink" | "rmdir",
@@ -226,6 +232,40 @@ describe("session owner lease", () => {
 		expect(inspectSessionOwnerLeaseSync(blockedPath).status).toBe("absent");
 	});
 
+	it("holds the session owner lease for the AgentSession lifetime", () => {
+		const owner = SessionManager.create(root, root);
+		const sessionPath = owner.getSessionFile();
+		if (!sessionPath) throw new Error("expected session path");
+		const competitor = SessionManager.open(sessionPath, root);
+		const createSession = (sessionManager: SessionManager): AgentSession => {
+			const model = getModel("anthropic", "claude-sonnet-4-5");
+			if (!model) throw new Error("expected test model");
+			return new AgentSession({
+				agent: new Agent({
+					getApiKey: () => "test-key",
+					initialState: { model, systemPrompt: "test", tools: [] },
+				}),
+				sessionManager,
+				settingsManager: SettingsManager.create(root, root),
+				cwd: root,
+				modelRegistry: ModelRegistry.create(AuthStorage.create(join(root, "auth.json")), root),
+				resourceLoader: createTestResourceLoader(),
+			});
+		};
+
+		const session = createSession(owner);
+		try {
+			expect(inspectSessionOwnerLeaseSync(sessionPath).status).toBe("live");
+			expect(() => createSession(competitor)).toThrow(SessionOwnerLeaseHeldError);
+		} finally {
+			session.dispose();
+		}
+
+		expect(inspectSessionOwnerLeaseSync(sessionPath).status).toBe("absent");
+		const resumed = createSession(competitor);
+		resumed.dispose();
+	});
+
 	it("lets the attached owner write while a previously opened session manager is refused", () => {
 		const author = SessionManager.create(root, root);
 		author.appendMessage(userMsg("seed"));
@@ -264,7 +304,7 @@ describe("session owner lease", () => {
 			lease.release();
 		}
 		const recovered = RunJournalStore.open({ journalPath, sessionId: SESSION_ID, now: () => T0 });
-		expect(recovered.records.at(-1)?.event).toBe("run_recovered");
+		expect(recovered.records[recovered.records.length - 1]?.event).toBe("run_recovered");
 	});
 
 	it("prevents session open from quarantining a live owner's trailing bytes", () => {

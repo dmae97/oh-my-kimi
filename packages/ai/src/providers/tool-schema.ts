@@ -73,10 +73,16 @@ export function stableToolSchema(parameters: Tool["parameters"]): Record<string,
 
 export function stableTools<TTool extends Tool>(tools: readonly TTool[]): TTool[] {
 	return [...tools]
-		.map((tool) => ({
-			...tool,
-			parameters: stableToolSchema(tool.parameters) as TTool["parameters"],
-		}))
+		.map((tool) => {
+			const descriptors = Object.getOwnPropertyDescriptors(tool);
+			descriptors.parameters = {
+				configurable: true,
+				enumerable: true,
+				value: stableToolSchema(tool.parameters) as TTool["parameters"],
+				writable: true,
+			};
+			return Object.create(Object.getPrototypeOf(tool), descriptors) as TTool;
+		})
 		.sort(compareStableTools);
 }
 

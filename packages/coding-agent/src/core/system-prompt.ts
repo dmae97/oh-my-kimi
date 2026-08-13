@@ -43,8 +43,15 @@ export interface BuildSystemPromptOptions {
 	contextBudget?: SystemPromptContextBudgetOptions;
 }
 
-/** Build the system prompt with tools, guidelines, and context */
-export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
+export interface BuiltSystemPrompt {
+	/** Full prompt text sent to the model. */
+	prompt: string;
+	/** UTF-16 offset ending the stable provider-cacheable prefix. */
+	cacheBoundary: number;
+}
+
+/** Build the system prompt plus its stable provider-cache boundary. */
+export function buildSystemPromptPlan(options: BuildSystemPromptOptions): BuiltSystemPrompt {
 	const {
 		customPrompt,
 		selectedTools,
@@ -81,6 +88,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 			prompt += appendSection;
 		}
 		prompt += RUNTIME_TRUST_BOUNDARY;
+		const cacheBoundary = prompt.length;
 
 		// Append project context files and skills. Budgeting is opt-in and preserves legacy behavior when omitted.
 		const customPromptHasRead = !selectedTools || selectedTools.includes("read");
@@ -110,7 +118,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		prompt += `\nCurrent date: ${date}`;
 		prompt += `\nCurrent working directory: ${promptCwd}`;
 
-		return prompt;
+		return { prompt, cacheBoundary };
 	}
 
 	// Get absolute paths to documentation and examples
@@ -183,6 +191,7 @@ OMK documentation (read only when the user asks about OMK itself, its SDK, exten
 		prompt += appendSection;
 	}
 	prompt += RUNTIME_TRUST_BOUNDARY;
+	const cacheBoundary = prompt.length;
 
 	// Append context files with PARENT precedence (global AGENTS.md / CLAUDE.md first)
 	const typedContext = (contextFiles ?? []) as ContextFile[];
@@ -213,7 +222,12 @@ OMK documentation (read only when the user asks about OMK itself, its SDK, exten
 	prompt += `\nCurrent date: ${date}`;
 	prompt += `\nCurrent working directory: ${promptCwd}`;
 
-	return prompt;
+	return { prompt, cacheBoundary };
+}
+
+/** Build only the prompt text for callers that do not need cache metadata. */
+export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
+	return buildSystemPromptPlan(options).prompt;
 }
 
 function appendLegacyContext(prompt: string, contextFiles: readonly ContextFile[]): string {

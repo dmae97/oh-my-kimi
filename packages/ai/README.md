@@ -9,6 +9,7 @@ Unified LLM API with automatic model discovery, provider configuration, token an
 - [Supported Providers](#supported-providers)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
+- [Prompt Cache Boundaries](#prompt-cache-boundaries)
 - [Tools](#tools)
   - [Defining Tools](#defining-tools)
   - [Handling Tool Calls](#handling-tool-calls)
@@ -210,6 +211,29 @@ for (const block of response.content) {
 }
 ```
 
+## Prompt Cache Boundaries
+
+Use typed cache-boundary metadata when the start of a system prompt is stable but its suffix changes between requests:
+
+```typescript
+import { type Context, deriveContextPromptCacheKey } from 'omk-ai';
+
+const stablePrefix = 'You are a coding assistant.';
+const dynamicSuffix = '\nCurrent task: Review the changes.';
+const context: Context = {
+  systemPrompt: stablePrefix + dynamicSuffix,
+  systemPromptCacheBoundary: stablePrefix.length,
+  messages: []
+};
+
+// Optional diagnostic/affinity key. Keep the scope stable for the same cache domain.
+const cacheKey = deriveContextPromptCacheKey(context, 'openai/gpt-4o-mini');
+```
+
+`systemPromptCacheBoundary` is a UTF-16 offset, so JavaScript's `.length` produces the expected unit. `deriveContextPromptCacheKey()` hashes the stable prefix, scope, and canonical tool schemas; it excludes the dynamic suffix and session ID. When prompt caching is enabled, Anthropic marks the stable prefix block and supported OpenAI-family transports derive `prompt_cache_key` from the same metadata. Other providers may ignore it.
+
+Set `systemPromptCacheBoundaryBypass: true` when an extension or caller replaces the prompt with dynamic content. A bypassed, non-positive, non-integer, or out-of-range boundary suppresses explicit cache markers and content-derived affinity. It does not promise a cache hit: only provider-returned `usage.cacheRead` confirms one.
+
 ## Tools
 
 Tools enable LLMs to interact with external systems. This library uses TypeBox schemas for type-safe tool definitions with automatic validation using TypeBox's built-in validator and value conversion utilities. TypeBox schemas can be serialized and deserialized as plain JSON, making them ideal for distributed systems.
@@ -328,6 +352,7 @@ for await (const event of s) {
 ```
 
 **Important notes about partial tool arguments:**
+
 - During `toolcall_delta` events, `arguments` contains the best-effort parse of partial JSON
 - Fields may be missing or incomplete - always check for existence before use
 - String values may be truncated mid-word
@@ -377,7 +402,7 @@ for await (const event of s) {
 All streaming events emitted during assistant message generation:
 
 | Event Type | Description | Key Properties |
-|------------|-------------|----------------|
+| ------------ | ------------- | ---------------- |
 | `start` | Stream begins | `partial`: Initial assistant message structure |
 | `text_start` | Text block starts | `contentIndex`: Position in content array |
 | `text_delta` | Text chunk received | `delta`: New text, `contentIndex`: Position |
@@ -787,6 +812,7 @@ multiModel.unregister();
 ```
 
 Notes:
+
 - Responses are consumed from a queue in request start order.
 - If the queue is empty, the faux provider returns an assistant error message with `errorMessage: "No more faux responses queued"`.
 - Use `registration.setResponses([...])` to replace the remaining queue and `registration.appendResponses([...])` to add more responses.
@@ -801,6 +827,7 @@ Notes:
 ### Providers and Models
 
 A **provider** offers models through a specific API. For example:
+
 - **Anthropic** models use the `anthropic-messages` API
 - **Google** models use the `google-generative-ai` API
 - **OpenAI** models use the `openai-responses` API
@@ -1022,12 +1049,14 @@ const geminiResponse = await complete(gemini, context);
 ### Provider Compatibility
 
 All providers can handle messages from other providers, including:
+
 - Text content
 - Tool calls and tool results (including images in tool results)
 - Thinking/reasoning blocks (transformed to tagged text for cross-provider compatibility)
 - Aborted messages with partial content
 
 This enables flexible workflows where you can:
+
 - Start with a fast model for initial responses
 - Switch to a more capable model for complex reasoning
 - Use specialized models for specific tasks
@@ -1101,7 +1130,7 @@ const response = await complete(model, {
 In Node.js environments, you can set environment variables to avoid passing API keys:
 
 | Provider | Environment Variable(s) |
-|----------|------------------------|
+| ---------- | ------------------------ |
 | OpenAI | `OPENAI_API_KEY` |
 | Ant Ling | `ANT_LING_API_KEY` |
 | Azure OpenAI | `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_BASE_URL` (e.g. `https://{resource}.openai.azure.com`) or `AZURE_OPENAI_RESOURCE_NAME`. Supports `*.openai.azure.com` and `*.cognitiveservices.azure.com`; root endpoints auto-normalize to `/openai/v1`. Optional: `AZURE_OPENAI_API_VERSION` (default `v1`), `AZURE_OPENAI_DEPLOYMENT_NAME_MAP`. |

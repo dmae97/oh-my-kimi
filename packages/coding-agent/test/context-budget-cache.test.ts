@@ -53,6 +53,32 @@ describe("context budget v2 exact cache", () => {
 		expect(representationHit.selectedRepresentations[0]?.cache?.hit).toBe(true);
 	});
 
+	it("reuses exact representations across queries and budget buckets", () => {
+		const cacheProvider = createMemoryContextBudgetCacheProviderV2();
+		const item = makeItem({
+			id: "content-addressed",
+			tier: "history",
+			priority: "medium",
+			text: "stable cacheable context ".repeat(80),
+			tokenEstimate: 320,
+		});
+		const plans = Array.from({ length: 10 }, (_, index) =>
+			planWith([item], {
+				cacheProvider,
+				maxTokens: index % 2 === 0 ? 4000 : 5000,
+				modelId: "gpt-cache-test",
+				promptHash: `turn-${index}`,
+				query: `unrelated query ${index}`,
+			}),
+		);
+		const selectedHits = plans.filter((plan) => plan.selectedRepresentations[0]?.cache?.hit === true).length;
+
+		expect(plans[0]?.observability.cache.representationCache.exactHits).toBe(0);
+		expect(plans.every((plan) => !plan.observability.cache.planCache.hit)).toBe(true);
+		expect(selectedHits).toBe(9);
+		expect(selectedHits / plans.length).toBe(0.9);
+	});
+
 	it("bounds the in-memory cache", () => {
 		const cacheProvider = createMemoryContextBudgetCacheProviderV2();
 		for (let index = 0; index <= 256; index++) {

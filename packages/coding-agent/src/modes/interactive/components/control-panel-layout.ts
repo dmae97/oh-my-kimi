@@ -97,7 +97,7 @@ function renderCompact(content: ControlPanelContent, width: number, bannerFrame?
 		if (deck.length > 0) return deck;
 	}
 	return [
-		divider(width, "OMK//CONTROL PANEL", "accent"),
+		divider(width, "WELCOME TO OMK", "accent"),
 		statusLine(content, width),
 		textLine(width, content.compactInstructions()),
 		textLine(width, content.compactOnboarding(), "dim"),
@@ -372,7 +372,7 @@ function renderExpanded(content: ControlPanelContent, width: number, bannerFrame
 		return lines;
 	}
 
-	const lines = [divider(width, "OMK//CONTROL PANEL", "accent"), statusLine(content, width)];
+	const lines = [divider(width, "WELCOME TO OMK", "accent"), statusLine(content, width)];
 	if (width >= 32) lines.push(...brandLines(content, width, bannerFrame));
 	lines.push(divider(width, "SYSTEM MAP", "mdHeading"));
 	for (const instruction of content.expandedInstructions().split("\n")) lines.push(textLine(width, instruction));

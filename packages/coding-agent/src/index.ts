@@ -1,5 +1,38 @@
 // Core session management
 
+export {
+	type ApprovalContentDigest,
+	type ApprovalDecision,
+	type ApprovalPlanDigest,
+	type ApprovalReceipt,
+	type ApprovalReceiptCore,
+	computeApprovalContentDigest,
+	computeApprovalReceiptCoreSha256,
+	createApprovalReceipt,
+	parseApprovalReceipt,
+	serializeApprovalReceipt,
+	validateApprovalReceipt,
+} from "./approvals/approval-receipt.ts";
+export {
+	ApprovalReceiptStore,
+	type ApprovalReceiptWriteResult,
+} from "./approvals/approval-receipt-store.ts";
+export {
+	type ApprovalExecutionBinding,
+	type ApprovalVerificationFailure,
+	type ApprovalVerificationResult,
+	verifyApprovalForExecution,
+} from "./approvals/approval-verifier.ts";
+export {
+	type ApprovalEventBus,
+	PLANNOTATOR_REQUEST_CHANNEL,
+	PLANNOTATOR_REVIEW_RESULT_CHANNEL,
+	PlannotatorApprovalBridge,
+	type PlannotatorApprovalBridgeOptions,
+	type PlanReviewCorrelation,
+	type PlanReviewRequest,
+	type ReviewResultOutcome,
+} from "./approvals/plannotator-approval-bridge.ts";
 export { type Args, parseArgs } from "./cli/args.ts";
 // Config paths
 export { getAgentDir, VERSION } from "./config.ts";
@@ -121,7 +154,10 @@ export {
 	type ContextCacheInvalidationSnapshot,
 	createContextBudgetCacheKeyBaseV2,
 	createContextCacheInvalidationSnapshot,
+	createDiskContextBudgetCacheProviderV2,
 	createMemoryContextBudgetCacheProviderV2,
+	type DiskContextBudgetCacheOptionsV2,
+	DiskContextBudgetCacheProviderV2,
 	planPromptContextBudgetV2,
 	serializeContextCacheSnapshot,
 } from "./core/context-budget-governor-v2.ts";
@@ -235,6 +271,7 @@ export {
 export type { ReadonlyFooterDataProvider } from "./core/footer-data-provider.ts";
 export { convertToLlm } from "./core/messages.ts";
 export { ModelRegistry } from "./core/model-registry.ts";
+export { extractNpmPackageTarball } from "./core/package-archive.ts";
 export type {
 	PackageManager,
 	PathMetadata,

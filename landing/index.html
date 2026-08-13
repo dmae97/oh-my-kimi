@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OMK — Open Multi-Agent Kit</title>
+    <meta
+      name="description"
+      content="Provider-neutral coding agent and multi-agent control plane. Scope work into parallel lanes, verify with evidence, replay every run."
+    />
+    <meta name="theme-color" content="#0b0d10" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&family=Schibsted+Grotesk:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+
+    <header class="top">
+      <div class="shell top__inner">
+        <a class="brand" href="#top" aria-label="OMK home">
+          <span class="brand__mark" aria-hidden="true"></span>
+          <span class="brand__name">OMK</span>
+        </a>
+        <nav class="nav" aria-label="Primary">
+          <a href="#product">Product</a>
+          <a href="#how">How it works</a>
+          <a href="#control">Control</a>
+          <a href="#docs">Docs</a>
+        </nav>
+        <div class="top__actions">
+          <a class="btn btn--ghost" href="https://github.com/dmae97/omk"
+            >GitHub</a
+          >
+          <a class="btn btn--solid" href="#install">Install</a>
+        </div>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero shell" id="top">
+        <p class="eyebrow">open-multi-agent-kit · v0.95.1</p>
+        <h1>
+          Software engineering<br />
+          <em>with receipts.</em>
+        </h1>
+        <p class="lede">
+          OMK is a provider-neutral coding agent and multi-agent control plane.
+          Turn a goal into bounded DAG lanes, block “done” without fresh
+          evidence, and keep every run replayable — for Codex, Claude Code,
+          OpenCode, and local models.
+        </p>
+        <div class="hero__cta">
+          <a class="btn btn--solid btn--lg" href="#install">Get started</a>
+          <a
+            class="btn btn--ghost btn--lg"
+            href="https://www.npmjs.com/package/open-multi-agent-kit"
+            >npm package</a
+          >
+        </div>
+        <p class="hero__meta">
+          <span>Node ≥ 22.19</span>
+          <span class="dot" aria-hidden="true"></span>
+          <span>MIT</span>
+          <span class="dot" aria-hidden="true"></span>
+          <span>npm install -g open-multi-agent-kit</span>
+        </p>
+
+        <div class="stage" aria-label="OMK product preview">
+          <div class="stage__chrome">
+            <div class="stage__dots" aria-hidden="true">
+              <i></i><i></i><i></i>
+            </div>
+            <div class="stage__title">omk · CONTROL</div>
+            <div class="stage__pill">evidence gate · PASS</div>
+          </div>
+          <div class="stage__body">
+            <aside class="rail">
+              <p class="rail__label">STATUS</p>
+              <ul>
+                <li><span class="ok"></span> lanes 4/4</li>
+                <li><span class="ok"></span> predicates 12</li>
+                <li><span class="warn"></span> context 61%</li>
+                <li><span class="ok"></span> mcp healthy</li>
+              </ul>
+              <p class="rail__label">PROVIDERS</p>
+              <ul class="rail__muted">
+                <li>codex · active</li>
+                <li>claude · standby</li>
+                <li>local · ready</li>
+              </ul>
+            </aside>
+            <div class="workspace">
+              <div class="prompt">
+                <span class="prompt__k">goal</span>
+                <p>Ship harness-graph health gate with CI and scorecard.</p>
+              </div>
+              <div class="lanes">
+                <article class="lane">
+                  <header>
+                    <span>L1 · graph</span><b class="tag tag--green">done</b>
+                  </header>
+                  <code>build-harness-graph.mjs</code>
+                  <p>1421 nodes · 2065 edges</p>
+                </article>
+                <article class="lane">
+                  <header>
+                    <span>L2 · analyze</span><b class="tag tag--green">done</b>
+                  </header>
+                  <code>graph_analyze.py</code>
+                  <p>bipartite SPOF · communities</p>
+                </article>
+                <article class="lane">
+                  <header>
+                    <span>L3 · gate</span><b class="tag tag--amber">verify</b>
+                  </header>
+                  <code>health_gate.py --json</code>
+                  <p>waiting fresh evidence</p>
+                </article>
+                <article class="lane">
+                  <header>
+                    <span>L4 · docs</span><b class="tag tag--blue">run</b>
+                  </header>
+                  <code>SCORECARD.md</code>
+                  <p>96/100 · write receipt</p>
+                </article>
+              </div>
+              <div class="term">
+                <div class="term__bar">terminal · lane L3</div>
+                <pre><span class="c-dim">$</span> python3 .omk/harness-graph/health_gate.py --json
+<span class="c-ok">{</span> "status": "PASS", "dead_skills": 0, "dead_hooks": 0
+<span class="c-dim">$</span> npm run check
+<span class="c-ok">✓</span> release surface OK · shrinkwrap OK · tsgo clean</pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="strip">
+        <div class="shell strip__inner">
+          <p>Routes across models without rewriting the control plane.</p>
+          <ul>
+            <li>Codex</li>
+            <li>Claude Code</li>
+            <li>OpenCode</li>
+            <li>Kimi · GLM · local</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="section shell" id="product">
+        <div class="section__head">
+          <p class="eyebrow">Product</p>
+          <h2>Built like a coding product,<br />not a chat wrapper.</h2>
+          <p class="section__lede">
+            The same shape as a modern agent IDE home: clear job-to-be-done, a
+            live workspace, and short paths from install to first verified run.
+          </p>
+        </div>
+        <div class="bento">
+          <article class="card card--wide">
+            <p class="card__kicker">Parallel lanes</p>
+            <h3>Own paths. No stomping.</h3>
+            <p>
+              Goals become a DAG. Each lane gets resource claims and write
+              ownership so agents stop overwriting each other mid-flight.
+            </p>
+            <img
+              src="./assets/demos/03-parallel-lanes.gif"
+              alt="OMK parallel lanes demo"
+              loading="lazy"
+              width="960"
+              height="540"
+            />
+          </article>
+          <article class="card">
+            <p class="card__kicker">Evidence gate</p>
+            <h3>Green means measured.</h3>
+            <p>
+              Acceptance predicates block completion until commands leave fresh
+              receipts. Chat claims stay labeled unverified.
+            </p>
+          </article>
+          <article class="card">
+            <p class="card__kicker">Provider-neutral</p>
+            <h3>Swap models, keep control.</h3>
+            <p>
+              Codex today, Claude tomorrow, local for air-gap. The evidence
+              model does not change with the vendor.
+            </p>
+          </article>
+          <article class="card card--wide">
+            <p class="card__kicker">Session recovery</p>
+            <h3>Crash mid-run? Replay.</h3>
+            <p>
+              Durable session state and repair keep long orchestration jobs
+              recoverable instead of restarting from zero.
+            </p>
+            <img
+              src="./assets/demos/09-session-doctor.gif"
+              alt="OMK session doctor demo"
+              loading="lazy"
+              width="960"
+              height="540"
+            />
+          </article>
+        </div>
+      </section>
+
+      <section class="section section--alt" id="how">
+        <div class="shell">
+          <div class="section__head">
+            <p class="eyebrow">How it works</p>
+            <h2>Scope. Verify. Replay.</h2>
+          </div>
+          <ol class="steps">
+            <li>
+              <span class="steps__n">01</span>
+              <div>
+                <h3>State the goal</h3>
+                <p>
+                  OMK decomposes work into a bounded DAG with owned paths and
+                  stop predicates.
+                </p>
+              </div>
+            </li>
+            <li>
+              <span class="steps__n">02</span>
+              <div>
+                <h3>Run parallel lanes</h3>
+                <p>
+                  Skills, hooks, and MCP tools route per lane. One writer per
+                  mutable surface.
+                </p>
+              </div>
+            </li>
+            <li>
+              <span class="steps__n">03</span>
+              <div>
+                <h3>Gate on evidence</h3>
+                <p>
+                  Completion waits on fresh command output, tests, and health
+                  checks — not vibes.
+                </p>
+              </div>
+            </li>
+            <li>
+              <span class="steps__n">04</span>
+              <div>
+                <h3>Keep the receipt</h3>
+                <p>
+                  Replayable artifacts stay available for review, recovery, and
+                  release notes.
+                </p>
+              </div>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="section shell" id="control">
+        <div class="split">
+          <div>
+            <p class="eyebrow">OMK//CONTROL</p>
+            <h2>A control plane for multi-agent work.</h2>
+            <p class="section__lede">
+              Interactive coding agent CLI underneath. Orchestration, skill
+              routing, MCP health, and harness-graph inventory on top — one
+              operator surface.
+            </p>
+            <ul class="ticks">
+              <li>
+                Skill hubs (including marketing/SEO via
+                <code>omk-marketing</code>)
+              </li>
+              <li>Harness graph: agents × skills × hooks × MCP</li>
+              <li>Fail-closed health gate and CI workflow</li>
+              <li>Context budget and session doctor</li>
+            </ul>
+          </div>
+          <figure class="shot">
+            <img
+              src="./assets/omk_tui.jpg"
+              alt="OMK TUI control plane screenshot"
+              width="960"
+              height="640"
+            />
+          </figure>
+        </div>
+      </section>
+
+      <section class="section section--install" id="install">
+        <div class="shell install">
+          <div>
+            <p class="eyebrow">Install</p>
+            <h2>One global binary.</h2>
+            <p class="section__lede">
+              Same path as a Codex-style product page: install, boot, first
+              goal.
+            </p>
+          </div>
+          <div class="install__panel">
+            <div
+              class="install__tabs"
+              role="tablist"
+              aria-label="Install commands"
+            >
+              <button class="is-active" type="button" data-cmd="npm">
+                npm
+              </button>
+              <button type="button" data-cmd="pnpm">pnpm</button>
+              <button type="button" data-cmd="bun">bun</button>
+            </div>
+            <pre
+              id="install-cmd"
+              class="install__cmd"
+            ><code>npm install -g open-multi-agent-kit@0.95.1 --ignore-scripts
+omk --version
+omk</code></pre>
+            <button class="btn btn--ghost" type="button" id="copy-install">
+              Copy
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section class="section shell" id="docs">
+        <div class="section__head">
+          <p class="eyebrow">Docs & FAQ</p>
+          <h2>Straight answers.</h2>
+        </div>
+        <div class="faq">
+          <details open>
+            <summary>Is OMK a coding agent or an orchestrator?</summary>
+            <p>
+              Both. <code>open-multi-agent-kit</code> is an interactive
+              coding-agent CLI. OMK//CONTROL adds multi-agent DAG lanes,
+              skill/MCP routing, and evidence gates.
+            </p>
+          </details>
+          <details>
+            <summary>Which models are supported?</summary>
+            <p>
+              Provider-neutral via <code>omk-ai</code>: Codex, Claude, OpenCode,
+              Kimi, GLM/ZAI, local providers, and more. Swap models without
+              changing the control model.
+            </p>
+          </details>
+          <details>
+            <summary>How is completion verified?</summary>
+            <p>
+              Acceptance predicates plus fresh command evidence. Unverified runs
+              stay labeled
+              <code>UNVERIFIED</code>. Green chat is not a release signal.
+            </p>
+          </details>
+          <details>
+            <summary>Where do I read more?</summary>
+            <p>
+              <a href="https://github.com/dmae97/omk">GitHub</a> ·
+              <a href="https://www.npmjs.com/package/open-multi-agent-kit"
+                >npm</a
+              >
+              ·
+              <a
+                href="https://github.com/dmae97/omk/blob/main/packages/coding-agent/docs/index.md"
+                >docs index</a
+              >
+              ·
+              <a
+                href="https://github.com/dmae97/omk/blob/main/.github/RELEASE_NOTES_v0.95.1.md"
+                >v0.95.1 notes</a
+              >
+            </p>
+          </details>
+        </div>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <div class="shell foot__inner">
+        <div class="brand">
+          <span class="brand__mark" aria-hidden="true"></span>
+          <span class="brand__name">OMK</span>
+        </div>
+        <p>Open Multi-Agent Kit · MIT · evidence over claims</p>
+        <div class="foot__links">
+          <a href="https://github.com/dmae97/omk">GitHub</a>
+          <a href="https://www.npmjs.com/package/open-multi-agent-kit">npm</a>
+          <a href="https://github.com/dmae97/omk/blob/main/LICENSE">License</a>
+        </div>
+      </div>
+    </footer>
+
+    <script src="./main.js"></script>
+  </body>
+</html>

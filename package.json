@@ -14,9 +14,10 @@
 	"scripts": {
 		"clean": "npm run clean --workspaces",
 		"build": "cd packages/tui && npm run build && cd ../ai && npm run build && cd ../agent && npm run build && cd ../adaptorch-wpl && npm run build && cd ../coding-agent && npm run build",
-		"check": "biome check --write --error-on-warnings . && npm run check:pinned-deps && npm run check:vendored-skills && npm run check:ts-imports && npm run check:release-consistency && npm run check:readme-releases && npm run check:doc-links && npm run check:release-surface && npm run check:shrinkwrap && tsgo --noEmit && npm run check:browser-smoke",
+		"check": "biome check --write --error-on-warnings . && npm run check:pinned-deps && npm run check:vendored-skills && npm run check:ts-imports && npm run check:release-consistency && npm run check:readme-releases && npm run check:doc-links && npm run check:feature-claims && npm run check:release-surface && npm run check:shrinkwrap && tsgo --noEmit && npm run check:browser-smoke",
 		"check:browser-smoke": "node scripts/check-browser-smoke.mjs",
 		"check:doc-links": "node scripts/check-doc-links.mjs",
+		"check:feature-claims": "node scripts/check-feature-claims.mjs",
 		"check:pinned-deps": "node scripts/check-pinned-deps.mjs",
 		"check:release-consistency": "node scripts/check-release-consistency.mjs",
 		"check:release-surface": "node scripts/check-release-surface.mjs",
@@ -53,13 +54,13 @@
 	"devDependencies": {
 		"@anthropic-ai/sandbox-runtime": "0.0.26",
 		"@biomejs/biome": "2.3.5",
-		"@types/node": "22.19.19",
+		"@types/node": "22.20.1",
 		"@typescript/native-preview": "7.0.0-dev.20260120.1",
 		"esbuild": "0.28.1",
 		"husky": "9.1.7",
 		"jiti": "2.7.0",
 		"shx": "0.4.0",
-		"tsx": "4.22.1",
+		"tsx": "4.23.8",
 		"typescript": "5.9.3"
 	},
 	"engines": {
@@ -73,7 +74,7 @@
 		},
 		"ws": "8.21.0",
 		"minimatch": "10.2.6",
-		"brace-expansion": "5.0.8",
+		"brace-expansion": "5.0.9",
 		"postcss": "8.5.24",
 		"protobufjs": "7.6.5",
 		"shell-quote": "1.10.0",
@@ -82,7 +83,7 @@
 			"esbuild": "0.28.1"
 		},
 		"@earendil-works/gondolin": {
-			"undici": "6.27.0"
+			"undici": "6.28.0"
 		}
 	}
 }

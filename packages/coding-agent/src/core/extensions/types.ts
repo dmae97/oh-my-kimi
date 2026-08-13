@@ -460,6 +460,11 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	 */
 	executionMode?: ToolExecutionMode;
 
+	/** Static tool timeout in milliseconds. `0` disables the timer. */
+	timeoutMs?: number;
+	/** Resolve a per-call timeout; `undefined` falls back to `timeoutMs` or settings. */
+	resolveTimeoutMs?: (ctx: ExtensionContext) => number | undefined;
+
 	/** Execute the tool. */
 	execute(
 		toolCallId: string,

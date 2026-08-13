@@ -35,7 +35,9 @@ import { sanitizeSurrogates, sanitizeSurrogatesDeep } from "../utils/sanitize-un
 import { sanitizeOversizedImages } from "./anthropic-image-guard.ts";
 import { resolveCloudflareBaseUrl } from "./cloudflare.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
+import { resolveSystemPromptCacheBoundary } from "./prompt-cache.ts";
 import { adjustMaxTokensForThinking, buildBaseOptions } from "./simple-options.ts";
+import { stableTools } from "./tool-schema.ts";
 import { transformMessages } from "./transform-messages.ts";
 
 /**
@@ -981,31 +983,20 @@ function buildParams(
 		stream: true,
 	};
 
-	// For OAuth tokens, we MUST include Claude Code identity
+	const systemPromptBlocks = convertSystemPrompt(context, cacheControl);
+	// For OAuth tokens, we MUST include Claude Code identity.
 	if (isOAuthToken) {
+		const hasStableBoundary = resolveSystemPromptCacheBoundary(context) !== undefined;
 		params.system = [
 			{
 				type: "text",
 				text: "You are Claude Code, Anthropic's official CLI for Claude.",
-				...(cacheControl ? { cache_control: cacheControl } : {}),
+				...(cacheControl && !hasStableBoundary ? { cache_control: cacheControl } : {}),
 			},
+			...systemPromptBlocks,
 		];
-		if (context.systemPrompt) {
-			params.system.push({
-				type: "text",
-				text: sanitizeSurrogates(context.systemPrompt),
-				...(cacheControl ? { cache_control: cacheControl } : {}),
-			});
-		}
-	} else if (context.systemPrompt) {
-		// Add cache control to system prompt for non-OAuth tokens
-		params.system = [
-			{
-				type: "text",
-				text: sanitizeSurrogates(context.systemPrompt),
-				...(cacheControl ? { cache_control: cacheControl } : {}),
-			},
-		];
+	} else if (systemPromptBlocks.length > 0) {
+		params.system = systemPromptBlocks;
 	}
 
 	// Temperature is incompatible with extended thinking and unsupported on Claude Opus 4.7+.
@@ -1259,6 +1250,40 @@ function shouldUseFineGrainedToolStreamingBeta(model: Model<"anthropic-messages"
 	return !!context.tools?.length && !getAnthropicCompat(model).supportsEagerToolInputStreaming;
 }
 
+function convertSystemPrompt(
+	context: Context,
+	cacheControl?: CacheControlEphemeral,
+): Array<{ type: "text"; text: string; cache_control?: CacheControlEphemeral }> {
+	if (!context.systemPrompt) return [];
+	const boundaryBypass = context.systemPromptCacheBoundaryBypass === true;
+	const hasBoundaryMetadata = context.systemPromptCacheBoundary !== undefined;
+	const boundary = cacheControl ? resolveSystemPromptCacheBoundary(context) : undefined;
+	if (boundary === undefined) {
+		return [
+			{
+				type: "text",
+				text: sanitizeSurrogates(context.systemPrompt),
+				...(cacheControl && !boundaryBypass && !hasBoundaryMetadata ? { cache_control: cacheControl } : {}),
+			},
+		];
+	}
+	const blocks: Array<{ type: "text"; text: string; cache_control?: CacheControlEphemeral }> = [
+		{
+			type: "text",
+			text: sanitizeSurrogates(context.systemPrompt.slice(0, boundary)),
+			cache_control: cacheControl,
+		},
+	];
+	const dynamicSuffix = context.systemPrompt.slice(boundary);
+	if (dynamicSuffix) {
+		blocks.push({
+			type: "text",
+			text: sanitizeSurrogates(dynamicSuffix),
+		});
+	}
+	return blocks;
+}
+
 function convertTools(
 	tools: Tool[],
 	isOAuthToken: boolean,
@@ -1267,7 +1292,8 @@ function convertTools(
 ): Anthropic.Messages.Tool[] {
 	if (!tools) return [];
 
-	return tools.map((tool, index) => {
+	const stable = stableTools(tools);
+	return stable.map((tool, index) => {
 		const schema = tool.parameters as { properties?: unknown; required?: string[] };
 
 		return {
@@ -1279,7 +1305,7 @@ function convertTools(
 				properties: schema.properties ?? {},
 				required: schema.required ?? [],
 			},
-			...(cacheControl && index === tools.length - 1 ? { cache_control: cacheControl } : {}),
+			...(cacheControl && index === stable.length - 1 ? { cache_control: cacheControl } : {}),
 		};
 	});
 }
@@ -1294,6 +1320,8 @@ function mapStopReason(reason: Anthropic.Messages.StopReason | string): StopReas
 			return "toolUse";
 		case "refusal":
 			return "error";
+		case "sticky": // Fallback 라우팅 후 대화 고정 (claude-code 2.1.177 RE, 2026-08-02)
+			return "stop";
 		case "pause_turn": // Stop is good enough -> resubmit
 			return "stop";
 		case "stop_sequence":

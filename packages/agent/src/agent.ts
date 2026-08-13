@@ -63,6 +63,8 @@ function createMutableAgentState(
 
 	return {
 		systemPrompt: initialState?.systemPrompt ?? "",
+		systemPromptCacheBoundary: initialState?.systemPromptCacheBoundary,
+		systemPromptCacheBoundaryBypass: initialState?.systemPromptCacheBoundaryBypass,
 		model: initialState?.model ?? DEFAULT_MODEL,
 		thinkingLevel: initialState?.thinkingLevel ?? "off",
 		get tools() {
@@ -104,6 +106,7 @@ export interface AgentOptions {
 	thinkingBudgets?: ThinkingBudgets;
 	transport?: Transport;
 	maxRetryDelayMs?: number;
+	maxTurns?: AgentLoopConfig["maxTurns"];
 	toolExecution?: ToolExecutionMode;
 	toolTimeoutMs?: AgentLoopConfig["toolTimeoutMs"];
 	toolTimeouts?: AgentLoopConfig["toolTimeouts"];
@@ -195,6 +198,8 @@ export class Agent {
 	public transport: Transport;
 	/** Optional cap for provider-requested retry delays. */
 	public maxRetryDelayMs?: number;
+	/** Optional provider-turn budget for each prompt or continuation run. */
+	public maxTurns?: number;
 	/** Tool execution strategy for assistant messages that contain multiple tool calls. */
 	public toolExecution: ToolExecutionMode;
 	/** Default execution timeout for tools; provider request timeout remains separate. */
@@ -231,6 +236,7 @@ export class Agent {
 		this.thinkingBudgets = options.thinkingBudgets;
 		this.transport = options.transport ?? "auto";
 		this.maxRetryDelayMs = options.maxRetryDelayMs;
+		this.maxTurns = options.maxTurns;
 		this.toolExecution = options.toolExecution ?? "parallel";
 		this.toolTimeoutMs = options.toolTimeoutMs;
 		this.toolTimeouts = options.toolTimeouts;
@@ -454,6 +460,8 @@ export class Agent {
 	private createContextSnapshot(): AgentContext {
 		return {
 			systemPrompt: this._state.systemPrompt,
+			systemPromptCacheBoundary: this._state.systemPromptCacheBoundary,
+			systemPromptCacheBoundaryBypass: this._state.systemPromptCacheBoundaryBypass,
 			messages: this._state.messages.slice(),
 			tools: this._state.tools.slice(),
 		};
@@ -470,6 +478,7 @@ export class Agent {
 			transport: this.transport,
 			thinkingBudgets: this.thinkingBudgets,
 			maxRetryDelayMs: this.maxRetryDelayMs,
+			maxTurns: this.maxTurns,
 			toolExecution: this.toolExecution,
 			toolTimeoutMs: this.toolTimeoutMs,
 			toolTimeouts: this.toolTimeouts,

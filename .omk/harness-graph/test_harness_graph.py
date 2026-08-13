@@ -168,6 +168,13 @@ class GraphAnalyzeTests(unittest.TestCase):
     def test_acyclic(self) -> None:
         self.assertEqual(graph_analyze.cycles(self.G), [])
 
+    def test_self_loop_is_reported_as_cycle(self) -> None:
+        graph = graph_analyze.nx.DiGraph()
+        graph.add_node("skill:recursive", name="recursive")
+        graph.add_edge("skill:recursive", "skill:recursive")
+
+        self.assertEqual(graph_analyze.cycles(graph), [["recursive"]])
+
     def test_analyze_json_shape(self) -> None:
         data = graph_analyze.analyze(self.G)
         for key in (

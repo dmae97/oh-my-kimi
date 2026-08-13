@@ -53,7 +53,7 @@ describe("ControlPanelComponent", () => {
 		const lines = panel.render(48);
 		const plain = stripAnsi(lines.join("\n"));
 
-		expect(plain).toContain("OMK//CONTROL PANEL");
+		expect(plain).toContain("WELCOME TO OMK");
 		expect(plain).toContain("CORE:UNKNOWN");
 		expect(plain).toContain("Ctrl+C interrupt");
 		expect(lines.every((line) => visibleWidth(line) <= 48)).toBe(true);
@@ -152,7 +152,7 @@ describe("ControlPanelComponent", () => {
 		const lines = panel.render(96);
 		const plain = stripAnsi(lines.join("\n"));
 
-		expect(plain).toContain("OMK//CONTROL PANEL");
+		expect(plain).toContain("WELCOME TO OMK");
 		expect(plain).toContain("████");
 		expect(plain).toContain("PANEL unknown");
 		expect(plain).toContain("THEME NEON-CONTROL");

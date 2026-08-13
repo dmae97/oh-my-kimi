@@ -37,6 +37,80 @@ describe("buildSystemPrompt context budget", () => {
 		expect(legacy).not.toContain("<context_budget>");
 	});
 
+	it("renders compact model-facing budget metadata when there are no resource items", () => {
+		const prompt = buildSystemPrompt({
+			selectedTools: ["read"],
+			toolSnippets: { read: "Read files" },
+			contextFiles: [],
+			skills: [],
+			cwd: "/repo",
+			contextBudget: { maxPromptTokens: 6000 },
+		});
+
+		expect(prompt).toContain("<context_budget>");
+		expect(prompt).toContain('<cache_decision plan_hit="false" />');
+		expect(prompt).toContain(
+			'<token_optimizer optimizer_id="legacy-token-optimizer" status="quarantined_compatibility" active="false" active_context_budget_optimizer="context-budget-v2" compatibility_only="true" />',
+		);
+		expect(prompt).not.toContain("<decision_observability>");
+		expect(prompt).not.toContain('<counts selected="0"');
+		expect(prompt).toContain("Current working directory: /repo");
+	});
+
+	it("keeps invalid-budget diagnostics isolated from the plan cache", () => {
+		for (const invalidFirst of [false, true]) {
+			const cacheProvider = createMemoryContextBudgetCacheProviderV2();
+			const render = (responseReserveTokens: number) =>
+				buildSystemPrompt({
+					selectedTools: ["read"],
+					toolSnippets: { read: "Read files" },
+					contextFiles: [],
+					skills: [],
+					cwd: "/repo",
+					contextBudget: { maxPromptTokens: 6000, responseReserveTokens, cacheProvider },
+				});
+			const first = render(invalidFirst ? Number.NaN : 0);
+			const second = render(invalidFirst ? 0 : Number.NaN);
+			const invalid = invalidFirst ? first : second;
+			const valid = invalidFirst ? second : first;
+
+			expect(invalid).toContain("<reason>invalid_budget</reason>");
+			expect(valid).not.toContain("<reason>invalid_budget</reason>");
+			expect(valid).not.toContain("<decision_observability>");
+		}
+	});
+
+	it("keeps full diagnostics for invalid empty-resource budgets", () => {
+		const prompt = buildSystemPrompt({
+			selectedTools: ["read"],
+			toolSnippets: { read: "Read files" },
+			contextFiles: [],
+			skills: [],
+			cwd: "/repo",
+			contextBudget: { maxPromptTokens: 6000, responseReserveTokens: Number.NaN },
+		});
+
+		expect(prompt).toContain("<decision_observability>");
+		expect(prompt).toContain("<emergency>true</emergency>");
+		expect(prompt).toContain("<reason>invalid_budget</reason>");
+	});
+
+	it("keeps full observability when resource items exist but none fit", () => {
+		const prompt = buildSystemPrompt({
+			selectedTools: ["read"],
+			toolSnippets: { read: "Read files" },
+			contextFiles: [{ path: "/repo/AGENTS.md", content: "Important project context.", isGlobal: false }],
+			skills: [],
+			cwd: "/repo",
+			contextBudget: { maxPromptTokens: 1, includeFullContextFiles: false },
+		});
+
+		expect(prompt).toContain("<decision_observability>");
+		expect(prompt).toContain('<counts selected="0" omitted="1"');
+		expect(prompt).toContain('<diagnostic_reasons count="1">');
+		expect(prompt).toContain("<reason>omitted_high_priority</reason>");
+	});
+
 	it("limits resource inventory while keeping active skills and pointers", () => {
 		const skills = Array.from({ length: 40 }, (_, index) => makeSkill(index));
 		const prompt = buildSystemPrompt({

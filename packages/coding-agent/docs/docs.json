@@ -42,6 +42,10 @@
         {
           "title": "Compaction",
           "path": "compaction.md"
+        },
+        {
+          "title": "Turn Metrics",
+          "path": "metrics.md"
         }
       ]
     },
@@ -55,6 +59,10 @@
         {
           "title": "Skills",
           "path": "skills.md"
+        },
+        {
+          "title": "MCP",
+          "path": "mcp.md"
         },
         {
           "title": "Prompt Templates",

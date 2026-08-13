@@ -12,8 +12,7 @@ import type { ContextCacheInvalidationSnapshot } from "./context-budget-v2-cache
 
 export const CONTEXT_BUDGET_POLICY_VERSION_V2 = "context-budget-v2";
 
-// Inlined from the deleted token-optimizer.ts (legacy quarantine-compatibility
-// status; legacy-token-optimizer itself no longer exists as a module).
+/** Fixed compatibility telemetry for the removed legacy token optimizer. */
 export interface TokenOptimizerRuntimeStatus {
 	readonly optimizerId: "legacy-token-optimizer";
 	readonly status: "quarantined_compatibility";

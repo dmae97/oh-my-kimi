@@ -4,6 +4,7 @@ import {
 	clampOpenAIPromptCacheKey,
 	derivePromptCacheKey,
 	OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH,
+	resolveOpenAIPromptCacheKey,
 } from "../src/providers/openai-prompt-cache.ts";
 import { convertResponsesTools } from "../src/providers/openai-responses-shared.ts";
 import {
@@ -93,6 +94,24 @@ describe("provider cache primitives", () => {
 		);
 	});
 
+	it("stableTools does not evaluate runtime-only getters", () => {
+		const tool: Tool = {
+			name: "lazy-runtime-tool",
+			description: "tool with session-bound runtime state",
+			parameters: Type.Object({}),
+		};
+		Object.defineProperty(tool, "timeoutMs", {
+			enumerable: true,
+			get: () => {
+				throw new Error("stale extension context");
+			},
+		});
+
+		expect(() => stableTools([tool])).not.toThrow();
+		const [stable] = stableTools([tool]);
+		expect(Object.getOwnPropertyDescriptor(stable, "timeoutMs")?.get).toBeTypeOf("function");
+	});
+
 	it("convertResponsesTools uses stable tool order and canonical parameters", () => {
 		const tools: Tool[] = [
 			{
@@ -137,14 +156,14 @@ describe("provider cache primitives", () => {
 		const normalized = normalizeToolParameters(parameters);
 		const normalizedProperties = normalized.properties as Record<string, unknown>;
 
-		expect(Object.hasOwn(normalizedProperties, "__proto__")).toBe(true);
+		expect(Object.getOwnPropertyDescriptor(normalizedProperties, "__proto__")).toBeDefined();
 		expect((normalizedProperties.__proto__ as Record<string, unknown>).type).toBe("string");
 		expect((normalizedProperties.constructor as unknown as Record<string, unknown>).type).toBe("number");
 
 		const stable = stableToolSchema(parameters);
 		const stableProperties = stable.properties as Record<string, unknown>;
 
-		expect(Object.hasOwn(stableProperties, "__proto__")).toBe(true);
+		expect(Object.getOwnPropertyDescriptor(stableProperties, "__proto__")).toBeDefined();
 		expect((stableProperties.__proto__ as Record<string, unknown>).type).toBe("string");
 		expect((stableProperties.constructor as unknown as Record<string, unknown>).type).toBe("number");
 	});
@@ -188,6 +207,91 @@ describe("provider cache primitives", () => {
 		];
 
 		expect(new Set(keys).size).toBe(keys.length);
+	});
+
+	it("derives cache affinity from the stable prefix and canonical tools", () => {
+		const tools: Tool[] = [
+			{
+				name: "zeta",
+				description: "last",
+				parameters: Type.Object({ z: Type.String(), a: Type.Number() }),
+			},
+			{
+				name: "alpha",
+				description: "first",
+				parameters: Type.Object({ value: Type.Boolean() }),
+			},
+		];
+		const prefix = "stable instructions";
+		const first = resolveOpenAIPromptCacheKey(
+			{
+				systemPrompt: `${prefix}\ndynamic one`,
+				systemPromptCacheBoundary: prefix.length,
+				messages: [],
+				tools,
+			},
+			"session-one",
+			"openai/gpt-test",
+		);
+		const second = resolveOpenAIPromptCacheKey(
+			{
+				systemPrompt: `${prefix}\ndynamic two`,
+				systemPromptCacheBoundary: prefix.length,
+				messages: [],
+				tools: [...tools].reverse(),
+			},
+			"session-two",
+			"openai/gpt-test",
+		);
+		const changed = resolveOpenAIPromptCacheKey(
+			{
+				systemPrompt: `changed instructions\ndynamic two`,
+				systemPromptCacheBoundary: "changed instructions".length,
+				messages: [],
+				tools,
+			},
+			"session-two",
+			"openai/gpt-test",
+		);
+
+		expect(first).toBe(second);
+		expect(changed).not.toBe(first);
+		expect(resolveOpenAIPromptCacheKey({ messages: [] }, "session-fallback", "scope")).toBe("session-fallback");
+
+		const fullyStablePrompt = "fully stable instructions";
+		expect(
+			resolveOpenAIPromptCacheKey(
+				{
+					systemPrompt: fullyStablePrompt,
+					systemPromptCacheBoundary: fullyStablePrompt.length,
+					messages: [],
+				},
+				"session-fallback",
+				"scope",
+			),
+		).toMatch(/^omk-/);
+		expect(
+			resolveOpenAIPromptCacheKey(
+				{
+					systemPrompt: fullyStablePrompt,
+					systemPromptCacheBoundary: fullyStablePrompt.length + 1,
+					messages: [],
+				},
+				"session-fallback",
+				"scope",
+			),
+		).toBeUndefined();
+		expect(
+			resolveOpenAIPromptCacheKey(
+				{
+					systemPrompt: fullyStablePrompt,
+					systemPromptCacheBoundaryBypass: true,
+					messages: [],
+				},
+				"session-fallback",
+				"scope",
+			),
+		).toBeUndefined();
 	});
 
 	it("clampOpenAIPromptCacheKey preserves undefined and clamps by Unicode code point", () => {

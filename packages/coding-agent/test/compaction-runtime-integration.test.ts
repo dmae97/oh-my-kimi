@@ -177,6 +177,8 @@ describe("compaction runtime transaction integration", () => {
 		seedClosedTranscript(harness);
 		const sessionFile = harness.sessionManager.getSessionFile();
 		if (!sessionFile) throw new Error("expected persisted session file");
+		// Simulate the owner losing its lease (e.g. crash) so the durable-head CAS is the last line of defense.
+		harness.sessionManager.getOwnerLease()?.release();
 		const manager = harness.sessionManager as DurableHeadSessionManager;
 		expect(typeof manager.getDurableHeadToken).toBe("function");
 		const durableHeadSpy = vi.spyOn(manager, "getDurableHeadToken");
@@ -235,6 +237,39 @@ describe("compaction runtime transaction integration", () => {
 		expect(JSON.stringify(entry)).not.toContain(credential);
 	});
 
+	it("commits a summary whose prose trips the credential-shape validator", async () => {
+		const harness = await createHarness({ settings: { compaction: { keepRecentTokens: 1 } } });
+		harnesses.push(harness);
+		seedClosedTranscript(harness);
+		injectSummaryStream(
+			harness,
+			undefined,
+			"Reviewed the task-scheduler module; the deploy bearer authenticates against staging.",
+		);
+
+		const result = await harness.session.compact();
+
+		expect(result.summary).toContain("task-scheduler");
+		const entry = harness.sessionManager.getEntries().find((candidate) => candidate.type === "compaction");
+		expect(entry?.type === "compaction" ? entry.summary : undefined).toBe(result.summary);
+	});
+
+	it("recovers auto-compaction when generated prose trips the credential-shape validator", async () => {
+		const harness = await createHarness({ settings: { compaction: { keepRecentTokens: 1 } } });
+		harnesses.push(harness);
+		seedClosedTranscript(harness);
+		injectSummaryStream(
+			harness,
+			undefined,
+			"Overflow recovery: the bearer authenticates the task-scheduler redeploy.",
+		);
+
+		await (harness.session as unknown as AutoCompactionRuntime)._runAutoCompaction("threshold", false);
+
+		const entry = harness.sessionManager.getEntries().find((candidate) => candidate.type === "compaction");
+		expect(entry?.type === "compaction" ? entry.summary : undefined).toContain("task-scheduler");
+	});
+
 	it("redacts credential-shaped summaries during auto-compaction", async () => {
 		const harness = await createHarness({ settings: { compaction: { keepRecentTokens: 1 } } });
 		harnesses.push(harness);
@@ -242,7 +277,7 @@ describe("compaction runtime transaction integration", () => {
 		const credential = "synthetic-auto-compaction-secret";
 		injectSummaryStream(harness, undefined, `api_key = "${credential}"`);
 
-		await harness.session["_runAutoCompaction"]("threshold", false);
+		await (harness.session as unknown as AutoCompactionRuntime)._runAutoCompaction("threshold", false);
 
 		const entry = harness.sessionManager.getEntries().find((candidate) => candidate.type === "compaction");
 		expect(entry?.type === "compaction" ? entry.summary : undefined).toContain("[REDACTED]");
@@ -265,6 +300,7 @@ describe("compaction runtime transaction integration", () => {
 		const sessionFile = harness.sessionManager.getSessionFile();
 		if (!sessionFile) throw new Error("expected persisted session file");
 		const serialized = readFileSync(sessionFile, "utf8");
+		harness.sessionManager.getOwnerLease()?.release();
 
 		expect(SessionManager.open(sessionFile, harness.tempDir).getEntries()).toHaveLength(
 			harness.sessionManager.getEntries().length,
@@ -379,7 +415,9 @@ describe("compaction runtime transaction integration", () => {
 				(harness.session as unknown as AutoCompactionRuntime)._runAutoCompaction(reason, reason === "overflow"),
 			).resolves.toBe(false);
 			expect(streamCalls(), reason).toBe(0);
-			expect(harness.eventsOfType("compaction_end").at(-1)?.errorMessage, reason).toMatch(/doctor|structural/i);
+			expect(harness.eventsOfType("compaction_end").slice(-1)[0]?.errorMessage, reason).toMatch(
+				/doctor|structural/i,
+			);
 		}
 	});
 

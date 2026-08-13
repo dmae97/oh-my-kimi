@@ -28,6 +28,7 @@ import {
 	TASK_CLASSES_V4,
 	type TaskClassV4,
 } from "./reasoning-router-v4-weights.ts";
+import type { RouterFeedbackLenBucket } from "./router-feedback-collector.ts";
 
 export type { ReasoningLaneTypeV4, RouterWeightsV4, TaskClassV4 } from "./reasoning-router-v4-weights.ts";
 export { DEFAULT_WEIGHTS_V4, TASK_CLASSES_V4 } from "./reasoning-router-v4-weights.ts";
@@ -385,6 +386,28 @@ function hasCodeFence(text: string): boolean {
 function hasDiffMarkers(text: string): boolean {
 	if (/^@@[^\n]*@@/m.test(text) || /^diff --git /m.test(text)) return true;
 	return /^\+(?!\+)/m.test(text) && /^-(?!-)/m.test(text);
+}
+
+export interface RouterFeedbackFeaturesV4 {
+	readonly lenBucket: RouterFeedbackLenBucket;
+	readonly hadFence: boolean;
+	readonly hadDiff: boolean;
+}
+
+/** Derive the exact bounded feature tuple used by both classification and learning. */
+export function deriveRouterFeedbackFeaturesV4(promptText: string): RouterFeedbackFeaturesV4 {
+	const prompt = promptText.trim();
+	let lenBucket = 0;
+	let remaining = prompt.length + 1;
+	while (remaining > 1 && lenBucket < 7) {
+		remaining >>= 1;
+		lenBucket++;
+	}
+	return {
+		lenBucket: lenBucket as RouterFeedbackLenBucket,
+		hadFence: hasCodeFence(prompt),
+		hadDiff: hasDiffMarkers(prompt),
+	};
 }
 
 /** First line (after stripping one polite prefix), capped at 180 chars. */
@@ -746,7 +769,12 @@ function countGeneralizedEvidenceV4(evidence: GeneralizedIntentEvidenceV4): Reco
  * whole-prompt scan exactly once and recording a `negation:<channel>` id in
  * `suppressed` whenever a match existed but every occurrence was negated.
  */
-function extractFeaturesV4(prompt: string, weights: RouterWeightsV4, suppressed: string[]): ContextualFeaturesV4 {
+function extractFeaturesV4(
+	prompt: string,
+	weights: RouterWeightsV4,
+	suppressed: string[],
+	feedbackFeatures: RouterFeedbackFeaturesV4 = deriveRouterFeedbackFeaturesV4(prompt),
+): ContextualFeaturesV4 {
 	const leading = firstClause(prompt);
 	const window = weights.negationWindowChars;
 	const secondClause = splitCompoundClauseV4(prompt);
@@ -870,8 +898,8 @@ function extractFeaturesV4(prompt: string, weights: RouterWeightsV4, suppressed:
 
 	return {
 		firstClause: leading,
-		codeFence: hasCodeFence(prompt),
-		diffHunk: hasDiffMarkers(prompt),
+		codeFence: feedbackFeatures.hadFence,
+		diffHunk: feedbackFeatures.hadDiff,
 		localEdit,
 		diagnosticEvidence,
 		reviewScope,
@@ -1069,10 +1097,11 @@ export interface ClassifierVerdictV4 {
 export function classifyTaskV4(
 	input: TaskClassifierInputV4,
 	weights: RouterWeightsV4 = DEFAULT_WEIGHTS_V4,
+	feedbackFeatures?: RouterFeedbackFeaturesV4,
 ): ClassifierVerdictV4 {
 	const prompt = input.prompt.trim();
 	const suppressed: string[] = [];
-	const features = extractFeaturesV4(prompt, weights, suppressed);
+	const features = extractFeaturesV4(prompt, weights, suppressed, feedbackFeatures);
 	const scores = computeScoresV4(features, weights);
 	applyExtensionSignalsV4(scores, input, weights);
 

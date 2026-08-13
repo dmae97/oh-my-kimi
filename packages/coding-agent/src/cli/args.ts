@@ -227,11 +227,13 @@ ${chalk.bold("Commands:")}
   ${APP_NAME} uninstall <source> [-l]   Alias for remove
   ${APP_NAME} update [source|self|omk]  Update OMK and installed extensions
   ${APP_NAME} list                      List installed extensions from settings
+  ${APP_NAME} package doctor <source>   Diagnose omk/pi manifest and runtime compatibility as JSON
   ${APP_NAME} config                    Open TUI to enable/disable package resources
   ${APP_NAME} quota                     Manage CodexBar quota connector and summaries
   ${APP_NAME} provider doctor <id>      Diagnose a provider as sanitized JSON (--probe-model adds an
                                  opt-in Level-2 generative probe that may incur provider costs)
   ${APP_NAME} session doctor            Inspect or safely repair one session (--session, --repair, --dry-run)
+  ${APP_NAME} router-feedback compile-bias  Compile this repository's bounded router bias snapshot
   ${APP_NAME} <command> --help          Show help for install/remove/uninstall/update/list
 
 ${chalk.bold("Options:")}

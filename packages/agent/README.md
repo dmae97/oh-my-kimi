@@ -36,6 +36,7 @@ await agent.prompt("Hello!");
 ### AgentMessage vs LLM Message
 
 The agent works with `AgentMessage`, a flexible type that can include:
+
 - Standard LLM messages (`user`, `assistant`, `toolResult`)
 - Custom app-specific message types via declaration merging
 
@@ -107,7 +108,7 @@ Tool execution mode is configurable:
 In parallel mode the batch can be scheduled with one of two schedulers:
 
 - `waves-v1` (historical): partitions the batch into ordered waves using `partitionToolBatchWaves`. Calls in the same wave run concurrently, and waves run one after another in source order. A fully safe batch is a single concurrent wave; bash, `clarify`, sequential-policy tools, unknown tools, and file tools with overlapping target paths become their own waves, so one conflicting call no longer serializes the independent rest of the batch.
-- `dag-v2` (opt-in): builds a deterministic resource-claim DAG per call. Tools declare `resourceClaims` and an access mode (`read` or `write`); the scheduler runs independent calls in source-directed levels, keeps `bash`, unknown tools, and unclaimed extension tools exclusive, and still preserves source-order result artifacts. Set `toolScheduler: "dag-v2"` in `Agent` options to enable it. `OMK_TOOL_SCHEDULER=dag-v2` is also honored in the OMK CLI.
+- `dag-v2` (opt-in): builds a deterministic resource-claim DAG per call. Tools declare `resourceClaims` and an access mode (`read` or `write`); the scheduler runs independent calls in source-directed levels, keeps `bash`, unknown tools, and unclaimed extension tools exclusive, and still preserves source-order result artifacts. A claim-planning failure closes only that call and does not block other claimable calls in the batch. Set `toolScheduler: "dag-v2"` in `Agent` options to enable it. `OMK_TOOL_SCHEDULER=dag-v2` is also honored in the OMK CLI.
 
 Tool completion events follow tool completion order, but persisted toolResult messages still follow assistant source order.
 
@@ -131,6 +132,8 @@ const stream = agentLoop(prompts, context, {
 
 `shouldStopAfterTurn` runs after `turn_end` is emitted and after the assistant response and any tool executions have completed normally. If it returns `true`, the loop emits `agent_end` and exits before polling steering or follow-up queues, and before starting another LLM call. It does not abort the provider stream, does not cancel running tools, and does not alter the assistant message stop reason.
 
+Set `maxTurns` on either `AgentLoopConfig` or `AgentOptions` to bound provider calls in one prompt or continuation run. Each assistant response counts as one turn. At the limit, the current response and tool batch finish normally, then the loop emits `agent_end` before `prepareNextTurn`, stop hooks, or steering/follow-up queues run again. The option is unbounded when omitted and must be a positive safe integer when configured.
+
 When you use the `Agent` class, assistant `message_end` processing is treated as a barrier before tool preflight begins. That means `beforeToolCall` sees agent state that already includes the assistant message that requested the tool call.
 
 ### continue() Event Sequence
@@ -147,7 +150,7 @@ The last message in context must be `user` or `toolResult` (not `assistant`).
 ### Event Types
 
 | Event | Description |
-|-------|-------------|
+| ------- | ------------- |
 | `agent_start` | Agent begins processing |
 | `agent_end` | Final event for the run. Awaited subscribers for this event still count toward settlement |
 | `turn_start` | New turn begins (one LLM call + tool executions) |
@@ -169,6 +172,10 @@ const agent = new Agent({
   // Initial state
   initialState: {
     systemPrompt: string,
+    // UTF-16 offset ending the stable provider-cacheable prefix.
+    systemPromptCacheBoundary?: number,
+    // Disable explicit cache affinity/markers for a dynamic replacement.
+    systemPromptCacheBoundaryBypass?: boolean,
     model: Model<any>,
     thinkingLevel: "off" | "minimal" | "low" | "medium" | "high" | "xhigh",
     tools: AgentTool<any>[],
@@ -195,6 +202,9 @@ const agent = new Agent({
 
   // Dynamic API key resolution (for expiring OAuth tokens)
   getApiKey: async (provider) => refreshToken(),
+
+  // Optional positive safe-integer provider-turn budget for each run
+  maxTurns: 50,
 
   // Tool execution mode: "parallel" (default) or "sequential"
   // Also "toolExecution: 'sequential'" forces waves/dag schedulers to run serially.
@@ -268,6 +278,8 @@ const agent = new Agent({
 ```typescript
 interface AgentState {
   systemPrompt: string;
+  systemPromptCacheBoundary?: number;
+  systemPromptCacheBoundaryBypass?: boolean;
   model: Model<any>;
   thinkingLevel: ThinkingLevel;
   tools: AgentTool<any>[];
@@ -279,7 +291,7 @@ interface AgentState {
 }
 ```
 
-Access state via `agent.state`.
+Access state via `agent.state`. `systemPromptCacheBoundary` is a UTF-16 offset into `systemPrompt`; providers that support the metadata may cache or route the prefix before that offset. Set `systemPromptCacheBoundaryBypass` when a turn replaces the prompt with dynamic content. Missing, invalid, or bypassed boundaries suppress explicit stable-prefix markers and affinity; provider usage is the only proof of a cache hit.
 
 Assigning `agent.state.tools = [...]` or `agent.state.messages = [...]` copies the top-level array before storing it. Mutating the returned array mutates the current agent state.
 
@@ -387,6 +399,7 @@ agent.clearAllQueues();
 Use clearSteeringQueue, clearFollowUpQueue, or clearAllQueues to drop queued messages.
 
 When steering messages are detected after a turn completes:
+
 1. All tool calls from the current assistant message have already finished
 2. Steering messages are injected
 3. The LLM responds on the next turn
@@ -494,7 +507,7 @@ Every tool call is guarded by a timeout. The effective timeout for a call is res
 3. `AgentLoopConfig.toolTimeoutMs` (fallback)
 4. No timer when all of the above are `0` or unset
 
-When a timeout wins the race, the agent closes the tool call and commits a synthetic terminal result with a `timeout` disposition. The same happens for `abort` or blocked calls. The LLM still sees the tool result, but the terminal envelope records why the call ended.
+When a timeout wins the race, the agent closes the tool call and commits a synthetic terminal result with a `timeout` disposition. The same happens for `abort` or blocked calls. If the provider itself ends with `error` or `aborted` while emitting complete, unambiguous tool calls, the agent closes those calls without executing them. Terminal abort paths stop before hooks, queue polling, or another provider request. The transcript retains each terminal result and its disposition.
 
 If the real tool promise settles after the terminal result has already been committed, the agent emits a `tool_execution_late_settlement` event (when `toolExecutionPolicy.lateSettlement` is `"audit"`, the default). The event is advisory: it does not change the transcript that the LLM sees.
 
@@ -517,7 +530,7 @@ Every terminal tool result carries a `details.omk` envelope with a `ToolCallDisp
 - `timeout` - Tool exceeded its timeout
 - `skipped` - Tool was skipped (e.g. duplicate call after transcript repair)
 
-The loop enforces transcript integrity on every continuation and provider request. It checks for:
+The loop enforces transcript integrity before tool execution, every continuation, and every provider request. It checks for:
 
 - Duplicate tool-call IDs
 - Orphan tool results (no matching call)
@@ -525,7 +538,7 @@ The loop enforces transcript integrity on every continuation and provider reques
 - Interleaved non-result messages between a call and its result
 - Missing results for finalized tool calls
 
-Unambiguous missing-only tail results are repaired by synthesizing skipped/error results. Corrupt or ambiguous transcripts fail closed with an error rather than fabricating an assistant message. This is why thrown errors should be real errors, not strings returned as content.
+Unambiguous missing-only tail results are repaired by synthesizing skipped/error results. Corrupt or ambiguous transcripts fail closed with an error rather than fabricating an assistant message; tools from an ambiguous assistant turn never execute. This is why thrown errors should be real errors, not strings returned as content.
 
 ## Proxy Usage
 
@@ -553,6 +566,8 @@ import { agentLoop, agentLoopContinue } from "omk-agent-core";
 
 const context: AgentContext = {
   systemPrompt: "You are helpful.",
+  systemPromptCacheBoundary: "You are helpful.".length,
+  systemPromptCacheBoundaryBypass: false,
   messages: [],
   tools: [],
 };

@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fauxAssistantMessage, registerFauxProvider } from "omk-ai";
+import { deriveContextPromptCacheKey, fauxAssistantMessage, registerFauxProvider } from "omk-ai";
+import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	type CreateAgentSessionRuntimeFactory,
@@ -181,6 +182,36 @@ describe("AgentSessionRuntime session lifecycle events", () => {
 		);
 		runtimeHost.setBeforeSessionInvalidate(undefined);
 		runtimeHost.setRebindSession(undefined);
+	});
+
+	it("derives tool schemas without evaluating a stale session timeout", async () => {
+		const { runtimeHost } = await createRuntimeHost((pi) => {
+			pi.registerTool({
+				name: "contextual-timeout",
+				label: "Contextual timeout",
+				description: "Test tool",
+				parameters: Type.Object({}),
+				resolveTimeoutMs: (ctx) => (ctx.thinkingLevel === "ultra" ? 0 : undefined),
+				execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
+			});
+		});
+		const staleTool = runtimeHost.session.agent.state.tools.find((tool) => tool.name === "contextual-timeout");
+		expect(staleTool).toBeDefined();
+
+		await runtimeHost.newSession();
+
+		expect(() => staleTool?.timeoutMs).toThrow("This extension ctx is stale after session replacement or reload");
+		expect(() =>
+			deriveContextPromptCacheKey(
+				{
+					systemPrompt: "stable instructions",
+					systemPromptCacheBoundary: "stable instructions".length,
+					messages: [],
+					tools: [staleTool!],
+				},
+				"test/model",
+			),
+		).not.toThrow();
 	});
 
 	it("emits session_before_fork and session_start and honors cancellation", async () => {

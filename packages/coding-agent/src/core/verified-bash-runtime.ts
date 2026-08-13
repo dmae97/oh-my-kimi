@@ -52,7 +52,10 @@ function computeSessionWorkspaceScope(cwd: string, maxPaths: number): WorkspaceS
 		if (top.status !== 0 || typeof top.stdout !== "string") return { root: cwd, artifactPaths: [] };
 		const root = top.stdout.trim();
 		if (root.length === 0) return { root: cwd, artifactPaths: [] };
-		const status = spawnSync("git", ["-C", cwd, "status", "--porcelain=v1", "-z", "--untracked-files=normal"], {
+		// File-granular untracked listing: -unormal emits untracked directories as
+		// `dir/`, whose trailing slash fails assertNormalizedArtifactPath downstream
+		// and kills every verified bash call in the session.
+		const status = spawnSync("git", ["-C", cwd, "status", "--porcelain=v1", "-z", "--untracked-files=all"], {
 			timeout: GIT_TIMEOUT_MS,
 			maxBuffer: 4 * 1024 * 1024,
 			stdio: ["ignore", "pipe", "ignore"],
@@ -65,9 +68,12 @@ function computeSessionWorkspaceScope(cwd: string, maxPaths: number): WorkspaceS
 			if (field.length < 4) continue;
 			const xy = field.slice(0, 2);
 			if (xy === "!!") continue;
-			if (xy.includes("R")) index++; // rename: consume the source path field too
+			if (xy.includes("R") || xy.includes("C")) index++; // rename/copy: consume the source path field too
 			const artifact = field.slice(3);
-			if (artifact.length > 0) paths.push(artifact);
+			// Trailing-slash entries survive -uall only for untracked nested
+			// repositories; their contents are outside the parent's dirty digest
+			// and cannot be file-hashed, so exclude them from the scope.
+			if (artifact.length > 0 && !artifact.endsWith("/")) paths.push(artifact);
 		}
 		const artifactPaths = [...new Set(paths)].sort().slice(0, maxPaths);
 		return { root, artifactPaths };

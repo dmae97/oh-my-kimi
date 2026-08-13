@@ -32,6 +32,12 @@ import { spawnProcess, spawnProcessSync } from "../utils/child-process.ts";
 import { type GitSource, parseGitUrl } from "../utils/git.ts";
 import { canonicalizePath, isLocalPath, markPathIgnoredByCloudSync, resolvePath } from "../utils/paths.ts";
 import { isStdoutTakenOver } from "./output-guard.ts";
+import { extractNpmPackageTarball } from "./package-archive.ts";
+import {
+	type PackageManifestResolution,
+	type PackageResourceManifest,
+	readPackageManifest as readPackageManifestFile,
+} from "./package-manifest.ts";
 import type { PackageSource, SettingsManager } from "./settings-manager.ts";
 
 const NETWORK_TIMEOUT_MS = 10000;
@@ -62,6 +68,12 @@ export interface ResolvedPaths {
 	skills: ResolvedResource[];
 	prompts: ResolvedResource[];
 	themes: ResolvedResource[];
+}
+
+export interface PackageInspection {
+	packageRoot: string;
+	resources: ResolvedPaths;
+	cleanup?: () => void;
 }
 
 export type MissingSourceAction = "install" | "skip" | "error";
@@ -109,6 +121,7 @@ export interface PackageManager {
 		sources: string[],
 		options?: { local?: boolean; temporary?: boolean },
 	): Promise<ResolvedPaths>;
+	preparePackageInspection(source: string): Promise<PackageInspection>;
 	addSourceToSettings(source: string, options?: { local?: boolean }): boolean;
 	removeSourceFromSettings(source: string, options?: { local?: boolean }): boolean;
 	setProgressCallback(callback: ProgressCallback | undefined): void;
@@ -150,13 +163,6 @@ interface NpmUpdateTarget extends ConfiguredUpdateSource {
 
 interface GitUpdateTarget extends ConfiguredUpdateSource {
 	parsed: GitSource;
-}
-
-interface OmkManifest {
-	extensions?: string[];
-	skills?: string[];
-	prompts?: string[];
-	themes?: string[];
 }
 
 interface ResourceAccumulator {
@@ -543,20 +549,10 @@ function collectAutoThemeEntries(dir: string): string[] {
 	return entries;
 }
 
-function readOmkManifestFile(packageJsonPath: string): OmkManifest | null {
-	try {
-		const content = readFileSync(packageJsonPath, "utf-8");
-		const pkg = JSON.parse(content) as { omk?: OmkManifest };
-		return pkg.omk ?? null;
-	} catch {
-		return null;
-	}
-}
-
 function resolveExtensionEntries(dir: string): string[] | null {
 	const packageJsonPath = join(dir, "package.json");
 	if (existsSync(packageJsonPath)) {
-		const manifest = readOmkManifestFile(packageJsonPath);
+		const manifest = readPackageManifestFile(packageJsonPath)?.manifest;
 		if (manifest?.extensions?.length) {
 			const entries: string[] = [];
 			for (const extPath of manifest.extensions) {
@@ -952,6 +948,41 @@ export class DefaultPackageManager implements PackageManager {
 		const packageSources = sources.map((source) => ({ pkg: source as PackageSource, scope }));
 		await this.resolvePackageSources(packageSources, accumulator);
 		return this.toResolvedPaths(accumulator);
+	}
+
+	async preparePackageInspection(source: string): Promise<PackageInspection> {
+		const parsed = this.parseSource(source);
+		const accumulator = this.createAccumulator();
+		const metadata: PathMetadata = { source, scope: "temporary", origin: "package" };
+		let packageRoot: string;
+		let cleanupRoot: string | undefined;
+
+		if (parsed.type === "local") {
+			const resolved = this.resolvePathFromBase(parsed.path, this.cwd);
+			if (!existsSync(resolved)) throw new Error(`Path does not exist: ${resolved}`);
+			packageRoot = statSync(resolved).isDirectory() ? resolved : dirname(resolved);
+			this.resolveLocalExtensionSource(parsed, accumulator, undefined, metadata, this.cwd);
+		} else {
+			if (isOfflineModeEnabled()) throw new Error(`Package is unavailable in offline mode: ${source}`);
+			packageRoot =
+				parsed.type === "npm"
+					? await this.downloadNpmForInspection(parsed)
+					: await this.cloneGitForInspection(parsed);
+			cleanupRoot = dirname(packageRoot);
+			metadata.baseDir = packageRoot;
+			try {
+				this.collectPackageResources(packageRoot, accumulator, undefined, metadata);
+			} catch (error) {
+				rmSync(cleanupRoot, { recursive: true, force: true });
+				throw error;
+			}
+		}
+
+		return {
+			packageRoot,
+			resources: this.toResolvedPaths(accumulator),
+			...(cleanupRoot ? { cleanup: () => rmSync(cleanupRoot, { recursive: true, force: true }) } : {}),
+		};
 	}
 
 	listConfiguredPackages(): ConfiguredPackage[] {
@@ -1508,7 +1539,13 @@ export class DefaultPackageManager implements PackageManager {
 		);
 		const raw = stdout.trim();
 		if (!raw) throw new Error("Empty response from npm view");
-		return JSON.parse(raw);
+		try {
+			const parsed = JSON.parse(raw) as unknown;
+			if (typeof parsed === "string" && parsed.length > 0) return parsed;
+		} catch {
+			// Fall through to the stable validation error below.
+		}
+		throw new Error("Invalid version response from npm view");
 	}
 
 	private async gitHasAvailableUpdate(installedPath: string): Promise<boolean> {
@@ -1757,14 +1794,15 @@ export class DefaultPackageManager implements PackageManager {
 		return this.runCommandSync(npmCommand.command, [...npmCommand.args, ...args]);
 	}
 
-	private getNpmInstallArgs(specs: string[], installRoot: string): string[] {
+	private getNpmInstallArgs(specs: string[], installRoot: string, ignoreScripts = false): string[] {
 		const packageManagerName = this.getPackageManagerName();
+		const scriptArgs = ignoreScripts ? ["--ignore-scripts"] : [];
 		// Extension packages run inside OMK and resolve OMK APIs through loader aliases/virtual modules.
 		// Disable peer dependency resolution for managed installs (npm's --legacy-peer-deps, and
 		// equivalent bun/pnpm settings) so package managers do not install or solve host-provided
 		// omk-agent-core, omk-ai, and omk-tui peers. Stale auto-installed host peers can otherwise block updates.
 		if (packageManagerName === "bun") {
-			return ["install", ...specs, "--cwd", installRoot, "--omit=peer"];
+			return ["install", ...specs, "--cwd", installRoot, "--omit=peer", ...scriptArgs];
 		}
 		if (packageManagerName === "pnpm") {
 			return [
@@ -1775,15 +1813,82 @@ export class DefaultPackageManager implements PackageManager {
 				"--config.auto-install-peers=false",
 				"--config.strict-peer-dependencies=false",
 				"--config.strict-dep-builds=false",
+				...scriptArgs,
 			];
 		}
-		return ["install", ...specs, "--prefix", installRoot, "--legacy-peer-deps"];
+		return ["install", ...specs, "--prefix", installRoot, "--legacy-peer-deps", ...scriptArgs];
 	}
 
-	private async installNpm(source: NpmSource, scope: SourceScope, temporary: boolean): Promise<void> {
+	private async cloneGitForInspection(source: GitSource): Promise<string> {
+		if (source.repo.startsWith("-") || /[\u0000-\u001f\u007f]/u.test(source.repo)) {
+			throw new Error("Git inspection URL contains unsupported option or control characters");
+		}
+		if (source.ref && (source.ref.startsWith("-") || /[\u0000-\u001f\u007f]/u.test(source.ref))) {
+			throw new Error("Git inspection ref contains unsupported option or control characters");
+		}
+		const sourceHash = createHash("sha256")
+			.update(source.repo)
+			.update("\0")
+			.update(source.ref ?? "")
+			.digest("hex")
+			.slice(0, 12);
+		const inspectionRoot = this.getTemporaryDir("doctor-git", `${process.pid}-${sourceHash}`);
+		const packageRoot = join(inspectionRoot, "package");
+		rmSync(inspectionRoot, { recursive: true, force: true });
+		mkdirSync(inspectionRoot, { recursive: true });
+		try {
+			await this.runCommand("git", ["clone", "--", source.repo, packageRoot]);
+			if (source.ref) await this.runCommand("git", ["checkout", source.ref], { cwd: packageRoot });
+			return packageRoot;
+		} catch (error) {
+			rmSync(inspectionRoot, { recursive: true, force: true });
+			throw error;
+		}
+	}
+
+	private async downloadNpmForInspection(source: NpmSource): Promise<string> {
+		const sourceHash = createHash("sha256").update(source.spec).digest("hex").slice(0, 12);
+		const inspectionRoot = this.getTemporaryDir("doctor-npm", `${process.pid}-${sourceHash}`);
+		const archiveRoot = join(inspectionRoot, "archive");
+		const packageRoot = join(inspectionRoot, "package");
+		rmSync(inspectionRoot, { recursive: true, force: true });
+		mkdirSync(archiveRoot, { recursive: true });
+		try {
+			const npmCommand = this.getNpmCommand();
+			await this.runCommandCapture(
+				npmCommand.command,
+				[
+					...npmCommand.args,
+					"pack",
+					"--ignore-scripts",
+					"--json",
+					"--pack-destination",
+					archiveRoot,
+					"--",
+					source.spec,
+				],
+				{ cwd: inspectionRoot, timeoutMs: NETWORK_TIMEOUT_MS },
+			);
+			const archives = readdirSync(archiveRoot).filter((entry) => entry.endsWith(".tgz"));
+			if (archives.length !== 1) throw new Error("npm pack did not produce exactly one package archive");
+			extractNpmPackageTarball(join(archiveRoot, archives[0] as string), packageRoot);
+			rmSync(archiveRoot, { recursive: true, force: true });
+			return packageRoot;
+		} catch (error) {
+			rmSync(inspectionRoot, { recursive: true, force: true });
+			throw error;
+		}
+	}
+
+	private async installNpm(
+		source: NpmSource,
+		scope: SourceScope,
+		temporary: boolean,
+		ignoreScripts = false,
+	): Promise<void> {
 		const installRoot = this.getNpmInstallRoot(scope, temporary);
 		this.ensureNpmProject(installRoot);
-		await this.runNpmCommand(this.getNpmInstallArgs([source.spec], installRoot));
+		await this.runNpmCommand(this.getNpmInstallArgs([source.spec], installRoot, ignoreScripts));
 	}
 
 	private async uninstallNpm(source: NpmSource, scope: SourceScope): Promise<void> {
@@ -1798,7 +1903,7 @@ export class DefaultPackageManager implements PackageManager {
 		await this.runNpmCommand(["uninstall", source.name, "--prefix", installRoot]);
 	}
 
-	private async installGit(source: GitSource, scope: SourceScope): Promise<void> {
+	private async installGit(source: GitSource, scope: SourceScope, installDependencies = true): Promise<void> {
 		const targetDir = this.getGitInstallPath(source, scope);
 		if (existsSync(targetDir)) {
 			if (source.ref) {
@@ -1820,7 +1925,7 @@ export class DefaultPackageManager implements PackageManager {
 			await this.runCommand("git", ["checkout", source.ref], { cwd: targetDir });
 		}
 		const packageJsonPath = join(targetDir, "package.json");
-		if (existsSync(packageJsonPath)) {
+		if (installDependencies && existsSync(packageJsonPath)) {
 			await this.runNpmCommand(this.getGitDependencyInstallArgs(), { cwd: targetDir });
 		}
 	}
@@ -1966,10 +2071,20 @@ export class DefaultPackageManager implements PackageManager {
 		}
 
 		const output = this.runNpmCommandSync(["list", "-g", "--depth", "0", "--json"]);
-		const entries = JSON.parse(output) as Array<{ dependencies?: Record<string, { path?: string }> }>;
-		for (const entry of entries) {
-			const path = entry.dependencies?.[packageName]?.path;
-			if (path) return path;
+		try {
+			const parsed = JSON.parse(output) as unknown;
+			if (!Array.isArray(parsed)) return undefined;
+			for (const entry of parsed) {
+				if (typeof entry !== "object" || entry === null) continue;
+				const dependencies = (entry as { dependencies?: unknown }).dependencies;
+				if (typeof dependencies !== "object" || dependencies === null) continue;
+				const dependency = (dependencies as Record<string, unknown>)[packageName];
+				if (typeof dependency !== "object" || dependency === null) continue;
+				const path = (dependency as { path?: unknown }).path;
+				if (typeof path === "string" && path.length > 0) return path;
+			}
+		} catch {
+			return undefined;
 		}
 		return undefined;
 	}
@@ -2077,10 +2192,11 @@ export class DefaultPackageManager implements PackageManager {
 			return true;
 		}
 
-		const manifest = this.readOmkManifest(packageRoot);
-		if (manifest) {
+		const manifestResolution = this.readPackageManifest(packageRoot);
+		if (manifestResolution?.key !== null && manifestResolution?.key !== undefined) {
+			const manifest = manifestResolution.manifest ?? {};
 			for (const resourceType of RESOURCE_TYPES) {
-				const entries = manifest[resourceType as keyof OmkManifest];
+				const entries = manifest[resourceType as keyof PackageResourceManifest];
 				this.addManifestEntries(
 					entries,
 					packageRoot,
@@ -2113,10 +2229,10 @@ export class DefaultPackageManager implements PackageManager {
 		target: Map<string, { metadata: PathMetadata; enabled: boolean }>,
 		metadata: PathMetadata,
 	): void {
-		const manifest = this.readOmkManifest(packageRoot);
-		const entries = manifest?.[resourceType as keyof OmkManifest];
-		if (entries) {
-			this.addManifestEntries(entries, packageRoot, resourceType, target, metadata);
+		const manifestResolution = this.readPackageManifest(packageRoot);
+		if (manifestResolution?.key !== null && manifestResolution?.key !== undefined) {
+			const entries = manifestResolution.manifest?.[resourceType as keyof PackageResourceManifest];
+			if (entries) this.addManifestEntries(entries, packageRoot, resourceType, target, metadata);
 			return;
 		}
 		const dir = join(packageRoot, resourceType);
@@ -2164,14 +2280,18 @@ export class DefaultPackageManager implements PackageManager {
 		packageRoot: string,
 		resourceType: ResourceType,
 	): { allFiles: string[]; enabledByManifest: Set<string> } {
-		const manifest = this.readOmkManifest(packageRoot);
-		const entries = manifest?.[resourceType as keyof OmkManifest];
+		const manifestResolution = this.readPackageManifest(packageRoot);
+		const entries = manifestResolution?.manifest?.[resourceType as keyof PackageResourceManifest];
 		if (entries && entries.length > 0) {
 			const allFiles = this.collectFilesFromManifestEntries(entries, packageRoot, resourceType);
 			const manifestPatterns = entries.filter(isOverridePattern);
 			const enabledByManifest =
 				manifestPatterns.length > 0 ? applyPatterns(allFiles, manifestPatterns, packageRoot) : new Set(allFiles);
 			return { allFiles: Array.from(enabledByManifest), enabledByManifest };
+		}
+
+		if (manifestResolution?.key !== null && manifestResolution?.key !== undefined) {
+			return { allFiles: [], enabledByManifest: new Set() };
 		}
 
 		const conventionDir = join(packageRoot, resourceType);
@@ -2182,19 +2302,31 @@ export class DefaultPackageManager implements PackageManager {
 		return { allFiles, enabledByManifest: new Set(allFiles) };
 	}
 
-	private readOmkManifest(packageRoot: string): OmkManifest | null {
+	private readPackageManifest(packageRoot: string): PackageManifestResolution | null {
 		const packageJsonPath = join(packageRoot, "package.json");
-		if (!existsSync(packageJsonPath)) {
-			return null;
+		if (!existsSync(packageJsonPath)) return null;
+		const resolvedManifest = readPackageManifestFile(packageJsonPath);
+		if (!resolvedManifest) return null;
+		if (resolvedManifest.diagnostics.length > 0) {
+			throw new Error(
+				`Invalid package manifest: ${resolvedManifest.diagnostics.map((diagnostic) => `${diagnostic.path}: ${diagnostic.message}`).join("; ")}`,
+			);
 		}
-
-		try {
-			const content = readFileSync(packageJsonPath, "utf-8");
-			const pkg = JSON.parse(content) as { omk?: OmkManifest };
-			return pkg.omk ?? null;
-		} catch {
-			return null;
-		}
+		if (!resolvedManifest.manifest || resolvedManifest.key !== "pi") return resolvedManifest;
+		const extensions = resolvedManifest.manifest.extensions?.map((entry) => {
+			if (hasGlobPattern(entry) || isOverridePattern(entry)) return entry;
+			const candidate = resolve(packageRoot, entry);
+			if (!existsSync(candidate) || !statSync(candidate).isDirectory()) return entry;
+			for (const indexName of ["index.ts", "index.js", "index.mjs", "index.cjs"]) {
+				const indexPath = join(candidate, indexName);
+				if (existsSync(indexPath)) return indexPath;
+			}
+			return entry;
+		});
+		return {
+			...resolvedManifest,
+			manifest: { ...resolvedManifest.manifest, ...(extensions ? { extensions } : {}) },
+		};
 	}
 
 	private addManifestEntries(

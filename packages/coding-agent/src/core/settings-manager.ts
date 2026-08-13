@@ -83,9 +83,9 @@ export interface ThinkingBudgetsSettings {
 export interface ReasoningRouterLearningSettings {
 	/** default: false */
 	enabled?: boolean;
-	/** Override path for the compiled bias snapshot the v4 auto-router reads (see reasoning-router-bias.ts for the default). */
+	/** Fixed override; omitted paths use the repository/worktree-scoped default. */
 	biasSnapshotPath?: string;
-	/** Override path for the local feedback ledger the v4 auto-router appends to (see router-feedback-collector.ts for the default). */
+	/** Fixed override; omitted paths use the repository/worktree-scoped default. */
 	feedbackLedgerPath?: string;
 }
 
@@ -1086,12 +1086,12 @@ export class SettingsManager {
 		return this.globalSettings.reasoningRouterLearning?.enabled === true;
 	}
 
-	/** Global-only override path for the compiled reasoning-router bias snapshot; undefined uses the default. */
+	/** Global-only fixed override; undefined uses the repository/worktree-scoped default. */
 	getReasoningRouterLearningBiasSnapshotPath(): string | undefined {
 		return this.globalSettings.reasoningRouterLearning?.biasSnapshotPath;
 	}
 
-	/** Global-only override path for the reasoning-router feedback ledger; undefined uses the default. */
+	/** Global-only fixed override; undefined uses the repository/worktree-scoped default. */
 	getReasoningRouterLearningFeedbackLedgerPath(): string | undefined {
 		return this.globalSettings.reasoningRouterLearning?.feedbackLedgerPath;
 	}

@@ -44,6 +44,20 @@ packages/*/dist-firefox/
 .omk/skills/system-prompts-leaks/
 .omk/skills/omk-godmod/
 .omk/.sha256-sensitive
+
+# Local jailbreak/policy-bypass research stays private, including artifacts placed
+# below the otherwise publishable project skill and prompt trees. Defensive
+# runtime code, tests, and security documentation remain reviewable.
+/*jailbreak*
+/*refusal-bypass*
+/*policy-evasion*
+.omk/skills/**/*jailbreak*
+.omk/skills/**/*refusal-bypass*
+.omk/skills/**/*policy-evasion*
+.omk/prompts/**/*jailbreak*
+.omk/prompts/**/*refusal-bypass*
+.omk/prompts/**/*policy-evasion*
+.pi/**/*jailbreak*
 packages/coding-agent/omk-session-*.html
 /GOAL-GJC-OMK-CONTROL-PORT.md
 

@@ -78,6 +78,39 @@ describe("extensions discovery", () => {
 		expect(factory).toBeTypeOf("function");
 	});
 
+	it("loads supported legacy Pi imports through Node aliases and Bun virtual modules", async () => {
+		const extensionPath = path.join(extensionsDir, "legacy-pi.ts");
+		fs.writeFileSync(
+			extensionPath,
+			`
+				import { Type } from "@earendil-works/pi-ai";
+				import { complete, StringEnum } from "@earendil-works/pi-ai/compat";
+				import { Key } from "@earendil-works/pi-tui";
+				import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
+				if (
+					typeof Type.Object !== "function" ||
+					typeof complete !== "function" ||
+					typeof StringEnum !== "function" ||
+					typeof Key.escape !== "string"
+				) {
+					throw new Error("missing legacy Pi compatibility exports");
+				}
+
+				export default function(api: ExtensionAPI) {
+					api.registerCommand("legacy-pi", { handler: async () => {} });
+				}
+			`,
+		);
+
+		const discovered = await discoverAndLoadExtensions([], tempDir, tempDir);
+		const binaryFactory = await loadExtensionModuleWithVirtualModulesForTests(extensionPath);
+
+		expect(discovered.errors).toHaveLength(0);
+		expect(discovered.extensions[0]?.commands.has("legacy-pi")).toBe(true);
+		expect(binaryFactory).toBeTypeOf("function");
+	});
+
 	describe("omk-agent-core/node installed-package resolution", () => {
 		it("falls back to the installed package when the workspace build is absent", () => {
 			const packageJsonPath = path.join(tempDir, "node_modules", "omk-agent-core", "package.json");
@@ -134,6 +167,18 @@ describe("extensions discovery", () => {
 		expect(result.extensions[0].path).toContain("index.ts");
 	});
 
+	it("does not fall back to an index when package.json is malformed", async () => {
+		const subdir = path.join(extensionsDir, "malformed-extension");
+		fs.mkdirSync(subdir);
+		fs.writeFileSync(path.join(subdir, "package.json"), "{not-json");
+		fs.writeFileSync(path.join(subdir, "index.ts"), extensionCode);
+
+		const result = await discoverAndLoadExtensions([], tempDir, tempDir);
+
+		expect(result.errors).toHaveLength(0);
+		expect(result.extensions).toHaveLength(0);
+	});
+
 	it("discovers subdirectory with index.js", async () => {
 		const subdir = path.join(extensionsDir, "my-extension");
 		fs.mkdirSync(subdir);
@@ -181,6 +226,37 @@ describe("extensions discovery", () => {
 		expect(result.extensions).toHaveLength(1);
 		expect(result.extensions[0].path).toContain("src");
 		expect(result.extensions[0].path).toContain("main.ts");
+	});
+
+	it("discovers package.json pi extension directories when omk is absent", async () => {
+		const subdir = path.join(extensionsDir, "pi-package");
+		fs.mkdirSync(subdir);
+		fs.writeFileSync(path.join(subdir, "index.ts"), extensionCode);
+		fs.writeFileSync(path.join(subdir, "package.json"), JSON.stringify({ pi: { extensions: ["./"] } }));
+
+		const result = await discoverAndLoadExtensions([], tempDir, tempDir);
+
+		expect(result.errors).toHaveLength(0);
+		expect(result.extensions).toHaveLength(1);
+		expect(result.extensions[0].path).toContain("index.ts");
+	});
+
+	it("prefers package.json omk extensions over pi extensions", async () => {
+		const subdir = path.join(extensionsDir, "dual-package");
+		fs.mkdirSync(subdir);
+		fs.writeFileSync(path.join(subdir, "omk.ts"), extensionCodeWithTool("from-omk"));
+		fs.writeFileSync(path.join(subdir, "pi.ts"), extensionCodeWithTool("from-pi"));
+		fs.writeFileSync(
+			path.join(subdir, "package.json"),
+			JSON.stringify({ omk: { extensions: ["./omk.ts"] }, pi: { extensions: ["./pi.ts"] } }),
+		);
+
+		const result = await discoverAndLoadExtensions([], tempDir, tempDir);
+
+		expect(result.errors).toHaveLength(0);
+		expect(result.extensions).toHaveLength(1);
+		expect(result.extensions[0].tools.has("from-omk")).toBe(true);
+		expect(result.extensions[0].tools.has("from-pi")).toBe(false);
 	});
 
 	it("keeps package.json omk extension entries with leading tilde package-relative", async () => {
