@@ -190,7 +190,7 @@ a single line of code is written.
 ### Predicates
 
 The Correctness Wall intercepts writes and runs acceptance predicates.
-A red predicate blocks completion — a green-looking reply is never a
+A red predicate blocks completion — a green-looking reply alone is not a
 release signal.
 
 ### Receipts
@@ -202,7 +202,7 @@ not marketing claims.
 ### Replay
 
 `omk session doctor` detects unterminated turns and orphan results, then
-plans a dry-run repair against the tamper-evident replay ledger. An
+plans a dry-run repair against the replay ledger. An
 interrupted run is a recoverable state, not a loss.
 
 ---

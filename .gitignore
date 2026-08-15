@@ -115,6 +115,12 @@ collect.sh
 /OMK_REBRAND_VIRAL_MARKETING_MASTERPLAN_KO.md
 /claw-stack-agentic-os-v2.md
 
+# Local GJC session runtime state (token logs, runtime-state, workflow gates) — never version.
+.gjc/
+
+# Internal working docs (ADRs, roadmaps, evidence JSONs, superpowers specs) — local only, not shipped.
+/docs/
+
 # Local code-intel tool caches
 .serena/
 .understand-anything/
