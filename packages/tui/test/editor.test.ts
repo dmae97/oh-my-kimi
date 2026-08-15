@@ -3970,3 +3970,44 @@ describe("Editor component", () => {
 		});
 	});
 });
+
+describe("Editor placeholder", () => {
+	it("renders placeholder while empty and hides it once text is entered", () => {
+		const editor = new Editor(createTestTUI(), defaultEditorTheme);
+		editor.setPlaceholder("Ask anything · / for commands");
+
+		const empty = stripVTControlCharacters(editor.render(60).join("\n"));
+		assert.ok(empty.includes("Ask anything · / for commands"));
+
+		editor.handleInput("h");
+		const typed = stripVTControlCharacters(editor.render(60).join("\n"));
+		assert.ok(!typed.includes("Ask anything"));
+	});
+
+	it("reappears after text is cleared", () => {
+		const editor = new Editor(createTestTUI(), defaultEditorTheme);
+		editor.setPlaceholder("Ask anything");
+
+		editor.setText("hello");
+		assert.ok(!stripVTControlCharacters(editor.render(60).join("\n")).includes("Ask anything"));
+
+		editor.setText("");
+		assert.ok(stripVTControlCharacters(editor.render(60).join("\n")).includes("Ask anything"));
+	});
+
+	it("truncates the placeholder to the available width", () => {
+		const editor = new Editor(createTestTUI(), defaultEditorTheme);
+		editor.setPlaceholder("A".repeat(200));
+
+		const width = 24;
+		for (const line of editor.render(width)) {
+			assert.ok(visibleWidth(line) <= width, `line exceeds width: ${JSON.stringify(line)}`);
+		}
+	});
+
+	it("renders nothing extra when no placeholder is set", () => {
+		const editor = new Editor(createTestTUI(), defaultEditorTheme);
+		const lines = stripVTControlCharacters(editor.render(60).join("\n"));
+		assert.ok(!lines.includes("Ask anything"));
+	});
+});

@@ -301,6 +301,30 @@ describe("SettingsManager", () => {
 		});
 	});
 
+	describe("UI defaults", () => {
+		it("collapses the changelog by default", () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getCollapseChangelog()).toBe(true);
+		});
+
+		it("honors an explicit collapseChangelog=false", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ collapseChangelog: false }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getCollapseChangelog()).toBe(false);
+		});
+
+		it("disables footer system metrics by default", () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getFooterSystemMetrics()).toBe(false);
+		});
+
+		it("enables footer system metrics when set", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ footerSystemMetrics: true }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getFooterSystemMetrics()).toBe(true);
+		});
+	});
+
 	describe("shellCommandPrefix", () => {
 		it("should load shellCommandPrefix from settings", () => {
 			const settingsPath = join(agentDir, "settings.json");

@@ -24,6 +24,8 @@ export class Loader extends Text {
 	private spinnerColorFn: (str: string) => string;
 	private messageColorFn: (str: string) => string;
 	private message: string = "Loading...";
+	private dynamicSuffix: (() => string) | undefined;
+	private lastRenderedText: string | undefined;
 
 	constructor(
 		ui: TUI,
@@ -61,6 +63,18 @@ export class Loader extends Text {
 		this.updateDisplay();
 	}
 
+	/**
+	 * Set a function whose result is appended after the message on every tick.
+	 * The caller is responsible for styling (colors) of the returned string.
+	 * Keeps the animation timer running even with a static indicator so
+	 * time-based suffixes (e.g. elapsed seconds) stay fresh.
+	 */
+	setDynamicSuffix(fn: (() => string) | undefined): void {
+		this.dynamicSuffix = fn;
+		this.updateDisplay();
+		this.restartAnimation();
+	}
+
 	setIndicator(indicator?: LoaderIndicatorOptions): void {
 		this.renderIndicatorVerbatim = indicator !== undefined;
 		this.frames = indicator?.frames !== undefined ? [...indicator.frames] : [...DEFAULT_FRAMES];
@@ -71,11 +85,13 @@ export class Loader extends Text {
 
 	private restartAnimation(): void {
 		this.stop();
-		if (this.frames.length <= 1) {
+		if (this.frames.length <= 1 && this.dynamicSuffix === undefined) {
 			return;
 		}
 		this.intervalId = setInterval(() => {
-			this.currentFrame = (this.currentFrame + 1) % this.frames.length;
+			if (this.frames.length > 1) {
+				this.currentFrame = (this.currentFrame + 1) % this.frames.length;
+			}
 			this.updateDisplay();
 		}, this.intervalMs);
 	}
@@ -84,7 +100,14 @@ export class Loader extends Text {
 		const frame = this.frames[this.currentFrame] ?? "";
 		const renderedFrame = this.renderIndicatorVerbatim ? frame : this.spinnerColorFn(frame);
 		const indicator = frame.length > 0 ? `${renderedFrame} ` : "";
-		this.setText(`${indicator}${this.messageColorFn(this.message)}`);
+		const suffix = this.dynamicSuffix?.() ?? "";
+		const next = `${indicator}${this.messageColorFn(this.message)}${suffix}`;
+		// Skip redundant renders when nothing visible changed (static frames + stable suffix).
+		if (next === this.lastRenderedText) {
+			return;
+		}
+		this.lastRenderedText = next;
+		this.setText(next);
 		if (this.ui) {
 			this.ui.requestRender();
 		}

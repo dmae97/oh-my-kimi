@@ -68,6 +68,7 @@ export interface SettingsConfig {
 	editorPaddingX: number;
 	autocompleteMaxVisible: number;
 	quietStartup: boolean;
+	footerSystemMetrics: boolean;
 	clearOnShrink: boolean;
 	showTerminalProgress: boolean;
 	warnings: WarningSettings;
@@ -96,6 +97,7 @@ export interface SettingsCallbacks {
 	onEditorPaddingXChange: (padding: number) => void;
 	onAutocompleteMaxVisibleChange: (maxVisible: number) => void;
 	onQuietStartupChange: (enabled: boolean) => void;
+	onFooterSystemMetricsChange: (enabled: boolean) => void;
 	onClearOnShrinkChange: (enabled: boolean) => void;
 	onShowTerminalProgressChange: (enabled: boolean) => void;
 	onWarningsChange: (warnings: WarningSettings) => void;
@@ -302,6 +304,13 @@ export class SettingsSelectorComponent extends Container {
 				label: "Quiet startup",
 				description: "Disable verbose printing at startup",
 				currentValue: config.quietStartup ? "true" : "false",
+				values: ["true", "false"],
+			},
+			{
+				id: "footer-system-metrics",
+				label: "Footer system metrics",
+				description: "Show system-wide CPU/MEM usage in the footer stats line",
+				currentValue: config.footerSystemMetrics ? "true" : "false",
 				values: ["true", "false"],
 			},
 			{
@@ -538,6 +547,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "quiet-startup":
 						callbacks.onQuietStartupChange(newValue === "true");
+						break;
+					case "footer-system-metrics":
+						callbacks.onFooterSystemMetricsChange(newValue === "true");
 						break;
 					case "install-telemetry":
 						callbacks.onEnableInstallTelemetryChange(newValue === "true");

@@ -332,6 +332,12 @@ export interface InteractiveModeOptions {
 	verbose?: boolean;
 }
 
+/** Placeholder shown in the empty editor to make core affordances discoverable. */
+const EDITOR_PLACEHOLDER = "Ask anything · / for commands · ! for skills/bash";
+
+/** How long transient info notices stay visible below the editor. */
+const TRANSIENT_NOTICE_MS = 6000;
+
 export function buildWorkingLoaderMessage(base: string, reasoning: boolean, level: string | undefined): string {
 	if (!reasoning || level === undefined || level === "off") {
 		return base;
@@ -362,6 +368,11 @@ export class InteractiveMode {
 	private onInputCallback?: (text: string) => void;
 	private pendingUserInputs: string[] = [];
 	private loadingAnimation: Loader | undefined = undefined;
+	// Wall-clock start of the current agent turn, for the working loader elapsed suffix
+	private workingStartedAt: number | undefined = undefined;
+	// Transient (auto-dismissing) notice shown below the editor for info-level notifications
+	private noticeContainer: Container;
+	private noticeTimer: ReturnType<typeof setTimeout> | undefined = undefined;
 	private workingMessage: string | undefined = undefined;
 	private workingVisible = true;
 	private workingIndicatorOptions: LoaderIndicatorOptions | undefined = undefined;
@@ -504,12 +515,15 @@ export class InteractiveMode {
 			paddingX: editorPaddingX,
 			autocompleteMaxVisible,
 		});
+		this.defaultEditor.setPlaceholder(EDITOR_PLACEHOLDER);
 		this.editor = this.defaultEditor;
 		this.editorContainer = new Container();
 		this.editorContainer.addChild(this.editor as Component);
 		this.footerDataProvider = new FooterDataProvider(this.sessionManager.getCwd());
 		this.footer = new FooterComponent(this.session, this.footerDataProvider);
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
+		this.footer.setShowSystemMetrics(this.settingsManager.getFooterSystemMetrics());
+		this.noticeContainer = new Container();
 
 		// Load hide thinking block setting
 		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
@@ -871,6 +885,7 @@ export class InteractiveMode {
 		this.ui.addChild(this.widgetContainerAbove);
 		this.ui.addChild(this.editorContainer);
 		this.ui.addChild(this.widgetContainerBelow);
+		this.ui.addChild(this.noticeContainer);
 
 		// Pinned status sidebar: renders footer data as a fixed right rail (Ctrl+Q).
 		// Pinned by default via the pinStatusSidebar setting / OMK_PIN_STATUS_SIDEBAR=1.
@@ -2021,13 +2036,23 @@ export class InteractiveMode {
 	}
 
 	private createWorkingLoader(): Loader {
-		return new Loader(
+		const loader = new Loader(
 			this.ui,
 			(spinner) => theme.fg("accent", spinner),
 			(text) => theme.fg("muted", text),
 			this.getWorkingLoaderMessage(),
 			this.workingIndicatorOptions,
 		);
+		const startedAt = this.workingStartedAt ?? Date.now();
+		loader.setDynamicSuffix(() => {
+			const seconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+			const parts = [`${seconds}s`, `${keyText("app.interrupt")} interrupt`];
+			if (!this.toolOutputExpanded && this.pendingTools.size > 0) {
+				parts.push(`${keyText("app.tools.expand")} expand tools`);
+			}
+			return theme.fg("dim", ` (${parts.join(" · ")})`);
+		});
+		return loader;
 	}
 
 	private stopWorkingLoader(): void {
@@ -2157,8 +2182,10 @@ export class InteractiveMode {
 		this.workingVisible = true;
 		this.setWorkingIndicator();
 		if (this.loadingAnimation) {
-			this.loadingAnimation.setMessage(`${this.defaultWorkingMessage} (${keyText("app.interrupt")} to interrupt)`);
+			// Interrupt hint now lives in the loader's dynamic suffix
+			this.loadingAnimation.setMessage(this.getWorkingLoaderMessage());
 		}
+		this.clearTransientNotice();
 		this.setHiddenThinkingLabel();
 	}
 
@@ -2602,7 +2629,8 @@ export class InteractiveMode {
 		} else if (type === "warning") {
 			this.showWarning(message);
 		} else {
-			this.showStatus(message);
+			// Info notifications are transient - they do not pollute the chat history
+			this.showTransientNotice(message);
 		}
 	}
 
@@ -3030,6 +3058,7 @@ export class InteractiveMode {
 
 		switch (event.type) {
 			case "agent_start":
+				this.workingStartedAt = Date.now();
 				this.pendingTools.clear();
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(true);
@@ -3218,6 +3247,7 @@ export class InteractiveMode {
 				break;
 
 			case "agent_end":
+				this.workingStartedAt = undefined;
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(false);
 				}
@@ -4074,6 +4104,29 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
+	/** Show an auto-dismissing notice below the editor (single slot, replaces previous). */
+	private showTransientNotice(message: string): void {
+		this.clearTransientNotice();
+		this.noticeContainer.addChild(new Text(theme.fg("dim", message), 1, 0));
+		this.noticeTimer = setTimeout(() => {
+			this.noticeTimer = undefined;
+			this.noticeContainer.clear();
+			this.ui.requestRender();
+		}, TRANSIENT_NOTICE_MS);
+		if (this.noticeTimer && typeof this.noticeTimer === "object" && "unref" in this.noticeTimer) {
+			this.noticeTimer.unref();
+		}
+		this.ui.requestRender();
+	}
+
+	private clearTransientNotice(): void {
+		if (this.noticeTimer) {
+			clearTimeout(this.noticeTimer);
+			this.noticeTimer = undefined;
+		}
+		this.noticeContainer.clear();
+	}
+
 	showNewVersionNotification(release: LatestOmkRelease): void {
 		const action = theme.fg("accent", `${APP_NAME} update`);
 		const updateInstruction = theme.fg("muted", `New version ${release.version} is available. Run `) + action;
@@ -4349,6 +4402,7 @@ export class InteractiveMode {
 					editorPaddingX: this.settingsManager.getEditorPaddingX(),
 					autocompleteMaxVisible: this.settingsManager.getAutocompleteMaxVisible(),
 					quietStartup: this.settingsManager.getQuietStartup(),
+					footerSystemMetrics: this.settingsManager.getFooterSystemMetrics(),
 					clearOnShrink: this.settingsManager.getClearOnShrink(),
 					showTerminalProgress: this.settingsManager.getShowTerminalProgress(),
 					warnings: this.settingsManager.getWarnings(),
@@ -4436,6 +4490,11 @@ export class InteractiveMode {
 					},
 					onQuietStartupChange: (enabled) => {
 						this.settingsManager.setQuietStartup(enabled);
+					},
+					onFooterSystemMetricsChange: (enabled) => {
+						this.settingsManager.setFooterSystemMetrics(enabled);
+						this.footer.setShowSystemMetrics(enabled);
+						this.ui.requestRender();
 					},
 					onDoubleEscapeActionChange: (action) => {
 						this.settingsManager.setDoubleEscapeAction(action);

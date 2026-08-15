@@ -4,7 +4,14 @@ import { decodePrintableKey, matchesKey } from "../keys.ts";
 import { KillRing } from "../kill-ring.ts";
 import { type Component, CURSOR_MARKER, type Focusable, type TUI } from "../tui.ts";
 import { UndoStack } from "../undo-stack.ts";
-import { getGraphemeSegmenter, getWordSegmenter, isWhitespaceChar, truncateToWidth, visibleWidth } from "../utils.ts";
+import {
+	getGraphemeSegmenter,
+	getWordSegmenter,
+	isWhitespaceChar,
+	sliceByColumn,
+	truncateToWidth,
+	visibleWidth,
+} from "../utils.ts";
 import { findWordBackward, findWordForward } from "../word-navigation.ts";
 import { SelectList, type SelectListLayoutOptions, type SelectListTheme } from "./select-list.ts";
 
@@ -210,6 +217,8 @@ interface LayoutLine {
 
 export interface EditorTheme {
 	borderColor: (str: string) => string;
+	/** Style applied to placeholder text shown while the editor is empty. Defaults to ANSI dim. */
+	placeholder?: (str: string) => string;
 	selectList: SelectListTheme;
 }
 
@@ -224,6 +233,27 @@ const SLASH_COMMAND_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
 };
 
 const ATTACHMENT_AUTOCOMPLETE_DEBOUNCE_MS = 20;
+
+/**
+ * Build one scroll-indicator border line, bounded to `width`.
+ *
+ * Both the `↑` and `↓` borders are the same class of string, so they share one
+ * bound: a border wider than the terminal wraps, the editor then occupies one
+ * more row than the renderer counted, and the differential renderer's viewport
+ * math drifts for every later frame. When the indicator fits, the border is
+ * padded to exactly `width`; when it does not, it is sliced and ellipsized so
+ * the hidden-line count still reads as far as the width allows.
+ */
+function createScrollBorder(direction: "↑" | "↓", hiddenLineCount: number, width: number): string {
+	const availableWidth = Math.max(0, width);
+	const indicator = `─── ${direction} ${hiddenLineCount} more `;
+	const remaining = availableWidth - visibleWidth(indicator);
+	if (remaining >= 0) return indicator + "─".repeat(remaining);
+
+	const ellipsis = "...".slice(0, availableWidth);
+	const indicatorWidth = availableWidth - visibleWidth(ellipsis);
+	return sliceByColumn(indicator, 0, indicatorWidth, true) + ellipsis;
+}
 
 export class Editor implements Component, Focusable {
 	private state: EditorState = {
@@ -241,6 +271,9 @@ export class Editor implements Component, Focusable {
 
 	// Store last render width for cursor navigation
 	private lastWidth: number = 80;
+
+	// Placeholder shown while the editor is empty
+	private placeholder: string = "";
 
 	// Vertical scrolling support
 	private scrollOffset: number = 0;
@@ -462,13 +495,7 @@ export class Editor implements Component, Focusable {
 
 		// Render top border (with scroll indicator if scrolled down)
 		if (this.scrollOffset > 0) {
-			const indicator = `─── ↑ ${this.scrollOffset} more `;
-			const remaining = width - visibleWidth(indicator);
-			if (remaining >= 0) {
-				result.push(this.borderColor(indicator + "─".repeat(remaining)));
-			} else {
-				result.push(this.borderColor(truncateToWidth(indicator, width)));
-			}
+			result.push(this.borderColor(createScrollBorder("↑", this.scrollOffset, width)));
 		} else {
 			result.push(horizontal.repeat(width));
 		}
@@ -509,6 +536,17 @@ export class Editor implements Component, Focusable {
 						cursorInPadding = true;
 					}
 				}
+
+				// Placeholder: dim hint text after the cursor while the editor is empty
+				if (this.placeholder.length > 0 && this.isTextEmpty() && !this.autocompleteState) {
+					const available = contentWidth - lineVisibleWidth;
+					if (available > 0) {
+						const placeholderFn = this.theme.placeholder ?? ((s: string) => `\x1b[2m${s}\x1b[22m`);
+						const truncated = truncateToWidth(this.placeholder, available, "");
+						displayText += placeholderFn(truncated);
+						lineVisibleWidth += visibleWidth(truncated);
+					}
+				}
 			}
 
 			// Calculate padding based on actual visible width
@@ -522,9 +560,7 @@ export class Editor implements Component, Focusable {
 		// Render bottom border (with scroll indicator if more content below)
 		const linesBelow = layoutLines.length - (this.scrollOffset + visibleLines.length);
 		if (linesBelow > 0) {
-			const indicator = `─── ↓ ${linesBelow} more `;
-			const remaining = width - visibleWidth(indicator);
-			result.push(this.borderColor(indicator + "─".repeat(Math.max(0, remaining))));
+			result.push(this.borderColor(createScrollBorder("↓", linesBelow, width)));
 		} else {
 			result.push(horizontal.repeat(width));
 		}
@@ -921,6 +957,15 @@ export class Editor implements Component, Focusable {
 
 	getText(): string {
 		return this.state.lines.join("\n");
+	}
+
+	/** Set placeholder text rendered dim while the editor is empty. */
+	setPlaceholder(text: string): void {
+		this.placeholder = text;
+	}
+
+	private isTextEmpty(): boolean {
+		return this.state.lines.length === 1 && this.state.lines[0] === "";
 	}
 
 	private expandPasteMarkers(text: string): string {

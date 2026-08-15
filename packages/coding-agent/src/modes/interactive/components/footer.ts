@@ -65,6 +65,7 @@ export function formatCwdForFooter(cwd: string, home: string | undefined): strin
  */
 export class FooterComponent implements Component {
 	private autoCompactEnabled = true;
+	private showSystemMetrics = false;
 	private session: AgentSession;
 	private footerData: ReadonlyFooterDataProvider;
 
@@ -81,12 +82,20 @@ export class FooterComponent implements Component {
 		this.autoCompactEnabled = enabled;
 	}
 
+	/** Show system-wide CPU/MEM metrics in the stats line (off by default). */
+	setShowSystemMetrics(enabled: boolean): void {
+		this.showSystemMetrics = enabled;
+	}
+
 	/**
 	 * Build a compact system-wide CPU/memory metrics segment for the footer.
 	 * Degrades gracefully to shorter forms (or is omitted entirely) when the
 	 * terminal is very narrow so the rest of the footer can still render.
 	 */
 	private buildMetricsSegment(width: number): string | undefined {
+		if (!this.showSystemMetrics) {
+			return undefined;
+		}
 		const cpu = this.footerData.getSystemCpuPercent();
 		const memUsed = this.footerData.getSystemMemoryUsedBytes();
 		const memTotal = this.footerData.getSystemMemoryTotalBytes();
@@ -174,26 +183,31 @@ export class FooterComponent implements Component {
 			pwd = `${pwd} • ${sessionName}`;
 		}
 
-		// Build stats line
-		const statsParts: string[] = [];
-		if (totalInput) statsParts.push(`↑${formatTokens(totalInput)}`);
-		if (totalOutput) statsParts.push(`↓${formatTokens(totalOutput)}`);
-		if (totalCacheRead) statsParts.push(`R${formatTokens(totalCacheRead)}`);
-		if (totalCacheWrite) statsParts.push(`W${formatTokens(totalCacheWrite)}`);
+		// Build stats line. Each part carries a drop priority so narrow terminals
+		// shed low-value segments first instead of truncating the context stats tail.
+		const statsParts: Array<{ text: string; priority: number }> = [];
+		if (totalInput) statsParts.push({ text: `↑${formatTokens(totalInput)}`, priority: 3 });
+		if (totalOutput) statsParts.push({ text: `↓${formatTokens(totalOutput)}`, priority: 3 });
+		if (totalCacheRead) statsParts.push({ text: `R${formatTokens(totalCacheRead)}`, priority: 2 });
+		if (totalCacheWrite) statsParts.push({ text: `W${formatTokens(totalCacheWrite)}`, priority: 2 });
 
 		// Show cost with "(sub)" indicator if using OAuth subscription
 		const usingSubscription = state.model ? this.session.modelRegistry.isUsingOAuth(state.model) : false;
 		if (totalCost || usingSubscription) {
 			const costStr = `$${totalCost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`;
-			statsParts.push(costStr);
+			statsParts.push({ text: costStr, priority: 4 });
 		}
 
-		// Add CPU/memory metrics; degrade gracefully when horizontal space is tight.
+		// Add CPU/memory metrics (opt-in); degrade gracefully when horizontal space is tight.
 		const metricsSegment = this.buildMetricsSegment(width);
 		if (metricsSegment) {
-			statsParts.push(metricsSegment);
+			statsParts.push({ text: metricsSegment, priority: 1 });
 		}
-		statsParts.push(formatPackageIntake(this.footerData.getPackageIntakeSummary()));
+		// Package intake status is internal jargon for sessions without packages - hide when empty.
+		const packageIntake = this.footerData.getPackageIntakeSummary();
+		if (packageIntake.total > 0) {
+			statsParts.push({ text: formatPackageIntake(packageIntake), priority: 2 });
+		}
 
 		// Colorize context percentage based on usage
 		let contextPercentStr: string;
@@ -209,16 +223,29 @@ export class FooterComponent implements Component {
 		} else {
 			contextPercentStr = contextPercentDisplay;
 		}
-		statsParts.push(contextPercentStr);
+		// Context usage is the most important number in the footer - never drop it.
+		statsParts.push({ text: contextPercentStr, priority: Number.POSITIVE_INFINITY });
 
-		let statsLeft = statsParts.join(" ");
+		// Drop the lowest-priority parts until the stats line fits.
+		let activeParts = [...statsParts];
+		let statsLeft = activeParts.map((part) => part.text).join(" ");
+		while (visibleWidth(statsLeft) > width) {
+			const droppable = activeParts.filter((part) => Number.isFinite(part.priority));
+			if (droppable.length === 0) break;
+			let lowest = droppable[0]!;
+			for (const part of droppable) {
+				if (part.priority < lowest.priority) lowest = part;
+			}
+			activeParts = activeParts.filter((part) => part !== lowest);
+			statsLeft = activeParts.map((part) => part.text).join(" ");
+		}
 
 		// Add model name on the right side, plus thinking level if model supports it
 		const modelName = state.model?.id || "no-model";
 
 		let statsLeftWidth = visibleWidth(statsLeft);
 
-		// If statsLeft is too wide, truncate it
+		// Final fallback: truncate if even the undroppable parts overflow
 		if (statsLeftWidth > width) {
 			statsLeft = truncateToWidth(statsLeft, width, "...");
 			statsLeftWidth = visibleWidth(statsLeft);

@@ -70,7 +70,8 @@ Global-only, default-off lifecycle for a future v4 advisory source. The timeout,
 | --------- | ------ | --------- | ------------- |
 | `theme` | string | `"dark"` | Theme name (`"dark"`, `"light"`, or custom) |
 | `quietStartup` | boolean | `false` | Hide startup header |
-| `collapseChangelog` | boolean | `false` | Show condensed changelog after updates |
+| `collapseChangelog` | boolean | `true` | Show condensed changelog after updates (set `false` for the full "What's New" block) |
+| `footerSystemMetrics` | boolean | `false` | Show system-wide CPU/MEM usage in the footer stats line |
 | `enableInstallTelemetry` | boolean | `true` | Send an anonymous install/update version ping after first install or changelog-detected updates. This does not control update checks |
 | `doubleEscapeAction` | string | `"tree"` | Action for double-escape: `"tree"`, `"fork"`, or `"none"` |
 | `treeFilterMode` | string | `"default"` | Default filter for `/tree`: `"default"`, `"no-tools"`, `"user-only"`, `"labeled-only"`, `"all"` |

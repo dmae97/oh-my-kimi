@@ -60,9 +60,12 @@ function createSession(options: {
 	return session as unknown as AgentSession;
 }
 
-function createFooterData(providerCount: number): ReadonlyFooterDataProvider {
+function createFooterData(
+	providerCount: number,
+	overrides: { packageTotal?: number; systemCpuPercent?: number | null } = {},
+): ReadonlyFooterDataProvider {
 	const packageIntakeSummary: PiPackageIntakeSummary = {
-		total: 6,
+		total: overrides.packageTotal ?? 6,
 		acceptedNative: 2,
 		acceptedReference: 1,
 		acceptedMeasurement: 1,
@@ -85,9 +88,9 @@ function createFooterData(providerCount: number): ReadonlyFooterDataProvider {
 		getAvailableProviderCount: () => providerCount,
 		getCpuPercent: () => null,
 		getMemoryRssBytes: () => null,
-		getSystemCpuPercent: () => null,
-		getSystemMemoryUsedBytes: () => null,
-		getSystemMemoryTotalBytes: () => null,
+		getSystemCpuPercent: () => overrides.systemCpuPercent ?? null,
+		getSystemMemoryUsedBytes: () => (overrides.systemCpuPercent != null ? 8 * 1024 * 1024 * 1024 : null),
+		getSystemMemoryTotalBytes: () => (overrides.systemCpuPercent != null ? 16 * 1024 * 1024 * 1024 : null),
 		getPackageIntakeSummary: () => packageIntakeSummary,
 		onBranchChange: (callback: () => void) => {
 			void callback;
@@ -156,5 +159,49 @@ describe("FooterComponent width handling", () => {
 		const lines = footer.render(120).join("\n");
 
 		expect(lines).toContain("PKG 4/6 R2 B0");
+	});
+
+	it("hides the package intake segment when no packages are tracked", () => {
+		const session = createSession({ sessionName: "" });
+		const footer = new FooterComponent(session, createFooterData(1, { packageTotal: 0 }));
+
+		const lines = footer.render(120).join("\n");
+
+		expect(lines).not.toContain("PKG");
+	});
+
+	it("drops low-priority stats before the context percentage on narrow widths", () => {
+		const width = 30;
+		const session = createSession({
+			sessionName: "",
+			usage: {
+				input: 12_345,
+				output: 6_789,
+				cacheRead: 2_000,
+				cacheWrite: 1_000,
+				cost: { total: 1.234 },
+			},
+		});
+		const footer = new FooterComponent(session, createFooterData(1));
+
+		const lines = footer.render(width);
+		for (const line of lines) {
+			expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+		}
+		// Context usage survives; internal package intake jargon is shed first.
+		expect(lines.join("\n")).toContain("12.3%");
+		expect(lines.join("\n")).not.toContain("PKG");
+	});
+
+	it("shows system metrics only when explicitly enabled", () => {
+		const session = createSession({ sessionName: "" });
+		const footerData = createFooterData(1, { systemCpuPercent: 42 });
+
+		const defaultFooter = new FooterComponent(session, footerData);
+		expect(defaultFooter.render(120).join("\n")).not.toContain("CPU");
+
+		const enabledFooter = new FooterComponent(session, footerData);
+		enabledFooter.setShowSystemMetrics(true);
+		expect(enabledFooter.render(120).join("\n")).toContain("CPU 42%");
 	});
 });
