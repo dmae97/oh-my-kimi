@@ -1,6 +1,6 @@
 # OMK v0.95.2
 
-OMK v0.95.2 is a patch release published to npm as `open-multi-agent-kit@0.95.2`, in lockstep with `omk-ai`, `omk-agent-core`, `omk-tui`, and `omk-adaptorch-wpl`. Prebuilt binaries are attached to the GitHub release.
+OMK v0.95.2 is a patch release published to npm as `open-multi-agent-kit@0.95.2`, in lockstep with `omk-ai`, `omk-agent-core`, `omk-tui`, and `omk-adaptorch-wpl`. The source tag is available; prebuilt binary publication is pending because GitHub Actions runner allocation is blocked by an account billing lock.
 
 ## Highlights
 
