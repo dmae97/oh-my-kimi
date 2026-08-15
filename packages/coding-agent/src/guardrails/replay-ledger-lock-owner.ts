@@ -56,7 +56,9 @@ function parseOwner(bytes: Buffer): LockOwner {
 	try {
 		value = JSON.parse(bytes.toString("utf8"));
 	} catch (error) {
-		throw new ReplayLedgerLockError("replay lock owner record is malformed", { cause: error });
+		const malformed = new ReplayLedgerLockError("replay lock owner record is malformed");
+		Object.defineProperty(malformed, "cause", { configurable: true, value: error, writable: true });
+		throw malformed;
 	}
 	if (
 		typeof value !== "object" ||
