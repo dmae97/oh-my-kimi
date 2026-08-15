@@ -36,25 +36,26 @@ describe("SessionBashRuntime", () => {
 		return { runtime, events };
 	}
 
-	it("defaults to audit mode with an unwrapped preflight", () => {
+	it("defaults to enforce mode with a network-disabled preflight", () => {
 		const { runtime } = createRuntime();
-		expect(runtime.sandboxMode).toBe("audit");
+		expect(runtime.sandboxMode).toBe("enforce");
 		const preflight = runtime.sandboxPreflight();
-		expect(preflight?.policy.mode).toBe("audit");
-		expect(preflight?.backend?.backendAvailable).toBe(false);
+		expect(preflight?.policy.mode).toBe("enforce");
+		expect(preflight?.policy.network.mode).toBe("none");
 		expect(preflight?.policy.filesystem.root).toBe(root);
 	});
 
-	it("promotes to enforce and demotes to off at runtime", () => {
+	it("switches to explicit audit and off modes at runtime", () => {
 		const { runtime } = createRuntime();
-		runtime.setSandboxMode("enforce");
-		expect(runtime.sandboxMode).toBe("enforce");
-		expect(runtime.sandboxPreflight()?.policy.mode).toBe("enforce");
+		runtime.setSandboxMode("audit");
+		expect(runtime.sandboxMode).toBe("audit");
+		expect(runtime.sandboxPreflight()?.policy.mode).toBe("audit");
+		expect(runtime.sandboxPreflight()?.backend?.backendAvailable).toBe(false);
 		runtime.setSandboxMode("off");
 		expect(runtime.sandboxMode).toBe("off");
 		expect(runtime.sandboxPreflight()).toBeUndefined();
 		runtime.setSandboxMode(undefined);
-		expect(runtime.sandboxMode).toBe("audit");
+		expect(runtime.sandboxMode).toBe("enforce");
 	});
 
 	it("env opt-out wins by default and override restores", () => {

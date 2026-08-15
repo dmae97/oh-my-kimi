@@ -1,5 +1,5 @@
 /**
- * Default bash sandbox policy wiring (default-on audit, opt-out via OMK_BASH_SANDBOX=0).
+ * Default bash sandbox policy wiring (default-on enforcement, explicit opt-out).
  *
  * Two live modes:
  * - `audit`   — preflight only, spawn stays unwrapped; every decision is eligible
@@ -13,24 +13,22 @@ import type { SandboxMode, SandboxPolicy } from "./policy.ts";
 export type BashSandboxMode = SandboxMode;
 
 const OFF_VALUES = new Set(["0", "off", "false", "disable", "disabled", "none"]);
-const ENFORCE_VALUES = new Set(["1", "true", "on", "yes", "enforce", "strict"]);
 
 /**
- * Resolve the bash sandbox mode. Default is `audit` (default-on); `OMK_BASH_SANDBOX=0`
- * restores the legacy unsandboxed path, `=enforce` activates the OS backend.
+ * Resolve the bash sandbox mode. Enforcement is the fail-safe default, including
+ * for unknown values. `audit` and `off` are explicit compatibility escape hatches.
  */
 export function resolveBashSandboxMode(env?: Record<string, string | undefined>): SandboxMode {
 	const source: Record<string, string | undefined> = env ?? process.env;
 	const raw = (source.OMK_BASH_SANDBOX ?? "").trim().toLowerCase();
 	if (OFF_VALUES.has(raw)) return "off";
-	if (ENFORCE_VALUES.has(raw)) return "enforce";
-	return "audit";
+	if (raw === "audit") return "audit";
+	return "enforce";
 }
 
 /**
- * Workspace-write policy for the session bash runtime. Network stays fully open
- * (bash without network is not a usable tool); the filesystem is rooted at the
- * workspace with the OS temp dir as the only additional write target.
+ * Workspace-write policy for the session bash runtime. Outbound network access
+ * is disabled; writes are limited to the workspace and the OS temp directory.
  */
 export function createWorkspaceSandboxPolicy(root: string, mode: Exclude<SandboxMode, "off">): SandboxPolicy {
 	return {
@@ -46,7 +44,7 @@ export function createWorkspaceSandboxPolicy(root: string, mode: Exclude<Sandbox
 			followSymlinks: false,
 		},
 		network: {
-			mode: "all-explicit",
+			mode: "none",
 			allowedDomains: [],
 			deniedDomains: [],
 			allowUnixSockets: [],

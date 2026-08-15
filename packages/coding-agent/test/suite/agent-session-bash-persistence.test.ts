@@ -96,13 +96,20 @@ describe("AgentSession bash and persistence characterization", () => {
 	});
 
 	it("executes bash commands and records the result", async () => {
-		const harness = await createHarness();
-		harnesses.push(harness);
+		const previousSandbox = process.env.OMK_BASH_SANDBOX;
+		process.env.OMK_BASH_SANDBOX = "off";
+		try {
+			const harness = await createHarness();
+			harnesses.push(harness);
 
-		const result = await harness.session.executeBash("printf 'hello'");
+			const result = await harness.session.executeBash("printf 'hello'");
 
-		expect(result.output).toContain("hello");
-		expect(harness.session.messages[harness.session.messages.length - 1]?.role).toBe("bashExecution");
+			expect(result.output).toContain("hello");
+			expect(harness.session.messages[harness.session.messages.length - 1]?.role).toBe("bashExecution");
+		} finally {
+			if (previousSandbox === undefined) delete process.env.OMK_BASH_SANDBOX;
+			else process.env.OMK_BASH_SANDBOX = previousSandbox;
+		}
 	});
 
 	it("cancels running bash commands with abortBash", async () => {

@@ -66,29 +66,38 @@ export function detectSandboxBackend(): SandboxBackendStatus {
 	};
 }
 
-function seatbeltProfile(invocation: SandboxInvocation): string {
-	const lines: string[] = ["(version 1)", "(debug deny)", `(allow default)`, `(deny network*)`];
+function seatbeltLiteral(value: string): string {
+	return JSON.stringify(value);
+}
 
-	for (const path of invocation.filesystem.readAllow) {
-		lines.push(`(allow file-read* (subpath "${path}"))`);
-	}
-	for (const path of invocation.filesystem.writeAllow) {
-		lines.push(`(allow file-write* (subpath "${path}"))`);
-	}
-	for (const path of invocation.filesystem.tempWrite) {
-		lines.push(`(allow file-write* (subpath "${path}"))`);
+function seatbeltProfile(invocation: SandboxInvocation): string {
+	const lines: string[] = ["(version 1)", "(debug deny)", "(allow default)"];
+	const writablePaths = [...new Set([...invocation.filesystem.writeAllow, ...invocation.filesystem.tempWrite])];
+
+	if (writablePaths.length === 0) {
+		lines.push("(deny file-write*)");
+	} else {
+		lines.push("(deny file-write*");
+		for (const path of writablePaths) {
+			lines.push(`  (require-not (subpath ${seatbeltLiteral(path)}))`);
+		}
+		lines.push('  (require-not (literal "/dev/null"))');
+		lines.push('  (require-not (literal "/dev/tty"))');
+		lines.push(")");
 	}
 	for (const path of invocation.filesystem.denyWrite) {
-		lines.push(`(deny file-write* (subpath "${path}"))`);
+		lines.push(`(deny file-write* (subpath ${seatbeltLiteral(path)}))`);
 	}
 
-	if (invocation.network.mode === "all-explicit") {
-		lines.push("(allow network-outbound)");
+	if (invocation.network.mode === "none") {
+		lines.push("(deny network*)");
 	} else if (invocation.network.mode === "domain-allowlist" && invocation.network.allowedDomains) {
+		lines.push("(deny network*)");
 		for (const domain of invocation.network.allowedDomains) {
-			lines.push(`(allow network-outbound (remote "${domain}"))`);
+			lines.push(`(allow network-outbound (remote ${seatbeltLiteral(domain)}))`);
 		}
 	} else if (invocation.network.mode === "loopback") {
+		lines.push("(deny network*)");
 		lines.push('(allow network-outbound (remote "localhost"))');
 		lines.push('(allow network-outbound (remote "127.0.0.1"))');
 	}
@@ -101,22 +110,33 @@ export function buildSeatbeltArgv(invocation: SandboxInvocation): readonly strin
 }
 
 export function buildBubblewrapArgv(invocation: SandboxInvocation): readonly string[] {
-	const argv: string[] = ["bwrap", "--unshare-all"];
-
-	argv.push("--bind", invocation.filesystem.root, invocation.filesystem.root);
+	const argv: string[] = [
+		"bwrap",
+		"--die-with-parent",
+		"--new-session",
+		"--unshare-all",
+		"--ro-bind",
+		"/",
+		"/",
+		"--proc",
+		"/proc",
+		"--dev",
+		"/dev",
+	];
 
 	for (const path of invocation.filesystem.readAllow) {
-		if (path !== invocation.filesystem.root) {
+		if (path !== "/" && path !== invocation.filesystem.root) {
 			argv.push("--ro-bind", path, path);
 		}
 	}
+	for (const path of invocation.filesystem.tempWrite) {
+		argv.push("--bind", path, path);
+	}
+	argv.push("--bind", invocation.filesystem.root, invocation.filesystem.root);
 	for (const path of invocation.filesystem.writeAllow) {
 		if (path !== invocation.filesystem.root) {
 			argv.push("--bind", path, path);
 		}
-	}
-	for (const path of invocation.filesystem.tempWrite) {
-		argv.push("--tmpfs", path);
 	}
 	for (const path of invocation.filesystem.denyWrite) {
 		argv.push("--remount-ro", path);
@@ -124,8 +144,6 @@ export function buildBubblewrapArgv(invocation: SandboxInvocation): readonly str
 
 	if (invocation.network.mode === "none") {
 		argv.push("--unshare-net");
-	} else if (invocation.network.mode === "loopback") {
-		argv.push("--share-net");
 	} else {
 		argv.push("--share-net");
 	}

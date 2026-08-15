@@ -9,11 +9,16 @@ import { type BashSandboxPreflight, createLocalBashOperations } from "../src/cor
 
 const linuxBackend: SandboxBackendStatus = { platform: "linux", backendAvailable: true };
 const linuxNoBackend: SandboxBackendStatus = { platform: "linux", backendAvailable: false };
+const macosBackend: SandboxBackendStatus = { platform: "macos", backendAvailable: true };
 
 describe("resolveBashSandboxMode", () => {
-	it("defaults to audit when unset", () => {
-		expect(resolveBashSandboxMode({})).toBe("audit");
-		expect(resolveBashSandboxMode({ OMK_BASH_SANDBOX: undefined })).toBe("audit");
+	it("defaults to enforce when unset or invalid", () => {
+		expect(resolveBashSandboxMode({})).toBe("enforce");
+		expect(resolveBashSandboxMode({ OMK_BASH_SANDBOX: undefined })).toBe("enforce");
+		expect(resolveBashSandboxMode({ OMK_BASH_SANDBOX: "unexpected" })).toBe("enforce");
+	});
+
+	it("uses unwrapped audit mode only when explicitly requested", () => {
 		expect(resolveBashSandboxMode({ OMK_BASH_SANDBOX: "audit" })).toBe("audit");
 	});
 
@@ -71,8 +76,9 @@ describe("createWorkspaceSandboxPolicy + spawn request", () => {
 		}
 	});
 
-	it("enforce mode wraps with bubblewrap when the backend is available", () => {
+	it("enforce mode wraps with bubblewrap and disables network when the backend is available", () => {
 		const policy = createWorkspaceSandboxPolicy(root, "enforce");
+		expect(policy.network.mode).toBe("none");
 		const request = buildSandboxedSpawnRequest({
 			argv: ["/bin/sh", "-c", "true"],
 			cwd: root,
@@ -85,6 +91,27 @@ describe("createWorkspaceSandboxPolicy + spawn request", () => {
 			expect(request.wrapped).toBe(true);
 			expect(request.argv[0]).toBe("bwrap");
 			expect(request.argv).toContain("--bind");
+			expect(request.argv).toContain("--unshare-net");
+			expect(request.argv).not.toContain("--share-net");
+			expect(request.argv).toEqual(expect.arrayContaining(["--ro-bind", "/", "/"]));
+		}
+	});
+
+	it("enforce mode builds a network- and write-restricted seatbelt profile", () => {
+		const policy = createWorkspaceSandboxPolicy(root, "enforce");
+		const request = buildSandboxedSpawnRequest({
+			argv: ["/bin/sh", "-c", "true"],
+			cwd: root,
+			env: {},
+			policy,
+			backend: macosBackend,
+		});
+		expect(request.allowed).toBe(true);
+		if (request.allowed) {
+			expect(request.argv[0]).toBe("sandbox-exec");
+			expect(request.argv[2]).toContain("(deny network*)");
+			expect(request.argv[2]).toContain("(deny file-write*");
+			expect(request.argv[2]).toContain(`(require-not (subpath ${JSON.stringify(root)}))`);
 		}
 	});
 
@@ -141,5 +168,21 @@ describe("createLocalBashOperations sandbox observer", () => {
 		expect(result.exitCode).toBe(0);
 		expect(Buffer.concat(chunks).toString("utf8")).toBe("sandbox-ok");
 		expect(decisions).toEqual(["sandbox.audit_fallback"]);
+	});
+
+	it("fails before spawn when enforce mode has no backend", async () => {
+		const decisions: string[] = [];
+		const operations = createLocalBashOperations({
+			sandboxPolicy: {
+				policy: createWorkspaceSandboxPolicy(root, "enforce"),
+				backend: linuxNoBackend,
+				onSpawnDecision: (decision) => decisions.push(decision.rule),
+			},
+		});
+
+		await expect(operations.exec("printf must-not-run", root, { onData: () => undefined })).rejects.toThrow(
+			/sandbox\.backend_missing/,
+		);
+		expect(decisions).toEqual(["sandbox.backend_missing"]);
 	});
 });

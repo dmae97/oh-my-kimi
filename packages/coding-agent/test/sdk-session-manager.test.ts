@@ -136,21 +136,28 @@ describe("createAgentSession session manager defaults", () => {
 		const sessionCwd = join(tempDir, "session-project");
 		mkdirSync(sessionCwd, { recursive: true });
 		const sessionManager = SessionManager.inMemory(sessionCwd);
-		const { session } = await createAgentSession({ agentDir, model, sessionManager });
+		const previousSandbox = process.env.OMK_BASH_SANDBOX;
+		process.env.OMK_BASH_SANDBOX = "off";
+		try {
+			const { session } = await createAgentSession({ agentDir, model, sessionManager });
 
-		expect(session.sessionManager).toBe(sessionManager);
-		expect(session.systemPrompt).toContain(`Current working directory: ${sessionCwd}`);
+			expect(session.sessionManager).toBe(sessionManager);
+			expect(session.systemPrompt).toContain(`Current working directory: ${sessionCwd}`);
 
-		const bashTool = session.agent.state.tools.find((tool) => tool.name === "bash");
-		if (!bashTool) throw new Error("expected bash tool");
-		const result = await bashTool.execute("test", { command: "pwd" });
-		const output = result.content
-			.filter((item): item is { type: "text"; text: string } => item.type === "text")
-			.map((item) => item.text)
-			.join("");
+			const bashTool = session.agent.state.tools.find((tool) => tool.name === "bash");
+			if (!bashTool) throw new Error("expected bash tool");
+			const result = await bashTool.execute("test", { command: "pwd" });
+			const output = result.content
+				.filter((item): item is { type: "text"; text: string } => item.type === "text")
+				.map((item) => item.text)
+				.join("");
 
-		expect(realpathSync(output.trim())).toBe(realpathSync(sessionCwd));
+			expect(realpathSync(output.trim())).toBe(realpathSync(sessionCwd));
 
-		session.dispose();
+			session.dispose();
+		} finally {
+			if (previousSandbox === undefined) delete process.env.OMK_BASH_SANDBOX;
+			else process.env.OMK_BASH_SANDBOX = previousSandbox;
+		}
 	});
 });

@@ -1,8 +1,20 @@
 # Containerization
 
-OMK runs with all permissions by default, but in some cases, you will want to have more control over what directories OMK can write to and which accesses it has.
+AgentSession's built-in local bash tool is OS-sandboxed by default on supported hosts. Other built-in tools, extension code, custom tools, and the OMK process itself still run with the host user's permissions unless you isolate or delegate them.
 
-There are two general options. You can either
+## Built-in session bash sandbox
+
+The default `enforce` profile wraps each local bash spawn with macOS `sandbox-exec` or Linux `bwrap`. It allows writes only in the session workspace and OS temp directory and disables network access. If the backend is unavailable, bash fails closed with `sandbox.backend_missing` rather than spawning without isolation.
+
+- macOS requires `sandbox-exec`.
+- Linux requires `bwrap` and unprivileged user namespaces.
+- `OMK_BASH_SANDBOX=audit` explicitly selects the unwrapped, ledger-only compatibility mode.
+- `OMK_BASH_SANDBOX=0` or `off` explicitly disables the preflight.
+
+The workspace-write profile protects host paths from writes; it is not a read-confidentiality boundary. It also does not cover injected or remote `BashOperations`, custom `createBashTool()` calls without a `sandboxPolicy`, extension tools, or other OMK file tools. Use one of the whole-process or delegated patterns below when that broader boundary is required.
+
+There are two general isolation options:
+
 1. run the whole `omk` process inside an isolated environment, or
 2. run `omk` on the host and route tool execution into an isolated environment.
 

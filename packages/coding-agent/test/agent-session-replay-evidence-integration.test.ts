@@ -305,10 +305,10 @@ describe("AgentSession ReplayLedger evidence freshness bridge", () => {
 		}
 	});
 
-	it("records sandbox_audit decisions by default and honors OMK_BASH_SANDBOX=0", async () => {
+	it("records sandbox_audit decisions in explicit audit mode", async () => {
 		const prevSandbox = process.env.OMK_BASH_SANDBOX;
 		const prevVerified = process.env.OMK_VERIFIED_BASH;
-		delete process.env.OMK_BASH_SANDBOX;
+		process.env.OMK_BASH_SANDBOX = "audit";
 		delete process.env.OMK_VERIFIED_BASH;
 		try {
 			const faux = registerFauxProvider();
@@ -345,7 +345,7 @@ describe("AgentSession ReplayLedger evidence freshness bridge", () => {
 				.getEvents()
 				.filter((event) => event.type === "sandbox_audit");
 			expect(audited.length).toBeGreaterThan(0);
-			expect(JSON.stringify(audited.at(-1)?.payload)).toContain("audit_fallback");
+			expect(JSON.stringify(audited[audited.length - 1]?.payload)).toContain("audit_fallback");
 			session.dispose();
 		} finally {
 			if (prevSandbox === undefined) delete process.env.OMK_BASH_SANDBOX;

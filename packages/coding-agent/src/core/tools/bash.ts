@@ -1,6 +1,6 @@
+import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access as fsAccess } from "node:fs/promises";
-import { spawn } from "child_process";
 import type { AgentTool } from "omk-agent-core";
 import { Container, Text, truncateToWidth } from "omk-tui";
 import { type Static, Type } from "typebox";
@@ -108,6 +108,7 @@ export function createLocalBashOperations(options?: {
 				throw new Error("aborted");
 			}
 
+			// nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- argv-array spawn; sandbox policy is applied above and shell mode is not used.
 			const child = spawn(spawnCommand, spawnArgs, {
 				cwd: spawnCwd,
 				detached: process.platform !== "win32",
@@ -168,8 +169,8 @@ export interface BashSandboxPreflight {
 	/** Policy that decides whether this spawn may proceed. */
 	policy: SandboxPolicy;
 	/**
-	 * Availability of an OS-level sandbox backend. Defaults to no backend, since
-	 * no OS sandbox wrapper is wired into the local spawn path yet.
+	 * Availability of an OS-level sandbox backend. Local operations auto-detect
+	 * macOS sandbox-exec or Linux bubblewrap when this is omitted.
 	 */
 	backend?: SandboxBackendStatus;
 	/** Optional resolver used to canonicalize the working directory before the root check. */

@@ -5,7 +5,8 @@
  * Extracted from AgentSession so the session class stays a coordinator; every
  * default-on behavior here keeps its opt-out:
  * - `OMK_VERIFIED_BASH=0` disables the receipt-bound executor.
- * - `OMK_BASH_SANDBOX=0` disables the default sandbox preflight.
+ * - OS sandbox enforcement and network isolation are enabled by default.
+ * - `OMK_BASH_SANDBOX=audit` keeps only the ledger preflight; `=0` disables it.
  */
 import { join } from "node:path";
 import { EvidenceReceiptStore } from "../guardrails/evidence-receipt-store.ts";
@@ -77,7 +78,7 @@ export class SessionBashRuntime {
 		return this.verifiedExecutor;
 	}
 
-	/** Configured preflight wins; otherwise the default audit/enforce preflight. */
+	/** Configured preflight wins; otherwise use the default enforce preflight. */
 	sandboxPreflight(override?: BashSandboxPreflight): BashSandboxPreflight | undefined {
 		const preflight = override ?? this.options.configuredSandboxPreflight ?? this.getDefaultSandboxPreflight();
 		if (!preflight || preflight.policy.mode === "off" || preflight.backend) {
@@ -88,9 +89,9 @@ export class SessionBashRuntime {
 	}
 
 	/**
-	 * Default-on sandbox preflight. `audit` (default) keeps the spawn unwrapped
-	 * but reports every decision to the replay ledger; `enforce` activates the
-	 * real OS backend and fails closed when none is available.
+	 * Default-on sandbox preflight. `enforce` wraps every local spawn with the
+	 * OS backend and fails closed when none is available. Explicit `audit` keeps
+	 * the spawn unwrapped but still reports decisions to the replay ledger.
 	 */
 	private getDefaultSandboxPreflight(): BashSandboxPreflight | undefined {
 		if (this.defaultSandboxPreflight !== undefined) {
