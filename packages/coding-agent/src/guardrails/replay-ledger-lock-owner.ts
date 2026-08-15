@@ -1,8 +1,13 @@
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { closeSync, constants as fsConstants, fstatSync, openSync, readFileSync } from "node:fs";
 
 const MAX_LOCK_RECORD_BYTES = 512;
 const MAX_CLOCK_SKEW_MS = 60_000;
+/** Hard bounds on what one `ps` child process may contribute on Darwin. */
+const DARWIN_PS_TIMEOUT_MS = 5_000;
+const DARWIN_PS_MAX_OUTPUT_BYTES = 4_096;
+const MAX_DARWIN_LSTART_CHARS = 512;
 const OWNER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const PROCESS_START_TOKEN = /^[A-Za-z0-9._:-]{1,128}$/;
 
@@ -154,7 +159,36 @@ export function parseLinuxProcessIdentityStat(stat: string): ReplayLedgerProcess
 		: { state: "unavailable" };
 }
 
+/**
+ * Parses BSD `ps -o lstart=` output (e.g. `Wed Aug 12 14:30:00 2026`).
+ * lstart is fixed for the lifetime of a pid, so `darwin:<epochMs>` is a
+ * stable per-process-instance token accepted by PROCESS_START_TOKEN.
+ * Empty output means ps matched no process; anything unparseable fails closed.
+ */
+export function parseDarwinProcessIdentityLstart(lstart: string): ReplayLedgerProcessIdentity {
+	const trimmed = lstart.trim();
+	if (trimmed === "") return { state: "absent" };
+	if (trimmed.length > MAX_DARWIN_LSTART_CHARS) return { state: "unavailable" };
+	const epochMs = Date.parse(trimmed);
+	return Number.isFinite(epochMs) ? { state: "present", startToken: `darwin:${epochMs}` } : { state: "unavailable" };
+}
+
+function inspectDarwinProcessIdentity(pid: number): ReplayLedgerProcessIdentity {
+	if (!Number.isSafeInteger(pid) || pid <= 0) return { state: "unavailable" };
+	const result = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], {
+		encoding: "utf8",
+		timeout: DARWIN_PS_TIMEOUT_MS,
+		maxBuffer: DARWIN_PS_MAX_OUTPUT_BYTES,
+	});
+	if (result.error) return { state: "unavailable" };
+	// BSD ps exits 1 when no process matches the pid; other non-zero is fail-closed.
+	if (result.status === 1) return { state: "absent" };
+	if (result.status !== 0) return { state: "unavailable" };
+	return parseDarwinProcessIdentityLstart(result.stdout ?? "");
+}
+
 export function inspectProcessIdentity(pid: number): ReplayLedgerProcessIdentity {
+	if (process.platform === "darwin") return inspectDarwinProcessIdentity(pid);
 	if (process.platform !== "linux") return { state: "unavailable" };
 	try {
 		return parseLinuxProcessIdentityStat(readFileSync(`/proc/${pid}/stat`, "utf8"));
