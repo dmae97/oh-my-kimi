@@ -170,7 +170,7 @@ npm test
 
 See [Development](https://github.com/dmae97/omk/blob/main/packages/coding-agent/docs/development.md) and [CONTRIBUTING.md](https://github.com/dmae97/omk/blob/main/CONTRIBUTING.md).
 
-Release notes: [v0.95.1](https://github.com/dmae97/omk/blob/main/.github/RELEASE_NOTES_v0.95.1.md).
+Release notes: [v0.95.2](https://github.com/dmae97/omk/blob/main/.github/RELEASE_NOTES_v0.95.2.md).
 
 ## License
 

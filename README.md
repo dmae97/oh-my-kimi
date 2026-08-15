@@ -377,7 +377,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and
 - [Browse all public Skills](SKILLS.md)
 - [Harness Graph control plane](.omk/harness-graph/README.md)
 - [Changelog (coding-agent / open-multi-agent-kit)](packages/coding-agent/CHANGELOG.md)
-- [Release notes for v0.95.1](.github/RELEASE_NOTES_v0.95.1.md)
+- [Release notes for v0.95.2](.github/RELEASE_NOTES_v0.95.2.md)
 - [Unreleased draft notes](.github/RELEASE_NOTES_UNRELEASED.md)
 
 ### FAQ (AEO)
@@ -404,6 +404,23 @@ truth and syncs the “Recent releases” block below (`npm run sync:readme-rele
 ## Recent releases
 
 <!-- releases:start -->
+
+## Release v0.95.2
+
+### Changed
+
+- macOS sessions now derive replay-ledger process identity from bounded BSD `ps -o lstart=` output, so replay-lock acquisition no longer fails closed during AgentSession startup on Darwin while Linux `/proc` behavior remains unchanged.
+- The status rail now verifies connected MCP servers with protocol pings, marks dead processes as failed, and retries failed servers on a bounded slower cadence without spawning idle servers.
+- Interactive UX now includes an empty-editor affordance hint, elapsed-time and interrupt details on the working indicator, transient information notices, width-safe editor scroll borders, and opt-in footer CPU/memory metrics.
+- Extension tools can resolve timeouts from current context. The subagent extension uses this to remove task-count, concurrency, execution-budget, attempt, and outer tool-timeout caps in Ultra while preserving explicit cancellation and non-Ultra limits.
+- The startup control panel now identifies the product with `WELCOME TO OMK` instead of legacy Pi agent branding.
+- Context-budget prompts use compact metadata for valid zero-resource plans while retaining cache-state and legacy optimizer compatibility telemetry; diagnostic and non-empty plans keep full observability, and invalid budgets bypass the plan cache so diagnostics cannot be hidden by a prior hit.
+- The workspace context-budget cache scans every persisted key/value, keeps credential-shaped entries in memory only, and removes unsafe legacy snapshots instead of persisting secret-shaped text.
+- Exact context representations now reuse content-addressed cache entries across different queries and budget sizes instead of forcing avoidable misses.
+- Opt-in reasoning-router learning now isolates default ledgers and compiled bias snapshots per repository or git worktree, captures explicit manual thinking-level overrides as bounded feedback, and keeps updates behind the shipped, deterministic `omk router-feedback compile-bias` between-session command. Snapshot loading rejects nonzero biases below the strong-evidence threshold, unsafe or inconsistent counts, and duplicate cells; compilation uses an exclusive randomized temporary file before atomic rename.
+- Session bash now defaults to OS sandbox enforcement instead of ledger-only audit mode. macOS `sandbox-exec` and Linux `bwrap` restrict writes to the workspace/temp directories and disable network access; missing backends fail closed. Unwrapped `audit` and disabled `off` modes now require an explicit `OMK_BASH_SANDBOX` value, and unknown values resolve to `enforce`.
+
+Release notes live in [RELEASE_NOTES_v0.95.2.md](.github/RELEASE_NOTES_v0.95.2.md).
 
 ## Release v0.95.1
 
@@ -440,14 +457,6 @@ Release notes live in [RELEASE_NOTES_v0.95.1.md](.github/RELEASE_NOTES_v0.95.1.m
 - Auto-compaction now fails fast on insufficient-balance 429 responses instead of repeating the same quota error through every retry.
 
 Release notes live in [RELEASE_NOTES_v0.95.0.md](.github/RELEASE_NOTES_v0.95.0.md).
-
-## Release v0.94.1
-
-### Added
-
-- **Persistent GitHub star nudge** on interactive startup: first installs and anyone who has not confirmed a star keep seeing a nag banner every launch until they star <https://github.com/dmae97/omk> and run `/star` (writes global `githubStarred: true` in `~/.omk/agent/settings.json`). `/star reset` brings the nag back. Project settings cannot silence it.
-
-Release notes live in [RELEASE_NOTES_v0.94.1.md](.github/RELEASE_NOTES_v0.94.1.md).
 
 <!-- releases:end -->
 
