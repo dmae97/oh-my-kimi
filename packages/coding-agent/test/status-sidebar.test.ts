@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { visibleWidth } from "omk-tui";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { McpServerStatus } from "../src/core/mcp/manager.ts";
 import type { McpInventory, McpServerEntry } from "../src/core/mcp-inventory.ts";
 import { recordClaudePassiveUsage } from "../src/core/provider-usage.ts";
 import {
@@ -84,6 +85,9 @@ function makeSession() {
 			getEntries: () => [],
 		},
 		getContextUsage: () => ({ percent: 42, contextWindow: 200000, tokens: 84000 }),
+		// Live MCP surface: tests set liveMcpStatuses to simulate manager state.
+		mcpServerStatus: () => liveMcpStatuses,
+		mcpCheckHealth: async () => liveMcpStatuses,
 		modelRegistry: {
 			isUsingOAuth: () => false,
 			isUsingOAuthProvider: (_provider: string) => false,
@@ -123,6 +127,18 @@ function makeFooterData() {
 beforeAll(() => {
 	process.env.OMK_PACKAGE_DIR = fileURLToPath(new URL("../", import.meta.url));
 	initTheme("omk-neon-control");
+});
+
+/** Mutable live MCP feed consumed by the session fake; reset per test. */
+let liveMcpStatuses: McpServerStatus[] = [];
+
+// Captured at import time: one roster test swaps mockInventory.entries and never
+// restores it, so later tests must put the original roster back themselves.
+const originalMcpEntries = mockInventory.entries;
+
+beforeEach(() => {
+	liveMcpStatuses = [];
+	mockInventory.entries = originalMcpEntries;
 });
 
 describe("StatusSidebarComponent (pinned opencode-style rail)", () => {
@@ -465,5 +481,79 @@ describe("StatusSidebarComponent (pinned opencode-style rail)", () => {
 		for (const line of lines) {
 			expect(visibleWidth(line)).toBeLessThanOrEqual(STATUS_SIDEBAR_MAX_WIDTH);
 		}
+	});
+});
+
+describe("StatusSidebarComponent live MCP connectivity", () => {
+	it("shows live ready/failed/idle state from the session manager, not just config stability", () => {
+		liveMcpStatuses = [
+			{ name: "adaptorch", state: "ready", toolCount: 7 },
+			{ name: "chrome-devtools", state: "failed", toolCount: 0, error: "health check failed: write EPIPE" },
+			{ name: "ghidra", state: "idle", toolCount: 0 },
+		];
+		const sidebar = new StatusSidebarComponent(
+			() => makeSession() as never,
+			makeFooterData() as never,
+			() => true,
+			() => 40,
+		);
+		const text = stripAnsi(sidebar.render(STATUS_SIDEBAR_WIDTH).join("\n"));
+		// Header counts live-ready servers over attached ones.
+		expect(text).toContain("1/3");
+		// Live badges and details per state.
+		expect(text).toContain("✕");
+		expect(text).toContain("failed");
+		expect(text).toContain("idle");
+		expect(text).toContain("7t");
+		expect(text).toContain("●");
+	});
+
+	it("renders configuration-disabled servers as off instead of a scary failure", () => {
+		liveMcpStatuses = [{ name: "adaptorch", state: "failed", toolCount: 0, error: "disabled by configuration" }];
+		const sidebar = new StatusSidebarComponent(
+			() => makeSession() as never,
+			makeFooterData() as never,
+			() => true,
+			() => 40,
+		);
+		const text = stripAnsi(sidebar.render(STATUS_SIDEBAR_WIDTH).join("\n"));
+		expect(text).toContain("off");
+		expect(text).not.toContain("✕");
+	});
+
+	it("probes MCP health on the first render and throttles subsequent ones", async () => {
+		liveMcpStatuses = [{ name: "adaptorch", state: "ready", toolCount: 7 }];
+		const session = makeSession();
+		const checkHealth = vi.fn(async () => liveMcpStatuses);
+		session.mcpCheckHealth = checkHealth;
+		const requestRender = vi.fn();
+		const sidebar = new StatusSidebarComponent(
+			() => session as never,
+			makeFooterData() as never,
+			() => true,
+			() => 40,
+			{ requestRender },
+		);
+		sidebar.render(STATUS_SIDEBAR_WIDTH);
+		await vi.waitFor(() => expect(checkHealth).toHaveBeenCalledTimes(1));
+		// A repaint inside the probe interval must not re-probe.
+		sidebar.render(STATUS_SIDEBAR_WIDTH);
+		expect(checkHealth).toHaveBeenCalledTimes(1);
+		// The probe completion repaints so fresh status lands on screen.
+		await vi.waitFor(() => expect(requestRender).toHaveBeenCalled());
+	});
+
+	it("never probes when no MCP manager is attached", () => {
+		const session = makeSession();
+		const checkHealth = vi.fn(async () => liveMcpStatuses);
+		session.mcpCheckHealth = checkHealth;
+		const sidebar = new StatusSidebarComponent(
+			() => session as never,
+			makeFooterData() as never,
+			() => true,
+			() => 40,
+		);
+		sidebar.render(STATUS_SIDEBAR_WIDTH);
+		expect(checkHealth).not.toHaveBeenCalled();
 	});
 });

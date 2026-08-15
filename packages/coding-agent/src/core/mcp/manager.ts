@@ -131,6 +131,43 @@ export class McpManager {
 		}
 	}
 
+	/**
+	 * Verify that `ready` servers are actually alive with a protocol ping. A
+	 * failed ping closes the client and marks the server `failed`, so a
+	 * silently killed process stops masquerading as connected. Servers already
+	 * `failed` are re-attempted only when `reconnectFailed` is set — callers
+	 * should gate that behind a slow cadence so a permanently broken server is
+	 * not respawned every probe. Idle servers stay idle: connection is lazy by
+	 * design, and a status probe must not spawn processes.
+	 */
+	async checkHealth(options?: { pingTimeoutMs?: number; reconnectFailed?: boolean }): Promise<McpServerStatus[]> {
+		const work: Promise<void>[] = [];
+		for (const runtime of this.runtimes.values()) {
+			if (runtime.state === "ready" && runtime.client) {
+				work.push(this.pingRuntime(runtime, options?.pingTimeoutMs));
+			} else if (runtime.state === "failed" && options?.reconnectFailed && !runtime.config.disabled) {
+				runtime.state = "idle";
+				runtime.error = undefined;
+				work.push(this.ensureConnected(runtime));
+			}
+		}
+		await Promise.all(work);
+		return this.status();
+	}
+
+	private async pingRuntime(runtime: ServerRuntime, timeoutMs?: number): Promise<void> {
+		try {
+			await runtime.client?.ping(timeoutMs);
+		} catch (error) {
+			// Isolation point: only this server transitions; the rest stay ready.
+			runtime.client?.close();
+			runtime.client = undefined;
+			runtime.tools = [];
+			runtime.state = "failed";
+			runtime.error = `health check failed: ${error instanceof Error ? error.message : String(error)}`;
+		}
+	}
+
 	private ensureConnected(runtime: ServerRuntime): Promise<void> {
 		if (runtime.config.disabled) {
 			runtime.state = "failed";

@@ -2,6 +2,7 @@ import type { Component } from "omk-tui";
 import { truncateToWidth, visibleWidth } from "omk-tui";
 import type { AgentSession } from "../../../core/agent-session.ts";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.ts";
+import type { McpServerStatus } from "../../../core/mcp/manager.ts";
 import { loadMcpInventory, type McpServerEntry } from "../../../core/mcp-inventory.ts";
 import {
 	type CodexUsageSnapshot,
@@ -55,6 +56,10 @@ const SPARK_WINDOW = 44;
 const SPARK_SAMPLE_MS = 1000;
 /** MCP inventory is read from disk; cache it so per-frame renders stay cheap. */
 const MCP_CACHE_TTL_MS = 5000;
+/** Protocol-ping cadence for live MCP connectivity (render-triggered, fire-and-forget). */
+const MCP_HEALTH_INTERVAL_MS = 15_000;
+/** Failed servers are re-attempted on this slower cadence, never on every probe. */
+const MCP_RECONNECT_INTERVAL_MS = 60_000;
 const SPARK_CHARS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"] as const;
 
 type SubscriptionUsageFetcher = (
@@ -89,6 +94,9 @@ export class StatusSidebarComponent implements Component {
 	private cpuHistory: number[] = [];
 	private lastSparkSampleAt = 0;
 	private mcpCache: { at: number; cwd: string; entries: McpServerEntry[] } | undefined;
+	private lastMcpProbeAt = 0;
+	private lastMcpReconnectAt = 0;
+	private mcpProbeInFlight = false;
 	private subscriptionUsage = new Map<string, SubscriptionUsageSnapshot>();
 	private subscriptionUsageSession: AgentSession | undefined;
 	private subscriptionUsageProviders: readonly string[] = [];
@@ -127,6 +135,7 @@ export class StatusSidebarComponent implements Component {
 	render(width: number): string[] {
 		const session = this.getSession();
 		const state = session.state;
+		this.refreshMcpHealth(session);
 		this.refreshSubscriptionUsage(session);
 		const lines: string[] = [boxTop(width, "STATUS RAIL")];
 
@@ -216,8 +225,8 @@ export class StatusSidebarComponent implements Component {
 			);
 		}
 
-		// --- MCP roster (opencode-style server list with stability dots) ---
-		lines.push(...this.mcpSection(width, session.sessionManager.getCwd(), usageLines.length));
+		// --- MCP roster (live connectivity + opencode-style stability dots) ---
+		lines.push(...this.mcpSection(width, session, usageLines.length));
 
 		// --- System ---
 		lines.push(sidebarRule(width, "SYSTEM"));
@@ -336,14 +345,31 @@ export class StatusSidebarComponent implements Component {
 	}
 
 	/**
-	 * MCP server roster with a stable/total counter in the section rule and a
-	 * stability dot per server. Reads are cached so the rail stays cheap to render.
+	 * MCP server roster with a live-connected/total counter in the section
+	 * rule and a per-server state badge. Config inventory reads are cached;
+	 * live status comes from the session's MCP manager each frame.
 	 */
-	private mcpSection(width: number, cwd: string, reservedRows = 0): string[] {
+	private mcpSection(width: number, session: AgentSession, reservedRows = 0): string[] {
+		const cwd = session.sessionManager.getCwd();
 		const entries = this.loadMcpEntries(cwd);
+		const live = new Map(session.mcpServerStatus().map((status) => [status.name, status]));
+		const ready = [...live.values()].filter((status) => status.state === "ready").length;
+		const anyFailed = [...live.values()].some((status) => status.state === "failed");
 		const stable = entries.filter((entry) => classifyMcpStability(entry) === "stable").length;
-		const countColor: ThemeColor = entries.length === 0 ? "dim" : stable === entries.length ? "success" : "warning";
-		const count = entries.length === 0 ? "0" : `${stable}/${entries.length}`;
+		const countColor: ThemeColor =
+			entries.length === 0
+				? "dim"
+				: live.size > 0
+					? anyFailed
+						? "error"
+						: ready === live.size
+							? "success"
+							: "warning"
+					: stable === entries.length
+						? "success"
+						: "warning";
+		const count =
+			entries.length === 0 ? "0" : live.size > 0 ? `${ready}/${live.size}` : `${stable}/${entries.length}`;
 
 		const lines: string[] = [railRule(width, "MCP", theme.fg(countColor, count))];
 		if (entries.length === 0) {
@@ -353,13 +379,39 @@ export class StatusSidebarComponent implements Component {
 
 		const shown = entries.slice(0, mcpMaxRows(this.getTerminalRows() - reservedRows));
 		for (const entry of shown) {
-			lines.push(boxTextLine(width, mcpRow(entry, width)));
+			lines.push(boxTextLine(width, mcpRow(entry, width, live.get(entry.name))));
 		}
 		const hidden = entries.length - shown.length;
 		if (hidden > 0) {
 			lines.push(boxTextLine(width, theme.fg("dim", `+${hidden} more…`)));
 		}
 		return lines;
+	}
+
+	/**
+	 * Keep the rail's MCP rows truthful: ping connected servers on a slow
+	 * cadence and retry failed ones even slower. Fire-and-forget from render —
+	 * the 2s metrics repaint supplies the ticks, so no extra timer exists to
+	 * leak. Probing never spawns connections: idle servers stay idle until a
+	 * tool call attaches them (manager lazy-connect design).
+	 */
+	private refreshMcpHealth(session: AgentSession): void {
+		const now = Date.now();
+		if (this.mcpProbeInFlight) return;
+		const probeDue = now - this.lastMcpProbeAt >= MCP_HEALTH_INTERVAL_MS;
+		const reconnectDue = now - this.lastMcpReconnectAt >= MCP_RECONNECT_INTERVAL_MS;
+		if (!probeDue && !reconnectDue) return;
+		if (session.mcpServerStatus().length === 0) return; // no MCP manager attached
+		this.mcpProbeInFlight = true;
+		this.lastMcpProbeAt = now;
+		if (reconnectDue) this.lastMcpReconnectAt = now;
+		void session
+			.mcpCheckHealth({ reconnectFailed: reconnectDue })
+			.catch(() => {})
+			.finally(() => {
+				this.mcpProbeInFlight = false;
+				this.requestRender();
+			});
 	}
 
 	private loadMcpEntries(cwd: string): McpServerEntry[] {
@@ -413,24 +465,62 @@ function railRule(width: number, label: string, right: string): string {
 	return visibleWidth(line) <= width ? line : truncateToWidth(line, width, "");
 }
 
-/** One MCP server row: stability dot + name, truncated to the rail width. */
-function mcpRow(entry: McpServerEntry, width: number): string {
-	const stability = classifyMcpStability(entry);
-	const dot =
-		stability === "stable"
-			? theme.fg("success", "●")
-			: stability === "overridden"
-				? theme.fg("dim", "◐")
-				: theme.fg("warning", "○");
-	const nameColor: ThemeColor = stability === "stable" ? "text" : stability === "overridden" ? "dim" : "warning";
-	const nameWidth = Math.max(1, width - 4 - 2); // frame (4) + dot + space (2)
+/** One MCP server row: live-state badge + name + right-aligned detail, truncated to the rail width. */
+function mcpRow(entry: McpServerEntry, width: number, live?: McpServerStatus): string {
+	const badge = live ? liveMcpBadge(live) : configMcpBadge(entry);
 	const safeName = stripAnsi(entry.name)
 		.replace(/[\t\r\n]+/g, " ")
 		.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, "")
 		.replace(/\s+/g, " ")
 		.trim();
+	const detail = live ? liveMcpDetail(live) : "";
+	// frame (4) + dot + space (2); detail is right-aligned with one gap column.
+	const detailText = detail ? ` ${detail}` : "";
+	const nameWidth = Math.max(1, width - 4 - 2 - visibleWidth(detailText));
 	const name = truncateToWidth(safeName || "<unnamed>", nameWidth, "…");
-	return `${dot} ${theme.fg(nameColor, name)}`;
+	const pad = Math.max(0, width - 4 - 2 - visibleWidth(name) - visibleWidth(detailText));
+	return `${badge.dot} ${theme.fg(badge.nameColor, name)}${" ".repeat(pad)}${detail ? theme.fg("dim", detailText) : ""}`;
+}
+
+function configMcpBadge(entry: McpServerEntry): { dot: string; nameColor: ThemeColor } {
+	const stability = classifyMcpStability(entry);
+	return {
+		dot:
+			stability === "stable"
+				? theme.fg("success", "●")
+				: stability === "overridden"
+					? theme.fg("dim", "◐")
+					: theme.fg("warning", "○"),
+		nameColor: stability === "stable" ? "text" : stability === "overridden" ? "dim" : "warning",
+	};
+}
+
+function liveMcpBadge(status: McpServerStatus): { dot: string; nameColor: ThemeColor } {
+	switch (status.state) {
+		case "ready":
+			return { dot: theme.fg("success", "●"), nameColor: "text" };
+		case "connecting":
+			return { dot: theme.fg("warning", "◐"), nameColor: "text" };
+		case "failed":
+			return status.error === "disabled by configuration"
+				? { dot: theme.fg("dim", "○"), nameColor: "dim" }
+				: { dot: theme.fg("error", "✕"), nameColor: "error" };
+		default:
+			return { dot: theme.fg("dim", "○"), nameColor: "dim" };
+	}
+}
+
+function liveMcpDetail(status: McpServerStatus): string {
+	switch (status.state) {
+		case "ready":
+			return `${status.toolCount}t`;
+		case "connecting":
+			return "…";
+		case "failed":
+			return status.error === "disabled by configuration" ? "off" : "failed";
+		default:
+			return "idle";
+	}
 }
 
 function formatUptime(seconds: number): string {

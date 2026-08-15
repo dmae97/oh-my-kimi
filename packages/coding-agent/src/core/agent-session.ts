@@ -4175,6 +4175,15 @@ export class AgentSession {
 		return this._mcpManager?.status() ?? [];
 	}
 
+	/**
+	 * Ping attached MCP servers and return fresh status, so callers (e.g. the
+	 * status rail) can keep displaying real connectivity instead of the last
+	 * handshake result. Resolves to [] when no manager is attached.
+	 */
+	mcpCheckHealth(options?: { pingTimeoutMs?: number; reconnectFailed?: boolean }): Promise<McpServerStatus[]> {
+		return this._mcpManager?.checkHealth(options) ?? Promise.resolve([]);
+	}
+
 	private _refreshToolRegistry(options?: { activeToolNames?: string[]; includeAllExtensionTools?: boolean }): void {
 		const previousRegistryNames = new Set(this._toolRegistry.keys());
 		const previousActiveToolNames = this.getActiveToolNames();

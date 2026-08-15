@@ -54,6 +54,18 @@ describe("MCP client against a real stdio server", () => {
 		expect(tools.map((tool) => tool.name)).toEqual(["echo", "fail"]);
 	});
 
+	it("answers a protocol ping once the handshake completed", async () => {
+		const c = client("ok");
+		await c.connect();
+		await expect(c.ping(2000)).resolves.toBeUndefined();
+	});
+
+	it("times out a ping the server never answers", async () => {
+		const c = client("hang", { requestTimeoutMs: 300 });
+		await c.connect();
+		await expect(c.ping(300)).rejects.toThrow();
+	});
+
 	it("calls a tool and returns its content", async () => {
 		const c = client("ok");
 		await c.connect();

@@ -57,6 +57,12 @@ function handle(request) {
 		});
 		return;
 	}
+	if (method === "ping") {
+		// Liveness probe: hang mode starves it so clients exercise the timeout path.
+		if (mode === "hang") return;
+		send({ jsonrpc: "2.0", id, result: {} });
+		return;
+	}
 	if (method === "tools/list") {
 		if (mode === "paged") {
 			const cursor = params?.cursor;

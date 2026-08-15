@@ -149,6 +149,16 @@ export class McpClient {
 		this.transport.send({ jsonrpc: "2.0", method: "notifications/initialized" });
 	}
 
+	/**
+	 * Protocol-level liveness probe. Rejects when the server is closed, dead,
+	 * or fails to answer within `timeoutMs`, so callers can tell a silently
+	 * killed process apart from a genuinely connected one.
+	 */
+	async ping(timeoutMs?: number): Promise<void> {
+		this.assertReady();
+		await this.request("ping", {}, timeoutMs);
+	}
+
 	/** List the server's tools. Requires a completed handshake. */
 	async listTools(): Promise<McpToolSchema[]> {
 		this.assertReady();
