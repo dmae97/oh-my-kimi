@@ -108,7 +108,7 @@ describe("AgentSession vision-route compaction", () => {
 	it("does not treat a vision-route overflow as a foreign-model overflow", async () => {
 		createSession();
 		// @ts-expect-error private method under test
-		session._overflowRecoveryAttempted = false;
+		session._overflowRecoveryAttempts = 0;
 		// @ts-expect-error private method under test
 		const overflowMessage = session._checkCompaction({
 			role: "assistant",
@@ -125,6 +125,6 @@ describe("AgentSession vision-route compaction", () => {
 		// recognized as session-owned and recovery proceeds.
 		await expect(overflowMessage).resolves.not.toBeNull();
 		// @ts-expect-error private method under test
-		expect(session._overflowRecoveryAttempted).toBe(true);
+		expect(session._overflowRecoveryAttempts).toBe(1);
 	});
 });

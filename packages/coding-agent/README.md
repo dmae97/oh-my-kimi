@@ -40,6 +40,16 @@ Then:
 
 OMK stores user configuration under `~/.omk/agent/` and project configuration under `.omk/`.
 
+## Optional document compiler
+
+Install `omk-book-to-skill` to compile documents into reusable skills without adding Python extractors to OMK core:
+
+```bash
+omk install npm:omk-book-to-skill@0.95.2
+```
+
+It provides compile, update, and verification commands plus a local SHA-256 provenance manifest. See [Book to Skill](https://github.com/dmae97/omk/blob/main/packages/coding-agent/docs/book-to-skill.md).
+
 ## Providers & Models
 
 OMK includes provider adapters for Anthropic, OpenAI Codex, Google, OpenCode, Kimi, Qwen, ZAI/GLM, Grok, and other compatible services. Availability depends on the credentials and endpoints configured on the current machine.
@@ -47,10 +57,13 @@ OMK includes provider adapters for Anthropic, OpenAI Codex, Google, OpenCode, Ki
 - `/login` adds or selects credentials.
 - `/logout` removes credentials for a selected provider.
 - `/model` lists models available to the current credential set.
+- NVIDIA NIM's `z-ai/glm-5.2` entry transmits reasoning effort, including `/thinking max`.
 - The optional status rail shows independent provider quota windows when an official API or passive response signal is available.
 - Missing quota values are shown as unavailable rather than estimated.
 
 OAuth credentials are stored locally in `~/.omk/agent/auth.json`. Multi-account providers keep accounts separate and send requests only through the explicitly selected account.
+
+Quota and billing-cycle errors are classified as rate limits and can switch to the first authenticated resilience candidate before retry. See [Provider resilience](https://github.com/dmae97/omk/blob/main/packages/coding-agent/docs/provider-resilience.md).
 
 See [Provider setup](https://github.com/dmae97/omk/blob/main/packages/coding-agent/docs/providers.md) for provider-specific authentication, quota behavior, and environment variables.
 
@@ -141,6 +154,8 @@ See [RPC](https://github.com/dmae97/omk/blob/main/packages/coding-agent/docs/rpc
 ## SDK and Extensions
 
 The TypeScript SDK exposes session creation, provider configuration, tools, and event streams. Extensions can add commands, tools, UI components, themes, and resource loaders without patching OMK core.
+
+`omk-protocol` provides the versioned `TaskSpec -> ExecutionAttempt -> Observation -> EvaluationResult -> RuntimeDecision` contracts and pure semantic reducers. See [Run Protocol v1](https://github.com/dmae97/omk/blob/main/packages/coding-agent/docs/run-protocol.md) for the implemented scope and migration boundaries.
 
 - [SDK](https://github.com/dmae97/omk/blob/main/packages/coding-agent/docs/sdk.md)
 - [Extensions](https://github.com/dmae97/omk/blob/main/packages/coding-agent/docs/extensions.md)

@@ -125,6 +125,32 @@ export class ApprovalReceiptStore {
 		const bytes = Buffer.from(canonical, "utf8");
 		if (bytes.byteLength > MAX_RECEIPT_BYTES) throw new Error(`Approval receipt exceeds ${MAX_RECEIPT_BYTES} bytes`);
 
+		// Explicit existence/symlink pre-check. O_EXCL/O_NOFOLLOW are honored on
+		// proper Linux but silently ignored on some platforms (e.g. WSL2), which
+		// would silently void the never-overwrite and symlink-rejection invariants
+		// (hard rule: no silent degraded operation). Enforce them via lstat so the
+		// guarantees hold on every platform; O_EXCL below stays as the atomic
+		// backstop for the create path on capable platforms.
+		let existingStat: ReturnType<typeof lstatSync> | null = null;
+		try {
+			existingStat = lstatSync(filePath);
+		} catch (error) {
+			if (!isErrno(error, "ENOENT")) throw error;
+		}
+		if (existingStat !== null) {
+			if (existingStat.isSymbolicLink()) {
+				throw new Error(`Approval receipt must not be a symbolic link: ${filePath}`);
+			}
+			const prior = this.read(validated.core.receiptId);
+			if (serializeApprovalReceipt(prior) !== canonical) {
+				throw new Error(
+					`Approval receipt already exists with different content and is never overwritten: ${validated.core.receiptId}`,
+				);
+			}
+			this.assertRootUnchanged(rootIdentity);
+			return { path: filePath, created: false };
+		}
+
 		let fd: number;
 		try {
 			fd = openSync(filePath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW, 0o600);

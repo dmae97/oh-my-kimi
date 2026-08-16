@@ -60,7 +60,9 @@ describe("diagnostics tool", () => {
 	it.skipIf(!has("pyright") && !has("ruff"))(
 		"surfaces a python issue via pyright or ruff",
 		async () => {
-			writeFileSync(join(root, "bad.py"), "def f(x: int) -> int:\n    return x + ''\n");
+			// pyright(타입 체커)와 ruff(linter, F821) 둘 다가 잡는 undefined-name을 쓴다 —
+			// 어느 체커가 살아 있어도 진단이 표면화된다 (깨진 pyright에서도 ruff 폴�백으로 동작).
+			writeFileSync(join(root, "bad.py"), "def f(x: int) -> int:\n    return x + undefined_name\n");
 			const { details } = await runTool(root, { language: "python" });
 			expect(details.diagnostics.length).toBeGreaterThan(0);
 			expect(details.diagnostics[0].path).toContain("bad.py");

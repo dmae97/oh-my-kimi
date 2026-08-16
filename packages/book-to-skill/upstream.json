@@ -1,0 +1,37 @@
+{
+	"schemaVersion": 1,
+	"source": {
+		"repository": "https://github.com/virgiliojr94/book-to-skill",
+		"commit": "c4c5e948caaa912c9e2024b925a7cdee9237b0c0",
+		"declaredVersion": "1.4.0",
+		"installedSnapshotHash": "c4c5e948caaa912c9e2024b925a7cdee9237b0c0"
+	},
+	"license": "MIT",
+	"vendoredAt": "2026-08-16",
+	"files": {
+		"vendor/book-to-skill/LICENSE.md": "be9b04bccfb4bdab63de13663307c229c0aa5ca69b692e9c351ff7053da9faca",
+		"vendor/book-to-skill/SKILL.md": "926a08ad0d5178d182bdf770e4fac3bb1a98d60691fc80c5b005b8237efc22d4",
+		"vendor/book-to-skill/book_to_skill/__init__.py": "9d18b99b2c417557244634073c6bb3fa52dcc58aad8fb1fc5f658599f0c3ab77",
+		"vendor/book-to-skill/book_to_skill/__main__.py": "2207592e7bad6433302d258a4cfc9384a406373f59e49392a56d8389d08803ea",
+		"vendor/book-to-skill/book_to_skill/cli.py": "936285510c1dfa2563e7487963b6891107ace40618facd2502e004ea357badf1",
+		"vendor/book-to-skill/book_to_skill/config.py": "69d5258b9cf73a64f9de77961bbf6ad4cf5953719517cda17ef73ff8d649b4ad",
+		"vendor/book-to-skill/book_to_skill/dependencies.py": "119b3c9635d8b83a58bf4ec9648f5efa9373eaf9f6bba424a42b3ca69f6b3342",
+		"vendor/book-to-skill/book_to_skill/exceptions.py": "bf9417993e577cea5130bc34f4241cafccd1dda1f2f1ac22a9e8a198cc9dedc8",
+		"vendor/book-to-skill/book_to_skill/parsers/__init__.py": "a8f740712820f8729cd3b6adca799d17a23e0b80205a29e511791aafc97723f0",
+		"vendor/book-to-skill/book_to_skill/parsers/calibre.py": "d9e23513e9dadc7894b541f64af921a608210c03fe3acd391e28e5a159548fc4",
+		"vendor/book-to-skill/book_to_skill/parsers/docx.py": "957beb3eb196267d6818b05de293a1d3b59933f881ff50011fe71edf1fe973dc",
+		"vendor/book-to-skill/book_to_skill/parsers/epub.py": "d0a2d1e3aae5b8f2d2daeecf0bc15a9f502ef286c45933fd2dfd10820367c7a0",
+		"vendor/book-to-skill/book_to_skill/parsers/html.py": "1bb15e173389750386f75ba726a442a5e92da3b20a415eb51bd43814e8bef40d",
+		"vendor/book-to-skill/book_to_skill/parsers/pdf.py": "b25f2dee1110806d11f06b051789feab9858b6a4abf4759d911a12aec6d25de6",
+		"vendor/book-to-skill/book_to_skill/parsers/rtf.py": "60255233a6fa98ccb5c48a910e4f8e80eecf252bfd5bd51e24fd797ba89d5d33",
+		"vendor/book-to-skill/book_to_skill/parsers/text.py": "d355f499d3184f2b96aa84ea8e55d72b2127c6b91ff9f90d43131c8039e1ee13",
+		"vendor/book-to-skill/book_to_skill/sanitize.py": "61d2dbaf3c23bc5f101f20cec6dcb3de214be4b042b9b38d7bcc9c7ec0b78014",
+		"vendor/book-to-skill/book_to_skill/utils.py": "6081128f1bab4679b41ad6ca0cc72ac1f77d187115a3eebce312d7de8cf12533",
+		"vendor/book-to-skill/pyproject.toml": "c132021d184307309ebefa4cd5fdca7bdfb5c59e87535c7c2b9b74f5520ce8a5",
+		"vendor/book-to-skill/scripts/banner.txt": "8c12a5bec98309f5b0bfe8bca7f819ecf944050820533465c88fcb388d4185cf",
+		"vendor/book-to-skill/scripts/extract.py": "541ed846d5aa5d5fb13dcfa97c955734fa42eb80c00cf5ff6a2d2f057508c8fc",
+		"vendor/book-to-skill/tools/discovery_tax.py": "b3df4394253cff5953b2df59665d81ab25a9a4eb1aa8c2fe046d4f39f4cc5deb",
+		"vendor/book-to-skill/tools/scan_generated_skill.py": "de51540d7cb4fc30a539894b61b1ca67a2c7b24fa48e674ec05200ac31ffbd2c",
+		"vendor/book-to-skill/tools/validate_skill.py": "57bea71fba6e6eae3b56388c304e52c4e45a33b175a726ee9161a346bba23382"
+	}
+}

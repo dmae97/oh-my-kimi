@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Added
+
+- GLM-5.3 (`glm-5.3`) is now registered for the Z.AI coding-plan endpoints (`zai`, `zai-coding-cn`) and OpenCode Go, with a 1M context window, 131,072 max output tokens, `compat.supportsReasoningEffort`, and thinking levels up to `max`. Upstream currently publishes GLM-5.3 only on the coding-plan surface, so it is intentionally absent from the plain Z.AI and OpenRouter catalogs.
+- Gemini 3.7 Flash (`gemini-3.7-flash`) is now registered for `google`, `google-vertex`, `openrouter`, `github-copilot`, `vercel-ai-gateway`, and `opencode`, with a 1,048,576-token context window and 65,536 max output tokens. The hand-maintained Vertex list gained a matching `Gemini 3.7 Flash (Vertex)` entry at $0.75/$3.75 per million tokens with $0.075 cache reads.
+
+### Changed
+
+- The GLM reasoning-effort gate now matches GLM-5.2 **and later** GLM-5.x releases instead of hard-coding 5.2, so new minor versions inherit `supportsReasoningEffort` and the `max` thinking map without another code change. `glm-5`, `glm-5-turbo`, and `glm-5.1` remain excluded because they do not accept `reasoning_effort`.
+
+### Fixed
+
+- NVIDIA NIM's `z-ai/glm-5.2` model metadata now enables `reasoning_effort`, so its generated `max` thinking level is transmitted instead of being silently omitted. Other NVIDIA models retain conservative compatibility defaults.
+- OpenCode's `grok-build-0.1` no longer emits `compat.supportsReasoningEffort` after upstream moved the model from `openai-completions` to `openai-responses`. The field only exists on `OpenAICompletionsCompat`, so regeneration produced a registry that failed to typecheck; it is now applied only when the resolved api accepts it.
+- Groq's Qwen3 `reasoning_effort` mapping follows the upstream `qwen/qwen3-32b` → `qwen/qwen3.6-27b` rename and now keys off the provider plus a `qwen3` id match, so the successor model keeps mapping to Groq's `none`/`default` values instead of inheriting the generic Qwen `high`/`max` tiers it does not accept.
+- Grok 4.6 exposed no `thinkingLevelMap`, so its upstream `xhigh` effort tier was invisible to `getSupportedThinkingLevels()` and `/thinking xhigh` silently clamped down to `high` on every provider (xAI, OpenRouter, Vercel AI Gateway, GitHub Copilot, OpenCode). The generator now reads models.dev `reasoning_options` and maps `xhigh` only for Grok models that actually advertise it, so `grok-4.5` and `grok-4.3` stay capped at `high` instead of being handed an effort value they reject. A regression test covers both directions.
+- Integration test fixtures no longer reference models removed upstream (`claude-opus-4-1-20250805`, `gemini-2.0-flash`, `github-copilot` `gemini-2.5-pro`, `groq` `qwen/qwen3-32b`, `zai` `glm-5.2-highspeed[1m]`), which previously broke `tsgo --noEmit` while remaining invisible to Vitest because those suites are credential-gated and skipped.
+
 ## [0.95.2] - 2026-08-15
 
 ### Changed
@@ -10,7 +27,7 @@
 
 ### Fixed
 
-- Every `glm-5.2` model entry (zai, zai-coding-cn, opencode, opencode-go, openrouter, vercel-ai-gateway, fireworks, together, huggingface, nvidia, cloudflare workers-ai/ai-gateway) now carries an explicit `thinkingLevelMap` that exposes the `max` thinking level (`max: "max"`), so `/thinking max` and the `Ctrl+T` selector reach the API as `reasoning_effort: "max"` instead of being capped at `high`. Z.AI GLM-5.2 entries also re-enable `compat.supportsReasoningEffort` so the effort is actually transmitted. The prior fix only covered `opencode`/`opencode-go` and was lost on the next catalog regeneration; the map now lives in `generate-models.ts` so it survives regeneration, and a regression test covers every registry entry.
+- Every `glm-5.2` model entry (zai, zai-coding-cn, opencode, opencode-go, openrouter, vercel-ai-gateway, fireworks, together, huggingface, nvidia, cloudflare workers-ai/ai-gateway) now carries an explicit `thinkingLevelMap` that exposes the `max` thinking level (`max: "max"`) instead of capping the `/thinking` and `Ctrl+T` selectors at `high`. Z.AI GLM-5.2 entries also re-enable `compat.supportsReasoningEffort` so the effort is transmitted. The prior fix only covered `opencode`/`opencode-go` and was lost on the next catalog regeneration; the map now lives in `generate-models.ts` so it survives regeneration, and a regression test covers every registry entry.
 
 ## [0.95.1] - 2026-08-01
 

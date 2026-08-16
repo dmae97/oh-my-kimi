@@ -5,6 +5,7 @@ import { fauxAssistantMessage, registerFauxProvider } from "omk-ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentSessionEvent } from "../src/core/agent-session.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
+import { ModelRegistry } from "../src/core/model-registry.ts";
 import { RunJournalStore } from "../src/core/run-journal-store.ts";
 import { createAgentSession } from "../src/core/sdk.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
@@ -12,6 +13,10 @@ import { SettingsManager } from "../src/core/settings-manager.ts";
 
 function terminationEvents(events: readonly AgentSessionEvent[]) {
 	return events.filter((event) => event.type === "session_termination");
+}
+
+function last<T>(values: readonly T[]): T | undefined {
+	return values[values.length - 1];
 }
 
 describe("AgentSession runtime termination production", () => {
@@ -77,6 +82,7 @@ describe("AgentSession runtime termination production", () => {
 
 	it.each([
 		["429 too many requests", "provider_rate_limit", "provider.rate_limit"],
+		["403 You've reached your usage limit for this billing cycle", "provider_rate_limit", "provider.rate_limit"],
 		["fetch failed: connection reset", "provider_network", "provider.network"],
 		["provider returned an invalid response frame", "provider_protocol", "provider.protocol"],
 		["context_length_exceeded", "context_overflow", "provider.context_overflow"],
@@ -88,11 +94,74 @@ describe("AgentSession runtime termination production", () => {
 
 		await session.prompt("fail");
 
-		const event = terminationEvents(events).at(-1);
+		const event = last(terminationEvents(events));
 		expect(event?.termination).toMatchObject({ kind, causeCode, message, provider: session.model?.provider });
 		expect(event?.termination.nextAction.length).toBeGreaterThan(0);
-		expect(session.runJournalRecords.at(-1)?.event).toBe("run_finished");
+		expect(last(session.runJournalRecords)?.event).toBe("run_finished");
 		session.dispose();
+	});
+
+	it("fails over quota exhaustion and records the recovered attempt", async () => {
+		const primary = registerFauxProvider({ provider: `faux-primary-${Date.now()}` });
+		const fallback = registerFauxProvider({
+			provider: `faux-fallback-${Date.now()}`,
+			models: [{ id: "faux-1", reasoning: false, contextWindow: 1_000_000 }],
+		});
+		primary.setResponses([
+			fauxAssistantMessage("", {
+				stopReason: "error",
+				errorMessage: "403 You've reached your usage limit for this billing cycle",
+			}),
+		]);
+		fallback.setResponses([fauxAssistantMessage("recovered")]);
+
+		const authStorage = AuthStorage.inMemory();
+		authStorage.setRuntimeApiKey(primary.getModel().provider, "primary-key");
+		authStorage.setRuntimeApiKey(fallback.getModel().provider, "fallback-key");
+		const modelRegistry = ModelRegistry.inMemory(authStorage);
+		modelRegistry.registerProvider(fallback.getModel().provider, {
+			api: fallback.api,
+			apiKey: "fallback-key",
+			baseUrl: fallback.getModel().baseUrl,
+			models: [...fallback.models],
+		});
+		const settingsManager = SettingsManager.inMemory({
+			retry: { enabled: true, maxRetries: 1, baseDelayMs: 0 },
+			providerResilience: {
+				autoFailoverOnSafetyStop: true,
+				failoverCandidates: [{ provider: fallback.getModel().provider, id: fallback.getModel().id }],
+			},
+		});
+		const { session } = await createAgentSession({
+			cwd,
+			agentDir,
+			authStorage,
+			modelRegistry,
+			model: primary.getModel(),
+			sessionManager: SessionManager.create(cwd, sessionDir),
+			settingsManager,
+		});
+		const events: AgentSessionEvent[] = [];
+		session.subscribe((event) => void events.push(event));
+
+		try {
+			await session.prompt("recover from quota");
+
+			expect(primary.state.callCount).toBe(1);
+			expect(fallback.state.callCount).toBe(1);
+			expect(session.model?.provider).toBe(fallback.getModel().provider);
+			expect(terminationEvents(events).map((event) => event.termination.kind)).toEqual([
+				"provider_rate_limit",
+				"completed",
+			]);
+			expect(session.lastTermination?.kind).toBe("completed");
+			expect(events.some((event) => event.type === "auto_retry_start")).toBe(true);
+		} finally {
+			session.dispose();
+			modelRegistry.unregisterProvider(fallback.getModel().provider);
+			primary.unregister();
+			fallback.unregister();
+		}
 	});
 
 	it("distinguishes provider abort from user abort", async () => {
@@ -208,7 +277,7 @@ describe("AgentSession runtime termination production", () => {
 			causeCode: "persistence.append_failed",
 			retryable: true,
 		});
-		expect(terminationEvents(events).at(-1)?.termination).toEqual(session.lastTermination);
+		expect(last(terminationEvents(events))?.termination).toEqual(session.lastTermination);
 		session.dispose();
 	});
 
@@ -225,7 +294,7 @@ describe("AgentSession runtime termination production", () => {
 			causeCode: "compaction.failed",
 			retryable: true,
 		});
-		expect(terminationEvents(events).at(-1)?.termination).toEqual(session.lastTermination);
+		expect(last(terminationEvents(events))?.termination).toEqual(session.lastTermination);
 		session.dispose();
 	});
 
@@ -236,7 +305,7 @@ describe("AgentSession runtime termination production", () => {
 
 		await expect(session.prompt("needs auth")).rejects.toThrow();
 
-		const event = terminationEvents(events).at(-1);
+		const event = last(terminationEvents(events));
 		expect(event?.termination).toMatchObject({
 			kind: "provider_auth",
 			causeCode: "provider.auth",

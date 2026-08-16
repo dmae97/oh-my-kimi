@@ -1,87 +1,68 @@
-# Provider resilience (root-level)
+# Provider Resilience
 
-Built into OMK core — not an optional extension.
+OMK can recover an agent turn from provider failures that are unlikely to succeed unchanged:
 
-## What it does
+- content or safety stops reported as errors
+- billing-cycle or quota exhaustion
+- orphaned `tool_call_id` protocol errors
+- transient transport and server failures
 
-1. **Blocks sticky safety models** (e.g. `claude-fable-5`) from being selected as the session chat model.
-2. **Ejects** them at prompt time if a resumed session still has one loaded.
-3. On **content/safety stop** (`stop_reason=refusal`), **auto-failovers** to `k3 → grok-4.5 → deepseek` before retry.
-4. Works with message sanitize (`transform-messages` orphan `tool_call_id` drop) so K3 protocol 400s can heal on retry.
+This is availability behavior, not a safety bypass. Provider safety policy and the user's configured model access remain authoritative.
 
-This is session survival engineering, not a jailbreak.
+## Settings
 
-## Settings (`~/.omk/agent/settings.json`)
+Configure resilience in `~/.omk/agent/settings.json` or `.omk/settings.json`:
 
 ```json
 {
-  "defaultProvider": "kimi-coding",
-  "defaultModel": "k3",
   "providerResilience": {
     "blockStickySafetyModels": true,
     "autoFailoverOnSafetyStop": true,
     "failoverCandidates": [
       { "provider": "kimi-coding", "id": "k3" },
-      { "provider": "grok-oauth-proxy", "id": "grok-4.5" },
-      { "provider": "deepseek", "id": "deepseek-v4-pro" }
+      { "provider": "modelstudio-maas", "id": "qwen3.8-max-preview" }
     ]
   }
 }
 ```
 
-| Key | Default | Meaning |
-|---|---|---|
-| `blockStickySafetyModels` | `true` | Refuse `setModel` / initial pick of Fable-class ids |
-| `autoFailoverOnSafetyStop` | `true` | Switch model before auto-retry on safety stop |
-| `failoverCandidates` | k3→grok→deepseek… | Ordered targets |
+| Setting | Default | Behavior |
+|---|---:|---|
+| `blockStickySafetyModels` | `true` | Rejects models known to produce sticky false-positive safety stops. |
+| `autoFailoverOnSafetyStop` | `true` | Enables failover for safety stops and quota/billing exhaustion. |
+| `failoverCandidates` | built-in chain | Ordered models considered before an automatic retry. |
 
-Disable only if you intentionally want Fable:
+Automatic recovery also requires `retry.enabled: true` and available retry budget.
 
-```json
-"providerResilience": { "blockStickySafetyModels": false, "autoFailoverOnSafetyStop": false }
-```
+## Failover behavior
 
-## Code
+For a safety stop or recognized quota/billing error, OMK:
 
-| Module | Role |
-|---|---|
-| `src/core/provider-resilience.ts` | Shared detectors + failover pick |
-| `src/core/agent-session.ts` | eject / failover / retry wiring |
-| `src/core/model-resolver.ts` | skip sticky on initial model pick |
-| `src/core/settings-manager.ts` | `providerResilience` settings |
-| `packages/ai/.../transform-messages.ts` | drop orphan tool results |
+1. classifies the failed provider attempt;
+2. excludes the current model and models already failed during this retry sequence;
+3. selects the first non-sticky candidate that exists and has configured authentication;
+4. switches models before retrying with a short delay.
 
-## How Fable is neutralized (not "jailbroken")
+If no candidate qualifies, the normal same-model retry policy and backoff apply. Plain authentication errors remain non-retryable and do not trigger failover.
 
-Server-side content/safety stops cannot be removed by OAuth RE or local patches.
-OMK **deletes Fable from the operational surface**:
+Recognized quota shapes include billing-cycle usage limits, `insufficient_quota`, exhausted balances, `GoUsageLimitError`, `FreeUsageLimitError`, and out-of-budget responses. These are classified as `provider.rate_limit`, even when a provider wraps them in HTTP 403.
 
-| Layer | Kill switch |
-|---|---|
-| `models.json` | `claude-fable-5` removed from anthropic catalog |
-| `model-registry.loadModels` | `/fable/i` filtered unless `OMK_ALLOW_STICKY_SAFETY_MODELS=1` |
-| `model-resolver` | sticky skipped; k3 preferred |
-| `setModel` | throws if sticky + block on |
-| `cycleModel` (scoped + available) | sticky filtered; goes through `setModel` |
-| prompt boundary | ejects leftover Fable session model → k3 |
-| safety-stop retry | failover chain before continue |
+The default candidate order is:
 
-**You don't fight Fable. You never load it.**
+1. `kimi-coding/k3`
+2. `modelstudio-maas/qwen3.8-max-preview`
+3. `grok-oauth-proxy/grok-4.5`
+4. `deepseek/deepseek-v4-pro`
+5. `deepseek/deepseek-v4-flash`
+6. `modelstudio-maas/deepseek-v4-pro`
+7. `kimi-coding/kimi-for-coding`
 
-## Operator
+## Retry and termination events
 
-```
-# after rebuild — restart OMK session (required)
+Each provider attempt is journaled separately and emits `session_termination`. A retryable failure is attempt-level when an `auto_retry_start` event follows it. A recovered retry later emits a `completed` termination; an exhausted retry budget leaves the last provider failure as the final termination.
 
-/model k3          # if still on a bad model
-/new               # if transcript is corrupted (orphan tool ids)
+See [Sessions](sessions.md#retries-and-termination-events) for consumer guidance.
 
-# emergency re-enable Fable (not recommended)
-OMK_ALLOW_STICKY_SAFETY_MODELS=1 omk
-# and settings: providerResilience.blockStickySafetyModels=false
-```
+## Protocol recovery
 
-## arXiv note (2026-07)
-
-Recent cs.CL hits on refusal/jailbreak are mostly attack-ASR / weight-edit / prefill studies.
-No immediate ops patch beyond routing+sanitize already in-tree. Skip theory-only papers.
+For orphaned `tool_call_id` errors, OMK removes the failed assistant message from the live retry context. The standard message transform then drops tool results whose originating call is absent. Persisted session history remains unchanged for auditability.

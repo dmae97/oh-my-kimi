@@ -14,6 +14,16 @@ vi.mock("fs", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("fs")>();
 	return {
 		...actual,
+		// Force the enforce path to attempt fchmod even on platforms (e.g. WSL2)
+		// where open() applies the requested mode exactly and ignores umask, so the
+		// temp file would otherwise already be 0600 and the EPERM path never runs.
+		fstatSync: (fd: number, options?: never) => {
+			const stat = actual.fstatSync(fd, options);
+			if (!modeFault.enabled) return stat;
+			return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, {
+				mode: stat.mode & ~0o7777,
+			});
+		},
 		fchmodSync: (fd: number, mode: number): void => {
 			if (modeFault.enabled) throw Object.assign(new Error("injected chmod failure"), { code: "EPERM" });
 			actual.fchmodSync(fd, mode);

@@ -18,6 +18,7 @@ const LINKS = [
   ["omk-tui", "tui"],
   ["omk-agent-core", "agent"],
   ["omk-adaptorch-wpl", "adaptorch-wpl"],
+  ["omk-protocol", "protocol"],
 ];
 
 mkdirSync(nm, { recursive: true });

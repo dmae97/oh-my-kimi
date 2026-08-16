@@ -439,9 +439,11 @@ function schedulePreparedLanes(
 	const batches: SubagentScheduleBatch[] = [];
 
 	while (scheduled.size < lanes.length) {
-		const ready = lanes.filter(
-			(lane) => !scheduled.has(lane.spec.id) && lane.dependsOn.every((dependency) => scheduled.has(dependency)),
-		);
+		const ready = lanes
+			.filter(
+				(lane) => !scheduled.has(lane.spec.id) && lane.dependsOn.every((dependency) => scheduled.has(dependency)),
+			)
+			.sort((left, right) => (left.spec.id < right.spec.id ? -1 : left.spec.id > right.spec.id ? 1 : 0));
 		if (ready.length === 0) {
 			const remaining = lanes.filter((lane) => !scheduled.has(lane.spec.id)).map((lane) => lane.spec.id);
 			blockers.push(`lane dependency cycle or unsatisfied dependency among: ${remaining.join(", ")}`);
@@ -565,7 +567,7 @@ function isMapReduceShape(lanes: readonly PreparedLane[], batches: readonly Suba
 }
 
 function normalizePath(path: string): string {
-	return path.replaceAll("\\", "/").replace(/\/+$/g, "");
+	return path.replace(/\\/g, "/").replace(/\/+$/g, "");
 }
 
 function round(value: number): number {

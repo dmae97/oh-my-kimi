@@ -99,6 +99,10 @@ omk
 
 Reference for environment variables and `auth.json` keys: [`const envMap`](https://github.com/dmae97/omk/blob/main/packages/ai/src/env-api-keys.ts) in [`packages/ai/src/env-api-keys.ts`](https://github.com/dmae97/omk/blob/main/packages/ai/src/env-api-keys.ts).
 
+#### NVIDIA NIM
+
+Set `NVIDIA_API_KEY` and select an NVIDIA model with `/model`. The built-in `nvidia/z-ai/glm-5.2` entry sends `reasoning_effort`, including the `max` level. Other NVIDIA models keep conservative compatibility defaults unless their model metadata explicitly enables reasoning effort.
+
 #### Zyloo
 
 Zyloo is an OpenAI-compatible unified API gateway. Set `ZYLOO_API_KEY` and use any Zyloo-hosted model:

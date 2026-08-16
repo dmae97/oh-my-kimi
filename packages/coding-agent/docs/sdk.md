@@ -216,6 +216,8 @@ const executor = new VerifiedEvidenceExecutor({ store, ledger });
 
 `transcript_repaired`, `tool_timeout`, `tool_late_settlement`, and `workspace_mutation` use that ledger. A receipt at or before a later relevant workspace mutation is blocked by `EvidenceGate`.
 
+New replay events declare `payloadHashAlgorithm: "jcs-rfc8785-v2"`; payload keys are canonicalized with RFC 8785 before SHA-256 hashing, and the algorithm identifier is part of the event-hash commitment. Existing events with no algorithm are verified with the original `json-stringify-v1` contract. Loading, appending to, replaying, or exporting a mixed ledger does not rewrite or relabel those legacy events. Unknown declared algorithms fail closed.
+
 ### Prompting and Message Queueing
 
 `PromptOptions` controls prompt expansion, queueing behavior while streaming, and prompt preflight notifications:
@@ -373,6 +375,8 @@ session.subscribe((event) => {
   }
 });
 ```
+
+`session_termination` is emitted per provider attempt, not only when the outer `prompt()` call stops. If `auto_retry_start` follows a retryable termination, wait for the recovered attempt; `session.lastTermination` is updated to the later `completed` result on success.
 
 ## Options Reference
 
@@ -1212,9 +1216,15 @@ Ledger and receipt publication are fail-closed but not one filesystem transactio
 - **Ledger**: `ReplayLedgerManager` verifies an existing ledger on construction (sequence order, prev-hash chain, payload hash, event hash) and **fails closed** on any violation.
 - **Store**: `EvidenceReceiptStore` uses an owner-only directory, symlink rejection, no-overwrite hard-link publication, and identity rechecks to detect observed path replacement. These checks assume same-UID path mutation is quiescent; they are **not** filesystem sandbox isolation.
 
+### Protocol-first semantic evaluation
+
+New integrations should use `TaskSpec`, `ExecutionAttempt`, `Observation`, `EvaluationResult`, `RuntimeDecision`, and `WaiverRecord` from `omk-protocol`. `evaluateTask()` derives the semantic verdict from current observations; `reduceRuntimeDecision()` derives the next runtime action. See [Run Protocol v1](run-protocol.md) for the rules and current migration boundary.
+
+`evidenceReceiptToObservation(receipt, attemptId)` validates the receipt core digest and emits immutable execution facts for protocol evaluation. It does not replace ledger, attestation, freshness, or sandbox checks.
+
 ### Receipt policy
 
-`EvidenceGate` (default `receiptMode: "prefer"`) gates a `TaskContract` against its satisfied receipts. Pass `executor.createGateOptions()` so the gate resolves receipts, ledger events, and workspace fingerprints from the same store and ledger.
+`EvidenceGate` (default `receiptMode: "prefer"`) gates the legacy `TaskContract` against its satisfied receipts. Pass `executor.createGateOptions()` so the gate resolves receipts, ledger events, and workspace fingerprints from the same store and ledger.
 
 | Mode | Soft missing data | Tamper-grade mismatch | Legacy `hash` / `command` |
 | ------ | ------------------- | ----------------------- | ---------------------------- |
@@ -1228,7 +1238,9 @@ Tamper-grade mismatches include: receipt ID, goal, or claim mismatch; schema ver
 
 `createGateOptions()` returns three resolvers bound to the executor's own store and ledger: `resolveReceipt` (read a stored receipt), `resolveLedgerEvent` (find a chain event by `seq`), and `captureWorkspaceFingerprint` (snapshot the selected artifact set). The gate validates every returned value.
 
-### Integration example
+### Legacy gate integration example
+
+This compatibility path still uses mutable `TaskContract` evidence status and verdict fields. `TaskContractBuilder.setVerdict()` and `updateEvidenceStatus()` are deprecated for new integrations.
 
 ```typescript
 import {
@@ -1329,6 +1341,7 @@ RunJournalStore, appendRunJournalRecordDurably, writeQuarantineBytesDurably,
 classifySessionTermination, formatSessionTermination, SessionTerminationError
 
 // Execution-bound evidence (optional, application-driven verification receipts)
+evidenceReceiptToObservation
 EvidenceReceiptStore
 ReplayLedgerManager
 EvidenceGate

@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `omk-protocol`, the versioned `TaskSpec -> ExecutionAttempt -> Observation -> EvaluationResult -> RuntimeDecision` contract package, with runtime validators, explicit waivers, and pure semantic and runtime-decision reducers.
+- Added `evidenceReceiptToObservation()` to project integrity-checked EvidenceReceipt v3 cores into immutable protocol facts. Legacy mutable `EvidenceStatus` and `TaskContract` verdict APIs remain compatible but are deprecated.
+- Added the optional `omk-book-to-skill` package with compile/update commands, a pinned upstream workflow, advisory generated-skill scanning, and SHA-256 source/artifact provenance checks. Python extractors remain outside OMK core.
+- Added deterministically seeded, bounded `fast-check` model and property suites for WPL transitions, replay migration and CAS, evidence freshness, subagent topology, run-journal CAS, and timeout/abort settlement ordering.
+
+### Changed
+
+- New replay events declare `jcs-rfc8785-v2` and hash RFC 8785-canonical payloads. Events without an algorithm remain verified as `json-stringify-v1`; mixed ledgers and exports preserve legacy records without rewriting them.
+
+### Fixed
+
+- NVIDIA NIM's `z-ai/glm-5.2` entry now transmits `reasoning_effort`, including the generated `max` thinking level; other NVIDIA models keep conservative compatibility defaults.
+- Billing-cycle and quota exhaustion, including provider 403 usage-limit responses, now classify as `provider.rate_limit` and can switch to the first configured, authenticated resilience candidate before retry. Each attempt remains journaled, and a recovered retry ends with a later `completed` termination.
+- Subagent DAG scheduling now sorts simultaneously ready lanes by lane ID, so topology aggregation does not depend on input insertion order.
+- Local release bundles now include `omk-adaptorch-wpl`, allowing isolated installs of the full packed workspace without resolving that dependency from the registry.
+
 ## [0.95.2] - 2026-08-15
 
 ### Changed

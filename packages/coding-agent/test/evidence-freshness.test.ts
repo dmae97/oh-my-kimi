@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createCommandHmacBinder } from "../src/guardrails/evidence-attestation.ts";
 import {
@@ -184,6 +185,22 @@ describe("EvidenceGate ledger-sequence freshness", () => {
 
 		// Then: the receipt post-dates the mutation.
 		expect(result.status).toBe("open");
+	});
+
+	it("blocks exactly when a generated mutation sequence is at or after the receipt", () => {
+		const fixture = createFixture();
+		fc.assert(
+			fc.property(fc.integer({ min: 1, max: 10_000 }), (mutationSeq) => {
+				const result = new EvidenceGate({
+					...fixture.gateOptions,
+					receiptMode: "prefer",
+					resolveVerifiedLedgerSnapshot: undefined,
+					resolveLatestWorkspaceMutationSeq: () => mutationSeq,
+				}).check(fixture.contract);
+				expect(result.status === "blocked").toBe(mutationSeq >= fixture.receiptSeq);
+			}),
+			{ numRuns: 250, seed: 0x0fc52026 },
+		);
 	});
 
 	it.each([{ mutationSeq: 2 }, { mutationSeq: 5 }])(

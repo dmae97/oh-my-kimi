@@ -262,10 +262,15 @@ async function checkPython(cwd: string, path: string | undefined, timeoutMs: num
 	if (await commandExists("pyright")) {
 		const { code, out } = await run("pyright", ["--outputjson", target], cwd, timeoutMs);
 		if (code === null) return { lines: [], skippedReason: "pyright spawn failed" };
-		return { lines: parsePyright(out) };
+		const lines = parsePyright(out);
+		// pyright가 사용 가능한 출력을 내지 못했으면(깨진 설치·실행 오류) 조용히 0건으로
+		// 보고하지 말고 ruff로 폴�백한다. `--outputjson`은 정상 실행 시 항상
+		// generalDiagnostics JSON을 낸다 — 마커가 없으면 실행 실패로 간주한다.
+		if (lines.length > 0 || out.includes('"generalDiagnostics"')) return { lines };
 	}
 	if (await commandExists("ruff")) {
-		const { code, out } = await run("ruff", ["check", "--no-cache", target], cwd, timeoutMs);
+		// ruff의 기본 full 출력은 parseRuff가 읽지 못하므로 concise(path:line:col: msg)를 강제한다.
+		const { code, out } = await run("ruff", ["check", "--no-cache", "--output-format", "concise", target], cwd, timeoutMs);
 		if (code === null) return { lines: [], skippedReason: "ruff spawn failed" };
 		return { lines: parseRuff(out) };
 	}

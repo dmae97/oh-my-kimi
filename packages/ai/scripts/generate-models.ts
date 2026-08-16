@@ -20,6 +20,7 @@ interface ModelsDevModel {
 	name: string;
 	tool_call?: boolean;
 	reasoning?: boolean;
+	reasoning_options?: Array<{ type?: string; values?: string[] }>;
 	limit?: {
 		context?: number;
 		output?: number;
@@ -165,8 +166,21 @@ const NVIDIA_NIM_UNSUPPORTED_MODELS = new Set([
 ]);
 const ZAI_TOOL_STREAM_UNSUPPORTED_MODELS = new Set(["glm-4.5", "glm-4.5-air", "glm-4.5-flash", "glm-4.5v"]);
 
-/** GLM-5.2 accepts reasoning_effort values up to max (none/minimal/low/medium/high/xhigh/max). */
-const GLM52_THINKING_LEVEL_MAP = {
+/**
+ * Bare model ids whose models.dev `reasoning_options` advertise an `xhigh` effort tier.
+ * Populated from the upstream catalog so per-model ceilings never need a hand-maintained list.
+ */
+const UPSTREAM_XHIGH_EFFORT_IDS = new Set<string>();
+
+/** Strips provider prefixes (`x-ai/`, `xai/`) and `:batch`-style suffixes so ids match across catalogs. */
+function normalizeUpstreamModelId(id: string): string {
+	const lastSegment = id.slice(id.lastIndexOf("/") + 1);
+	const suffix = lastSegment.indexOf(":");
+	return (suffix === -1 ? lastSegment : lastSegment.slice(0, suffix)).toLowerCase();
+}
+
+/** GLM-5.2+ accepts reasoning_effort values up to max (none/minimal/low/medium/high/xhigh/max). */
+const GLM5_REASONING_EFFORT_THINKING_LEVEL_MAP = {
 	off: null,
 	minimal: null,
 	low: "low",
@@ -176,9 +190,13 @@ const GLM52_THINKING_LEVEL_MAP = {
 	max: "max",
 } as const;
 
-/** Every GLM-5.2 variant (glm-5.2, glm-5p2, GLM-5.2, highspeed[1m], ...) exposes thinking up to max. */
-function isGlm52(id: string): boolean {
-	return /glm-?5[\.-]?p?2/i.test(id);
+/**
+ * GLM-5.2 and every later GLM-5.x variant (glm-5.2, glm-5p2, GLM-5.2, highspeed[1m], glm-5.3, ...)
+ * exposes reasoning_effort thinking up to max. Plain glm-5, glm-5-turbo and glm-5.1 do not.
+ */
+function isGlm5ReasoningEffortModel(id: string): boolean {
+	const minorVersion = /glm-?5[.\-]?p?(\d+)/i.exec(id);
+	return minorVersion !== null && Number(minorVersion[1]) >= 2;
 }
 const EAGER_TOOL_INPUT_STREAMING_UNSUPPORTED_ANTHROPIC_MODELS = new Set([
 	"github-copilot:claude-haiku-4.5",
@@ -296,8 +314,15 @@ function isGemma4Model(modelId: string): boolean {
 }
 
 function applyThinkingLevelMetadata(model: Model<any>): void {
-	if (isGlm52(model.id)) {
-		mergeThinkingLevelMap(model, GLM52_THINKING_LEVEL_MAP);
+	if (isGlm5ReasoningEffortModel(model.id)) {
+		mergeThinkingLevelMap(model, GLM5_REASONING_EFFORT_THINKING_LEVEL_MAP);
+	}
+	// xAI ships an xhigh effort tier on some Grok models (4.6, 4.20 multi-agent) but not others
+	// (4.5, 4.3). Top tiers are only exposed when explicitly mapped, so drive this from the
+	// upstream reasoning_options instead of a family-wide regex that would over-apply xhigh.
+	// Scoped to Grok deliberately: applying it catalog-wide is a separate, higher-blast-radius change.
+	if (model.reasoning && /grok/i.test(model.id) && UPSTREAM_XHIGH_EFFORT_IDS.has(normalizeUpstreamModelId(model.id))) {
+		mergeThinkingLevelMap(model, { xhigh: "xhigh" });
 	}
 	if (
 		(model.api === "openai-responses" || model.api === "azure-openai-responses") &&
@@ -373,7 +398,8 @@ function applyThinkingLevelMetadata(model: Model<any>): void {
 	if (isGoogleThinkingApi(model) && isGemma4Model(model.id)) {
 		mergeThinkingLevelMap(model, { off: null, minimal: "MINIMAL", low: null, medium: null, high: "HIGH" });
 	}
-	if (model.provider === "groq" && model.id === "qwen/qwen3-32b") {
+	// Groq's Qwen3 models only accept reasoning_effort none/default, never the OpenAI-style tiers.
+	if (model.provider === "groq" && /qwen3/i.test(model.id)) {
 		mergeThinkingLevelMap(model, { minimal: null, low: null, medium: null, high: "default" });
 	}
 	if (model.provider === "openai-codex" && supportsOpenAiXhigh(model.id)) {
@@ -429,7 +455,7 @@ function getBedrockBaseUrl(modelId: string): string {
 }
 
 function normalizeNvidiaModelId(modelId: string): string {
-	return modelId.toLowerCase().replaceAll("_", ".");
+	return modelId.toLowerCase().replace(/_/g, ".");
 }
 
 async function fetchNvidiaNimModelIds(): Promise<Map<string, string>> {
@@ -704,6 +730,17 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 		console.log("Fetching models from models.dev API...");
 		const response = await fetch("https://models.dev/api.json");
 		const data = await response.json();
+
+		// Record upstream-declared xhigh effort support before the per-provider passes run, so
+		// thinking metadata can consult real catalog data rather than hardcoded model versions.
+		for (const providerData of Object.values(
+			data as Record<string, { models?: Record<string, ModelsDevModel> } | undefined>,
+		)) {
+			for (const [modelId, model] of Object.entries(providerData?.models ?? {})) {
+				const effortValues = model.reasoning_options?.find((option) => option.type === "effort")?.values;
+				if (effortValues?.includes("xhigh")) UPSTREAM_XHIGH_EFFORT_IDS.add(normalizeUpstreamModelId(modelId));
+			}
+		}
 
 		const models: Model<any>[] = [];
 		const nvidiaNimModelIds = data.nvidia?.models ? await fetchNvidiaNimModelIds() : new Map<string, string>();
@@ -1014,7 +1051,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 						compat: {
 							supportsDeveloperRole: false,
 							thinkingFormat: "zai",
-							...(isGlm52(modelId) ? { supportsReasoningEffort: true } : {}),
+							...(isGlm5ReasoningEffortModel(modelId) ? { supportsReasoningEffort: true } : {}),
 							...(!ZAI_TOOL_STREAM_UNSUPPORTED_MODELS.has(modelId) ? { zaiToolStream: true } : {}),
 						},
 						contextWindow: m.limit?.context || 4096,
@@ -1143,7 +1180,9 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 						cacheRead: m.cost?.cache_read || 0,
 						cacheWrite: m.cost?.cache_write || 0,
 					},
-					compat: NVIDIA_OPENAI_COMPAT,
+					compat: isGlm5ReasoningEffortModel(liveModelId)
+						? { ...NVIDIA_OPENAI_COMPAT, supportsReasoningEffort: true }
+						: NVIDIA_OPENAI_COMPAT,
 					contextWindow: m.limit?.context || 4096,
 					maxTokens: m.limit?.output || 4096,
 				});
@@ -1226,7 +1265,10 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					baseUrl = `${variant.basePath}/v1`;
 				}
 
-				if (variant.provider === "opencode" && modelId === "grok-build-0.1") {
+				// supportsReasoningEffort only exists on OpenAICompletionsCompat. OpenCode has flipped
+				// this model between openai-completions and openai-responses, so only set it when the
+				// resolved api actually accepts the field.
+				if (variant.provider === "opencode" && modelId === "grok-build-0.1" && api === "openai-completions") {
 					compat = { ...(compat ?? {}), supportsReasoningEffort: false };
 				}
 
@@ -2217,6 +2259,18 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0 },
+			contextWindow: 1048576,
+			maxTokens: 65536,
+		},
+		{
+			id: "gemini-3.7-flash",
+			name: "Gemini 3.7 Flash (Vertex)",
+			api: "google-vertex",
+			provider: "google-vertex",
+			baseUrl: VERTEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0 },
 			contextWindow: 1048576,
 			maxTokens: 65536,
 		},

@@ -19,6 +19,7 @@ export type EvidenceCategory =
 	| "docs"
 	| "orchestration";
 
+/** @deprecated Use protocol Observation presence plus ClaimEvaluation; do not persist mutable semantic state. */
 export type EvidenceStatus = "pending" | "gathering" | "satisfied" | "failed" | "waived";
 
 export interface EvidenceItem {
@@ -34,7 +35,7 @@ export interface EvidenceItem {
 	hash?: string;
 	/** When the evidence was gathered. */
 	timestamp: string;
-	/** Whether the evidence is available. */
+	/** @deprecated Legacy mutable state. New code records an immutable protocol Observation instead. */
 	status: EvidenceStatus;
 	/** Receipt v3 metadata consumed by receipt-aware evidence gates. */
 	receiptId?: string;
@@ -56,7 +57,7 @@ export interface TaskContract {
 	requiredEvidence: EvidenceItem[];
 	/** Remaining risk note. */
 	finalRisk: string;
-	/** Verdict: can the task be considered done? */
+	/** @deprecated Derive `EvaluationResult.semanticVerdict` from current observations instead. */
 	verdict: "pass" | "fail" | "conditional";
 	/** ISO-8601 timestamp of contract creation. */
 	createdAt: string;
@@ -302,6 +303,9 @@ export interface EvidenceReceipt {
 	readonly envelope: EvidenceReceiptEnvelope;
 }
 
+/** Serializer contract used to derive a replay event's payload hash. */
+export type ReplayPayloadHashAlgorithm = "json-stringify-v1" | "jcs-rfc8785-v2";
+
 /** Replay payload intentionally commits only the immutable core, avoiding a ledger/hash cycle. */
 export interface EvidenceReceiptReplayPayload {
 	readonly receiptId: string;
@@ -323,9 +327,14 @@ export interface ReplayEvent {
 	payload: unknown;
 	/** SHA-256 of the serialized payload for integrity. */
 	payloadHash: string;
+	/**
+	 * Serializer contract for `payloadHash`. Missing means the legacy
+	 * `json-stringify-v1` algorithm; new events use `jcs-rfc8785-v2`.
+	 */
+	payloadHashAlgorithm?: ReplayPayloadHashAlgorithm;
 	/** eventHash of the previous event in the chain ("genesis" for the first event). */
 	prevHash: string;
-	/** SHA-256 over [seq, type, timestamp, goalId, laneId, payloadHash, prevHash]. */
+	/** SHA-256 over chain metadata, the optional payload hash algorithm, payloadHash, and prevHash. */
 	eventHash: string;
 }
 

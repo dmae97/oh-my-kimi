@@ -36,6 +36,11 @@ import {
 	validateEvidenceReceipt,
 } from "./evidence-receipt.ts";
 import { ReplayLedgerStore, replayLedgerHeadsEqual } from "./replay-ledger-store.ts";
+import {
+	computeReplayPayloadHash,
+	JCS_REPLAY_PAYLOAD_HASH_ALGORITHM,
+	LEGACY_REPLAY_PAYLOAD_HASH_ALGORITHM,
+} from "./replay-payload-hash.ts";
 
 function sha256(input: string): string {
 	return createHash("sha256").update(input).digest("hex");
@@ -90,12 +95,14 @@ export class TaskContractBuilder {
 		return this;
 	}
 
+	/** @deprecated Use `evaluateTask()` from `omk-protocol`; verdicts are derived, not mutated. */
 	setVerdict(verdict: "pass" | "fail" | "conditional"): this {
 		this.verdict = verdict;
 		this.touch();
 		return this;
 	}
 
+	/** @deprecated Append a protocol Observation and re-evaluate instead of mutating evidence state. */
 	updateEvidenceStatus(claim: string, status: EvidenceStatus, gapReason?: string): this {
 		const item = this.requiredEvidence.find((e) => e.claim === claim);
 		if (item) {
@@ -216,17 +223,12 @@ function parseEvidenceItem(raw: unknown, index: number): EvidenceItem {
 const GENESIS_HASH = "genesis";
 
 function computeEventHash(event: Omit<ReplayEvent, "eventHash">): string {
-	return sha256(
-		JSON.stringify([
-			event.seq,
-			event.type,
-			event.timestamp,
-			event.goalId,
-			event.laneId ?? null,
-			event.payloadHash,
-			event.prevHash,
-		]),
-	);
+	const metadata = [event.seq, event.type, event.timestamp, event.goalId, event.laneId ?? null];
+	const material =
+		event.payloadHashAlgorithm === undefined
+			? [...metadata, event.payloadHash, event.prevHash]
+			: [...metadata, event.payloadHashAlgorithm, event.payloadHash, event.prevHash];
+	return sha256(JSON.stringify(material));
 }
 
 function parseReplayEventLine(line: string, lineNumber: number): ReplayEvent {
@@ -240,7 +242,7 @@ function parseReplayEventLine(line: string, lineNumber: number): ReplayEvent {
 		throw new Error(`Replay ledger corrupted at line ${lineNumber}: event must be an object`);
 	}
 	const event = raw as Record<string, unknown>;
-	const { seq, type, timestamp, goalId, laneId, payloadHash, prevHash, eventHash } = event;
+	const { seq, type, timestamp, goalId, laneId, payloadHashAlgorithm, payloadHash, prevHash, eventHash } = event;
 	if (
 		typeof seq !== "number" ||
 		typeof type !== "string" ||
@@ -254,7 +256,14 @@ function parseReplayEventLine(line: string, lineNumber: number): ReplayEvent {
 	) {
 		throw new Error(`Replay ledger corrupted at line ${lineNumber}: event fields are missing or mistyped`);
 	}
-	return {
+	if (
+		payloadHashAlgorithm !== undefined &&
+		payloadHashAlgorithm !== LEGACY_REPLAY_PAYLOAD_HASH_ALGORITHM &&
+		payloadHashAlgorithm !== JCS_REPLAY_PAYLOAD_HASH_ALGORITHM
+	) {
+		throw new Error(`Replay ledger corrupted at line ${lineNumber}: unsupported payload hash algorithm`);
+	}
+	const parsed: ReplayEvent = {
 		seq,
 		type: type as ReplayEvent["type"],
 		timestamp,
@@ -265,6 +274,7 @@ function parseReplayEventLine(line: string, lineNumber: number): ReplayEvent {
 		prevHash,
 		eventHash,
 	};
+	return payloadHashAlgorithm === undefined ? parsed : { ...parsed, payloadHashAlgorithm };
 }
 
 function parseReplayLedgerBytes(bytes: Buffer, goalId: string): ReplayEvent[] {
@@ -281,7 +291,8 @@ function parseReplayLedgerBytes(bytes: Buffer, goalId: string): ReplayEvent[] {
 			throw new Error(`Replay ledger corrupted at line ${index + 1}: expected seq ${index + 1}, got ${event.seq}`);
 		}
 		if (event.prevHash !== prevHash) throw new Error(`Replay ledger chain broken at line ${index + 1}`);
-		if (sha256(JSON.stringify(event.payload)) !== event.payloadHash) {
+		const payloadHashAlgorithm = event.payloadHashAlgorithm ?? LEGACY_REPLAY_PAYLOAD_HASH_ALGORITHM;
+		if (computeReplayPayloadHash(event.payload, payloadHashAlgorithm) !== event.payloadHash) {
 			throw new Error(`Replay ledger payload tampered at line ${index + 1} (seq ${event.seq})`);
 		}
 		if (computeEventHash(event) !== event.eventHash) {
@@ -306,7 +317,7 @@ export class ReplayLedgerManager {
 		this.committedHead = { fileIdentity: null, size: 0, lastSeq: 0, lastHash: GENESIS_HASH };
 		this.store = new ReplayLedgerStore(ledgerPath, (bytes) => {
 			const events = parseReplayLedgerBytes(bytes, goalId);
-			const last = events.at(-1);
+			const last = events[events.length - 1];
 			return { lastSeq: last?.seq ?? 0, lastHash: last?.eventHash ?? GENESIS_HASH };
 		});
 		this.refresh(expectedHead);
@@ -319,18 +330,20 @@ export class ReplayLedgerManager {
 	}
 
 	append(
-		event: Omit<ReplayEvent, "seq" | "timestamp" | "payloadHash" | "prevHash" | "eventHash">,
+		event: Omit<ReplayEvent, "seq" | "timestamp" | "payloadHashAlgorithm" | "payloadHash" | "prevHash" | "eventHash">,
 		expectedHead: ReplayLedgerHead = this.committedHead,
 	): ReplayEvent {
 		if (event.goalId !== this.goalId) throw new Error("Replay event goalId does not match the ledger");
 		if (!replayLedgerHeadsEqual(expectedHead, this.committedHead)) {
 			throw new Error("Replay manager expected-head CAS is stale");
 		}
-		const payloadHash = sha256(JSON.stringify(event.payload));
+		const payloadHashAlgorithm = JCS_REPLAY_PAYLOAD_HASH_ALGORITHM;
+		const payloadHash = computeReplayPayloadHash(event.payload, payloadHashAlgorithm);
 		const chained: Omit<ReplayEvent, "eventHash"> = {
 			...event,
 			seq: expectedHead.lastSeq + 1,
 			timestamp: new Date().toISOString(),
+			payloadHashAlgorithm,
 			payloadHash,
 			prevHash: expectedHead.lastHash,
 		};

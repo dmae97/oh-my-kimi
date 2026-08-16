@@ -19,6 +19,12 @@ Use `/session` in interactive mode to see the current session file, session ID, 
 
 For the JSONL file format and SessionManager API, see [Session Format](session-format.md).
 
+## Retries and Termination Events
+
+Each provider attempt writes its own `run_started`/`run_finished` journal pair and emits `session_termination`. A retryable termination is attempt-level when `auto_retry_start` follows it; consumers should not treat that event alone as the end of the outer `prompt()` call.
+
+If a retry or failover succeeds, the later attempt emits `completed` and becomes `session.lastTermination`. If retry budget is exhausted, the last provider failure remains final. Quota and billing-cycle exhaustion are classified as `provider.rate_limit` and can switch through the configured provider-resilience chain before retrying. See [Provider Resilience](provider-resilience.md).
+
 ## Session Commands
 
 | Command | Description |

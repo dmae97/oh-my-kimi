@@ -77,6 +77,16 @@ If the reserved budget exceeds the context window, the reserve boundary is ignor
 
 You can also trigger manually with `/compact [instructions]`, where optional instructions focus the summary. If a run is active, manual compaction waits for abort-driven terminal events, including tool results, to persist before capturing the transcript.
 
+### Overflow Recovery
+
+If a provider rejects a request for context overflow despite OMK's projection, OMK removes the rejected assistant message from retry context, compacts, and retries automatically. Recovery is bounded and staged:
+
+1. The first recovery uses the configured compaction budgets.
+2. If that retry also overflows, OMK recompacts from the previous kept boundary with `reserveTokens`, `reservedOutputTokens`, and `keepRecentTokens` capped at 4096, then retries once more.
+3. A third overflow stops recovery and reports an actionable error instead of looping.
+
+Compaction cannot shrink a latest user message that alone exceeds the provider's effective context window; split that input or select a model with a larger effective window.
+
 ### Model Selection
 
 By default, compaction uses the active session model. Set `compaction.model` to an authenticated canonical `provider/model` reference when summaries should use a different model. For example, `zai/glm-5.2` keeps an interactive Claude session while using GLM only for auto-compaction and `/compact`.

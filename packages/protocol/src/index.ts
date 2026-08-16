@@ -1,0 +1,43 @@
+export { reduceRuntimeDecision } from "./decision.ts";
+export { evaluateTask, ProtocolInvariantError } from "./evaluation.ts";
+export type {
+	AllCondition,
+	AnyCondition,
+	AttemptExecutor,
+	AttemptOutcome,
+	AttemptTrigger,
+	ClaimCondition,
+	ClaimEvaluation,
+	ClaimPredicate,
+	ClaimReasonCode,
+	ClaimResult,
+	EvaluationInput,
+	EvaluationResult,
+	ExecutionAttempt,
+	JsonObject,
+	JsonPrimitive,
+	JsonValue,
+	NotCondition,
+	Observation,
+	ObservationCondition,
+	ProtocolVersion,
+	RequirementLevel,
+	RuntimeAction,
+	RuntimeDecision,
+	RuntimeDecisionInput,
+	RuntimeDecisionPolicy,
+	RuntimeDecisionReason,
+	SemanticVerdict,
+	TaskSpec,
+	WaiverRecord,
+} from "./types.ts";
+export { PROTOCOL_VERSION } from "./types.ts";
+export {
+	ProtocolValidationError,
+	parseEvaluationResult,
+	parseExecutionAttempt,
+	parseObservation,
+	parseRuntimeDecision,
+	parseTaskSpec,
+	parseWaiverRecord,
+} from "./validation.ts";

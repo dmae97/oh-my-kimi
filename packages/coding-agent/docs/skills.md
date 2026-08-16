@@ -11,6 +11,7 @@ OMK implements the [Agent Skills standard](https://agentskills.io/specification)
 ## Table of Contents
 
 - [Locations](#locations)
+- [Optional Document Compiler](#optional-document-compiler)
 - [How Skills Work](#how-skills-work)
 - [Skill Commands](#skill-commands)
 - [Skill Structure](#skill-structure)
@@ -41,6 +42,10 @@ Discovery rules:
 - In `~/.agents/skills/` and project `.agents/skills/`, root `.md` files are ignored
 
 Disable discovery with `--no-skills` (explicit `--skill` paths still load).
+
+## Optional Document Compiler
+
+Install [`omk-book-to-skill`](book-to-skill.md) to compile PDF, EPUB, DOCX, HTML, Markdown, text, RTF, MOBI, and AZW sources into generated skills. It is an optional OMK package, not a built-in skill, and keeps Python extractors outside OMK core.
 
 ### Using Skills from Other Harnesses
 
@@ -88,7 +93,7 @@ Arguments after the command are appended after the skill content for the current
 
 `!omk <role-or-request>` is a deterministic OMK hub router. Exact role aliases such as `frontend`, `backend`, `loop`, and `plan` select `omk-frontend`, `omk-backend-data`, `omk-loop`, and `omk-plan`; free-form prompts are scored against the same hub vocabulary and fall back to `omk-skills` when no role is clear.
 
-In interactive mode, type `!` to open skill autocomplete. Selecting a skill inserts the explicit `!skill:name ` form, and `!omk` is offered when the OMK skill hub index is available. Bash remains available as `! command`, and `!! command` runs bash without sending output to the model. If `!token` is not a known skill, it falls back to bash; use `! command` when a command name might collide with a skill. `!omk` is reserved for OMK hub routing and never falls through to bash.
+In interactive mode, type `!` to open skill autocomplete. Selecting a skill inserts the explicit `!skill:name` form, and `!omk` is offered when the OMK skill hub index is available. Bash remains available as `! command`, and `!! command` runs bash without sending output to the model. If `!token` is not a known skill, it falls back to bash; use `! command` when a command name might collide with a skill. `!omk` is reserved for OMK hub routing and never falls through to bash.
 
 Toggle skill commands via `/settings` in interactive mode or in `settings.json`:
 
@@ -173,11 +178,13 @@ Invalid: `PDF-Processing`, `-pdf`, `pdf--processing`
 The description determines when the agent loads the skill. Be specific.
 
 Good:
+
 ```yaml
 description: Extracts text and tables from PDF files, fills PDF forms, and merges multiple PDFs. Use when working with PDF documents.
 ```
 
 Poor:
+
 ```yaml
 description: Helps with PDFs.
 ```
@@ -206,6 +213,7 @@ brave-search/
 ```
 
 **SKILL.md:**
+
 ````markdown
 ---
 name: brave-search

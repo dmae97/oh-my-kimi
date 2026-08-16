@@ -59,6 +59,19 @@ export function isContentSafetyStopMessage(text: string | undefined): boolean {
 	);
 }
 
+/**
+ * Billing/quota exhaustion ("usage limit for this billing cycle",
+ * "insufficient_quota", zero balance, ...). Same-model retry is useless until
+ * the cycle resets, but the turn can still be saved by failing over to another
+ * candidate — so these classify as retryable-with-failover, not auth-fatal.
+ */
+export function isQuotaExhaustionMessage(text: string | undefined): boolean {
+	if (!text) return false;
+	return /usage limit|GoUsageLimitError|FreeUsageLimitError|available balance|insufficient_quota|out of budget|quota exceeded|billing/i.test(
+		text,
+	);
+}
+
 /** Orphan tool results / Kimi-K3 protocol shape errors that heal after sanitize+retry. */
 export function isOrphanToolCallIdError(text: string | undefined): boolean {
 	if (!text) return false;

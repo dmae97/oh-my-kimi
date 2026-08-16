@@ -12,7 +12,15 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const packages = ["packages/ai", "packages/tui", "packages/agent", "packages/adaptorch-wpl", "packages/coding-agent"];
+const packages = [
+	"packages/ai",
+	"packages/tui",
+	"packages/agent",
+	"packages/protocol",
+	"packages/adaptorch-wpl",
+	"packages/coding-agent",
+	"packages/book-to-skill",
+];
 
 const forbidden = [
 	{

@@ -35,6 +35,7 @@ For the full first-run flow, see [Quickstart](quickstart.md).
 - [Quickstart](quickstart.md) - install, authenticate, and run a first session.
 - [Using OMK](usage.md) - interactive mode, slash commands, context files, and CLI reference.
 - [Providers](providers.md) - subscription and API-key setup for built-in providers.
+- [Provider Resilience](provider-resilience.md) - retry, failover, quota, and safety-stop recovery.
 - [Containerization](containerization.md) - sandbox omk with OpenShell, Gondolin, or Docker.
 - [Settings](settings.md) - global and project settings.
 - [Environment Variables](environment-variables.md) - process configuration and bash-tool session environment.
@@ -46,6 +47,7 @@ For the full first-run flow, see [Quickstart](quickstart.md).
 
 - [Extensions](extensions.md) - TypeScript modules for tools, commands, events, and custom UI.
 - [Skills](skills.md) - Agent Skills for reusable on-demand capabilities.
+- [Book to Skill](book-to-skill.md) - optional document-to-skill compiler with local provenance checks.
 - [Prompt templates](prompt-templates.md) - reusable prompts that expand from slash commands.
 - [Themes](themes.md) - built-in and custom terminal themes.
 - [OMK packages](packages.md) - bundle and share extensions, skills, prompts, and themes.
@@ -55,6 +57,7 @@ For the full first-run flow, see [Quickstart](quickstart.md).
 ## Programmatic usage
 
 - [SDK](sdk.md) - embed omk in Node.js applications.
+- [Run Protocol v1](run-protocol.md) - canonical task, attempt, observation, evaluation, decision, and waiver contracts.
 - [RPC mode](rpc.md) - integrate over stdin/stdout JSONL.
 - [JSON event stream mode](json.md) - print mode with structured events.
 - [TUI components](tui.md) - build custom terminal UI for extensions.

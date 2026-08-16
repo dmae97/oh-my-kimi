@@ -150,7 +150,7 @@ The doctor verifies the session's complete JSONL prefix, run journal, compaction
 
 Session and journal bytes after the final newline are copied byte-for-byte to a `.quarantine-*` file before the original is atomically rewritten to its valid complete prefix. Opening a session uses the same complete-prefix rule; `SessionManager.getQuarantineReport()` reports any startup quarantine.
 
-Each real agent run writes fsynced `run_started` and `run_finished` records to `<session>.runjournal`. An unclosed valid run is recorded as an inferred `process_crash` on the next startup. JSON/RPC emit `session_termination`; text and TUI errors include kind, provider/model, retryability, cause, run ID, and next action.
+Each agent attempt writes fsynced `run_started` and `run_finished` records to `<session>.runjournal`. An unclosed valid run is recorded as an inferred `process_crash` on the next startup. JSON/RPC emit `session_termination`; text and TUI errors include kind, provider/model, retryability, cause, run ID, and next action. Recovered retries therefore record the failed attempt and a later `completed` attempt.
 
 ## Context Files
 

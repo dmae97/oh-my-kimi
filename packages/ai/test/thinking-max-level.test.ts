@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { MODELS } from "../src/models.generated.ts";
 import { clampThinkingLevel, getModel, getModels, getSupportedThinkingLevels } from "../src/models.ts";
 
-const GLM52_MODEL_IDS = [
+const GLM5_EFFORT_MODEL_IDS = [
 	["cloudflare-ai-gateway", "workers-ai/@cf/zai-org/glm-5.2"],
 	["cloudflare-workers-ai", "@cf/zai-org/glm-5.2"],
 	["fireworks", "accounts/fireworks/models/glm-5p2"],
@@ -16,24 +16,29 @@ const GLM52_MODEL_IDS = [
 	["vercel-ai-gateway", "zai/glm-5.2"],
 	["vercel-ai-gateway", "zai/glm-5.2-fast"],
 	["zai", "glm-5.2"],
-	["zai", "glm-5.2-highspeed[1m]"],
+	["zai", "glm-5.2-highspeed"],
+	["zai", "glm-5.3"],
 	["zai-coding-cn", "glm-5.2"],
-	["zai-coding-cn", "glm-5.2-highspeed[1m]"],
+	["zai-coding-cn", "glm-5.2-highspeed"],
+	["zai-coding-cn", "glm-5.3"],
+	["opencode-go", "glm-5.3"],
 ] as const;
 
 describe("max thinking level", () => {
-	it.each(GLM52_MODEL_IDS)("exposes the max thinking level for glm-5.2 on %s (%s)", (provider, id) => {
+	it.each(GLM5_EFFORT_MODEL_IDS)("exposes the max thinking level for GLM-5.2+ on %s (%s)", (provider, id) => {
 		const model = getModels(provider).find((candidate) => candidate.id === id);
 		expect(model).toBeDefined();
 		expect(getSupportedThinkingLevels(model!)).toContain("max");
 		expect(model!.thinkingLevelMap?.max).toBe("max");
 	});
 
-	it("covers every glm-5.2 model in the registry with a max mapping", () => {
+	it("covers every GLM-5.2+ model in the registry with a max mapping", () => {
 		const unmapped: string[] = [];
 		for (const [provider, models] of Object.entries(MODELS)) {
 			for (const model of Object.values(models)) {
-				if (/glm-?5[.-]?p?2/i.test(model.id)) {
+				// Mirrors isGlm5ReasoningEffortModel() in scripts/generate-models.ts: GLM-5.2 and later.
+				const glmMinorVersion = /glm-?5[.-]?p?(\d+)/i.exec(model.id);
+				if (glmMinorVersion !== null && Number(glmMinorVersion[1]) >= 2) {
 					if (model.thinkingLevelMap?.max !== "max") unmapped.push(`${provider}/${model.id}`);
 				}
 			}
@@ -53,6 +58,30 @@ describe("max thinking level", () => {
 			expect(model!.thinkingLevelMap?.max).toBe("max");
 		},
 	);
+
+	// models.dev reasoning_options: grok-4.6 exposes low/medium/high/xhigh, while grok-4.5 and
+	// grok-4.3 stop at high. Top tiers are only visible when explicitly mapped, so an unmapped
+	// grok-4.6 would silently clamp `/thinking xhigh` down to high.
+	it.each([
+		["xai", "grok-4.6"],
+		["openrouter", "x-ai/grok-4.6"],
+		["vercel-ai-gateway", "xai/grok-4.6"],
+		["github-copilot", "grok-4.6"],
+		["opencode", "grok-4.6"],
+	] as const)("exposes the xhigh thinking level for grok-4.6 on %s (%s)", (provider, id) => {
+		const model = getModels(provider).find((candidate) => candidate.id === id);
+		expect(model).toBeDefined();
+		expect(getSupportedThinkingLevels(model!)).toContain("xhigh");
+		expect(model!.thinkingLevelMap?.xhigh).toBe("xhigh");
+		expect(clampThinkingLevel(model!, "xhigh")).toBe("xhigh");
+	});
+
+	it.each(["grok-4.5", "grok-4.3"] as const)("keeps %s capped at high (no upstream xhigh tier)", (id) => {
+		const model = getModel("xai", id);
+		expect(model).toBeDefined();
+		expect(getSupportedThinkingLevels(model!)).not.toContain("xhigh");
+		expect(clampThinkingLevel(model!, "xhigh")).toBe("high");
+	});
 
 	it("keeps Opus 4.6 topping out at effort max via xhigh (no separate max level)", () => {
 		const model = getModel("anthropic", "claude-opus-4-6");

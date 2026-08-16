@@ -202,6 +202,8 @@ When a provider requests a retry delay longer than `retry.provider.maxRetryDelay
 
 Keep `retry.provider.maxRetries` at `0` unless provider-level retries are explicitly needed. Setting it above `0` can make SDK/provider retries handle out-of-usage-limit errors before OMK sees them, which may block the agent until the provider quota resets in some circumstances.
 
+At the agent level, recognized quota and billing-cycle failures are retryable so OMK can first switch to an authenticated `providerResilience.failoverCandidates` entry. If no candidate qualifies, normal retry backoff applies. See [Provider Resilience](provider-resilience.md).
+
 ```json
 {
   "retry": {

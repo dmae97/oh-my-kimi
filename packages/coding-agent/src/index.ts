@@ -476,6 +476,7 @@ export {
 	type RedactedCommandDescriptor,
 	redactCommandDescriptor,
 } from "./guardrails/command-redaction.ts";
+export { evidenceReceiptToObservation } from "./guardrails/evidence-protocol.ts";
 export {
 	computeEvidenceCommandSha256,
 	computeEvidenceReceiptCoreSha256,
@@ -605,6 +606,7 @@ export type {
 	MissingArtifactState,
 	ReplayEvent,
 	ReplayEventType,
+	ReplayPayloadHashAlgorithm,
 	Sha256Hex,
 	TaskContract,
 	WorkspaceFingerprint,

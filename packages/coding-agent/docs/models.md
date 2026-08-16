@@ -4,6 +4,7 @@ Add custom providers and models (Ollama, vLLM, LM Studio, proxies) via `~/.omk/a
 
 ## Table of Contents
 
+- [Built-in NVIDIA GLM-5.2](#built-in-nvidia-glm-52)
 - [Minimal Example](#minimal-example)
 - [Full Example](#full-example)
 - [Supported APIs](#supported-apis)
@@ -13,6 +14,10 @@ Add custom providers and models (Ollama, vLLM, LM Studio, proxies) via `~/.omk/a
 - [Per-model Overrides](#per-model-overrides)
 - [Anthropic Messages Compatibility](#anthropic-messages-compatibility)
 - [OpenAI Compatibility](#openai-compatibility)
+
+## Built-in NVIDIA GLM-5.2
+
+With `NVIDIA_API_KEY` configured, `nvidia/z-ai/glm-5.2` supports OMK thinking levels through NVIDIA NIM. Its generated metadata explicitly enables `reasoning_effort`, so `/thinking max` is sent as `reasoning_effort: "max"`. Other NVIDIA models do not inherit that capability automatically.
 
 ## Minimal Example
 
@@ -146,22 +151,29 @@ Set `api` at provider level (default for all models) or model level (override pe
 The `apiKey` and `headers` fields support command execution, environment interpolation, and literals:
 
 - **Shell command:** `"!command"` at the start executes the whole value as a command and uses stdout
+
   ```json
   "apiKey": "!security find-generic-password -ws 'anthropic'"
   "apiKey": "!op read 'op://vault/item/credential'"
   ```
+
 - **Environment interpolation:** `"$ENV_VAR"` or `"${ENV_VAR}"` uses the value of the named variable. Interpolation works inside larger literals.
+
   ```json
   "apiKey": "$MY_API_KEY"
   "apiKey": "${KEY_PREFIX}_${KEY_SUFFIX}"
   ```
+
   `$FOO_BAR` is the variable `FOO_BAR`; use `${FOO}_BAR` when `BAR` is literal text. Missing environment variables make the value unresolved.
 - **Escapes:** `"$$"` emits a literal `"$"`; `"$!"` emits a literal `"!"` without triggering command execution.
+
   ```json
   "apiKey": "$$literal-dollar-prefix"
   "apiKey": "$!literal-bang-prefix"
   ```
+
 - **Literal value:** Used directly
+
   ```json
   "apiKey": "sk-..."
   ```

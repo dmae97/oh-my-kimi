@@ -8,8 +8,10 @@ const packages = [
 	{ directory: "packages/ai", name: "omk-ai" },
 	{ directory: "packages/tui", name: "omk-tui" },
 	{ directory: "packages/agent", name: "omk-agent-core" },
+	{ directory: "packages/protocol", name: "omk-protocol" },
 	{ directory: "packages/adaptorch-wpl", name: "omk-adaptorch-wpl" },
 	{ directory: "packages/coding-agent", name: "open-multi-agent-kit" },
+	{ directory: "packages/book-to-skill", name: "omk-book-to-skill" },
 ];
 
 const dryRun = process.argv.includes("--dry-run");

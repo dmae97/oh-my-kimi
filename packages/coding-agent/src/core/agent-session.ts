@@ -125,6 +125,8 @@ import { type ToolCallMetric, TurnMetricsSink } from "./turn-metrics.ts";
 
 /** Values that disable a session-level feature through its environment variable. */
 const DISABLED_ENV_VALUES = new Set(["0", "false", "off", "disable", "disabled"]);
+const MAX_OVERFLOW_RECOVERY_ATTEMPTS = 2;
+const OVERFLOW_RECOVERY_EMERGENCY_TOKENS = 4_096;
 
 function isDisabledEnvValue(value: string | undefined): boolean {
 	return value !== undefined && DISABLED_ENV_VALUES.has(value.trim().toLowerCase());
@@ -166,6 +168,7 @@ import { findExactModelReferenceMatch } from "./model-resolver.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import {
 	isContentSafetyStopMessage,
+	isQuotaExhaustionMessage,
 	isStickySafetyModel,
 	isTransientProviderErrorMessage,
 	pickFailoverCandidate,
@@ -664,7 +667,7 @@ export class AgentSession {
 	// Compaction state
 	private _compactionAbortController: AbortController | undefined = undefined;
 	private _autoCompactionAbortController: AbortController | undefined = undefined;
-	private _overflowRecoveryAttempted = false;
+	private _overflowRecoveryAttempts = 0;
 	private _thresholdCompactionEmergency = false;
 	private _compactionHysteresisState: CompactionHysteresisState = createCompactionHysteresisState();
 
@@ -981,11 +984,14 @@ export class AgentSession {
 		) {
 			return { area: "provider", code: "refusal" };
 		}
+		// Quota/billing exhaustion is checked BEFORE the generic 401/403 auth
+		// patterns: "403 ... usage limit for this billing cycle" is transient per
+		// cycle and must fail over, not terminate the turn as an auth error.
+		if (isQuotaExhaustionMessage(text) || /rate.?limit|too many requests|429/i.test(text)) {
+			return { area: "provider", code: "rate_limit" };
+		}
 		if (/auth|unauthori[sz]ed|forbidden|invalid.?api.?key|no api key|401|403|\/login/i.test(text)) {
 			return { area: "provider", code: "auth" };
-		}
-		if (/rate.?limit|too many requests|429|quota|available balance|billing/i.test(text)) {
-			return { area: "provider", code: "rate_limit" };
 		}
 		// Kimi/K3 + OpenAI-compat: orphan tool results after dropped error assistants.
 		// Sanitize-and-retry (transform-messages drops orphans), not a hard tool fatal.
@@ -1003,6 +1009,9 @@ export class AgentSession {
 	private _classifyPreflightCause(message: string): SessionTerminationCause {
 		if (!this.model || /no model|model selected|model is required/i.test(message)) {
 			return { area: "configuration", code: "invalid" };
+		}
+		if (isQuotaExhaustionMessage(message)) {
+			return { area: "provider", code: "rate_limit" };
 		}
 		if (/auth|api key|unauthori[sz]ed|forbidden|401|403|\/login/i.test(message)) {
 			return { area: "provider", code: "auth" };
@@ -1381,7 +1390,7 @@ export class AgentSession {
 		// When a user message starts, check if it's from either queue and remove it BEFORE emitting
 		// This ensures the UI sees the updated queue state
 		if (event.type === "message_start" && event.message.role === "user") {
-			this._overflowRecoveryAttempted = false;
+			this._overflowRecoveryAttempts = 0;
 			const messageText = this._getUserMessageText(event.message);
 			if (messageText) {
 				// Check steering queue first
@@ -1446,7 +1455,7 @@ export class AgentSession {
 
 				const assistantMsg = finalizedEvent.message as AssistantMessage;
 				if (assistantMsg.stopReason !== "error") {
-					this._overflowRecoveryAttempted = false;
+					this._overflowRecoveryAttempts = 0;
 				}
 
 				// Reset retry counter immediately on successful assistant response
@@ -3633,7 +3642,7 @@ export class AgentSession {
 
 		// Case 1: Overflow - LLM returned context overflow error
 		if ((sameModel || visionRouteOverflow) && isContextOverflow(assistantMessage, contextWindow)) {
-			if (this._overflowRecoveryAttempted) {
+			if (this._overflowRecoveryAttempts >= MAX_OVERFLOW_RECOVERY_ATTEMPTS) {
 				this._emit({
 					type: "compaction_end",
 					reason: "overflow",
@@ -3641,12 +3650,12 @@ export class AgentSession {
 					aborted: false,
 					willRetry: false,
 					errorMessage:
-						"Context overflow recovery failed after one compact-and-retry attempt. Try reducing context or switching to a larger-context model.",
+						"Context overflow recovery failed after two staged compact-and-retry attempts. Reduce the latest input or switch to a model with a larger effective context window.",
 				});
 				return false;
 			}
 
-			this._overflowRecoveryAttempted = true;
+			this._overflowRecoveryAttempts++;
 			// Remove the error message from agent state (it IS saved to session for history,
 			// but we don't want it in context for the retry)
 			const messages = this.agent.state.messages;
@@ -3686,6 +3695,20 @@ export class AgentSession {
 		return false;
 	}
 
+	private _overflowCompactionSettings(settings: CompactionSettings, attempt: number): CompactionSettings {
+		if (attempt < MAX_OVERFLOW_RECOVERY_ATTEMPTS) return settings;
+
+		return {
+			...settings,
+			reserveTokens: Math.min(settings.reserveTokens, OVERFLOW_RECOVERY_EMERGENCY_TOKENS),
+			reservedOutputTokens: Math.min(
+				settings.reservedOutputTokens ?? settings.reserveTokens,
+				OVERFLOW_RECOVERY_EMERGENCY_TOKENS,
+			),
+			keepRecentTokens: Math.min(settings.keepRecentTokens, OVERFLOW_RECOVERY_EMERGENCY_TOKENS),
+		};
+	}
+
 	/**
 	 * Internal: Run auto-compaction with events.
 	 */
@@ -3694,7 +3717,11 @@ export class AgentSession {
 		willRetry: boolean,
 		emergency = reason === "overflow" || this._thresholdCompactionEmergency,
 	): Promise<boolean> {
-		const settings = this.settingsManager.getCompactionSettings();
+		const configuredSettings = this.settingsManager.getCompactionSettings();
+		const settings =
+			reason === "overflow"
+				? this._overflowCompactionSettings(configuredSettings, this._overflowRecoveryAttempts)
+				: configuredSettings;
 
 		this._emit({ type: "compaction_start", reason });
 		this._autoCompactionAbortController = new AbortController();
@@ -4442,12 +4469,6 @@ export class AgentSession {
 	// Auto-Retry
 	// =========================================================================
 
-	private _isNonRetryableProviderLimitError(errorMessage: string): boolean {
-		return /GoUsageLimitError|FreeUsageLimitError|Monthly usage limit reached|available balance|insufficient_quota|out of budget|quota exceeded|billing/i.test(
-			errorMessage,
-		);
-	}
-
 	/**
 	 * Check if an error is retryable (overloaded, rate limit, server errors).
 	 * Context overflow errors are NOT retryable (handled by compaction instead).
@@ -4460,7 +4481,10 @@ export class AgentSession {
 		if (isContextOverflow(message, contextWindow)) return false;
 
 		const err = message.errorMessage;
-		if (this._isNonRetryableProviderLimitError(err)) return false;
+		// Billing/quota exhaustion: useless to retry the same model until the
+		// cycle resets, but the turn may still be saved by failing over to the
+		// next candidate, so let _prepareRetry run its failover path.
+		if (isQuotaExhaustionMessage(err)) return true;
 		// Shared contract with provider-resilience.ts (Fable safety stop, K3 orphan tool_call_id, terminated).
 		return isTransientProviderErrorMessage(err);
 	}
@@ -4536,7 +4560,11 @@ export class AgentSession {
 	private async _maybeFailoverFromSafetyStop(message: AssistantMessage): Promise<string | undefined> {
 		const resilience = resolveProviderResilience(this.settingsManager.getProviderResilienceSettings());
 		if (!resilience.autoFailoverOnSafetyStop) return undefined;
-		if (!isContentSafetyStopMessage(message.errorMessage)) return undefined;
+		// Fire on safety-stop FPs AND on billing/quota exhaustion: both mean the
+		// current model cannot finish this turn and same-model retry is useless.
+		if (!isContentSafetyStopMessage(message.errorMessage) && !isQuotaExhaustionMessage(message.errorMessage)) {
+			return undefined;
+		}
 
 		const current = this.model;
 		// v10.0-Ω: do NOT gate on isStickySafetyModel(source).

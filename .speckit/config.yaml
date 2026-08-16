@@ -2,7 +2,7 @@ schemaVersion: omk.speckit.v1
 projectRoot: /home/yu/omk
 preset:
   name: omk
-  version: 1.1.0
+  version: 1.2.0
   source: ~/.omk/templates/spec-kit-omk-preset
 artifacts:
   constitution: specs/constitution.md

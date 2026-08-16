@@ -13,7 +13,7 @@
 	],
 	"scripts": {
 		"clean": "npm run clean --workspaces",
-		"build": "cd packages/tui && npm run build && cd ../ai && npm run build && cd ../agent && npm run build && cd ../adaptorch-wpl && npm run build && cd ../coding-agent && npm run build",
+		"build": "cd packages/tui && npm run build && cd ../ai && npm run build && cd ../protocol && npm run build && cd ../agent && npm run build && cd ../adaptorch-wpl && npm run build && cd ../coding-agent && npm run build && cd ../book-to-skill && npm run build",
 		"check": "biome check --write --error-on-warnings . && npm run check:pinned-deps && npm run check:vendored-skills && npm run check:ts-imports && npm run check:release-consistency && npm run check:readme-releases && npm run check:doc-links && npm run check:feature-claims && npm run check:release-surface && npm run check:shrinkwrap && tsgo --noEmit && npm run check:browser-smoke",
 		"check:browser-smoke": "node scripts/check-browser-smoke.mjs",
 		"check:doc-links": "node scripts/check-doc-links.mjs",

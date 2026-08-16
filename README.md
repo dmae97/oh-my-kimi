@@ -215,6 +215,9 @@ model stays consistent.
 
 Providers stay interchangeable. The routing layer picks the best arm
 for the task, but the control plane never changes when you swap models.
+NVIDIA NIM's `z-ai/glm-5.2` entry transmits reasoning effort through `max`.
+Quota and billing-cycle failures can switch to an authenticated resilience
+candidate before retry; see [provider resilience](packages/coding-agent/docs/provider-resilience.md).
 
 ---
 
@@ -310,18 +313,22 @@ happens to be installed.
 
 ---
 
-## SDK packages
+## Published packages
 
 | Package | Description |
 | --------- | ------------- |
 | **[omk-ai](packages/ai)** | Unified multi-provider LLM API (OpenAI, Anthropic, Google, etc.) |
 | **[omk-agent-core](packages/agent)** | Agent runtime with tool calling and state management |
+| **[omk-protocol](packages/protocol)** | Versioned run contracts and pure semantic reducers |
+| **[omk-book-to-skill](packages/book-to-skill)** | Optional document-to-skill compiler and provenance adapter |
 | **[open-multi-agent-kit](packages/coding-agent)** | Interactive coding agent CLI |
 | **[omk-tui](packages/tui)** | Terminal UI library with differential rendering |
 
 ```bash
 npm install omk-agent-core   # Agent runtime
 npm install omk-ai           # Multi-provider LLM API
+npm install omk-protocol     # Run contracts and semantic reducers
+omk install npm:omk-book-to-skill@0.95.2  # Optional document compiler
 npm install omk-tui          # Terminal UI
 ```
 
@@ -387,8 +394,8 @@ interactive coding-agent CLI; OMK//CONTROL adds multi-agent DAG lanes, skill/MCP
 routing, and evidence gates on top.
 
 **Which models does OMK support?** Provider-neutral — Codex, Claude, OpenCode Zen/Go,
-Kimi, GLM/ZAI, local providers, and more via `omk-ai`. Swap models without changing
-the control/evidence model.
+Kimi, GLM/ZAI, NVIDIA NIM, local providers, and more via `omk-ai`. Swap models
+without changing the control/evidence model.
 
 **How is completion verified?** Acceptance predicates and fresh command evidence.
 Unverified runs are labeled `UNVERIFIED`; green chat is not a release signal.

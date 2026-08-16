@@ -3,6 +3,7 @@ import {
 	DEFAULT_SAFETY_FAILOVER_CANDIDATES,
 	isContentSafetyStopMessage,
 	isOrphanToolCallIdError,
+	isQuotaExhaustionMessage,
 	isStickySafetyModel,
 	isTransientProviderErrorMessage,
 	pickFailoverCandidate,
@@ -131,5 +132,29 @@ describe("provider-resilience (root-level)", () => {
 		expect(message).toMatch(/blockStickySafetyModels/);
 		expect(message).toMatch(/kimi-coding\/k3/);
 		expect(message).toMatch(/modelstudio-maas\/qwen3\.8-max-preview/);
+	});
+});
+
+describe("isQuotaExhaustionMessage", () => {
+	it("matches kimi billing-cycle quota errors (403 permission_error body)", () => {
+		expect(
+			isQuotaExhaustionMessage(
+				'403 {"error":{"type":"permission_error","message":"You\'ve reached your usage limit for this billing cycle. Your quota will be refreshed in the next cycle. To continue now, purchase extra usage or upgrade your plan: https://www.kimi.com/code/#pricing"},"type":"error"}',
+			),
+		).toBe(true);
+	});
+
+	it("matches generic quota/balance shapes", () => {
+		expect(isQuotaExhaustionMessage("insufficient_quota")).toBe(true);
+		expect(isQuotaExhaustionMessage("Your available balance is 0")).toBe(true);
+		expect(isQuotaExhaustionMessage("Monthly usage limit reached")).toBe(true);
+		expect(isQuotaExhaustionMessage("GoUsageLimitError")).toBe(true);
+	});
+
+	it("does not match plain auth or transient rate-limit errors", () => {
+		expect(isQuotaExhaustionMessage("403 forbidden")).toBe(false);
+		expect(isQuotaExhaustionMessage("invalid api key")).toBe(false);
+		expect(isQuotaExhaustionMessage("429 too many requests")).toBe(false);
+		expect(isQuotaExhaustionMessage(undefined)).toBe(false);
 	});
 });

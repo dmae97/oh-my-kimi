@@ -170,7 +170,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 		expect(compactionEnd?.willRetry).toBe(true);
 	});
 
-	it("should not compact repeatedly after overflow recovery already attempted", async () => {
+	it("should perform two staged recovery attempts before giving up on repeated overflow", async () => {
 		const model = session.model!;
 		const overflowMessage: AssistantMessage = {
 			role: "assistant",
@@ -194,11 +194,11 @@ describe("AgentSession auto-compaction queue resume", () => {
 		const runAutoCompactionSpy = vi
 			.spyOn(
 				session as unknown as {
-					_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<void>;
+					_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<boolean>;
 				},
 				"_runAutoCompaction",
 			)
-			.mockResolvedValue();
+			.mockResolvedValue(true);
 
 		const events: Array<{ type: string; reason: string; errorMessage?: string }> = [];
 		session.subscribe((event) => {
@@ -209,19 +209,50 @@ describe("AgentSession auto-compaction queue resume", () => {
 
 		const checkCompaction = (
 			session as unknown as {
-				_checkCompaction: (assistantMessage: AssistantMessage, skipAbortedCheck?: boolean) => Promise<void>;
+				_checkCompaction: (assistantMessage: AssistantMessage, skipAbortedCheck?: boolean) => Promise<boolean>;
 			}
 		)._checkCompaction.bind(session);
 
 		await checkCompaction(overflowMessage);
 		await checkCompaction({ ...overflowMessage, timestamp: Date.now() + 1 });
+		await checkCompaction({ ...overflowMessage, timestamp: Date.now() + 2 });
 
-		expect(runAutoCompactionSpy).toHaveBeenCalledTimes(1);
+		expect(runAutoCompactionSpy).toHaveBeenCalledTimes(2);
 		expect(events).toContainEqual({
 			type: "compaction_end",
 			reason: "overflow",
 			errorMessage:
-				"Context overflow recovery failed after one compact-and-retry attempt. Try reducing context or switching to a larger-context model.",
+				"Context overflow recovery failed after two staged compact-and-retry attempts. Reduce the latest input or switch to a model with a larger effective context window.",
+		});
+	});
+
+	it("should tighten compaction budgets for the second overflow attempt", () => {
+		type TestCompactionSettings = {
+			enabled: boolean;
+			reserveTokens: number;
+			reservedOutputTokens?: number;
+			keepRecentTokens: number;
+			safetyMarginTokens?: number;
+		};
+		const tune = (
+			session as unknown as {
+				_overflowCompactionSettings: (settings: TestCompactionSettings, attempt: number) => TestCompactionSettings;
+			}
+		)._overflowCompactionSettings.bind(session);
+		const configured: TestCompactionSettings = {
+			enabled: true,
+			reserveTokens: 16_384,
+			reservedOutputTokens: 12_000,
+			keepRecentTokens: 20_000,
+			safetyMarginTokens: 512,
+		};
+
+		expect(tune(configured, 1)).toBe(configured);
+		expect(tune(configured, 2)).toEqual({
+			...configured,
+			reserveTokens: 4_096,
+			reservedOutputTokens: 4_096,
+			keepRecentTokens: 4_096,
 		});
 	});
 

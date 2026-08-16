@@ -81,6 +81,8 @@ Unified LLM API with automatic model discovery, provider configuration, token an
 - **Zyloo** (OpenAI-compatible unified API gateway)
 - **Any OpenAI-compatible API**: Ollama, vLLM, LM Studio, etc.
 
+The generated NVIDIA NIM entry `z-ai/glm-5.2` explicitly enables `reasoning_effort`; its `max` thinking level is sent as `reasoning_effort: "max"`. Other NVIDIA models keep the provider's conservative compatibility defaults.
+
 ## Installation
 
 ```bash

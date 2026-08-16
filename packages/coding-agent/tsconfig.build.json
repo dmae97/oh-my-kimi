@@ -8,7 +8,8 @@
 			"omk-ai": ["../ai/dist/index.d.ts"],
 			"omk-ai/*": ["../ai/dist/*.d.ts", "../ai/dist/providers/*.d.ts"],
 			"omk-tui": ["../tui/dist/index.d.ts"],
-			"omk-tui/*": ["../tui/dist/*.d.ts", "../tui/dist/components/*.d.ts"]
+			"omk-tui/*": ["../tui/dist/*.d.ts", "../tui/dist/components/*.d.ts"],
+			"omk-protocol": ["../protocol/dist/index.d.ts"]
 		},
 		"rootDir": "./src"
 	},
