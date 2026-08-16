@@ -270,7 +270,12 @@ async function checkPython(cwd: string, path: string | undefined, timeoutMs: num
 	}
 	if (await commandExists("ruff")) {
 		// ruff의 기본 full 출력은 parseRuff가 읽지 못하므로 concise(path:line:col: msg)를 강제한다.
-		const { code, out } = await run("ruff", ["check", "--no-cache", "--output-format", "concise", target], cwd, timeoutMs);
+		const { code, out } = await run(
+			"ruff",
+			["check", "--no-cache", "--output-format", "concise", target],
+			cwd,
+			timeoutMs,
+		);
 		if (code === null) return { lines: [], skippedReason: "ruff spawn failed" };
 		return { lines: parseRuff(out) };
 	}

@@ -384,7 +384,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and
 - [Browse all public Skills](SKILLS.md)
 - [Harness Graph control plane](.omk/harness-graph/README.md)
 - [Changelog (coding-agent / open-multi-agent-kit)](packages/coding-agent/CHANGELOG.md)
-- [Release notes for v0.95.2](.github/RELEASE_NOTES_v0.95.2.md)
+- [Release notes for v0.96.0](.github/RELEASE_NOTES_v0.96.0.md)
 - [Unreleased draft notes](.github/RELEASE_NOTES_UNRELEASED.md)
 
 ### FAQ (AEO)
@@ -411,6 +411,28 @@ truth and syncs the “Recent releases” block below (`npm run sync:readme-rele
 ## Recent releases
 
 <!-- releases:start -->
+
+## Release v0.96.0
+
+### Added
+
+- Added `omk-protocol`, the versioned `TaskSpec -> ExecutionAttempt -> Observation -> EvaluationResult -> RuntimeDecision` contract package, with runtime validators, explicit waivers, and pure semantic and runtime-decision reducers.
+- Added `evidenceReceiptToObservation()` to project integrity-checked EvidenceReceipt v3 cores into immutable protocol facts. Legacy mutable `EvidenceStatus` and `TaskContract` verdict APIs remain compatible but are deprecated.
+- Added the optional `omk-book-to-skill` package with compile/update commands, a pinned upstream workflow, advisory generated-skill scanning, and SHA-256 source/artifact provenance checks. Python extractors remain outside OMK core.
+- Added deterministically seeded, bounded `fast-check` model and property suites for WPL transitions, replay migration and CAS, evidence freshness, subagent topology, run-journal CAS, and timeout/abort settlement ordering.
+
+### Changed
+
+- New replay events declare `jcs-rfc8785-v2` and hash RFC 8785-canonical payloads. Events without an algorithm remain verified as `json-stringify-v1`; mixed ledgers and exports preserve legacy records without rewriting them.
+
+### Fixed
+
+- NVIDIA NIM's `z-ai/glm-5.2` entry now transmits `reasoning_effort`, including the generated `max` thinking level; other NVIDIA models keep conservative compatibility defaults.
+- Billing-cycle and quota exhaustion, including provider 403 usage-limit responses, now classify as `provider.rate_limit` and can switch to the first configured, authenticated resilience candidate before retry. Each attempt remains journaled, and a recovered retry ends with a later `completed` termination.
+- Subagent DAG scheduling now sorts simultaneously ready lanes by lane ID, so topology aggregation does not depend on input insertion order.
+- Local release bundles now include `omk-adaptorch-wpl`, allowing isolated installs of the full packed workspace without resolving that dependency from the registry.
+
+Release notes live in [RELEASE_NOTES_v0.96.0.md](.github/RELEASE_NOTES_v0.96.0.md).
 
 ## Release v0.95.2
 
@@ -446,24 +468,6 @@ Release notes live in [RELEASE_NOTES_v0.95.2.md](.github/RELEASE_NOTES_v0.95.2.m
 - Spec/plan/scorecard for harness-graph engineering (`specs/012-harness-graph-engineering/`, `.omk/harness-graph/SCORECARD.md`).
 
 Release notes live in [RELEASE_NOTES_v0.95.1.md](.github/RELEASE_NOTES_v0.95.1.md).
-
-## Release v0.95.0
-
-### Added
-
-- Added explicit multi-account subscription authentication: `/login` now opens an account picker for configured OAuth providers, offers a separate **Add another account** action, captures ChatGPT/Claude/Google email identities, and pins requests to the selected account without silent rotation or failover.
-- Added multi-provider quota meters to the pinned STATUS RAIL: every configured Codex, Claude, Kimi Code, and GLM/ZAI subscription is shown together with independent windows and reset countdowns. Codex polling passively merges official `x-codex-primary-*`, `x-codex-secondary-*`, and `codex.rate_limits` signals when they are present. Claude Code's passive `anthropic-ratelimit-unified-*` headers preserve recent 5-hour/7-day values; when the usage endpoint is rate limited and the snapshot is incomplete, an account-scoped, hourly-capped one-token Haiku quota check mirrors Claude Code's startup fallback. Model Studio Token Plan is identified as `QWEN TOKEN PLAN` with `console-only quota` because its official usage endpoint requires an Alibaba Cloud console session rather than the plan API key; Qwen OAuth/Grok remain explicit `quota API unavailable` entries.
-
-### Fixed
-
-- Removed the persistent GitHub star prompt from interactive startup. The `/star` command remains available as an explicit, on-demand repository shortcut and no longer writes a tracking flag to settings.
-- Anthropic-bound images now default to a 1,900 px longest edge and pass through a final header-level size guard, preventing sticky oversized-image request failures from clipboard and extension paths.
-- Cancelling manual compaction now clears the transient compaction notice and restores queued input without duplicating messages.
-- Refreshed built-in model metadata via `omk-ai` so OpenCode Zen (`opencode`) gains the `kimi-k3` entry that OpenCode Go (`opencode-go`) already had, with current provider handoff coverage for both catalogs.
-- `glm-5.2` on OpenCode Zen/Go now exposes the `xhigh`/`max` thinking levels in the thinking-level selector (`Ctrl+T` / `/thinking`); it was previously capped at `high` because top-tier levels require an explicit `thinkingLevelMap` entry to appear.
-- Auto-compaction now fails fast on insufficient-balance 429 responses instead of repeating the same quota error through every retry.
-
-Release notes live in [RELEASE_NOTES_v0.95.0.md](.github/RELEASE_NOTES_v0.95.0.md).
 
 <!-- releases:end -->
 
