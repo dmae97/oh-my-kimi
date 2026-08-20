@@ -31,7 +31,7 @@ describe("bash tool session environment", () => {
 		return {
 			cwd: tempDir,
 			hasUI: false,
-			model: { provider: "grok-oauth-proxy", id: "grok-4.5" },
+			model: { provider: "xai", id: "grok-4.5" },
 			thinkingLevel: "high",
 			sessionManager: {
 				getSessionId: () => "session-abc",
@@ -48,7 +48,7 @@ describe("bash tool session environment", () => {
 
 		expect(captured.env?.PI_SESSION_ID).toBe("session-abc");
 		expect(captured.env?.PI_SESSION_FILE).toBe("/tmp/session-abc.jsonl");
-		expect(captured.env?.PI_PROVIDER).toBe("grok-oauth-proxy");
+		expect(captured.env?.PI_PROVIDER).toBe("xai");
 		expect(captured.env?.PI_MODEL).toBe("grok-4.5");
 		expect(captured.env?.PI_REASONING_LEVEL).toBe("high");
 	});

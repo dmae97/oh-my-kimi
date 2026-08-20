@@ -80,7 +80,11 @@ describe("max thinking level", () => {
 		const model = getModel("xai", id);
 		expect(model).toBeDefined();
 		expect(getSupportedThinkingLevels(model!)).not.toContain("xhigh");
-		expect(clampThinkingLevel(model!, "xhigh")).toBe("high");
+		expect(getSupportedThinkingLevels(model!)).toContain("max");
+		expect(model!.thinkingLevelMap?.max).toBe("high");
+		// xhigh is hidden; clamp walks up to the next exposed alias, which maps to high.
+		expect(clampThinkingLevel(model!, "xhigh")).toBe("max");
+		expect(clampThinkingLevel(model!, "max")).toBe("max");
 	});
 
 	it("keeps Opus 4.6 topping out at effort max via xhigh (no separate max level)", () => {

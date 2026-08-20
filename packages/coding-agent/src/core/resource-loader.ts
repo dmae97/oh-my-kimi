@@ -10,7 +10,11 @@ export type { ResourceCollision, ResourceDiagnostic } from "./diagnostics.ts";
 import { canonicalizePath, isLocalPath, resolvePath } from "../utils/paths.ts";
 import { createEventBus, type EventBus } from "./event-bus.ts";
 import commandSafetyGate from "./extensions/builtin/command-safety-gate.ts";
+import goalController from "./extensions/builtin/goal-controller.ts";
+import identicalLoop from "./extensions/builtin/identical-loop.ts";
+import promptPreset from "./extensions/builtin/prompt-preset.ts";
 import todoChecklist from "./extensions/builtin/todo-checklist.ts";
+import toolPairRepair from "./extensions/builtin/tool-pair-repair.ts";
 import { createExtensionRuntime, loadExtensionFromFactory, loadExtensions } from "./extensions/loader.ts";
 import type { Extension, ExtensionFactory, ExtensionRuntime, LoadExtensionsResult } from "./extensions/types.ts";
 import { DefaultPackageManager, type PathMetadata } from "./package-manager.ts";
@@ -520,6 +524,40 @@ export class DefaultResourceLoader implements ResourceLoader {
 				"<builtin:command-safety>",
 			);
 			extensionsResult.extensions.unshift(commandSafetyExtension);
+		}
+
+		const harnessFactories: Array<{ factory: ExtensionFactory; path: string; disabled: boolean }> = [
+			{
+				factory: identicalLoop,
+				path: "<builtin:identical-loop>",
+				disabled: isDisabledByEnv(process.env.OMK_IDENTICAL_LOOP),
+			},
+			{
+				factory: toolPairRepair,
+				path: "<builtin:tool-pair-repair>",
+				disabled: isDisabledByEnv(process.env.OMK_TOOL_PAIR_REPAIR),
+			},
+			{
+				factory: promptPreset,
+				path: "<builtin:prompt-preset>",
+				disabled: isDisabledByEnv(process.env.OMK_PROMPT_PRESET),
+			},
+			{
+				factory: goalController,
+				path: "<builtin:goal-controller>",
+				disabled: isDisabledByEnv(process.env.OMK_GOAL_CONTROLLER),
+			},
+		];
+		for (const { factory, path, disabled } of harnessFactories) {
+			if (disabled) continue;
+			const extension = await loadExtensionFromFactory(
+				factory,
+				this.cwd,
+				this.eventBus,
+				extensionsResult.runtime,
+				path,
+			);
+			extensionsResult.extensions.push(extension);
 		}
 
 		const inlineExtensions = await this.loadExtensionFactories(extensionsResult.runtime);

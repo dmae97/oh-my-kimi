@@ -18,16 +18,19 @@ Use `/login` in interactive mode, then select a provider:
 - ChatGPT Plus/Pro (Codex)
 - Claude Pro/Max
 - GitHub Copilot
+- xAI Grok subscription OAuth
 
 Run `/login` and choose a configured subscription provider to open its account picker. Select an existing account by its ChatGPT, Claude, or Google email when available, or choose **Add another account** to sign in with a new one. OMK keeps and refreshes each account independently, pins the provider to the account you select, and does not silently fail over to another subscription. `/model` remains dedicated to model selection.
 
 Use `/logout` to clear all stored accounts for a provider. Tokens are stored in `~/.omk/agent/auth.json` and auto-refresh when expired.
 
-When the status sidebar is pinned, its **USAGE** section lists every configured subscription provider, with the active provider first. OMK reads quota windows from fixed provider endpoints for Codex, Claude, Kimi Code, and GLM/ZAI Coding Plan, caches the result, and displays each percentage and reset countdown separately. Claude also passively merges the official `anthropic-ratelimit-unified-*` response headers used by Claude Code. If Anthropic's usage endpoint is rate limited and no complete recent snapshot exists, OMK mirrors Claude Code's own startup quota check with one fixed-endpoint Haiku request capped at one output token, no more than once per OAuth credential per hour. This fallback consumes a small amount of Claude plan quota.
+When the status sidebar is pinned, its **USAGE** section lists every configured subscription provider, with the active provider first. OMK reads quota windows from fixed provider endpoints for Codex, Claude, Kimi Code, GLM/ZAI Coding Plan, and native xAI SuperGrok, caches the result, and displays each percentage and reset countdown separately. Claude also passively merges the official `anthropic-ratelimit-unified-*` response headers used by Claude Code. If Anthropic's usage endpoint is rate limited and no complete recent snapshot exists, OMK mirrors Claude Code's own startup quota check with one fixed-endpoint Haiku request capped at one output token, no more than once per OAuth credential per hour. This fallback consumes a small amount of Claude plan quota.
 
 Codex streaming passively merges `x-codex-primary-*`, `x-codex-secondary-*`, and `codex.rate_limits` signals through the non-blocking `StreamOptions.onRateLimit` observer. These signals supplement missing polling windows only when the Codex service returns them; OMK does not infer a missing 5-hour value from a 7-day value.
 
-Alibaba Model Studio Token Plan is recognized as **QWEN TOKEN PLAN** but shows `console-only quota`. Its [official usage page](https://modelstudio.console.alibabacloud.com/ap-southeast-1?tab=plan&commonbuy=1&orderType=buy#/efm/subscription/token-plan) obtains `per5HourPercentage`, `per5HourResetTime`, `per1WeekPercentage`, and `per1WeekResetTime` through an authenticated Alibaba Cloud console gateway. The plan-specific `sk-sp-*` key does not authorize that console endpoint, and compatible-mode model responses expose token counts but no quota headers. OMK therefore does not copy browser cookies or estimate quota from token counts. Qwen OAuth and Grok remain explicit `quota API unavailable`.
+Alibaba Model Studio Token Plan is recognized as **QWEN TOKEN PLAN** but shows `console-only quota`. Its [official usage page](https://modelstudio.console.alibabacloud.com/ap-southeast-1?tab=plan&commonbuy=1&orderType=buy#/efm/subscription/token-plan) obtains `per5HourPercentage`, `per5HourResetTime`, `per1WeekPercentage`, and `per1WeekResetTime` through an authenticated Alibaba Cloud console gateway. The plan-specific `sk-sp-*` key does not authorize that console endpoint, and compatible-mode model responses expose token counts but no quota headers. OMK therefore does not copy browser cookies or estimate quota from token counts. Qwen OAuth remains explicit `quota API unavailable`.
+
+With a stored native `xai` OAuth credential, OMK reads `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits` and shows the weekly SuperGrok pool from `config.creditUsagePercent` plus its reset from `config.currentPeriod.end`. `XAI_API_KEY` is a separate API-billing credential and does not authorize this subscription endpoint.
 
 ### OpenAI Codex
 
@@ -49,9 +52,11 @@ Anthropic subscription auth is active for Claude Pro/Max accounts. Third-party h
 - Press Enter for github.com, or enter your GitHub Enterprise Server domain
 - If you get "model not supported", enable it in VS Code: Copilot Chat → model selector → select model → "Enable"
 
-### Grok harness presets
+### xAI Grok
 
-For `grok-oauth-proxy` project presets, Composer routing, and Imagine tool guidance, see [Grok harness](grok-harness.md).
+Both authentication modes use the built-in `xai` provider. Run `/login` for subscription OAuth, or set `XAI_API_KEY` for xAI Platform API billing. Do not configure a second Grok provider.
+
+For project presets, Imagine guidance, and the exact `grok-4.6`, `grok-4.5`, and `grok-4.3` thinking mappings, see [Grok harness](grok-harness.md).
 
 ## API Keys
 

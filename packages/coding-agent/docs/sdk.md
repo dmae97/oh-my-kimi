@@ -14,6 +14,19 @@ The SDK provides programmatic access to omk's agent capabilities. Use it to embe
 
 See [examples/sdk/](../examples/sdk/) for working examples from minimal to full control.
 
+## Inspect persisted sessions from the CLI
+
+Use `omk sdk session` to inspect or append to stored JSONL sessions without starting the TUI:
+
+```bash
+omk sdk session status [id] [--cwd <path>] [--session-dir <path>] [--json]
+omk sdk session tail [id] [--cwd <path>] [--session-dir <path>] [--limit <n>]
+omk sdk session inspect [id] [--cwd <path>] [--session-dir <path>]
+omk sdk session send <id> "<message>" [--cwd <path>] [--session-dir <path>]
+```
+
+`status` without an ID lists sessions for the selected working directory. `tail` and `inspect` without an ID select the most recently modified session; `tail` defaults to 20 entries. `send` requires an exact ID, appends a user-message entry only when the session has no active owner, and does not wake or execute an agent. `status` is human-readable unless `--json` is passed; the other actions emit JSON. Exit codes are `0` for success, `1` when no target exists or the session is active, and `2` for invalid usage.
+
 ## Quick Start
 
 ```typescript
@@ -133,6 +146,20 @@ interface AgentSession {
 `getSessionStats()` returns message, token, and cost totals. Its `promptCache` field includes provider-eligible input tokens, provider hit rate (`cacheRead / (input + cacheRead + cacheWrite)`), stable-prefix characters, cache-key changes, boundary bypasses, and the last local break reason. These values diagnose cache-affinity changes; only provider-reported `cacheRead` proves a hit.
 
 Session replacement APIs such as new-session, resume, fork, and import live on `AgentSessionRuntime`, not on `AgentSession`.
+
+### AgentSession policy seams
+
+The package root exports focused policy helpers for custom runtimes and tests:
+
+| Exports | Purpose |
+| --- | --- |
+| `shouldSkipCompactionCheck`, `isSessionModelOverflow` | Compaction eligibility and overflow ownership |
+| `isRetryableAssistantError`, `nextRetryAttempt`, `computeRetryDelayMs`, `isFailoverTriggerError`, `failoverModelKey` | Retry and failover decisions |
+| `computePromptTokenBudget`, `computeResponseReserveTokens` | Prompt and response token budgets |
+| `classifyPromptCacheTransition` | Cache establishment, reuse, change, or bypass |
+| `assembleSessionSystemPrompt` | System-prompt options, text, and cache boundary |
+
+The decision and arithmetic helpers perform no I/O. `assembleSessionSystemPrompt()` delegates to the system-prompt planner, which incorporates the current date and installation paths.
 
 ### createAgentSessionRuntime() and AgentSessionRuntime
 
@@ -534,10 +561,12 @@ The `edit` tool returns `details.diff` for OMK's TUI display and `details.patch`
 
 The `diagnostics` tool runs the project's own checkers and normalizes the result — `tsc --noEmit` for TypeScript, `pyright`/`ruff` for Python, `go vet` for Go, `cargo check` for Rust. Missing checkers or project markers are reported as `skipped` in the tool result instead of failing. Output is capped at 50 diagnostics and cached for 5 s.
 
+With default OMP seams, truncated `read` output does not create a sidecar. With `OMK_OMP_SEAMS=0`, legacy truncation may write the selected window to `<absolute-source-path>.omk-spill.txt`; `ReadToolDetails.fullOutputPath` reports the path when present. A first line that alone exceeds the byte cap is clipped without a sidecar. The exported `spillTruncatedOutput()` helper provides the preview-plus-path contract for custom tools.
+
 ```typescript
 import { createAgentSession } from "open-multi-agent-kit";
 
-// Read-only mode
+// Enable inspection tools; legacy read mode may create a spill sidecar
 const { session } = await createAgentSession({
   tools: ["read", "grep", "find", "ls"],
 });
@@ -1159,9 +1188,11 @@ Execution-bound evidence records a declared verification command and reported ou
 
 **Default path (opt-out):** when an AgentSession has a replay ledger (persisted sessions create one automatically), LLM-callable `bash` and interactive/RPC `executeBash` bind through `executeVerifiedBash` with `executor: "bash-tool"` and receipts under `<sessionFile>.evidence/receipts` (or `cwd/.omk/session-evidence/<goalId>/receipts` for ephemeral sessions). Session workspace scope is git-aware: inside a worktree, the receipt binds the toplevel plus up to 32 sorted dirty file paths (1 s TTL). Git status expands ordinary untracked directories to files; untracked nested repositories remain outside the parent scope. Set `OMK_VERIFIED_BASH=0` to restore the legacy unverified path. Custom `createBashTool()` calls stay unverified unless the caller wraps operations with `createVerifiedBashOperations()`. CI still runs release-consistency through `executeVerifiedLocalBash()` with `executor: "ci-runner"`.
 
-**Default sandbox (opt-out):** session bash defaults to `enforce`. Every built-in local spawn is wrapped by macOS `sandbox-exec` or Linux `bwrap`, writes are limited to the session workspace and OS temp directory, and network access is disabled. If the platform is unsupported or the backend is unavailable, the spawn fails closed with `sandbox.backend_missing`. Set `OMK_BASH_SANDBOX=audit` only for an unwrapped compatibility path that records each decision as a `sandbox_audit` replay event; set `OMK_BASH_SANDBOX=0` to disable the preflight entirely. Unknown values resolve to `enforce`.
+**Default AgentSession sandbox (opt-out):** built-in local bash defaults to `enforce`. Local spawns use macOS `sandbox-exec` or Linux `bwrap`, writes are limited to the session workspace and OS temp directory, and network access is disabled. Unsupported platforms and unavailable backends fail closed with `sandbox.backend_missing`. Explicit `audit` keeps the unwrapped ledger-only path; `0` or `off` disables the preflight. Unknown values resolve to `enforce`.
 
-This boundary applies to AgentSession's built-in local bash operations. Custom `createBashTool()` calls remain unsandboxed unless they receive a `sandboxPolicy`, and injected or remote `BashOperations` own their own isolation. The default workspace-write profile is not a read-confidentiality boundary or whole-process container; use [Containerization](containerization.md) when every tool and extension must be isolated.
+Automatic backend probing is lazy and cached. An AgentSession probes at most once during its lifetime; each `createLocalBashOperations({ sandboxPolicy })` instance also probes at most once when its preflight omits `backend`. The denial reason identifies missing `bwrap` or `sandbox-exec`, disabled user namespaces, both Linux failures, or an unsupported platform.
+
+This boundary applies only to AgentSession's built-in local bash operations. Custom `createBashTool()` calls remain unsandboxed unless they receive a `sandboxPolicy`; injected or remote `BashOperations` own their isolation. The profile is not read-confidentiality or whole-process containment. `executeVerifiedLocalBash()` remains an evidence adapter, not an OS sandbox. See [Containerization](containerization.md).
 
 ### Recorded and invoked inputs
 
@@ -1221,6 +1252,63 @@ Ledger and receipt publication are fail-closed but not one filesystem transactio
 New integrations should use `TaskSpec`, `ExecutionAttempt`, `Observation`, `EvaluationResult`, `RuntimeDecision`, and `WaiverRecord` from `omk-protocol`. `evaluateTask()` derives the semantic verdict from current observations; `reduceRuntimeDecision()` derives the next runtime action. See [Run Protocol v1](run-protocol.md) for the rules and current migration boundary.
 
 `evidenceReceiptToObservation(receipt, attemptId)` validates the receipt core digest and emits immutable execution facts for protocol evaluation. It does not replace ledger, attestation, freshness, or sandbox checks.
+
+### Advisory best-of-N selection
+
+Use the advisory judge only after deterministic evaluation. `chooseWithAdvisoryJudge()` validates every `EvaluationResult` and excludes `fail` and `inconclusive` candidates before any model call. The judge cannot revive them or alter protocol, evidence, loop, or security gates.
+
+```typescript
+import {
+  chooseWithAdvisoryJudge,
+  createModelAdvisoryJudge,
+} from "open-multi-agent-kit";
+
+const model = modelRegistry.find("xai", "grok-4.5");
+if (!model) throw new Error("judge model is not registered");
+
+const judge = createModelAdvisoryJudge({ model, modelRegistry });
+const decision = await chooseWithAdvisoryJudge({
+  taskGoal: task.goal,
+  judgeId: "reviewer-v1",
+  judge,
+  rubric: [
+    { id: "correctness", description: "Satisfies required behavior and evidence", weight: 3 },
+    { id: "safety", description: "Preserves security and deterministic gates", weight: 2 },
+  ],
+  candidates: [
+    { id: "attempt-a", deterministicRank: 0, material: outputA, evaluation: evaluationA },
+    { id: "attempt-b", deterministicRank: 1, material: outputB, evaluation: evaluationB },
+  ],
+});
+```
+
+The sidecar makes no call when zero or one candidate passes. For multiple passing candidates it sends only bounded, forced-redacted material through a tool-free request and requires a complete 0–4 score matrix. Invalid output or provider failure returns `status: "fallback"` with the deterministic first candidate and a sanitized reason. It never persists model prose. Re-run fresh deterministic gates after applying the selected result.
+
+`createModelAdvisoryJudge()` resolves current auth through `ModelRegistry` for each explicit call, uses no cache retention, and performs no model retry. Tests can inject `AdvisoryJudgeCompletion`; production defaults to `completeSimple()`.
+
+### Durable-goal seam checkpoints
+
+Use the existing durable-goal journal for `Goal / Core / Verified / Open / Next` continuity:
+
+```typescript
+const current = await goalStore.current();
+if (!current) throw new Error("durable goal is missing");
+
+const now = new Date().toISOString();
+const checkpointed = await goalStore.transition({
+  kind: "record-checkpoint",
+  ref: current.ref,
+  checkpoint: {
+    core: ["Keep the protocol verdict authoritative"],
+    verifiedEvidenceIds: ["focused-tests"],
+    open: ["Historical calibration"],
+    next: "Run the full package checks",
+    capturedAt: now,
+  },
+}, now);
+```
+
+The reducer rejects stale refs and evidence outside the current generation. Text is bounded and forced-redacted before persistence; the checkpoint digest correlates its content and generation but is unkeyed and does not authenticate a same-user workspace. `/goal checkpoint {"core":[],"verified":[],"open":[],"next":"..."}` exposes the same transition interactively. The built-in controller carries prose into the next round only for a checkpoint explicitly recorded through that command in the current process. On resume, mutable workspace checkpoint prose is not promoted to user authority; only its digest is noted. Editing the goal definition clears the checkpoint. No `.jspace/` or second state system is created.
 
 ### Receipt policy
 
@@ -1335,6 +1423,11 @@ buildContextBudgetMaterializedRepresentationCacheKeyV2, createContextBudgetCache
 createContextCacheInvalidationSnapshot, serializeContextCacheSnapshot,
 CONTEXT_BUDGET_POLICY_VERSION_V2
 computeReservedTokenBudget, estimateToolResultReserve, ReservedTokenBudgetError
+
+// Advisory selection and durable goals
+chooseWithAdvisoryJudge, createModelAdvisoryJudge, AdvisoryJudgeInputError, AdvisoryJudgeModelError
+createDurableGoal, applyDurableGoalCommand, parseDurableGoalSnapshot, DurableGoalStore
+createDurableGoalCheckpoint, parseDurableGoalCheckpoint, formatDurableGoalCheckpoint
 
 // Run journal and session termination
 RunJournalStore, appendRunJournalRecordDurably, writeQuarantineBytesDurably,

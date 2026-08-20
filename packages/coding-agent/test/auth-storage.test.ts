@@ -858,4 +858,29 @@ describe("AuthStorage", () => {
 			expect(apiKey).toBe("stored-key");
 		});
 	});
+
+	describe("retired grok-oauth-proxy", () => {
+		test("drops grok-oauth-proxy credentials from list and get", () => {
+			writeAuthJson({
+				xai: {
+					type: "oauth",
+					access: "xai-access",
+					refresh: "xai-refresh",
+					expires: Date.now() + 60_000,
+				},
+				"grok-oauth-proxy": {
+					type: "oauth",
+					access: "proxy-access",
+					refresh: "proxy-refresh",
+					expires: Date.now() + 60_000,
+				},
+			});
+
+			authStorage = AuthStorage.create(authJsonPath);
+
+			expect(authStorage.list()).toEqual(["xai"]);
+			expect(authStorage.get("grok-oauth-proxy")).toBeUndefined();
+			expect(authStorage.getAuthStatus("grok-oauth-proxy")).toEqual({ configured: false });
+		});
+	});
 });

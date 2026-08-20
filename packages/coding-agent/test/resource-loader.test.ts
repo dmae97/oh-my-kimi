@@ -305,7 +305,9 @@ Project skill`,
 			expect(runner.getCommand("project-only")?.description).toBe("project only");
 			expect(runner.getCommand("user-only")?.description).toBe("user only");
 
-			const commands = runner.getRegisteredCommands();
+			const commands = runner
+				.getRegisteredCommands()
+				.filter((command) => !command.sourceInfo.path.startsWith("<builtin:"));
 			expect(commands.map((command) => command.invocationName)).toEqual([
 				"deploy:1",
 				"project-only",

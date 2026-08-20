@@ -4,6 +4,7 @@
  * RFC 8628 device-authorization grant with OIDC discovery.
  * Uses the official xAI OAuth client id and scopes.
  */
+import { applyGrokThinking } from "../../providers/grok-thinking.ts";
 import { pollOAuthDeviceCodeFlow } from "./device-code.ts";
 import type { OAuthCredentials, OAuthLoginCallbacks, OAuthProviderInterface } from "./types.ts";
 
@@ -11,13 +12,17 @@ const XAI_OAUTH_ISSUER = "https://auth.x.ai";
 const XAI_OAUTH_DISCOVERY_URL = `${XAI_OAUTH_ISSUER}/.well-known/openid-configuration`;
 const XAI_OAUTH_DEVICE_CODE_URL = `${XAI_OAUTH_ISSUER}/oauth2/device/code`;
 const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
-const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access";
+const XAI_OAUTH_SCOPE =
+	"openid profile email offline_access grok-cli:access api:access conversations:read conversations:write workspaces:read workspaces:write";
+const XAI_OAUTH_REFERRER = "grok-build";
+const XAI_OAUTH_CLIENT_SURFACE = "ui";
 
 const ACCESS_TOKEN_CLIENT_SKEW_MS = 5 * 60 * 1000;
 const DISCOVERY_TIMEOUT_MS = 15_000;
 const TOKEN_REQUEST_TIMEOUT_MS = 20_000;
 
 export const XAI_OAUTH_PROVIDER_ID = "xai";
+const XAI_OAUTH_API_BASE_URL = "https://api.x.ai/v1";
 
 interface XAIOAuthDiscovery {
 	token_endpoint: string;
@@ -175,10 +180,12 @@ async function requestXAIDeviceAuthorization(signal?: AbortSignal): Promise<XAID
 			headers: {
 				"Content-Type": "application/x-www-form-urlencoded",
 				Accept: "application/json",
+				"x-grok-client-surface": XAI_OAUTH_CLIENT_SURFACE,
 			},
 			body: new URLSearchParams({
 				client_id: XAI_OAUTH_CLIENT_ID,
 				scope: XAI_OAUTH_SCOPE,
+				referrer: XAI_OAUTH_REFERRER,
 			}),
 			signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
 		});
@@ -226,6 +233,7 @@ async function pollXAIDeviceToken(
 			headers: {
 				"Content-Type": "application/x-www-form-urlencoded",
 				Accept: "application/json",
+				"x-grok-client-surface": XAI_OAUTH_CLIENT_SURFACE,
 			},
 			body: new URLSearchParams({
 				grant_type: "urn:ietf:params:oauth:grant-type:device_code",
@@ -345,4 +353,11 @@ export const xaiOAuthProvider: OAuthProviderInterface = {
 	login: loginXAI,
 	refreshToken: (credentials: OAuthCredentials) => refreshXAIToken(credentials.refresh),
 	getApiKey: (credentials: OAuthCredentials) => credentials.access,
+	modifyModels(models) {
+		return models.map((model) =>
+			model.provider === XAI_OAUTH_PROVIDER_ID
+				? applyGrokThinking({ ...model, baseUrl: XAI_OAUTH_API_BASE_URL })
+				: model,
+		);
+	},
 };

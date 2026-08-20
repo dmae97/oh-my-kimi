@@ -7,7 +7,6 @@
  * - GitHub Copilot
  * - OpenAI Codex (ChatGPT Plus/Pro)
  * - Qwen (Qwen Code subscription)
- * - Grok (xAI, via the local grok-oauth-proxy)
  * - xAI (native Grok OAuth, SuperGrok or X Premium+)
  * - Cursor (Claude, GPT, etc. via Cursor subscription)
  * - GitLab Duo (Code Suggestions, Chat)
@@ -66,8 +65,6 @@ export {
 	loginGeminiCli,
 	refreshGeminiCliToken,
 } from "./google-gemini-cli.ts";
-// Grok (xAI OAuth proxy)
-export { GROK_PROXY_PROVIDER_ID, grokProxyOAuthProvider, loginGrokProxy } from "./grok-proxy.ts";
 // Kimi Code (Moonshot AI)
 export {
 	KIMI_CODE_OAUTH_PROVIDER_ID,
@@ -132,7 +129,6 @@ import { githubCopilotOAuthProvider } from "./github-copilot.ts";
 import { gitlabDuoOAuthProvider } from "./gitlab-duo.ts";
 import { googleAntigravityOAuthProvider } from "./google-antigravity.ts";
 import { googleGeminiCliOAuthProvider } from "./google-gemini-cli.ts";
-import { grokProxyOAuthProvider } from "./grok-proxy.ts";
 import { kimiCodeOAuthProvider } from "./kimi.ts";
 import { openaiCodexOAuthProvider } from "./openai-codex.ts";
 import { opencodeGoOAuthProvider, opencodeZenOAuthProvider } from "./opencode.ts";
@@ -150,7 +146,6 @@ const BUILT_IN_OAUTH_PROVIDERS: OAuthProviderInterface[] = [
 	gitlabDuoOAuthProvider,
 	googleAntigravityOAuthProvider,
 	googleGeminiCliOAuthProvider,
-	grokProxyOAuthProvider,
 	kimiCodeOAuthProvider,
 	openaiCodexOAuthProvider,
 	opencodeGoOAuthProvider,

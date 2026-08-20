@@ -20,6 +20,7 @@ import { handleCodexBarQuotaCommand } from "./codexbar-cli.ts";
 import { runDoctorProviderCli } from "./commands/doctor-provider-cli.ts";
 import { runPackageDoctorCli } from "./commands/package-doctor-cli.ts";
 import { runRouterFeedbackCli } from "./commands/router-feedback-cli.ts";
+import { runSdkSessionCli } from "./commands/sdk-session-cli.ts";
 import { runSessionDoctorCli } from "./commands/session-doctor-cli.ts";
 import { runStatsCli } from "./commands/stats-cli.ts";
 import { ENV_SESSION_DIR, expandTildePath, getAgentDir, getPackageDir, VERSION } from "./config.ts";
@@ -465,6 +466,7 @@ function buildSessionOptions(
 		}
 		if (resolved.model) {
 			options.model = resolved.model;
+			options.modelPinned = true;
 			// Allow "--model <pattern>:<thinking>" as a shorthand.
 			// Explicit --thinking still takes precedence (applied later).
 			if (!parsed.thinking && resolved.thinkingLevel) {
@@ -617,6 +619,12 @@ export async function main(args: string[], options?: MainOptions) {
 	const stats = runStatsCli(args);
 	if (stats.handled) {
 		process.exitCode = stats.exitCode;
+		return;
+	}
+
+	const sdkSession = await runSdkSessionCli(args);
+	if (sdkSession.handled) {
+		process.exitCode = sdkSession.exitCode;
 		return;
 	}
 
@@ -797,6 +805,7 @@ export async function main(args: string[], options?: MainOptions) {
 			model: sessionOptions.model,
 			thinkingLevel: sessionOptions.thinkingLevel,
 			scopedModels: sessionOptions.scopedModels,
+			modelPinned: sessionOptions.modelPinned,
 			tools: sessionOptions.tools,
 			excludeTools: sessionOptions.excludeTools,
 			noTools: sessionOptions.noTools,

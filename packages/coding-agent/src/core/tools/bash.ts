@@ -68,11 +68,21 @@ export interface BashOperations {
  * This is useful for extensions that intercept user_bash and still want OMK's
  * standard local shell behavior while wrapping, sandboxing, or rewriting commands.
  */
-export function createLocalBashOperations(options?: {
-	shellPath?: string;
-	sandboxPolicy?: BashSandboxPreflight;
-}): BashOperations {
+export interface LocalBashOperationsOptions {
+	readonly shellPath?: string;
+	readonly sandboxPolicy?: BashSandboxPreflight;
+	/** Override backend probing for embedders and deterministic tests. */
+	readonly detectSandboxBackend?: () => SandboxBackendStatus;
+}
+
+export function createLocalBashOperations(options?: LocalBashOperationsOptions): BashOperations {
 	const sandbox = options?.sandboxPolicy;
+	let detectedBackend: SandboxBackendStatus | undefined;
+	const resolveBackend = (): SandboxBackendStatus => {
+		if (sandbox?.backend) return sandbox.backend;
+		detectedBackend ??= (options?.detectSandboxBackend ?? defaultBashSandboxBackend)();
+		return detectedBackend;
+	};
 	return {
 		exec: async (command, cwd, { onData, signal, timeout, env }) => {
 			const { shell, args } = getShellConfig(options?.shellPath);
@@ -81,7 +91,7 @@ export function createLocalBashOperations(options?: {
 			let spawnCwd = cwd;
 			let spawnEnv: NodeJS.ProcessEnv = env ?? getShellEnv();
 			if (sandbox) {
-				const backend = sandbox.backend ?? defaultBashSandboxBackend();
+				const backend = resolveBackend();
 				const request = buildSandboxedSpawnRequest({
 					argv: [shell, ...args, command],
 					cwd,

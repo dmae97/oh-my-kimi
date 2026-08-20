@@ -1,4 +1,5 @@
 import { MODELS } from "./models.generated.ts";
+import { applyGrokThinking } from "./providers/grok-thinking.ts";
 import type { Api, KnownProvider, Model, ModelThinkingLevel, Usage } from "./types.ts";
 
 const modelRegistry: Map<string, Map<string, Model<Api>>> = new Map();
@@ -7,7 +8,8 @@ const modelRegistry: Map<string, Map<string, Model<Api>>> = new Map();
 for (const [provider, models] of Object.entries(MODELS)) {
 	const providerModels = new Map<string, Model<Api>>();
 	for (const [id, model] of Object.entries(models)) {
-		providerModels.set(id, model as Model<Api>);
+		const registered = model as Model<Api>;
+		providerModels.set(id, provider === "xai" ? applyGrokThinking(registered) : registered);
 	}
 	modelRegistry.set(provider, providerModels);
 }

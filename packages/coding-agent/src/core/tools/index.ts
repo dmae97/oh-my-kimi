@@ -8,6 +8,7 @@ export {
 	createBashTool,
 	createBashToolDefinition,
 	createLocalBashOperations,
+	type LocalBashOperationsOptions,
 } from "./bash.ts";
 export {
 	createDiagnosticsTool,

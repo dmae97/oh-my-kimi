@@ -2,7 +2,8 @@ import type { AgentTool, ThinkingLevel } from "omk-agent-core";
 import { fauxAssistantMessage, fauxToolCall, type Model } from "omk-ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
-import type { BuildSystemPromptOptions, ExtensionAPI } from "../../src/index.ts";
+import type { BuildSystemPromptOptions, ExtensionAPI, ResourceLoader } from "../../src/index.ts";
+import { createTestResourceLoader } from "../utilities.ts";
 import { createHarness, getAssistantTexts, type Harness } from "./harness.ts";
 
 describe("AgentSession model and extension characterization", () => {
@@ -42,6 +43,77 @@ describe("AgentSession model and extension characterization", () => {
 				.filter((entry) => entry.type === "model_change")
 				.map((entry) => `${entry.provider}/${entry.modelId}`),
 		).toEqual([`${nextModel.provider}/${nextModel.id}`]);
+	});
+
+	it("rebuilds model-dependent context when setModel changes families", async () => {
+		const contextMarker = "MODEL_CONTEXT_MARKER";
+		const baseResourceLoader = createTestResourceLoader();
+		const resourceLoader: ResourceLoader = {
+			...baseResourceLoader,
+			getAgentsFiles: () => ({
+				agentsFiles: [{ path: "/workspace/AGENTS.md", content: contextMarker, isGlobal: false }],
+			}),
+		};
+		const previousOverride = process.env.OMK_CLAUDE_CONTEXT_FILES;
+		delete process.env.OMK_CLAUDE_CONTEXT_FILES;
+
+		try {
+			const harness = await createHarness({
+				models: [{ id: "faux-1" }, { id: "claude-faux" }],
+				resourceLoader,
+			});
+			harnesses.push(harness);
+
+			expect(harness.session.systemPrompt).toContain(contextMarker);
+			await harness.session.setModel(harness.getModel("claude-faux")!);
+			expect(harness.session.systemPrompt).not.toContain(contextMarker);
+			await harness.session.setModel(harness.getModel("faux-1")!);
+			expect(harness.session.systemPrompt).toContain(contextMarker);
+		} finally {
+			if (previousOverride === undefined) {
+				delete process.env.OMK_CLAUDE_CONTEXT_FILES;
+			} else {
+				process.env.OMK_CLAUDE_CONTEXT_FILES = previousOverride;
+			}
+		}
+	});
+
+	it("keeps the previous model when model-dependent prompt assembly fails", async () => {
+		const baseResourceLoader = createTestResourceLoader();
+		let failPromptAssembly = false;
+		const resourceLoader: ResourceLoader = {
+			...baseResourceLoader,
+			getAgentsFiles: () => {
+				if (failPromptAssembly) throw new Error("prompt assembly failed");
+				return { agentsFiles: [] };
+			},
+		};
+		const harness = await createHarness({
+			models: [{ id: "faux-1" }, { id: "claude-faux" }],
+			resourceLoader,
+		});
+		harnesses.push(harness);
+		failPromptAssembly = true;
+
+		await expect(harness.session.setModel(harness.getModel("claude-faux")!)).rejects.toThrow(
+			"prompt assembly failed",
+		);
+		expect(harness.session.model?.id).toBe("faux-1");
+	});
+
+	it("runs an explicitly selected Fable model when sticky blocking is disabled", async () => {
+		const harness = await createHarness({
+			models: [{ id: "faux-1" }, { id: "claude-fable-5" }],
+			settings: { providerResilience: { blockStickySafetyModels: false } },
+		});
+		harnesses.push(harness);
+		harness.setResponses([fauxAssistantMessage("FABLE_SESSION_OK")]);
+
+		await harness.session.setModel(harness.getModel("claude-fable-5")!);
+		await harness.session.prompt("hello");
+
+		expect(harness.session.model?.id).toBe("claude-fable-5");
+		expect(getAssistantTexts(harness)).toContain("FABLE_SESSION_OK");
 	});
 
 	it("cycles through scoped models and preserves the scoped thinking preference", async () => {

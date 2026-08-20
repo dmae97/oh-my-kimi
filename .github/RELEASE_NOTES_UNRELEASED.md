@@ -6,4 +6,4 @@
 
 ## Highlights
 
-- No changes yet since v0.96.0.
+No unreleased changes yet.

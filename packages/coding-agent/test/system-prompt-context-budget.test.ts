@@ -153,6 +153,24 @@ describe("buildSystemPrompt context budget", () => {
 		expect(prompt).toContain("Current working directory: /repo");
 	});
 
+	it("lets an operator pin an explicit-only skill without exposing other hidden skills", () => {
+		const hiddenSkill = { ...makeSkill(0), name: "omk-loop", disableModelInvocation: true };
+		const render = (activeSkillNames: readonly string[]) =>
+			buildSystemPrompt({
+				selectedTools: ["read"],
+				toolSnippets: { read: "Read files" },
+				contextFiles: [],
+				skills: [hiddenSkill],
+				cwd: "/repo",
+				contextBudget: { maxPromptTokens: 6000, activeSkillNames },
+			});
+
+		expect(render([])).not.toContain("<name>omk-loop</name>");
+		const pinned = render(["omk-loop"]);
+		expect(pinned).toContain("<name>omk-loop</name>");
+		expect(pinned).toContain("<activation>operator-default</activation>");
+	});
+
 	it("escapes budgeted full context before prompt assembly", () => {
 		const prompt = buildSystemPrompt({
 			selectedTools: ["read"],

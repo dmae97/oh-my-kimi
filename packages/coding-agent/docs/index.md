@@ -1,6 +1,6 @@
 # OMK Documentation
 
-OMK is a minimal terminal coding harness. It is designed to stay small at the core while being extended through TypeScript extensions, skills, prompt templates, themes, and omk packages.
+OMK is a provider-neutral coding agent with multi-agent orchestration, durable harness controls, replayable sessions, SDK/RPC integration, and evidence-backed verification. Its core stays small while extensions, skills, prompts, themes, and packages add workflows.
 
 ## Quick start
 
@@ -33,12 +33,13 @@ For the full first-run flow, see [Quickstart](quickstart.md).
 ## Start here
 
 - [Quickstart](quickstart.md) - install, authenticate, and run a first session.
-- [Using OMK](usage.md) - interactive mode, slash commands, context files, and CLI reference.
+- [Using OMK](usage.md) - interactive mode, `/goal`, default harness safeguards, context files, and CLI reference.
 - [Providers](providers.md) - subscription and API-key setup for built-in providers.
 - [Provider Resilience](provider-resilience.md) - retry, failover, quota, and safety-stop recovery.
+- [Native xAI Grok](grok-harness.md) - authentication, weekly SuperGrok usage, presets, and thinking tiers.
 - [Containerization](containerization.md) - sandbox omk with OpenShell, Gondolin, or Docker.
 - [Settings](settings.md) - global and project settings.
-- [Environment Variables](environment-variables.md) - process configuration and bash-tool session environment.
+- [Environment Variables](environment-variables.md) - process configuration, harness opt-outs, and bash-tool session environment.
 - [Keybindings](keybindings.md) - default shortcuts and custom keybindings.
 - [Sessions](sessions.md) - session management, branching, and tree navigation.
 - [Compaction](compaction.md) - context compaction and branch summarization.
@@ -54,10 +55,10 @@ For the full first-run flow, see [Quickstart](quickstart.md).
 - [Custom models](models.md) - add model entries for supported provider APIs.
 - [Custom providers](custom-provider.md) - implement custom APIs and OAuth flows.
 
-## Programmatic usage
+## Automation and control
 
-- [SDK](sdk.md) - embed omk in Node.js applications.
-- [Run Protocol v1](run-protocol.md) - canonical task, attempt, observation, evaluation, decision, and waiver contracts.
+- [SDK and Session Control](sdk.md) - embed omk, reuse policy helpers, or inspect stored sessions from scripts.
+- [Run Protocol and Durable Goals](run-protocol.md) - canonical run contracts and the durable-goal lifecycle.
 - [RPC mode](rpc.md) - integrate over stdin/stdout JSONL.
 - [JSON event stream mode](json.md) - print mode with structured events.
 - [TUI components](tui.md) - build custom terminal UI for extensions.

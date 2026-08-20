@@ -66,6 +66,8 @@ export interface SandboxBackendStatus {
 	platform: SandboxPlatform;
 	backendAvailable: boolean;
 	domainAllowlistAvailable?: boolean;
+	/** Human-readable probe detail when the backend cannot enforce the policy. */
+	unavailableReason?: string;
 }
 
 export interface SandboxFallbackDecision extends SandboxDecision {
@@ -242,8 +244,13 @@ export function decideSandboxFallback(policy: SandboxPolicy, backend: SandboxBac
 			allowReadOnlyTools: true,
 		};
 	}
+	const backendDetail = backend.unavailableReason ? ` ${backend.unavailableReason}` : "";
 	return {
-		...decision(false, "sandbox.backend_missing", "Enforce mode blocks shell and exec when no backend is available."),
+		...decision(
+			false,
+			"sandbox.backend_missing",
+			`Enforce mode blocks shell and exec when no backend is available.${backendDetail}`,
+		),
 		allowShell: false,
 		allowExec: false,
 		allowReadOnlyTools: true,

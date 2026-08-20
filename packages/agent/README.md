@@ -456,7 +456,7 @@ const readFileTool: AgentTool = {
   // or a claim list. Omit to let the tool run exclusively (or as an unclaimed
   // extension tool when strictExtensionClaims is false).
   resourceClaims: (args, context) => [
-    { kind: "path", path: args.path, access: "read" },
+    { kind: "path", key: args.path, access: "read" },
   ],
 
   // Per-tool timeout in milliseconds. 0 disables the timer for this tool.

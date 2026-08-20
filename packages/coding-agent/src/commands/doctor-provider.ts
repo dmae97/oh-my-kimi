@@ -893,16 +893,18 @@ function credentialBindingMatchesTarget(
 }
 
 function appendPath(url: URL, segment: string): URL {
-	const next = new URL(url.href);
+	const next = URL.parse(url.href);
+	if (!next) throw new Error("validated provider URL could not be cloned");
 	next.pathname = `${next.pathname.replace(/\/$/, "")}/${segment}`;
 	return next;
 }
 
 function makeRootProbeUrl(url: URL, origin: ProviderOrigin): URL {
-	if (origin !== "local-proxy") return new URL(url.href);
-	const health = new URL(url.href);
-	health.pathname = "/health";
-	return health;
+	const root = URL.parse(url.href);
+	if (!root) throw new Error("validated provider URL could not be cloned");
+	if (origin !== "local-proxy") return root;
+	root.pathname = "/health";
+	return root;
 }
 
 function publicResult(
@@ -1312,14 +1314,9 @@ function modelProbeSpec(api: string, modelId: string): { path: string; payload: 
 	return undefined;
 }
 
-function classifyOrigin(
-	providerId: string,
-	baseUrl: string | undefined,
-	api: string | undefined,
-	isNative: boolean,
-): ProviderOrigin {
+function classifyOrigin(baseUrl: string | undefined, api: string | undefined, isNative: boolean): ProviderOrigin {
 	const url = baseUrl ? sanitizeUrl(baseUrl) : undefined;
-	if (providerId === "grok-oauth-proxy" || (url && isLiteralLoopback(normalizedHostname(url)))) {
+	if (url && isLiteralLoopback(normalizedHostname(url))) {
 		return "local-proxy";
 	}
 	if (isNative) return "native";
@@ -1408,13 +1405,6 @@ function resolveProviderTarget(
 	} else {
 		baseUrl = baseUrl ?? nativeModel?.baseUrl;
 	}
-	let builtInAuth = false;
-	if (providerId === "grok-oauth-proxy" && !baseUrl) {
-		baseUrl = "http://127.0.0.1:9996/v1";
-		api = "openai-completions";
-		source = "built-in-grok-oauth-proxy-defaults";
-		builtInAuth = true;
-	}
 
 	const storedAuth = authConfig.kind === "ok" && authConfig.value[providerId] !== undefined;
 	const environmentAuth = findEnvKeys(providerId) !== undefined;
@@ -1424,7 +1414,7 @@ function resolveProviderTarget(
 	const customAuthPresent = customApiKey !== undefined && isConfigValueConfigured(customApiKey);
 	const authPresent = kimiCustomSelected
 		? customAuthPresent
-		: storedAuth || environmentAuth || configuredAuth || headerAuth || builtInAuth;
+		: storedAuth || environmentAuth || configuredAuth || headerAuth;
 	const authSource = kimiCustomSelected
 		? customAuthPresent
 			? source
@@ -1435,15 +1425,13 @@ function resolveProviderTarget(
 				? "environment"
 				: configuredAuth || headerAuth
 					? "models.json"
-					: builtInAuth
-						? "built-in"
-						: undefined;
+					: undefined;
 
-	if (!configured && !isNative && !storedAuth && !environmentAuth && providerId !== "grok-oauth-proxy") {
+	if (!configured && !isNative && !storedAuth && !environmentAuth) {
 		return { failure: unresolvedFailure(providerId, level, "provider-not-found", "Provider was not found") };
 	}
 
-	const origin = classifyOrigin(providerId, baseUrl, api, isNative && !kimiCustomSelected);
+	const origin = classifyOrigin(baseUrl, api, isNative && !kimiCustomSelected);
 	const canonicalBaseUrl = canonicalProviderEndpointUrl(baseUrl);
 	const binding =
 		canonicalBaseUrl && api && endpointModelId

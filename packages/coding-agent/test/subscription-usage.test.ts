@@ -6,6 +6,7 @@ import {
 	loadSubscriptionUsage,
 	parseClaudeUsageSnapshot,
 	parseCodexUsageSnapshot,
+	parseGrokUsageSnapshot,
 	parseKimiUsageSnapshot,
 	parseZaiUsageSnapshot,
 	recordClaudePassiveUsage,
@@ -55,7 +56,7 @@ describe("subscription usage providers", () => {
 		expect(getSubscriptionUsageSource("zhipu-coding-plan")?.label).toBe("GLM");
 		expect(getSubscriptionUsageSource("zai")?.label).toBe("GLM");
 		expect(getSubscriptionUsageSource("zai-coding-cn")?.label).toBe("GLM");
-		expect(getSubscriptionUsageSource("grok-oauth-proxy")?.label).toBe("GROK");
+		expect(getSubscriptionUsageSource("grok-oauth-proxy")).toBeUndefined();
 		expect(getSubscriptionUsageSource("xai")?.label).toBe("GROK");
 		expect(getSubscriptionUsageSource("openai")).toBeUndefined();
 		expect(getSubscriptionUsageSource("moonshotai")).toBeUndefined();
@@ -74,12 +75,14 @@ describe("subscription usage providers", () => {
 		expect(
 			supportsSubscriptionUsage(session("modelstudio-maas", { configuredProviders: ["modelstudio-maas"] }) as never),
 		).toBe(true);
+		expect(supportsSubscriptionUsage(session("xai", { oauthProviders: ["xai"] }) as never)).toBe(true);
+		expect(supportsSubscriptionUsage(session("xai", { configuredProviders: ["xai"] }) as never)).toBe(false);
 		expect(supportsSubscriptionUsage(session("openai", { configuredProviders: ["openai"] }) as never)).toBe(false);
 	});
 
 	it("lists every configured quota group with the active provider first", () => {
 		const configured = session("anthropic", {
-			oauthProviders: ["openai-codex", "anthropic", "grok-oauth-proxy"],
+			oauthProviders: ["openai-codex", "anthropic", "xai"],
 			configuredProviders: ["kimi-coding", "zai", "modelstudio-maas"],
 		});
 		expect(getConfiguredSubscriptionUsageProviders(configured as never)).toEqual([
@@ -88,7 +91,7 @@ describe("subscription usage providers", () => {
 			"kimi-coding",
 			"zai",
 			"modelstudio-maas",
-			"grok-oauth-proxy",
+			"xai",
 		]);
 	});
 
@@ -456,19 +459,72 @@ describe("subscription usage providers", () => {
 		expect(result).toEqual({ label: "CLAUDE", windows: [], message: "usage unavailable" });
 	});
 
-	it("reports Qwen and Grok quota APIs as unavailable without probing the network", async () => {
+	it("reports Qwen quota APIs as unavailable without probing the network", async () => {
 		const fetchMock = vi.fn();
 		const qwen = await loadSubscriptionUsage(
 			session("qwen-oauth", { oauthProviders: ["qwen-oauth"] }) as never,
 			fetchMock,
 		);
-		const grok = await loadSubscriptionUsage(
-			session("grok-oauth-proxy", { oauthProviders: ["grok-oauth-proxy"] }) as never,
+
+		expect(qwen).toEqual({ label: "QWEN", windows: [], message: "quota API unavailable" });
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("parses SuperGrok weekly credits from the CLI-proxy billing payload", () => {
+		expect(
+			parseGrokUsageSnapshot({
+				config: {
+					creditUsagePercent: 27,
+					currentPeriod: {
+						type: "USAGE_PERIOD_TYPE_WEEKLY",
+						start: "2026-08-12T16:01:00+09:00",
+						end: "2026-08-19T16:01:00+09:00",
+					},
+				},
+			}),
+		).toEqual([{ label: "7D", usedPercent: 27, resetsAt: Date.parse("2026-08-19T16:01:00+09:00") / 1000 }]);
+		expect(
+			parseGrokUsageSnapshot({
+				config: {
+					currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY", end: "2026-08-19T16:01:00+09:00" },
+				},
+			}),
+		).toEqual([{ label: "7D", usedPercent: 0, resetsAt: Date.parse("2026-08-19T16:01:00+09:00") / 1000 }]);
+		expect(parseGrokUsageSnapshot({ remaining_balance: 20, spent_balance: 80, total_granted: 100 })).toBeUndefined();
+	});
+
+	it("loads SuperGrok weekly usage from the Grok CLI billing proxy", async () => {
+		const requests: Array<{ url: string | URL | Request; init?: RequestInit }> = [];
+		const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+			requests.push({ url, init });
+			return new Response(
+				JSON.stringify({
+					config: {
+						creditUsagePercent: 27,
+						currentPeriod: {
+							type: "USAGE_PERIOD_TYPE_WEEKLY",
+							end: "2026-08-19T16:01:00+09:00",
+						},
+					},
+				}),
+				{ status: 200, headers: { "content-type": "application/json" } },
+			);
+		});
+		const result = await loadSubscriptionUsage(
+			session("xai", {
+				oauthProviders: ["xai"],
+				apiKeys: { xai: "test-xai-token" },
+			}) as never,
 			fetchMock,
 		);
 
-		expect(qwen).toEqual({ label: "QWEN", windows: [], message: "quota API unavailable" });
-		expect(grok).toEqual({ label: "GROK", windows: [], message: "quota API unavailable" });
-		expect(fetchMock).not.toHaveBeenCalled();
+		const headers = new Headers(requests[0]?.init?.headers);
+		expect(requests[0]?.url).toBe("https://cli-chat-proxy.grok.com/v1/billing?format=credits");
+		expect(headers.get("authorization")).toBe("Bearer test-xai-token");
+		expect(headers.get("x-xai-token-auth")).toBe("xai-grok-cli");
+		expect(result).toEqual({
+			label: "GROK",
+			windows: [{ label: "7D", usedPercent: 27, resetsAt: Date.parse("2026-08-19T16:01:00+09:00") / 1000 }],
+		});
 	});
 });

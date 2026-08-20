@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Api, Model } from "../src/types.ts";
-import { GROK_PROXY_PROVIDER_ID, grokProxyOAuthProvider, loginGrokProxy } from "../src/utils/oauth/grok-proxy.ts";
+import { getModel, getSupportedThinkingLevels } from "../src/models.ts";
+import { streamSimpleOpenAICompletions } from "../src/providers/openai-completions.ts";
+import type { Api, Model, ThinkingLevel } from "../src/types.ts";
 import { getOAuthProviders } from "../src/utils/oauth/index.ts";
 import {
 	loginQwen,
@@ -10,6 +11,7 @@ import {
 	refreshQwenToken,
 } from "../src/utils/oauth/qwen.ts";
 import type { OAuthCredentials } from "../src/utils/oauth/types.ts";
+import { XAI_OAUTH_PROVIDER_ID, xaiOAuthProvider } from "../src/utils/oauth/xai.ts";
 
 function jsonResponse(body: unknown, status: number = 200): Response {
 	return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -37,22 +39,50 @@ function fakeModel(provider: string, id: string): Model<Api> {
 	} satisfies Model<"openai-completions">;
 }
 
+function getGrokModel(id: "grok-4.6" | "grok-4.5" | "grok-4.3"): Model<"openai-completions"> {
+	return getModel("xai", id);
+}
+
+async function captureGrokPayload(model: Model<"openai-completions">, reasoning?: ThinkingLevel): Promise<unknown> {
+	let captured: unknown;
+	const stream = streamSimpleOpenAICompletions(
+		model,
+		{ messages: [{ role: "user", content: "test", timestamp: 0 }] },
+		{
+			apiKey: "dummy",
+			maxTokens: 128,
+			reasoning,
+			onPayload(payload) {
+				captured = payload;
+				throw new Error("payload captured");
+			},
+		},
+	);
+	for await (const _event of stream) {
+		// The capture hook aborts before network I/O; consume the terminal error event.
+	}
+	return captured;
+}
+
+function payloadField(payload: unknown, field: string): unknown {
+	return typeof payload === "object" && payload !== null ? Reflect.get(payload, field) : undefined;
+}
+
 afterEach(() => {
 	vi.restoreAllMocks();
-	delete process.env.OMK_GROK_PROXY_BASE_URL;
-	delete process.env.OMK_GROK_PROXY_API_KEY;
 });
 
 describe("OAuth provider registry", () => {
-	it("registers Qwen and Grok as built-in subscription providers", () => {
+	it("registers Qwen and native xAI as built-in subscription providers", () => {
 		const ids = getOAuthProviders().map((p) => p.id);
 		expect(ids).toContain(QWEN_OAUTH_PROVIDER_ID);
-		expect(ids).toContain(GROK_PROXY_PROVIDER_ID);
+		expect(ids).toContain(XAI_OAUTH_PROVIDER_ID);
+		expect(ids).not.toContain("grok-oauth-proxy");
 
 		const qwen = getOAuthProviders().find((p) => p.id === QWEN_OAUTH_PROVIDER_ID);
-		const grok = getOAuthProviders().find((p) => p.id === GROK_PROXY_PROVIDER_ID);
+		const grok = getOAuthProviders().find((p) => p.id === XAI_OAUTH_PROVIDER_ID);
 		expect(qwen?.name).toBe("Qwen (Qwen Code Subscription)");
-		expect(grok?.name).toBe("Grok (xAI OAuth Proxy)");
+		expect(grok?.name).toBe("xAI Grok (SuperGrok or X Premium+)");
 	});
 });
 
@@ -132,53 +162,56 @@ describe("Qwen OAuth provider", () => {
 	});
 });
 
-describe("Grok proxy OAuth provider", () => {
-	it("adds default Grok models at the proxy base URL", () => {
+describe("native xAI Grok OAuth provider", () => {
+	it("applies model-specific thinking levels on native xAI Grok models", () => {
+		const grok46 = getGrokModel("grok-4.6");
+		expect(grok46.provider).toBe(XAI_OAUTH_PROVIDER_ID);
+		expect(grok46.baseUrl).toBe("https://api.x.ai/v1");
+		expect(grok46.contextWindow).toBe(500_000);
+		expect(grok46.compat).toMatchObject({ supportsReasoningEffort: true });
+		expect(getSupportedThinkingLevels(grok46)).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
+		expect(getSupportedThinkingLevels(getGrokModel("grok-4.5"))).toEqual(["low", "medium", "high", "max", "ultra"]);
+		expect(getSupportedThinkingLevels(getGrokModel("grok-4.3"))).toEqual([
+			"off",
+			"low",
+			"medium",
+			"high",
+			"max",
+			"ultra",
+		]);
+	});
+
+	it.each([
+		["grok-4.6", "max", "xhigh"],
+		["grok-4.5", "max", "high"],
+	] as const)("maps %s %s thinking to xAI reasoning_effort=%s", async (id, requested, expected) => {
+		const payload = await captureGrokPayload(getGrokModel(id), requested);
+		expect(payloadField(payload, "reasoning_effort")).toBe(expected);
+		expect(payloadField(payload, "max_tokens")).toBeDefined();
+		expect(payloadField(payload, "max_completion_tokens")).toBeUndefined();
+	});
+
+	it("keeps mandatory Grok 4.6 reasoning enabled when no level is selected", async () => {
+		const payload = await captureGrokPayload(getGrokModel("grok-4.6"));
+		expect(payloadField(payload, "reasoning_effort")).toBeUndefined();
+	});
+
+	it("sends none when Grok 4.3 thinking is off", async () => {
+		const payload = await captureGrokPayload(getGrokModel("grok-4.3"));
+		expect(payloadField(payload, "reasoning_effort")).toBe("none");
+	});
+
+	it("applies thinking maps to existing xAI models without adding or duplicating ids", () => {
 		const cred: OAuthCredentials = { access: "x", refresh: "x", expires: Date.now() };
-		const result = grokProxyOAuthProvider.modifyModels?.([fakeModel("openai", "gpt-x")], cred) ?? [];
-		const grokModels = result.filter((m) => m.provider === GROK_PROXY_PROVIDER_ID);
-		expect(grokModels.map((m) => m.id)).toEqual(["grok-4.5", "grok-4.3"]);
-		expect(grokModels.every((m) => m.baseUrl === "http://127.0.0.1:9996/v1")).toBe(true);
-		expect(result.find((m) => m.id === "gpt-x")).toBeDefined();
+		const existing = [fakeModel(XAI_OAUTH_PROVIDER_ID, "grok-4.5"), fakeModel(XAI_OAUTH_PROVIDER_ID, "my-grok")];
+		const result = xaiOAuthProvider.modifyModels?.(existing, cred) ?? [];
+		const grokIds = result.filter((m) => m.provider === XAI_OAUTH_PROVIDER_ID).map((m) => m.id);
+		expect(grokIds.sort()).toEqual(["grok-4.5", "my-grok"]);
+		expect(result.find((m) => m.id === "grok-4.5")?.thinkingLevelMap?.high).toBe("high");
+		expect(result.find((m) => m.id === "grok-4.5")?.baseUrl).toBe("https://api.x.ai/v1");
 	});
 
-	it("preserves user-configured Grok models and does not duplicate default ids", () => {
-		const cred: OAuthCredentials = { access: "x", refresh: "x", expires: Date.now() };
-		const existing = [fakeModel(GROK_PROXY_PROVIDER_ID, "grok-4.5"), fakeModel(GROK_PROXY_PROVIDER_ID, "my-grok")];
-		const result = grokProxyOAuthProvider.modifyModels?.(existing, cred) ?? [];
-		const grokIds = result.filter((m) => m.provider === GROK_PROXY_PROVIDER_ID).map((m) => m.id);
-		expect(grokIds.sort()).toEqual(["grok-4.3", "grok-4.5", "my-grok"]);
-		// Pre-existing grok-4.5 keeps its own baseUrl (default not re-added on top).
-		expect(result.find((m) => m.id === "grok-4.5")?.baseUrl).toBe("https://example.com/v1");
-	});
-
-	it("honors OMK_GROK_PROXY_BASE_URL and OMK_GROK_PROXY_API_KEY", () => {
-		process.env.OMK_GROK_PROXY_BASE_URL = "http://127.0.0.1:8080/v1";
-		process.env.OMK_GROK_PROXY_API_KEY = "local-key";
-		const cred: OAuthCredentials = { access: "x", refresh: "x", expires: Date.now() };
-		const result = grokProxyOAuthProvider.modifyModels?.([], cred) ?? [];
-		expect(result.every((m) => m.baseUrl === "http://127.0.0.1:8080/v1")).toBe(true);
-		expect(grokProxyOAuthProvider.getApiKey({ access: "x", refresh: "x", expires: 0 })).toBe("local-key");
-	});
-
-	it("getApiKey defaults to dummy", () => {
-		expect(grokProxyOAuthProvider.getApiKey({ access: "x", refresh: "x", expires: 0 })).toBe("dummy");
-	});
-
-	it("login succeeds when the proxy health endpoint is reachable", async () => {
-		vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-			expect(urlOf(input)).toBe("http://127.0.0.1:9996/health");
-			return new Response("ok", { status: 200 });
-		});
-		const onProgress = vi.fn();
-		const creds = await loginGrokProxy({ onProgress });
-		expect(creds.access).toBe(GROK_PROXY_PROVIDER_ID);
-		expect(creds.expires).toBeGreaterThan(Date.now());
-		expect(onProgress).toHaveBeenCalled();
-	});
-
-	it("login fails with a start hint when the proxy is unreachable", async () => {
-		vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("ECONNREFUSED"));
-		await expect(loginGrokProxy({})).rejects.toThrow(/systemctl --user start grok-oauth-proxy/);
+	it("getApiKey returns the access token", () => {
+		expect(xaiOAuthProvider.getApiKey({ access: "tok", refresh: "r", expires: 0 })).toBe("tok");
 	});
 });

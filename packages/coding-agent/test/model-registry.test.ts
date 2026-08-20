@@ -585,6 +585,33 @@ describe("ModelRegistry", () => {
 			expect(anthropicModels.some((m) => m.id.includes("claude"))).toBe(true);
 		});
 
+		test("skips retired grok-oauth-proxy custom models from models.json", () => {
+			writeRawModelsJson({
+				"grok-oauth-proxy": {
+					baseUrl: "http://127.0.0.1:9996/v1",
+					apiKey: "dummy",
+					api: "openai-completions",
+					models: [
+						{
+							id: "grok-4.5",
+							name: "Grok 4.5 via retired proxy",
+							reasoning: true,
+							input: ["text"],
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							contextWindow: 1000,
+							maxTokens: 100,
+						},
+					],
+				},
+			});
+
+			const registry = ModelRegistry.create(authStorage, modelsJsonPath);
+
+			expect(registry.getError()).toBeUndefined();
+			expect(getModelsForProvider(registry, "grok-oauth-proxy")).toEqual([]);
+			expect(registry.find("xai", "grok-4.5")).toBeDefined();
+		});
+
 		test("removing custom models from models.json keeps built-in provider models", () => {
 			writeModelsJson({
 				anthropic: providerConfig("https://proxy.example.com/v1", [{ id: "claude-custom" }]),

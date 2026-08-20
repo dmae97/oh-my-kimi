@@ -56,6 +56,12 @@ afterEach(() => {
 });
 
 describe("GPT-5.6 Codex thinking metadata", () => {
+	it("advertises a 1M context window only for the Sol harness", () => {
+		expect(getCodexModel("gpt-5.6-sol").contextWindow).toBe(1_000_000);
+		expect(getCodexModel("gpt-5.6-terra").contextWindow).toBe(372_000);
+		expect(getCodexModel("gpt-5.6-luna").contextWindow).toBe(372_000);
+	});
+
 	it.each([
 		["gpt-5.6-sol", "max"],
 		["gpt-5.6-sol", "ultra"],

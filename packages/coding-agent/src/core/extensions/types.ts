@@ -10,6 +10,7 @@
 
 import type {
 	AgentMessage,
+	AgentTool,
 	AgentToolResult,
 	AgentToolUpdateCallback,
 	ThinkingLevel,
@@ -459,6 +460,11 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	 * If omitted, the default execution mode applies.
 	 */
 	executionMode?: ToolExecutionMode;
+	/**
+	 * dag-v2 resource contract for this tool call. Distinct non-conflicting
+	 * claims may execute concurrently; malformed or empty claims fail closed.
+	 */
+	resourceClaims?: AgentTool<TParams, TDetails>["resourceClaims"];
 
 	/** Static tool timeout in milliseconds. `0` disables the timer. */
 	timeoutMs?: number;
@@ -1282,7 +1288,6 @@ export interface ExtensionAPI {
 	 * // Register a new provider with custom models
 	 * omk.registerProvider("my-proxy", {
 	 *   baseUrl: "https://proxy.example.com",
-	 *   apiKey: "$PROXY_API_KEY",
 	 *   api: "anthropic-messages",
 	 *   models: [
 	 *     {

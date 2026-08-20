@@ -244,7 +244,12 @@ async function loginGitLab(callbacks: OAuthLoginCallbacks): Promise<OAuthCredent
 
 	callbacks.onAuth({ url: `${GITLAB_COM_URL}/oauth/authorize?${authParams.toString()}` });
 	const callbackUrl = await callbacks.onPrompt({ message: "Paste the callback URL:" });
-	const code = new URL(callbackUrl).searchParams.get("code");
+	let code: string | null = null;
+	try {
+		code = new URL(callbackUrl).searchParams.get("code");
+	} catch {
+		throw new Error("Invalid callback URL — paste the full redirect URL from the browser");
+	}
 	if (!code) throw new Error("No authorization code found in callback URL");
 
 	const tokenResponse = await fetch(`${GITLAB_COM_URL}/oauth/token`, {

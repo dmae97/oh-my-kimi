@@ -22,6 +22,14 @@ import { stripAnsi } from "../utils/ansi.ts";
 import { normalizePath } from "../utils/paths.ts";
 import { resolveConfigValue } from "./resolve-config-value.ts";
 
+const RETIRED_GROK_OAUTH_PROXY = "grok-oauth-proxy";
+
+function omitRetiredGrokOAuthProxy(data: AuthStorageData): AuthStorageData {
+	if (!(RETIRED_GROK_OAUTH_PROXY in data)) return data;
+	const { [RETIRED_GROK_OAUTH_PROXY]: _retired, ...kept } = data;
+	return kept;
+}
+
 export type ApiKeyCredential = {
 	type: "api_key";
 	key: string;
@@ -389,7 +397,7 @@ export class AuthStorage {
 			return {};
 		}
 		try {
-			return JSON.parse(content) as AuthStorageData;
+			return omitRetiredGrokOAuthProxy(JSON.parse(content) as AuthStorageData);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			throw new Error(`Failed to parse auth storage: ${message}`);
@@ -423,7 +431,9 @@ export class AuthStorage {
 			this.storage.withLock((current) => {
 				const currentData = this.parseStorageData(current);
 				const merged: AuthStorageData = { ...currentData };
-				if (credential) {
+				if (provider === RETIRED_GROK_OAUTH_PROXY) {
+					delete merged[provider];
+				} else if (credential) {
 					merged[provider] = credential;
 				} else {
 					delete merged[provider];
@@ -439,6 +449,7 @@ export class AuthStorage {
 	 * Get credential for a provider.
 	 */
 	get(provider: string): AuthCredential | undefined {
+		if (provider === RETIRED_GROK_OAUTH_PROXY) return undefined;
 		return this.data[provider] ?? undefined;
 	}
 
@@ -446,6 +457,11 @@ export class AuthStorage {
 	 * Set credential for a provider.
 	 */
 	set(provider: string, credential: AuthCredential): void {
+		if (provider === RETIRED_GROK_OAUTH_PROXY) {
+			delete this.data[provider];
+			this.persistProviderChange(provider, undefined);
+			return;
+		}
 		this.data[provider] = credential;
 		this.persistProviderChange(provider, credential);
 	}
@@ -462,13 +478,14 @@ export class AuthStorage {
 	 * List all providers with credentials.
 	 */
 	list(): string[] {
-		return Object.keys(this.data);
+		return Object.keys(this.data).filter((provider) => provider !== RETIRED_GROK_OAUTH_PROXY);
 	}
 
 	/**
 	 * Check if credentials exist for a provider in auth.json.
 	 */
 	has(provider: string): boolean {
+		if (provider === RETIRED_GROK_OAUTH_PROXY) return false;
 		return provider in this.data;
 	}
 
@@ -477,6 +494,7 @@ export class AuthStorage {
 	 * Unlike getApiKey(), this doesn't refresh OAuth tokens.
 	 */
 	hasAuth(provider: string): boolean {
+		if (provider === RETIRED_GROK_OAUTH_PROXY) return false;
 		if (this.runtimeOverrides.has(provider)) return true;
 		if (this.data[provider]) return true;
 		if (getEnvApiKey(provider)) return true;
@@ -547,6 +565,9 @@ export class AuthStorage {
 	 * Return auth status without exposing credential values or refreshing tokens.
 	 */
 	getAuthStatus(provider: string): AuthStatus {
+		if (provider === RETIRED_GROK_OAUTH_PROXY) {
+			return { configured: false };
+		}
 		if (this.data[provider]) {
 			return { configured: true, source: "stored" };
 		}
@@ -571,7 +592,7 @@ export class AuthStorage {
 	 * Get all credentials (for passing to getOAuthApiKey).
 	 */
 	getAll(): AuthStorageData {
-		return { ...this.data };
+		return omitRetiredGrokOAuthProxy({ ...this.data });
 	}
 
 	drainErrors(): Error[] {

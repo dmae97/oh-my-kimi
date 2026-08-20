@@ -110,6 +110,7 @@ export {
 	DEFAULT_SAFETY_FAILOVER_CANDIDATES,
 	type FailoverCandidate,
 	isContentSafetyStopMessage,
+	isNoSafetyFailoverModel,
 	isOrphanToolCallIdError,
 	isStickySafetyModel,
 	isTransientProviderErrorMessage,
@@ -118,6 +119,8 @@ export {
 	resolveFailoverCandidates,
 	resolveProviderResilience,
 	STICKY_SAFETY_MODEL_RE,
+	shouldEjectStickySafetyModel,
+	shouldHonorSafetyFailover,
 	stickySafetyBlockMessage,
 } from "./provider-resilience.ts";
 export {

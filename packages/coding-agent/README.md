@@ -6,7 +6,7 @@ OMK supports interactive terminal use, non-interactive output, RPC integration, 
 
 ## Install
 
-Requires Node.js 22.19 or newer.
+Requires Node.js 22.19 or newer. Built-in local bash also requires `sandbox-exec` on macOS or `bwrap` plus unprivileged user namespaces on Linux. Enforcement is enabled by default and fails closed with `sandbox.backend_missing`; see [Containerization](https://github.com/dmae97/omk/blob/main/packages/coding-agent/docs/containerization.md).
 
 ```bash
 npm install -g open-multi-agent-kit --ignore-scripts
@@ -45,19 +45,20 @@ OMK stores user configuration under `~/.omk/agent/` and project configuration un
 Install `omk-book-to-skill` to compile documents into reusable skills without adding Python extractors to OMK core:
 
 ```bash
-omk install npm:omk-book-to-skill@0.95.2
+omk install npm:omk-book-to-skill@0.96.1
 ```
 
 It provides compile, update, and verification commands plus a local SHA-256 provenance manifest. See [Book to Skill](https://github.com/dmae97/omk/blob/main/packages/coding-agent/docs/book-to-skill.md).
 
 ## Providers & Models
 
-OMK includes provider adapters for Anthropic, OpenAI Codex, Google, OpenCode, Kimi, Qwen, ZAI/GLM, Grok, and other compatible services. Availability depends on the credentials and endpoints configured on the current machine.
+OMK includes provider adapters for Anthropic, OpenAI Codex, Google, OpenCode, Kimi, Qwen, ZAI/GLM, native xAI/Grok, and other compatible services. Availability depends on the credentials and endpoints configured on the current machine.
 
 - `/login` adds or selects credentials.
 - `/logout` removes credentials for a selected provider.
 - `/model` lists models available to the current credential set.
-- NVIDIA NIM's `z-ai/glm-5.2` entry transmits reasoning effort, including `/thinking max`.
+- NVIDIA NIM's `z-ai/glm-5.2` entry transmits reasoning effort, including `/think max`.
+- Native `xai` accepts subscription OAuth from `/login` or `XAI_API_KEY` for API billing. Only OAuth exposes weekly SuperGrok usage/reset. See [Grok harness](https://github.com/dmae97/omk/blob/main/packages/coding-agent/docs/grok-harness.md).
 - The optional status rail shows independent provider quota windows when an official API or passive response signal is available.
 - Missing quota values are shown as unavailable rather than estimated.
 
@@ -88,6 +89,7 @@ Type `/` in the editor to open command completion.
 | `/resume` | Open a previous session |
 | `/new` | Start a new session |
 | `/session` | Show session path, messages, tokens, and cost |
+| `/goal [objective]` | Show or set the durable goal; supports `checkpoint <json>`, `pause`, `resume`, evidence-gated `complete`, and `clear` |
 | `/tree` | Navigate the current session tree |
 | `/compact [prompt]` | Compact context, optionally with custom instructions |
 | `/copy` | Copy the last assistant message |
@@ -97,6 +99,10 @@ Type `/` in the editor to open command completion.
 | `/star` | Open the OMK GitHub repository |
 | `/quit` | Exit OMK |
 
+### Default Harness Safeguards
+
+OMK warns from the third repeated identical tool call and blocks the sixth. It also repairs unmatched tool pairs before provider requests and adds guidance for supported Kimi, GLM, and Grok models. `OMK_IDENTICAL_LOOP`, `OMK_TOOL_PAIR_REPAIR`, and `OMK_PROMPT_PRESET` opt out; `OMK_GOAL_CONTROLLER` controls `/goal` and continuation.
+
 See [Usage](https://github.com/dmae97/omk/blob/main/packages/coding-agent/docs/usage.md) and [Keybindings](https://github.com/dmae97/omk/blob/main/packages/coding-agent/docs/keybindings.md) for the complete interactive reference.
 
 ## Sessions
@@ -104,6 +110,17 @@ See [Usage](https://github.com/dmae97/omk/blob/main/packages/coding-agent/docs/u
 Sessions are append-only JSONL transcripts stored under `~/.omk/agent/sessions/`. OMK can resume, branch, export, and repair sessions without sending the transcript to a separate orchestration service.
 
 Do not publish session files until you have reviewed them for source code, credentials, personal information, and private tool output.
+
+### Scripted Session Inspection
+
+```bash
+omk sdk session status --json
+omk sdk session tail [id] --limit 20
+omk sdk session inspect [id]
+omk sdk session send <id> "message"
+```
+
+These commands inspect or append to stored transcripts. `send` does not wake or execute an agent.
 
 ### Context Compaction
 
@@ -153,7 +170,7 @@ See [RPC](https://github.com/dmae97/omk/blob/main/packages/coding-agent/docs/rpc
 
 ## SDK and Extensions
 
-The TypeScript SDK exposes session creation, provider configuration, tools, and event streams. Extensions can add commands, tools, UI components, themes, and resource loaders without patching OMK core.
+The TypeScript SDK exposes session creation, provider configuration, tools, event streams, durable-goal reducers, Goal/Core/Verified/Open/Next seam checkpoints, an explicit pass-gated advisory best-of-N judge, and policy helpers for compaction, retries, prompt budgets, cache transitions, and system-prompt assembly. Extensions can add commands, tools, UI components, themes, and resource loaders without patching OMK core.
 
 `omk-protocol` provides the versioned `TaskSpec -> ExecutionAttempt -> Observation -> EvaluationResult -> RuntimeDecision` contracts and pure semantic reducers. See [Run Protocol v1](https://github.com/dmae97/omk/blob/main/packages/coding-agent/docs/run-protocol.md) for the implemented scope and migration boundaries.
 
@@ -165,6 +182,7 @@ The TypeScript SDK exposes session creation, provider configuration, tools, and 
 ## Security and Privacy
 
 - Tool access is explicit and can be scoped by path or runtime policy.
+- Default OS isolation covers AgentSession's built-in local bash only; it does not isolate other tools, extensions, custom code, or the OMK process.
 - Default tests scrub provider credentials; live provider tests require `LIVE_E2E=1`.
 - Subscription quota requests use fixed HTTPS provider origins.
 - Passive quota observers do not block model streams.
@@ -185,7 +203,7 @@ npm test
 
 See [Development](https://github.com/dmae97/omk/blob/main/packages/coding-agent/docs/development.md) and [CONTRIBUTING.md](https://github.com/dmae97/omk/blob/main/CONTRIBUTING.md).
 
-Release notes: [v0.95.2](https://github.com/dmae97/omk/blob/main/.github/RELEASE_NOTES_v0.95.2.md).
+Release notes: [v0.96.1](https://github.com/dmae97/omk/blob/main/.github/RELEASE_NOTES_v0.96.1.md).
 
 ## License
 

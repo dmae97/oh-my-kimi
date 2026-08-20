@@ -1,3 +1,4 @@
+// biome-ignore-all assist/source/organizeImports: Public exports are grouped by API domain.
 // Core session management
 
 export {
@@ -36,6 +37,28 @@ export {
 export { type Args, parseArgs } from "./cli/args.ts";
 // Config paths
 export { getAgentDir, VERSION } from "./config.ts";
+export {
+	ADVISORY_JUDGE_PROMPT_VERSION,
+	type AdvisoryJudge,
+	type AdvisoryJudgeCandidate,
+	type AdvisoryJudgeCandidateScore,
+	type AdvisoryJudgeCriterion,
+	type AdvisoryJudgeDecision,
+	type AdvisoryJudgeDecisionReason,
+	type AdvisoryJudgeDecisionStatus,
+	type AdvisoryJudgeInput,
+	AdvisoryJudgeInputError,
+	type AdvisoryJudgeRequest,
+	type AdvisoryJudgeRequestCandidate,
+	chooseWithAdvisoryJudge,
+} from "./core/advisory-judge.ts";
+export {
+	type AdvisoryJudgeCompletion,
+	AdvisoryJudgeModelError,
+	type AdvisoryJudgeModelErrorCode,
+	createModelAdvisoryJudge,
+	type ModelAdvisoryJudgeOptions,
+} from "./core/advisory-judge-model.ts";
 export {
 	AgentSession,
 	type AgentSessionConfig,
@@ -169,6 +192,82 @@ export {
 	type ReservedTokenBudgetResult,
 	type ToolResultReserveRequest,
 } from "./core/context-budget-reserved-tokens.ts";
+export {
+	computeDurableGoalGeneration,
+	createDurableGoal,
+	DURABLE_GOAL_CHECKPOINT_SCHEMA_VERSION,
+	DURABLE_GOAL_SCHEMA_VERSION,
+	DURABLE_GOAL_STATUS_VALUES,
+	type DurableGoalCheckpoint,
+	type DurableGoalCheckpointInput,
+	type DurableGoalCommand,
+	DurableGoalError,
+	type DurableGoalErrorCode,
+	type DurableGoalEvidence,
+	type DurableGoalRef,
+	type DurableGoalSnapshot,
+	type DurableGoalStatus,
+	freshDurableGoalEvidence,
+} from "./core/durable-goal.ts";
+export {
+	createDurableGoalCheckpoint,
+	formatDurableGoalCheckpoint,
+	parseDurableGoalCheckpoint,
+	parseDurableGoalCheckpointCommand,
+} from "./core/durable-goal-checkpoint.ts";
+export { parseDurableGoalSnapshot } from "./core/durable-goal-parse.ts";
+export { applyDurableGoalCommand } from "./core/durable-goal-reducer.ts";
+export {
+	type GoalContinuationDecision,
+	type GoalContinuationInput,
+	decideGoalContinuation,
+} from "./core/goal-continuation.ts";
+export { isSessionModelOverflow, shouldSkipCompactionCheck } from "./core/compaction-gate.ts";
+export {
+	detectIdenticalLoop,
+	type LoopDetection,
+	type LoopPolicy,
+	type LoopRecord,
+} from "./core/identical-loop.ts";
+export {
+	type PromptPreset,
+	type PromptPresetId,
+	PROMPT_PRESET_IDS,
+	resolvePromptPreset,
+} from "./core/prompt-preset.ts";
+export {
+	computeRetryDelayMs,
+	failoverModelKey,
+	isFailoverTriggerError,
+	isRetryableAssistantError,
+	nextRetryAttempt,
+} from "./core/provider-retry.ts";
+export { computePromptTokenBudget, computeResponseReserveTokens } from "./core/prompt-budget.ts";
+export {
+	classifyPromptCacheTransition,
+	type PromptCacheTransition,
+	type PromptCacheTransitionKind,
+} from "./core/prompt-cache.ts";
+export {
+	type SessionSystemPromptAssembly,
+	type SessionSystemPromptInput,
+	assembleSessionSystemPrompt,
+} from "./core/session-system-prompt.ts";
+export {
+	applyToolPairRepair,
+	type ToolContentBlock,
+	type ToolPairMessage,
+} from "./core/tool-pair-repair.ts";
+export {
+	type SpillInput,
+	type SpillResult,
+	spillTruncatedOutput,
+} from "./core/tools/artifact-spill.ts";
+export {
+	DURABLE_GOAL_JOURNAL_SCHEMA_VERSION,
+	type DurableGoalJournal,
+	DurableGoalStore,
+} from "./core/durable-goal-store.ts";
 export { createEventBus, type EventBus, type EventBusController } from "./core/event-bus.ts";
 // Extension system
 export type {
@@ -407,6 +506,7 @@ export {
 	type BashToolInput,
 	type BashToolOptions,
 	createBashToolDefinition,
+	type LocalBashOperationsOptions,
 	createDiagnosticsTool,
 	createDiagnosticsToolDefinition,
 	createEditToolDefinition,

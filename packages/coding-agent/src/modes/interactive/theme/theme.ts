@@ -491,14 +491,24 @@ function getBuiltinThemes(): Record<string, ThemeJson> {
 	if (!BUILTIN_THEMES) {
 		const themesDir = getThemesDir();
 		const themes: Record<string, ThemeJson> = {};
+		// A missing asset dir (foreign runner, partial install) yields no built-ins
+		// instead of throwing — themes are cosmetic and must not fail closed.
+		if (!fs.existsSync(themesDir)) {
+			BUILTIN_THEMES = themes;
+			return BUILTIN_THEMES;
+		}
 		for (const file of fs.readdirSync(themesDir)) {
 			if (!file.endsWith(".json") || file === "theme-schema.json") {
 				continue;
 			}
 			const themePath = path.join(themesDir, file);
-			const parsed = JSON.parse(fs.readFileSync(themePath, "utf-8")) as Partial<ThemeJson>;
-			if (typeof parsed.name === "string" && parsed.colors) {
-				themes[parsed.name] = parsed as ThemeJson;
+			try {
+				const parsed = JSON.parse(fs.readFileSync(themePath, "utf-8")) as Partial<ThemeJson>;
+				if (typeof parsed.name === "string" && parsed.colors) {
+					themes[parsed.name] = parsed as ThemeJson;
+				}
+			} catch {
+				// Skip unreadable or malformed theme files.
 			}
 		}
 		BUILTIN_THEMES = themes;

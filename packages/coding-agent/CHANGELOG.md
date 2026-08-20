@@ -2,6 +2,46 @@
 
 ## [Unreleased]
 
+## [0.96.1] - 2026-08-20
+
+### Added
+
+- Added built-in harness loop extensions: identical-loop detection, compaction tool-pair repair, Kimi/K3/GLM/Grok/Claude prompt presets, and `/goal` with automatic continuation plus explicit `pause`, `resume`, evidence-gated `complete`, and `clear` lifecycle commands.
+- Added pass-gated advisory best-of-N selection with strict weighted judge responses, forced-redacted candidate material, deterministic fallback, evaluation-bound request digests, and an explicit `ModelRegistry`-backed LLM adapter.
+- Added digest-bound `Goal / Core / Verified / Open / Next` seam checkpoints to the existing durable-goal journal, including `/goal checkpoint <json>` and checkpoint-aware continuation.
+- Added `omk sdk session status|tail|inspect|send` for external session controllers. Ambiguous selectors now fail closed, writes require exact IDs, active owners block concurrent access, and credential-shaped transcript text is redacted from output.
+- Legacy `read` mode (`OMK_OMP_SEAMS=0`) now reports a private `0700` temporary spill directory with an exclusive `0600` file for recoverable line or byte truncation; it never writes beside or through the source path. A first line that alone exceeds the byte cap remains preview-only.
+
+### Changed
+
+- Sandbox backend probing is now cached per local bash operations instance. All enforce-mode fallback verdicts share the concrete missing-backend diagnosis (`bwrap`, user namespaces, `sandbox-exec`, or unsupported platform). Policy semantics are unchanged.
+- Extracted the session system-prompt assembly from `AgentSession._rebuildSystemPrompt` into the pure `assembleSessionSystemPrompt` module (`core/session-system-prompt.ts`). Provider playbook resolution stays at the call site; the assembly is now directly testable.
+- Extracted the retry/failover decisions from `AgentSession._isRetryableError` and `_prepareRetry` into the pure `core/provider-retry.ts` module (`isRetryableAssistantError`, `nextRetryAttempt`, `computeRetryDelayMs`). Retry ordering, backoff, and failover semantics are unchanged.
+- Extracted the compaction gates from `AgentSession._checkCompaction` into the pure `core/compaction-gate.ts` module (`shouldSkipCompactionCheck`, `isSessionModelOverflow`). Gate ordering and staleness semantics are unchanged.
+- Extracted the failover trigger and refused-model bookkeeping from `AgentSession._maybeFailoverFromSafetyStop` into `core/provider-retry.ts` (`isFailoverTriggerError`, `failoverModelKey`). Chain ordering and blacklist semantics are unchanged.
+- Extracted the context-budget arithmetic from `AgentSession._getContextBudgetOptions` into the pure `core/prompt-budget.ts` module (`computePromptTokenBudget`, `computeResponseReserveTokens`). Env parsing stays at the call site; budget values are unchanged.
+- Extracted the prompt-cache key transition classification from `AgentSession._recordPromptCachePlan` into the pure `core/prompt-cache.ts` module (`classifyPromptCacheTransition`). Counter and break-reason semantics are unchanged.
+- Grok 4.5 / 4.3 now expose `/think max` and `ultra` in the selector. Those aliases still send xAI `reasoning_effort: "high"` because those models have no upstream `xhigh`/`max` tier.
+- Native xAI SuperGrok usage now polls `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits` and shows the weekly SuperGrok pool from `creditUsagePercent`. Stale `grok-oauth-proxy` credentials are dropped from `/login` and `/logout`.
+
+### Fixed
+
+- Durable-goal continuation now records and skips an unavailable WSL/project workspace instead of emitting an `ENODEV` extension stack after every failed provider attempt.
+- Content/safety refusals are capped at one same-model retry when failover is unavailable, preventing the default transport retry budget from replaying the same refusal three times.
+- Fable models remain visible in the model catalog, and a saved Fable default is honored when sticky-safety blocking is disabled.
+- Claude models now omit discovered context files by default, avoiding provider false positives from unrelated instruction text; `OMK_CLAUDE_CONTEXT_FILES=1` restores the full context.
+- Extension `resourceClaims` now survive both tool-definition adapters, allowing `dag-v2` to schedule non-conflicting custom tool calls concurrently instead of treating them as unclaimed exclusive work.
+- Built-in tool-pair repair now uses the real `AgentMessage` contract (`toolCall` blocks and top-level `role: "toolResult"` messages), removing orphan pairs without unsafe message-shape casts.
+- Pinned the transitive development dependency `nanoid` to 3.3.18, clearing GHSA-2v37-7h3g-55p8 from both full and production npm audits.
+
+### Docs
+
+- Redesigned the root README around the Scope → Route → Verify → Replay control loop with a WCAG-aware cyberpunk OMK Girl hero and slow feature GIF generated through GPT Image 2. The root `DESIGN.md` now defines public brand tokens, media budgets, and reduced-motion guidance.
+
+### Removed
+
+- Removed the `grok-oauth-proxy` provider path. Grok harness dispatch, failover, usage, and presets now use native `xai`. Stale `models.json` entries for `grok-oauth-proxy` are ignored instead of reappearing in `/login` and `/model`.
+
 ## [0.96.0] - 2026-08-16
 
 ### Added

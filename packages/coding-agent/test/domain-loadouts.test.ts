@@ -97,6 +97,8 @@ describe("domain-loadouts registry", () => {
 
 		expect(profile.id).toBe("grok-harness");
 		expect(profile.label).toBe("Grok xAI Harness");
+		expect(profile.routingPrompt).toContain("docs/grok-harness.md");
+		expect(profile.routingPrompt).toContain("optional local operator overlay");
 		expect(validation.valid, validation.errors.join("; ")).toBe(true);
 	});
 

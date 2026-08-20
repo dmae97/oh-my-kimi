@@ -1,7 +1,13 @@
 import { execSync } from "node:child_process";
 import type { NetworkMode, SandboxBackendStatus, SandboxDecision, SandboxPolicy } from "./policy.ts";
+import { decideSandboxFallback } from "./policy.ts";
 
 export type SandboxBackendType = "unsupported" | "seatbelt" | "bubblewrap";
+
+export type SandboxBackendProbe =
+	| { readonly platform: "macos"; readonly seatbeltAvailable: boolean }
+	| { readonly platform: "linux"; readonly bubblewrapAvailable: boolean; readonly userNamespacesEnabled: boolean }
+	| { readonly platform: "unsupported"; readonly hostPlatform: string };
 
 export interface SandboxInvocation {
 	readonly argv: readonly string[];
@@ -42,28 +48,62 @@ function userNamespacesEnabled(): boolean {
 	}
 }
 
+function assertNever(value: never): never {
+	throw new Error(`Unexpected sandbox backend probe: ${JSON.stringify(value)}`);
+}
+
+export function classifySandboxBackendProbe(probe: SandboxBackendProbe): SandboxBackendStatus {
+	switch (probe.platform) {
+		case "macos":
+			return {
+				platform: "macos",
+				backendAvailable: probe.seatbeltAvailable,
+				domainAllowlistAvailable: probe.seatbeltAvailable,
+				...(probe.seatbeltAvailable ? {} : { unavailableReason: "sandbox-exec is not installed or unavailable." }),
+			};
+		case "linux": {
+			const backendAvailable = probe.bubblewrapAvailable && probe.userNamespacesEnabled;
+			let unavailableReason: string | undefined;
+			if (!probe.bubblewrapAvailable) {
+				unavailableReason = probe.userNamespacesEnabled
+					? "bwrap is not installed or unavailable."
+					: "bwrap is unavailable and unprivileged user namespaces are disabled.";
+			} else if (!probe.userNamespacesEnabled) {
+				unavailableReason = "Unprivileged user namespaces are disabled.";
+			}
+			return {
+				platform: "linux",
+				backendAvailable,
+				domainAllowlistAvailable: false,
+				...(unavailableReason ? { unavailableReason } : {}),
+			};
+		}
+		case "unsupported":
+			return {
+				platform: "unsupported",
+				backendAvailable: false,
+				unavailableReason: `No supported sandbox backend exists for ${probe.hostPlatform}.`,
+			};
+		default:
+			return assertNever(probe);
+	}
+}
+
 export function detectSandboxBackend(): SandboxBackendStatus {
 	if (process.platform === "darwin") {
-		const available = commandExists("sandbox-exec");
-		return {
+		return classifySandboxBackendProbe({
 			platform: "macos",
-			backendAvailable: available,
-			domainAllowlistAvailable: available,
-		};
+			seatbeltAvailable: commandExists("sandbox-exec"),
+		});
 	}
 	if (process.platform === "linux") {
-		const bwrap = commandExists("bwrap");
-		const userns = userNamespacesEnabled();
-		return {
+		return classifySandboxBackendProbe({
 			platform: "linux",
-			backendAvailable: bwrap && userns,
-			domainAllowlistAvailable: false,
-		};
+			bubblewrapAvailable: commandExists("bwrap"),
+			userNamespacesEnabled: userNamespacesEnabled(),
+		});
 	}
-	return {
-		platform: "unsupported",
-		backendAvailable: false,
-	};
+	return classifySandboxBackendProbe({ platform: "unsupported", hostPlatform: process.platform });
 }
 
 function seatbeltLiteral(value: string): string {
@@ -169,30 +209,6 @@ export function buildBackendArgv(backend: SandboxBackendStatus, invocation: Sand
 }
 
 export function strictBackendMissingVerdict(policy: SandboxPolicy, backend: SandboxBackendStatus): SandboxDecision {
-	if (policy.mode === "off") {
-		return {
-			allowed: true,
-			rule: "sandbox.off",
-			reason: "Sandbox policy is disabled.",
-		};
-	}
-	if (backend.backendAvailable) {
-		return {
-			allowed: true,
-			rule: "sandbox.backend_available",
-			reason: "Sandbox backend is available.",
-		};
-	}
-	if (policy.mode === "audit") {
-		return {
-			allowed: true,
-			rule: "sandbox.audit_fallback",
-			reason: "Audit mode permits execution without backend.",
-		};
-	}
-	return {
-		allowed: false,
-		rule: "sandbox.backend_missing",
-		reason: "Enforce mode blocks shell and exec when no backend is available.",
-	};
+	const { allowed, rule, reason } = decideSandboxFallback(policy, backend);
+	return { allowed, rule, reason };
 }

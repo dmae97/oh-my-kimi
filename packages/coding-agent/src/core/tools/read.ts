@@ -12,6 +12,7 @@ import { formatDimensionNote, resizeImage } from "../../utils/image-resize.ts";
 import { detectSupportedImageMimeTypeFromFile } from "../../utils/mime.ts";
 import { formatPathRelativeToCwdOrAbsolute } from "../../utils/paths.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
+import { spillTruncatedOutput } from "./artifact-spill.ts";
 import {
 	formatOmpIssues,
 	getOmpSeams,
@@ -33,6 +34,7 @@ export type ReadToolInput = Static<typeof readSchema>;
 
 export interface ReadToolDetails {
 	truncation?: TruncationResult;
+	fullOutputPath?: string;
 }
 
 interface CompactReadClassification {
@@ -353,7 +355,15 @@ export function createReadToolDefinition(
 									} else {
 										outputText += `\n\n[Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines} (${formatSize(DEFAULT_MAX_BYTES)} limit). Use offset=${nextOffset} to continue.]`;
 									}
-									details = { truncation };
+									const spilled = spillTruncatedOutput({
+										kind: "read",
+										preview: outputText,
+										full: selectedContent,
+										truncated: true,
+										path: `${absolutePath}.omk-spill.txt`,
+									});
+									outputText = spilled.preview;
+									details = { truncation, fullOutputPath: spilled.path };
 								} else if (userLimitedLines !== undefined && startLine + userLimitedLines < allLines.length) {
 									// User-specified limit stopped early, but the file still has more content.
 									const remaining = allLines.length - (startLine + userLimitedLines);

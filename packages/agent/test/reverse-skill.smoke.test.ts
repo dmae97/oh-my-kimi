@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeReverseSkillName, routeReverseSkill } from "../src/index.ts";
+import { normalizeReverseSkillName, REVERSE_SKILL_ROUTES, routeReverseSkill } from "../src/index.ts";
 
 // Smoke test for the deduplicated canonical reverse-skill module. The
 // coding-agent copy is now a thin re-export of this implementation through the
@@ -15,5 +15,15 @@ describe("reverse-skill canonical module (omk-agent-core public surface)", () =>
 		});
 		expect(decision.unmatched).toBe(false);
 		expect(decision.primary?.route.id).toBe("js-reverse");
+	});
+
+	it("routes repository-to-prompt reconstruction to gitreverse through the public entry", () => {
+		const decision = routeReverseSkill({
+			query: "Turn https://github.com/vercel/next.js into one prompt I can paste into Cursor to vibe code it from scratch",
+		});
+
+		expect(decision.unmatched).toBe(false);
+		expect(decision.primary?.route.id).toBe("gitreverse");
+		expect(REVERSE_SKILL_ROUTES.some((route) => route.id === "gitreverse")).toBe(true);
 	});
 });

@@ -65,6 +65,8 @@ export interface CreateAgentSessionOptions {
 	thinkingLevel?: ThinkingLevel;
 	/** Models available for cycling (Ctrl+P in interactive mode) */
 	scopedModels?: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
+	/** True when the user pinned `--model` / `--provider` for this process. */
+	modelPinned?: boolean;
 
 	/**
 	 * Optional default tool suppression mode when no explicit allowlist is provided.
@@ -602,6 +604,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		loadoutAccessPolicy: effectiveLoadoutAccessPolicy,
 		bashSandboxPreflight: options.bashSandboxPreflight,
 		sessionStartEvent: options.sessionStartEvent,
+		modelPinned: options.modelPinned,
 		transcriptRepair: transcriptRecovery.repair,
 		replayLedger,
 		replayGoalId,

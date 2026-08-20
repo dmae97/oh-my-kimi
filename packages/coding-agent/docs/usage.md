@@ -45,18 +45,39 @@ Type `/` in the editor to open command completion. Extensions can register custo
 | `/new` | Start a new session |
 | `/name <name>` | Set session display name |
 | `/session` | Show session file, ID, messages, tokens, and cost |
+| `/goal [objective]` | Show or set the durable goal for the current working directory |
 | `/tree` | Jump to any point in the session and continue from there |
 | `/fork` | Create a new session from a previous user message |
 | `/clone` | Duplicate the current active branch into a new session |
 | `/compact [prompt]` | Manually compact context, optionally with custom instructions |
 | `/copy` | Copy last assistant message to clipboard |
 | `/export [file]` | Export session to HTML |
+| `/import <path.jsonl>` | Import a JSONL session and continue it |
 | `/share` | Upload as private GitHub gist with shareable HTML link |
 | `/reload` | Reload keybindings, extensions, skills, prompts, and context files |
 | `/hotkeys` | Show all keyboard shortcuts |
 | `/changelog` | Display version history |
 | `/star` | Open the OMK GitHub repository |
 | `/quit` | Quit omk |
+
+### Durable Goals
+
+Use `/goal <objective>` to create or update the durable goal for the current working directory; `/goal` without arguments shows its status. See [Run Protocol](run-protocol.md#durable-goal-lifecycle) for the authoritative persistence, round-limit, continuation, and SDK lifecycle rules.
+
+## Built-in Harness Safeguards
+
+`DefaultResourceLoader` enables these first-party safeguards:
+
+| Safeguard | Behavior | Opt out |
+| --- | --- | --- |
+| Identical-loop guard | Warns from the third consecutive identical tool call and blocks the sixth | `OMK_IDENTICAL_LOOP=0` |
+| Tool-pair repair | Removes unmatched tool-use and tool-result blocks from outbound context | `OMK_TOOL_PAIR_REPAIR=0` |
+| Model prompt presets | Adds model-specific execution guidance for supported Claude, Kimi, GLM, and Grok models | `OMK_PROMPT_PRESET=0` |
+| Goal controller | Registers `/goal` and continues active goals within their round limit | `OMK_GOAL_CONTROLLER=0` |
+
+These built-ins remain active with `--no-extensions`. A custom `ResourceLoader` owns its own extension set and does not receive them automatically.
+
+Claude models use a clean prompt context by default: OMK keeps tools, skills, and the Claude preset but omits discovered `AGENTS.md` and `CLAUDE.md` files. This avoids provider false positives caused by unrelated instruction text. Set `OMK_CLAUDE_CONTEXT_FILES=1` to restore those files for Claude.
 
 ## Automatic Thinking Level Routing
 
@@ -134,6 +155,17 @@ Useful session commands:
 - `/fork` creates a new session from an earlier user message.
 - `/clone` duplicates the current active branch into a new session file.
 - `/compact` summarizes older messages to free context.
+
+External controllers can inspect stored sessions without starting the TUI:
+
+```bash
+omk sdk session status [id] [--json]
+omk sdk session tail [id] [--limit 20]
+omk sdk session inspect [id]
+omk sdk session send <id> "message"
+```
+
+`send` appends a user-message entry; it does not wake or execute an agent. See [SDK](sdk.md#inspect-persisted-sessions-from-the-cli) for flags and output formats.
 
 See [Sessions](sessions.md) and [Compaction](compaction.md) for details.
 
@@ -279,6 +311,8 @@ cat README.md | omk -p "Summarize this text"
 
 Built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`.
 
+With default OMP seams, a long text `read` returns a bounded window and continuation marker without creating a sidecar. With `OMK_OMP_SEAMS=0`, legacy truncation may write the selected window to `<absolute-source-path>.omk-spill.txt` and report that path. A first line that alone exceeds the byte cap is clipped without a sidecar. An inspection-only tool allowlist is therefore not a strict no-write filesystem boundary in legacy read mode.
+
 ### Resource Options
 
 | Option | Description |
@@ -346,7 +380,7 @@ omk --model sonnet:high "Solve this complex problem"
 # Limit model cycling
 omk --models "claude-*,gpt-4o"
 
-# Read-only mode
+# Inspection-only tool allowlist; legacy read mode may create a spill sidecar
 omk --tools read,grep,find,ls -p "Review the code"
 
 # Disable one extension or built-in tool while keeping the rest available
@@ -355,22 +389,10 @@ omk --exclude-tools ask_question
 
 ### Environment Variables
 
-| Variable | Description |
-| ---------- | ------------- |
-| `OMK_CODING_AGENT_DIR` | Override config directory; default is `~/.omk/agent` |
-| `OMK_CODING_AGENT_SESSION_DIR` | Override session storage directory; overridden by `--session-dir` |
-| `OMK_PACKAGE_DIR` | Override package directory, useful for Nix/Guix store paths |
-| `OMK_TOOL_SCHEDULER` | Override the tool scheduler with `dag-v2` or use `waves-v1` for process-local rollback |
-| `OMK_OFFLINE` | Disable startup network operations, including update checks, package update checks, and install/update telemetry |
-| `OMK_SKIP_VERSION_CHECK` | Skip the OMK version update check at startup. This prevents the `the OMK repository` latest-version request |
-| `OMK_TELEMETRY` | Override install/update telemetry and provider attribution headers: `1`/`true`/`yes` or `0`/`false`/`no`. This does not disable update checks |
-| `OMK_CACHE_RETENTION` | Set to `long` for extended prompt cache where supported |
-| `VISUAL`, `EDITOR` | External editor for Ctrl+G |
+See [Environment Variables](environment-variables.md) for the authoritative variable list and exact startup semantics.
 
 ## Design Principles
 
-OMK keeps the core small and pushes workflow-specific behavior into extensions, skills, prompt templates, and packages.
-
-It intentionally does not include built-in MCP, sub-agents, permission popups, plan mode, to-dos, or background bash. You can build or install those workflows as extensions or packages, or use external tools such as containers and tmux.
+OMK keeps the core small while shipping a first-party MCP client and a small default harness layer for loop detection, context repair, model guidance, and durable goals. Broader subagent runtimes, permission UIs, plan mode, and background bash remain extension or package concerns.
 
 For the full rationale, read the [blog post](https://mariozechner.at/posts/2025-11-30-omk-coding-agent/).

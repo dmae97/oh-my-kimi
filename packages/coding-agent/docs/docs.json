@@ -20,6 +20,14 @@
           "path": "providers.md"
         },
         {
+          "title": "Provider Resilience",
+          "path": "provider-resilience.md"
+        },
+        {
+          "title": "Native xAI Grok",
+          "path": "grok-harness.md"
+        },
+        {
           "title": "Containerization",
           "path": "containerization.md"
         },
@@ -100,14 +108,14 @@
       ]
     },
     {
-      "title": "Programmatic Usage",
+      "title": "Automation and Control",
       "items": [
         {
-          "title": "SDK",
+          "title": "SDK & Session Control",
           "path": "sdk.md"
         },
         {
-          "title": "Run Protocol v1",
+          "title": "Run Protocol & Durable Goals",
           "path": "run-protocol.md"
         },
         {

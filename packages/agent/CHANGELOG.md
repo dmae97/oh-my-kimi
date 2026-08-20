@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.96.1] - 2026-08-20
+
+### Added
+
+- Added the `gitreverse` passive-analysis route for public repository-to-prompt reconstruction, including GitHub/file-tree evidence requirements, Git/GitHub tool hints, and secret-safe acceptance criteria.
+
+### Fixed
+
+- Corrected the `resourceClaims` README example to use the public `key` field, matching the scheduler contract.
+
 ## [0.96.0] - 2026-08-16
 
 ## [0.95.2] - 2026-08-15

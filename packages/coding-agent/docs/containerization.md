@@ -8,10 +8,14 @@ The default `enforce` profile wraps each local bash spawn with macOS `sandbox-ex
 
 - macOS requires `sandbox-exec`.
 - Linux requires `bwrap` and unprivileged user namespaces.
+- Backend probing is lazy. `AgentSession` caches the first automatic probe for the session lifetime. `createLocalBashOperations({ sandboxPolicy })` caches one probe per operations instance when the preflight omits `backend`.
+- `sandbox.backend_missing` includes the concrete cause: missing `bwrap` or `sandbox-exec`, disabled unprivileged user namespaces, both Linux failures, or an unsupported host platform.
 - `OMK_BASH_SANDBOX=audit` explicitly selects the unwrapped, ledger-only compatibility mode.
 - `OMK_BASH_SANDBOX=0` or `off` explicitly disables the preflight.
 
 The workspace-write profile protects host paths from writes; it is not a read-confidentiality boundary. It also does not cover injected or remote `BashOperations`, custom `createBashTool()` calls without a `sandboxPolicy`, extension tools, or other OMK file tools. Use one of the whole-process or delegated patterns below when that broader boundary is required.
+
+When a verified outer whole-process sandbox owns the boundary, set `OMK_BASH_SANDBOX=off` only inside that sandbox to avoid unsupported nested `bwrap` or `sandbox-exec`. This disables OMK's inner bash wrapper; it does not create isolation. Do not copy this override to host-run OMK.
 
 There are two general isolation options:
 
@@ -102,9 +106,14 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 RUN npm install -g --ignore-scripts open-multi-agent-kit
 
+# Docker owns the whole-process boundary; avoid a nested bwrap requirement.
+ENV OMK_BASH_SANDBOX=off
+
 WORKDIR /workspace
 ENTRYPOINT ["omk"]
 ```
+
+The `OMK_BASH_SANDBOX=off` override is intentional in this image because Docker contains the whole `omk` process. The image does not install `bwrap`, so leaving the inner default at `enforce` would make built-in bash fail closed.
 
 Build and run:
 

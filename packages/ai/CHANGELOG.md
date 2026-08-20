@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [0.96.1] - 2026-08-20
+
+### Added
+
+- Native `xai` now owns Grok thinking levels and sends model-specific `reasoning_effort` values. Grok 4.6 exposes `xhigh` (with `max`/`ultra` aliases). Grok 4.5 and 4.3 expose `max`/`ultra` in the selector and map them to `high`; only Grok 4.3 maps thinking off to `none`.
+
+### Fixed
+
+- Native xAI OAuth now locks every `xai` model request to the official `https://api.x.ai/v1` origin after all provider and model overrides, preventing subscription bearer tokens from being forwarded to a custom endpoint. API-key-only configurations retain their explicit provider configuration.
+
+### Removed
+
+- Removed the built-in `grok-oauth-proxy` OAuth provider. Use native `xai` OAuth or `XAI_API_KEY`.
+
 ## [0.96.0] - 2026-08-16
 
 ### Added
@@ -11,6 +25,7 @@
 
 ### Changed
 
+- The `openai-codex/gpt-5.6-sol` harness now advertises a 1,000,000-token context window; Terra and Luna retain their 372,000-token Codex metadata.
 - The GLM reasoning-effort gate now matches GLM-5.2 **and later** GLM-5.x releases instead of hard-coding 5.2, so new minor versions inherit `supportsReasoningEffort` and the `max` thinking map without another code change. `glm-5`, `glm-5-turbo`, and `glm-5.1` remain excluded because they do not accept `reasoning_effort`.
 
 ### Fixed

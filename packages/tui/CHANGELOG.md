@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.96.1] - 2026-08-20
+
+### Notes
+
+- Version lockstep with `open-multi-agent-kit@0.96.1`; no functional changes in this package.
+
 ## [0.96.0] - 2026-08-16
 
 ## [0.95.2] - 2026-08-15
@@ -317,7 +323,6 @@
 - Fixed slash-command Tab completion from immediately chaining into argument autocomplete after completing the command name, restoring flows like `/model` that submit into a selector dialog ([#2577](https://github.com/badlogic/pi-mono/issues/2577))
 - Fixed stale content and incorrect viewport tracking after TUI content shrinks or transient components inflate the working area ([#2126](https://github.com/badlogic/pi-mono/pull/2126) by [@Perlence](https://github.com/Perlence))
 - Fixed `@` autocomplete to debounce editor-triggered searches, cancel in-flight `fd` lookups cleanly, and keep suggestions visible while results refresh ([#1278](https://github.com/badlogic/pi-mono/issues/1278))
-
 
 ## [0.62.0] - 2026-03-23
 

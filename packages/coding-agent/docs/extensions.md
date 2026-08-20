@@ -1711,7 +1711,20 @@ Use `promptGuidelines` to add tool-specific bullets to the default system prompt
 
 Note: Some models are idiots and include the @ prefix in tool path arguments. Built-in tools strip a leading @ before resolving paths. If your custom tool accepts a path, normalize a leading @ as well.
 
-If your custom tool mutates files, use `withFileMutationQueue()` so it participates in the same per-file queue as built-in `edit` and `write`. This matters because tool calls run in parallel by default. Without the queue, two tools can read the same old file contents, compute different updates, and then whichever write lands last overwrites the other.
+For concurrent custom tools, set `executionMode: "parallel"` and provide a `resourceClaims(args, context)` resolver. OMK's `dag-v2` scheduler requires extension claims and runs only calls whose claims do not conflict. Claims use `kind: "path" | "session" | "terminal" | "network" | "global"`, a non-empty `key`, and `access: "read" | "write"` (`"exclusive"` is also valid for non-path claims). Return `"exclusive"` to run alone. Empty, malformed, rejected, or missing extension claims fail closed to exclusive scheduling.
+
+```typescript
+omk.registerTool({
+  name: "isolated_task",
+  // ...
+  executionMode: "parallel",
+  resourceClaims: (_args, { toolCallId }) => [
+    { kind: "session", key: `isolated-task:${toolCallId}`, access: "write" },
+  ],
+});
+```
+
+If your custom tool mutates files, use `withFileMutationQueue()` so it participates in the same per-file queue as built-in `edit` and `write`. This matters because tool calls can run in parallel. Without the queue, two tools can read the same old file contents, compute different updates, and then whichever write lands last overwrites the other.
 
 Example failure case: your custom tool edits `foo.ts` while built-in `edit` also changes `foo.ts` in the same assistant turn. If your tool does not participate in the queue, both can read the original `foo.ts`, apply separate changes, and one of those changes is lost.
 

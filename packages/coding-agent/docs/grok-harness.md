@@ -1,6 +1,6 @@
 # Grok harness
 
-This page is the project-local operator guide for running OMK with the xAI OAuth proxy. The canonical Grok playbook remains `~/.omk/agent/grok.md`; keep this page as a short routing and preset reference, not a duplicate source of truth.
+This page is the canonical operator guide for the native `xai` provider. Use `/login` for xAI subscription OAuth or `XAI_API_KEY` for xAI Platform API billing. A user-local `~/.omk/agent/grok.md` may add operator notes, but it is not the portable product contract.
 
 ## Presets
 
@@ -8,27 +8,50 @@ Project presets live in `.omk/presets.json` and are consumed by the preset exten
 
 | Preset | Provider | Model | Thinking | Use |
 | --- | --- | --- | --- | --- |
-| `grok-verified` | `grok-oauth-proxy` | `grok-4.5` | `high` | Default Grok text-chat baseline (local OAuth proxy). |
-| `grok-adaptorch-prod` | `grok-oauth-proxy` | `grok-4.5` | `high` | Same baseline, with AdaptOrch reserved for explicit DAG routing, synthesis, or consistency-verification lanes. |
+| `grok-verified` | `xai` | `grok-4.5` | `high` | Default native xAI text-chat baseline. |
+| `grok-adaptorch-prod` | `xai` | `grok-4.5` | `high` | Same baseline, with AdaptOrch reserved for explicit DAG routing, synthesis, or consistency-verification lanes. |
 
-Register the provider in `~/.omk/agent/models.json` with `baseUrl: http://127.0.0.1:9996/v1` and chat models including `grok-4.5` (and optional fallbacks such as `grok-4.3`). Loopback proxy accepts a dummy `apiKey`; do not put OAuth tokens in models.json. Confirm proxy health with `curl -fsS http://127.0.0.1:9996/health` before long sessions.
+## Authentication and weekly usage
 
-Suggested TUI flow:
+Both authentication methods use provider ID `xai`. See [Providers](providers.md#xai-grok) for the authoritative OAuth, API-key, credential-storage, and weekly-usage behavior. Do not put OAuth access or refresh tokens in `models.json`.
 
-1. Run `/grok` to inject the pointer to `~/.omk/agent/grok.md`.
+## Thinking tiers
+
+OMK sends the mapped value as xAI `reasoning_effort`.
+
+| OMK tier | `grok-4.6` | `grok-4.5` | `grok-4.3` |
+| --- | --- | --- | --- |
+| `off` | unavailable | unavailable | `none` |
+| `minimal` | unavailable | unavailable | unavailable |
+| `low` | `low` | `low` | `low` |
+| `medium` | `medium` | `medium` | `medium` |
+| `high` | `high` | `high` | `high` |
+| `xhigh` | `xhigh` | unavailable | unavailable |
+| `max` | `xhigh` | `high` | `high` |
+| `ultra` | `xhigh` | `high` | `high` |
+
+Grok 4.6 and 4.5 cannot disable reasoning. Grok 4.3 supports `off` by sending `reasoning_effort: "none"`.
+
+## Migration from `grok-oauth-proxy`
+
+The proxy provider is retired. Remove stale `grok-oauth-proxy` entries from `models.json` and `auth.json`, then use native `xai`. OMK ignores stale entries during migration.
+
+## Suggested TUI flow
+
+1. Run `/grok` only when you want to load the optional local operator overlay.
 2. Select `/preset grok-verified` for normal chat/coding work.
 3. Select `/preset grok-adaptorch-prod` only when the task has an explicit DAG, routing, or synthesis objective.
 4. Keep credentials and OAuth material out of preset JSON.
 
 ## Domain routing
 
-Domain routing is opt-in. Start OMK with `OMK_DOMAIN_ROUTING=1` when you want the domain router to compose the role loadout with a domain profile before dispatch. With the variable unset or any value other than `1`, the domain dispatch layer does not apply a domain access policy.
+Selecting the native `xai` provider auto-applies the `grok-harness` loadout by default; this does not require `OMK_DOMAIN_ROUTING=1`. Set `OMK_GROK_HARNESS=0` to disable that provider-specific dispatch.
 
-The router selects one of the documented domain profiles under [`loadout-domains/`](loadout-domains/README.md), then composes that profile with the active role loadout. Grok presets do not replace this mechanism; they only set provider, model, thinking level, and instruction pointers.
+General prompt-based domain routing is separate and opt-in through `OMK_DOMAIN_ROUTING=1`. It selects one of the profiles under [`loadout-domains/`](loadout-domains/README.md) and composes it with the active role loadout. Grok presets only set provider, model, thinking level, and instruction pointers.
 
-## Composer model
+## Chat model selection
 
-`grok-composer-2.5-fast` is a valid Grok chat model, but the project presets keep `grok-4.5` as the default. Use Composer only for explicit Composer validation or comparison work. `grok-4.3` remains a supported fallback chat model. Do not use `grok-imagine-*` ids as chat models; session `setModel` / `prompt` reject them on `grok-oauth-proxy`.
+The native `xai` catalog includes `grok-4.6`, `grok-4.5`, and `grok-4.3`. Use `/model` or `omk --list-models xai` for the current complete list. Project presets intentionally pin the verified `grok-4.5` baseline, and `grok-4.3` remains a fallback. Do not use `grok-imagine-*` IDs as chat models.
 
 ## Imagine tools
 
@@ -58,6 +81,6 @@ Use the normal OMK lane grant model: grant the smallest skill and MCP surface th
 
 Relevant evidence hooks for Grok lanes are `pre-shell-guard`, `protect-secrets`, `typecheck-after-edit`, and `stop-verify`. Hook output is incremental evidence; code changes still need the project's required final verification command before claiming type/lint cleanliness.
 
-## Canonical reference
+## Local overlay
 
-For proxy health checks, chat model rules, Imagine tool behavior, Hermes parity, Telegram behavior, and unsafe `GROK.MD` handling, read `~/.omk/agent/grok.md`.
+`/grok` may load `~/.omk/agent/grok.md` for host-specific Hermes, Telegram, or Imagine notes. Treat that file as optional local configuration; this page and the current provider documentation remain authoritative.

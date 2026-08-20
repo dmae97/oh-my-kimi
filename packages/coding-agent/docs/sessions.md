@@ -17,6 +17,17 @@ omk --fork <path|id>    # Fork a session file or partial session ID into a new s
 
 Use `/session` in interactive mode to see the current session file, session ID, message count, tokens, and cost.
 
+Stored sessions can also be inspected or appended from scripts:
+
+```bash
+omk sdk session status [id] [--json]
+omk sdk session tail [id] [--limit 20]
+omk sdk session inspect [id]
+omk sdk session send <id> "message"
+```
+
+`send` requires an exact session ID and appends only when the session has no active owner; it does not connect to a running process or execute the message. See [SDK](sdk.md#inspect-persisted-sessions-from-the-cli) for full flags and exit codes.
+
 For the JSONL file format and SessionManager API, see [Session Format](session-format.md).
 
 ## Retries and Termination Events
@@ -33,12 +44,15 @@ If a retry or failover succeeds, the later attempt emits `completed` and becomes
 | `/new` | Start a new session |
 | `/name <name>` | Set the current session display name |
 | `/session` | Show session info |
+| `/goal [objective]` | Show or set the durable goal; `checkpoint <json>` records Goal/Core/Verified/Open/Next continuity |
 | `/tree` | Navigate the current session tree |
 | `/fork` | Create a new session from a previous user message |
 | `/clone` | Duplicate the current active branch into a new session |
 | `/compact [prompt]` | Summarize older context; see [Compaction](compaction.md) |
 | `/export [file]` | Export session to HTML |
 | `/share` | Upload as private GitHub gist with shareable HTML link |
+
+`/goal` state lives under the working directory, not in one session file. Seam checkpoints are digest-correlated revisions in the same goal journal; session entries contain only their goal ID, revision, and digest. The unkeyed digest is not workspace authentication, so checkpoint prose loaded on resume is not promoted to user authority. See [Run Protocol](run-protocol.md#durable-goal-lifecycle).
 
 ## Resuming and Deleting Sessions
 

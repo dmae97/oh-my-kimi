@@ -2,7 +2,7 @@ import type { Model } from "omk-ai";
 import { describe, expect, it } from "vitest";
 import { isImagineOrGenerationModel, resolveCompactionModel } from "../src/core/compaction/model-policy.ts";
 
-function grokChatModel(id: string, provider = "grok-oauth-proxy"): Model<"openai-completions"> {
+function grokChatModel(id: string, provider = "xai"): Model<"openai-completions"> {
 	return {
 		id,
 		name: id,
@@ -36,27 +36,27 @@ describe("resolveCompactionModel", () => {
 	});
 
 	it("falls back to grok-4.5 on the same provider for imagine models when registry is empty", () => {
-		const model = grokChatModel("grok-imagine-pro", "grok-oauth-proxy");
+		const model = grokChatModel("grok-imagine-pro", "xai");
 		const resolved = resolveCompactionModel(model);
 		expect(resolved.id).toBe("grok-4.5");
-		expect(resolved.provider).toBe("grok-oauth-proxy");
+		expect(resolved.provider).toBe("xai");
 		expect(resolved.api).toBe(model.api);
 		expect(resolved.baseUrl).toBe(model.baseUrl);
 	});
 
 	it("prefers grok-4.5 over grok-4.3 and other chat models on the same provider", () => {
-		const imagine = grokChatModel("grok-imagine-image", "grok-oauth-proxy");
-		const composer = grokChatModel("grok-composer-2.5-fast", "grok-oauth-proxy");
-		const v43 = grokChatModel("grok-4.3", "grok-oauth-proxy");
-		const v45 = grokChatModel("grok-4.5", "grok-oauth-proxy");
+		const imagine = grokChatModel("grok-imagine-image", "xai");
+		const composer = grokChatModel("grok-composer-2.5-fast", "xai");
+		const v43 = grokChatModel("grok-4.3", "xai");
+		const v45 = grokChatModel("grok-4.5", "xai");
 		const resolved = resolveCompactionModel(imagine, [imagine, composer, v43, v45]);
 		expect(resolved.id).toBe("grok-4.5");
 	});
 
 	it("prefers grok-4.3 over non-preferred chat models when 4.5 is absent", () => {
-		const imagine = grokChatModel("grok-imagine-image", "grok-oauth-proxy");
-		const composer = grokChatModel("grok-composer-2.5-fast", "grok-oauth-proxy");
-		const v43 = grokChatModel("grok-4.3", "grok-oauth-proxy");
+		const imagine = grokChatModel("grok-imagine-image", "xai");
+		const composer = grokChatModel("grok-composer-2.5-fast", "xai");
+		const v43 = grokChatModel("grok-4.3", "xai");
 		const resolved = resolveCompactionModel(imagine, [imagine, composer, v43]);
 		expect(resolved.id).toBe("grok-4.3");
 	});

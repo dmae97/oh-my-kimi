@@ -547,10 +547,10 @@ export async function findInitialModel(options: {
 		};
 	}
 
-	// 3. Try saved default from settings (skip sticky safety models like claude-fable-5)
+	// 3. Try saved default from settings. A saved default is an explicit user selection.
 	if (defaultProvider && defaultModelId) {
 		const found = modelRegistry.find(defaultProvider, defaultModelId);
-		if (found && !isStickySafetyModel(found.id, found.provider)) {
+		if (found) {
 			model = found;
 			if (defaultThinkingLevel) {
 				thinkingLevel = defaultThinkingLevel;

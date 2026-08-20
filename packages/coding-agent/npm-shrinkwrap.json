@@ -1,17 +1,17 @@
 {
 	"name": "open-multi-agent-kit",
-	"version": "0.96.0",
+	"version": "0.96.1",
 	"lockfileVersion": 3,
 	"requires": true,
 	"packages": {
 		"": {
 			"name": "open-multi-agent-kit",
-			"version": "0.96.0",
+			"version": "0.96.1",
 			"license": "MIT",
 			"dependencies": {
-				"omk-agent-core": "^0.96.0",
-				"omk-ai": "^0.96.0",
-				"omk-tui": "^0.96.0",
+				"omk-agent-core": "^0.96.1",
+				"omk-ai": "^0.96.1",
+				"omk-tui": "^0.96.1",
 				"@silvia-odwyer/photon-node": "0.3.4",
 				"canonicalize": "4.0.0",
 				"chalk": "5.6.2",
@@ -27,8 +27,8 @@
 				"typebox": "1.3.11",
 				"undici": "8.10.0",
 				"yaml": "2.9.0",
-				"omk-adaptorch-wpl": "^0.96.0",
-				"omk-protocol": "^0.96.0"
+				"omk-adaptorch-wpl": "^0.96.1",
+				"omk-protocol": "^0.96.1"
 			},
 			"optionalDependencies": {
 				"@mariozechner/clipboard": "0.3.9"
@@ -1285,19 +1285,19 @@
 			}
 		},
 		"node_modules/omk-adaptorch-wpl": {
-			"version": "0.96.0",
-			"resolved": "https://registry.npmjs.org/omk-adaptorch-wpl/-/omk-adaptorch-wpl-0.96.0.tgz",
+			"version": "0.96.1",
+			"resolved": "https://registry.npmjs.org/omk-adaptorch-wpl/-/omk-adaptorch-wpl-0.96.1.tgz",
 			"license": "MIT",
 			"engines": {
 				"node": ">=22.19.0"
 			}
 		},
 		"node_modules/omk-agent-core": {
-			"version": "0.96.0",
-			"resolved": "https://registry.npmjs.org/omk-agent-core/-/omk-agent-core-0.96.0.tgz",
+			"version": "0.96.1",
+			"resolved": "https://registry.npmjs.org/omk-agent-core/-/omk-agent-core-0.96.1.tgz",
 			"license": "MIT",
 			"dependencies": {
-				"omk-ai": "^0.96.0",
+				"omk-ai": "^0.96.1",
 				"ignore": "7.0.6",
 				"typebox": "1.3.11",
 				"yaml": "2.9.0"
@@ -1307,8 +1307,8 @@
 			}
 		},
 		"node_modules/omk-ai": {
-			"version": "0.96.0",
-			"resolved": "https://registry.npmjs.org/omk-ai/-/omk-ai-0.96.0.tgz",
+			"version": "0.96.1",
+			"resolved": "https://registry.npmjs.org/omk-ai/-/omk-ai-0.96.1.tgz",
 			"license": "MIT",
 			"dependencies": {
 				"@anthropic-ai/sdk": "0.91.1",
@@ -1330,16 +1330,16 @@
 			}
 		},
 		"node_modules/omk-protocol": {
-			"version": "0.96.0",
-			"resolved": "https://registry.npmjs.org/omk-protocol/-/omk-protocol-0.96.0.tgz",
+			"version": "0.96.1",
+			"resolved": "https://registry.npmjs.org/omk-protocol/-/omk-protocol-0.96.1.tgz",
 			"license": "MIT",
 			"engines": {
 				"node": ">=22.19.0"
 			}
 		},
 		"node_modules/omk-tui": {
-			"version": "0.96.0",
-			"resolved": "https://registry.npmjs.org/omk-tui/-/omk-tui-0.96.0.tgz",
+			"version": "0.96.1",
+			"resolved": "https://registry.npmjs.org/omk-tui/-/omk-tui-0.96.1.tgz",
 			"license": "MIT",
 			"dependencies": {
 				"get-east-asian-width": "1.6.0",

@@ -18,7 +18,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join as joinPath } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { Agent, AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "omk-agent-core";
-import { getVisionRouteModel, isVisionRouteModel } from "omk-agent-core";
+import { getVisionRouteModel } from "omk-agent-core";
 import type { Api, AssistantMessage, ImageContent, Message, Model, TextContent } from "omk-ai";
 import {
 	clampThinkingLevel,
@@ -68,6 +68,7 @@ import {
 	resolveCompactionModel,
 } from "./compaction/index.ts";
 import { compactionEmitWillRetry } from "./compaction/resume-policy.ts";
+import { isSessionModelOverflow, shouldSkipCompactionCheck } from "./compaction-gate.ts";
 import {
 	estimateToolResultReserve,
 	type ToolResultClass,
@@ -163,18 +164,29 @@ function firstTextContent(result: unknown): string | undefined {
 
 import { redactCredentialShapedContent } from "./compaction/transaction.ts";
 import type { CustomMessage } from "./messages.ts";
+import { selectContextFilesForModel } from "./model-prompt-policy.ts";
 import type { ModelRegistry } from "./model-registry.ts";
 import { findExactModelReferenceMatch } from "./model-resolver.ts";
+import { computePromptTokenBudget } from "./prompt-budget.ts";
+import { classifyPromptCacheTransition } from "./prompt-cache.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import {
-	isContentSafetyStopMessage,
 	isQuotaExhaustionMessage,
 	isStickySafetyModel,
-	isTransientProviderErrorMessage,
 	pickFailoverCandidate,
 	resolveProviderResilience,
+	shouldEjectStickySafetyModel,
+	shouldHonorSafetyFailover,
 	stickySafetyBlockMessage,
 } from "./provider-resilience.ts";
+import {
+	computeRetryDelayMs,
+	failoverModelKey,
+	isFailoverTriggerError,
+	isRetryableAssistantError,
+	nextRetryAttempt,
+	retryBudgetForAssistantError,
+} from "./provider-retry.ts";
 import { getBiasStepsForCell, parseRouterBiasSnapshot, type RouterBiasSnapshot } from "./reasoning-router-bias.ts";
 import {
 	classifyTaskV4,
@@ -200,6 +212,7 @@ import { SessionCompactionService } from "./session-compaction-service.ts";
 import type { BranchSummaryEntry, SessionManager } from "./session-manager.ts";
 import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.ts";
 import { acquireSessionOwnerLeaseSync, type SessionOwnerLease } from "./session-owner-lease.ts";
+import { assembleSessionSystemPrompt } from "./session-system-prompt.ts";
 import {
 	classifySessionTermination,
 	type SessionProcessSignal,
@@ -355,6 +368,8 @@ export interface AgentSessionConfig {
 	replayGoalId?: string;
 	/** Optional lane binding for replay events. */
 	replayLaneId?: string;
+	/** True when the user pinned `--model` / `--provider` for this process. */
+	modelPinned?: boolean;
 }
 
 /** Summary of a missing-only transcript auto-repair applied on session open/resume. */
@@ -680,6 +695,8 @@ export class AgentSession {
 	// v10.3-Ω: models that already refused/failed this turn — failover must advance,
 	// not re-pick the same candidate (claude-opus-5 → grok → grok → grok loop fix).
 	private _refusedModels = new Set<string>();
+	/** True when `--model` / `--provider` pinned this process to one model. */
+	private readonly _modelPinned: boolean;
 
 	// Bash execution state
 	private readonly _bashService: SessionBashService;
@@ -758,6 +775,7 @@ export class AgentSession {
 		this.sessionManager = config.sessionManager;
 		this.settingsManager = config.settingsManager;
 		this._scopedModels = config.scopedModels ?? [];
+		this._modelPinned = config.modelPinned === true;
 		this._resourceLoader = config.resourceLoader;
 		this._customTools = config.customTools ?? [];
 		this._cwd = config.cwd;
@@ -1475,14 +1493,14 @@ export class AgentSession {
 
 	private _willRetryAfterAgentEnd(event: Extract<AgentEvent, { type: "agent_end" }>): boolean {
 		const settings = this.settingsManager.getRetrySettings();
-		if (!settings.enabled || this._retryAttempt >= settings.maxRetries) {
-			return false;
-		}
+		if (!settings.enabled) return false;
 
 		for (let i = event.messages.length - 1; i >= 0; i--) {
 			const message = event.messages[i];
 			if (message.role === "assistant") {
-				return this._isRetryableError(message as AssistantMessage);
+				const assistant = message as AssistantMessage;
+				const maxRetries = retryBudgetForAssistantError(assistant, settings.maxRetries);
+				return this._retryAttempt < maxRetries && this._isRetryableError(assistant);
 			}
 		}
 		return false;
@@ -2019,6 +2037,7 @@ export class AgentSession {
 
 	private _getContextBudgetOptions(
 		queryContext = this._extractCurrentQuery(),
+		model: Model<any> | undefined = this.model,
 	): BuildSystemPromptOptions["contextBudget"] | undefined {
 		const contextGovernorOverride = process.env.OMK_CONTEXT_GOVERNOR;
 		if (contextGovernorOverride === "0") {
@@ -2028,60 +2047,26 @@ export class AgentSession {
 			return undefined;
 		}
 
-		const contextWindow = this.model?.contextWindow ?? 0;
-
-		// --- maxPromptTokens ---
-		// Priority 1: explicit env override (user knows best)
-		const envMaxPrompt = parsePositiveIntegerEnv("OMK_CONTEXT_GOVERNOR_MAX_PROMPT_TOKENS");
-		let maxPromptTokens: number;
-		let responseReserveTokens: number;
-
-		if (envMaxPrompt !== undefined) {
-			// User override — use as-is for prompt, derive response reserve normally
-			maxPromptTokens = envMaxPrompt;
-			responseReserveTokens =
-				parsePositiveIntegerEnv("OMK_CONTEXT_GOVERNOR_RESPONSE_RESERVE_TOKENS") ??
-				this._computeResponseReserve(contextWindow);
-		} else if (contextWindow > 0) {
-			// Dynamic: derive from model contextWindow
-			const envPromptRatio = parsePositiveFloatEnv("OMK_CONTEXT_GOVERNOR_PROMPT_RATIO");
-			const envResponseRatio = parsePositiveFloatEnv("OMK_CONTEXT_GOVERNOR_RESPONSE_RATIO");
-
-			responseReserveTokens =
-				parsePositiveIntegerEnv("OMK_CONTEXT_GOVERNOR_RESPONSE_RESERVE_TOKENS") ??
-				this._computeResponseReserve(contextWindow, envResponseRatio);
-
-			const safetyMargin = Math.floor(contextWindow * SAFETY_MARGIN_RATIO);
-			if (envPromptRatio !== undefined && envPromptRatio > 0 && envPromptRatio < 1) {
-				maxPromptTokens = Math.floor(contextWindow * envPromptRatio);
-			} else {
-				// Default: contextWindow minus reserves and safety margin
-				maxPromptTokens = contextWindow - responseReserveTokens - safetyMargin;
-			}
-		} else {
-			// No model info — legacy fallback
-			maxPromptTokens = LEGACY_MAX_PROMPT_TOKENS;
-			responseReserveTokens =
-				parsePositiveIntegerEnv("OMK_CONTEXT_GOVERNOR_RESPONSE_RESERVE_TOKENS") ?? LEGACY_RESPONSE_RESERVE_TOKENS;
-		}
+		const contextWindow = model?.contextWindow ?? 0;
+		const budget = computePromptTokenBudget({
+			contextWindow,
+			modelMaxTokens: model?.maxTokens,
+			envMaxPromptTokens: parsePositiveIntegerEnv("OMK_CONTEXT_GOVERNOR_MAX_PROMPT_TOKENS"),
+			envResponseReserveTokens: parsePositiveIntegerEnv("OMK_CONTEXT_GOVERNOR_RESPONSE_RESERVE_TOKENS"),
+			envPromptRatio: parsePositiveFloatEnv("OMK_CONTEXT_GOVERNOR_PROMPT_RATIO"),
+			envResponseRatio: parsePositiveFloatEnv("OMK_CONTEXT_GOVERNOR_RESPONSE_RATIO"),
+		});
+		const maxPromptTokens = budget.maxPromptTokens;
+		const responseReserveTokens = budget.responseReserveTokens;
 
 		const cacheProvider = this._contextBudgetCacheProvider ?? this._createContextBudgetCacheProvider();
 		cacheProvider.setInvalidationSnapshot?.(this._contextCacheInvalidationSnapshot);
 		this._contextBudgetCacheProvider = cacheProvider;
 
-		// Enforce floor
-		if (maxPromptTokens < MIN_PROMPT_TOKENS) {
-			maxPromptTokens = MIN_PROMPT_TOKENS;
-		}
-		// Ensure responseReserve does not exceed maxPromptTokens
-		if (responseReserveTokens >= maxPromptTokens) {
-			responseReserveTokens = Math.max(Math.floor(maxPromptTokens / 4), LEGACY_RESPONSE_RESERVE_TOKENS);
-		}
-
 		return {
 			maxPromptTokens,
 			responseReserveTokens,
-			modelId: this.model?.id ?? "unknown",
+			modelId: model?.id ?? "unknown",
 			tokenizerMode: parseTokenizerModeEnv(process.env.OMK_CONTEXT_GOVERNOR_TOKENIZER),
 			activeSkillNames: parseCommaSeparatedEnv(process.env.OMK_CONTEXT_GOVERNOR_ACTIVE_SKILLS),
 			queryContext,
@@ -2093,16 +2078,6 @@ export class AgentSession {
 	 * Compute responseReserveTokens from contextWindow.
 	 * Prefers the model's own maxTokens when available, otherwise uses a ratio.
 	 */
-	private _computeResponseReserve(contextWindow: number, overrideRatio?: number): number {
-		// Prefer model's maxTokens (actual output limit) if available and reasonable
-		const modelMaxTokens = this.model?.maxTokens;
-		if (modelMaxTokens !== undefined && modelMaxTokens > 0 && modelMaxTokens < contextWindow) {
-			return modelMaxTokens;
-		}
-		const ratio = overrideRatio ?? RESPONSE_RESERVE_RATIO;
-		return Math.max(Math.floor(contextWindow * ratio), LEGACY_RESPONSE_RESERVE_TOKENS);
-	}
-
 	private _recordPromptCachePlan(reason: string): void {
 		const boundary = this.agent.state.systemPromptCacheBoundary;
 		const scope = this.model ? `${this.model.provider}/${this.model.id}` : "unknown";
@@ -2116,16 +2091,17 @@ export class AgentSession {
 			},
 			scope,
 		);
-		if (!nextKey) {
+		const transition = classifyPromptCacheTransition(this._promptCacheKey, nextKey);
+		if (transition.kind === "bypass") {
 			this._promptCacheBoundaryBypasses += 1;
 			this._promptCacheStablePrefixCharacters = 0;
-			if (this._promptCacheKey !== undefined) {
+			if (transition.recordBreak) {
 				this._promptCacheLastBreakReason = reason;
 			}
 			this._promptCacheKey = undefined;
 			return;
 		}
-		if (this._promptCacheKey !== undefined && this._promptCacheKey !== nextKey) {
+		if (transition.kind === "changed") {
 			this._promptCacheKeyChanges += 1;
 			this._promptCacheLastBreakReason = reason;
 		}
@@ -2133,47 +2109,23 @@ export class AgentSession {
 		this._promptCacheStablePrefixCharacters = boundary ?? 0;
 	}
 
-	private _rebuildSystemPrompt(toolNames: string[]): string {
-		const validToolNames = toolNames.filter((name) => this._toolRegistry.has(name));
-		const toolSnippets: Record<string, string> = {};
-		const promptGuidelines: string[] = [];
-		for (const name of validToolNames) {
-			const snippet = this._toolPromptSnippets.get(name);
-			if (snippet) {
-				toolSnippets[name] = snippet;
-			}
-
-			const toolGuidelines = this._toolPromptGuidelines.get(name);
-			if (toolGuidelines) {
-				promptGuidelines.push(...toolGuidelines);
-			}
-		}
-
-		const loaderSystemPrompt = this._resourceLoader.getSystemPrompt();
-		const loaderAppendSystemPrompt = this._resourceLoader.getAppendSystemPrompt();
-		const grokAppend = grokPlaybookAppendForProvider(this.model?.provider);
-		const appendParts = [...loaderAppendSystemPrompt];
-		if (grokAppend) {
-			appendParts.push(grokAppend);
-		}
-		const appendSystemPrompt = appendParts.length > 0 ? appendParts.join("\n\n") : undefined;
-		const loadedSkills = this._resourceLoader.getSkills().skills;
-		const loadedContextFiles = this._resourceLoader.getAgentsFiles().agentsFiles;
-
-		this._baseSystemPromptOptions = {
+	private _rebuildSystemPrompt(toolNames: string[], model: Model<any> | undefined = this.model): string {
+		const assembled = assembleSessionSystemPrompt({
 			cwd: this._cwd,
-			skills: loadedSkills,
-			contextFiles: loadedContextFiles,
-			customPrompt: loaderSystemPrompt,
-			appendSystemPrompt,
-			selectedTools: validToolNames,
-			toolSnippets,
-			promptGuidelines,
-			contextBudget: this._getContextBudgetOptions(),
-		};
-		const built = buildSystemPromptPlan(this._baseSystemPromptOptions);
-		this._baseSystemPromptCacheBoundary = built.cacheBoundary;
-		return built.prompt;
+			toolNames,
+			hasTool: (name) => this._toolRegistry.has(name),
+			toolPromptSnippets: this._toolPromptSnippets,
+			toolPromptGuidelines: this._toolPromptGuidelines,
+			customPrompt: this._resourceLoader.getSystemPrompt(),
+			appendSystemPrompt: this._resourceLoader.getAppendSystemPrompt(),
+			providerAppend: grokPlaybookAppendForProvider(model?.provider),
+			skills: this._resourceLoader.getSkills().skills,
+			contextFiles: selectContextFilesForModel(this._resourceLoader.getAgentsFiles().agentsFiles, model),
+			contextBudget: this._getContextBudgetOptions(undefined, model),
+		});
+		this._baseSystemPromptOptions = assembled.options;
+		this._baseSystemPromptCacheBoundary = assembled.cacheBoundary;
+		return assembled.prompt;
 	}
 
 	// =========================================================================
@@ -2792,9 +2744,15 @@ export class AgentSession {
 			throw new Error(`No API key for ${model.provider}/${model.id}`);
 		}
 
-		// Root-level: block sticky safety models (Fable) unless explicitly allowed in settings.
+		// Root-level: block sticky safety models (Fable) unless the user pinned `--model`.
 		const resilience = resolveProviderResilience(this.settingsManager.getProviderResilienceSettings());
-		if (resilience.blockStickySafetyModels && isStickySafetyModel(model.id, model.provider)) {
+		if (
+			shouldEjectStickySafetyModel({
+				blockStickySafetyModels: resilience.blockStickySafetyModels,
+				modelPinned: this._modelPinned,
+			}) &&
+			isStickySafetyModel(model.id, model.provider)
+		) {
 			throw new Error(stickySafetyBlockMessage(model.id, model.provider));
 		}
 
@@ -2803,7 +2761,12 @@ export class AgentSession {
 
 		const previousModel = this.model;
 		const thinkingLevel = this._getThinkingLevelForModelSwitch();
+		const nextSystemPrompt = this._rebuildSystemPrompt(this.getActiveToolNames(), model);
 		this.agent.state.model = model;
+		this._baseSystemPrompt = nextSystemPrompt;
+		this.agent.state.systemPrompt = this._baseSystemPrompt;
+		this.agent.state.systemPromptCacheBoundary = this._baseSystemPromptCacheBoundary;
+		this.agent.state.systemPromptCacheBoundaryBypass = false;
 		this.sessionManager.appendModelChange(model.provider, model.id);
 		this.settingsManager.setDefaultModelAndProvider(model.provider, model.id);
 
@@ -3608,40 +3571,35 @@ export class AgentSession {
 	 */
 	private async _checkCompaction(assistantMessage: AssistantMessage, skipAbortedCheck = true): Promise<boolean> {
 		const settings = this.settingsManager.getCompactionSettings();
-		if (!settings.enabled) return false;
-
-		// Skip if message was aborted (user cancelled) - unless skipAbortedCheck is false
-		if (skipAbortedCheck && assistantMessage.stopReason === "aborted") return false;
-
-		const contextWindow = this.model?.contextWindow ?? 0;
-
-		// Skip overflow check if the message came from a different model.
-		// This handles the case where user switched from a smaller-context model (e.g. opus)
-		// to a larger-context model (e.g. codex) - the overflow error from the old model
-		// shouldn't trigger compaction for the new model.
-		const sameModel =
-			this.model && assistantMessage.provider === this.model.provider && assistantMessage.model === this.model.id;
-		// Image-bearing turns are auto-routed to a vision-capable model (gpt-5.6-luna)
-		// while the session model stays text-only (deepseek). An overflow from that
-		// routed model must still count as the session's own overflow: compaction is
-		// the fix, and the raw context_length_exceeded error must never reach the user.
-		const visionRouteOverflow =
-			this.model != null &&
-			!(this.model.input ?? []).includes("image") &&
-			isVisionRouteModel({ provider: assistantMessage.provider, id: assistantMessage.model });
-
-		// Skip compaction checks if this assistant message is older than the latest
-		// compaction boundary. This prevents a stale pre-compaction usage/error
-		// from retriggering compaction on the first prompt after compaction.
+		// Stale pre-compaction usage/errors must not retrigger compaction on the
+		// first prompt after one finished.
 		const compactionEntry = getLatestCompactionEntry(this.sessionManager.getBranch());
-		const assistantIsFromBeforeCompaction =
-			compactionEntry !== null && assistantMessage.timestamp <= new Date(compactionEntry.timestamp).getTime();
-		if (assistantIsFromBeforeCompaction) {
+		if (
+			shouldSkipCompactionCheck({
+				enabled: settings.enabled,
+				skipAbortedCheck,
+				stopReason: assistantMessage.stopReason,
+				messageTimestamp: assistantMessage.timestamp,
+				latestCompactionTimestamp: compactionEntry ? new Date(compactionEntry.timestamp).getTime() : undefined,
+			})
+		) {
 			return false;
 		}
 
-		// Case 1: Overflow - LLM returned context overflow error
-		if ((sameModel || visionRouteOverflow) && isContextOverflow(assistantMessage, contextWindow)) {
+		const contextWindow = this.model?.contextWindow ?? 0;
+
+		// Case 1: Overflow - LLM returned context overflow error. Only counts when
+		// the failing message belongs to the session model — or to the auto-routed
+		// vision model while the session model is text-only.
+		if (
+			isSessionModelOverflow({
+				message: assistantMessage,
+				contextWindow,
+				sessionProvider: this.model?.provider,
+				sessionModelId: this.model?.id,
+				sessionInputs: this.model?.input,
+			})
+		) {
 			if (this._overflowRecoveryAttempts >= MAX_OVERFLOW_RECOVERY_ATTEMPTS) {
 				this._emit({
 					type: "compaction_end",
@@ -4474,19 +4432,7 @@ export class AgentSession {
 	 * Context overflow errors are NOT retryable (handled by compaction instead).
 	 */
 	private _isRetryableError(message: AssistantMessage): boolean {
-		if (message.stopReason !== "error" || !message.errorMessage) return false;
-
-		// Context overflow is handled by compaction, not retry
-		const contextWindow = this.model?.contextWindow ?? 0;
-		if (isContextOverflow(message, contextWindow)) return false;
-
-		const err = message.errorMessage;
-		// Billing/quota exhaustion: useless to retry the same model until the
-		// cycle resets, but the turn may still be saved by failing over to the
-		// next candidate, so let _prepareRetry run its failover path.
-		if (isQuotaExhaustionMessage(err)) return true;
-		// Shared contract with provider-resilience.ts (Fable safety stop, K3 orphan tool_call_id, terminated).
-		return isTransientProviderErrorMessage(err);
+		return isRetryableAssistantError(message, this.model?.contextWindow ?? 0);
 	}
 
 	/**
@@ -4527,7 +4473,14 @@ export class AgentSession {
 	/** Eject sticky safety model at prompt boundary (session resume / leftover default). */
 	private async _ejectStickySafetyModelIfNeeded(): Promise<void> {
 		const resilience = resolveProviderResilience(this.settingsManager.getProviderResilienceSettings());
-		if (!resilience.blockStickySafetyModels) return;
+		if (
+			!shouldEjectStickySafetyModel({
+				blockStickySafetyModels: resilience.blockStickySafetyModels,
+				modelPinned: this._modelPinned,
+			})
+		) {
+			return;
+		}
 		const current = this.model;
 		if (!current || !isStickySafetyModel(current.id, current.provider)) return;
 
@@ -4559,10 +4512,19 @@ export class AgentSession {
 	 */
 	private async _maybeFailoverFromSafetyStop(message: AssistantMessage): Promise<string | undefined> {
 		const resilience = resolveProviderResilience(this.settingsManager.getProviderResilienceSettings());
-		if (!resilience.autoFailoverOnSafetyStop) return undefined;
+		if (
+			!shouldHonorSafetyFailover({
+				autoFailoverOnSafetyStop: resilience.autoFailoverOnSafetyStop,
+				modelPinned: this._modelPinned,
+				modelId: this.model?.id,
+				provider: this.model?.provider,
+			})
+		) {
+			return undefined;
+		}
 		// Fire on safety-stop FPs AND on billing/quota exhaustion: both mean the
 		// current model cannot finish this turn and same-model retry is useless.
-		if (!isContentSafetyStopMessage(message.errorMessage) && !isQuotaExhaustionMessage(message.errorMessage)) {
+		if (!isFailoverTriggerError(message.errorMessage)) {
 			return undefined;
 		}
 
@@ -4571,14 +4533,14 @@ export class AgentSession {
 		// claude-opus-5 emits the same stop_reason=refusal FP; same-model retry is useless.
 
 		// v10.3-Ω: mark the model that just refused so we never re-pick it this turn.
-		if (current) this._refusedModels.add(`${current.provider}/${current.id}`);
+		if (current) this._refusedModels.add(failoverModelKey(current.provider, current.id));
 
 		const pick = pickFailoverCandidate(
 			resilience.failoverCandidates,
 			current ? { provider: current.provider, id: current.id } : undefined,
 			(c) => {
 				// Skip any model that already refused/failed this turn → advance the chain.
-				if (this._refusedModels.has(`${c.provider}/${c.id}`)) return false;
+				if (this._refusedModels.has(failoverModelKey(c.provider, c.id))) return false;
 				const next = this._modelRegistry.find(c.provider, c.id);
 				if (!next) return false;
 				return this._modelRegistry.hasConfiguredAuth(next);
@@ -4593,39 +4555,34 @@ export class AgentSession {
 			return `${next.provider}/${next.id}`;
 		} catch {
 			// setModel failed (auth/guard) — blacklist so next retry advances further.
-			this._refusedModels.add(`${pick.provider}/${pick.id}`);
+			this._refusedModels.add(failoverModelKey(pick.provider, pick.id));
 			return undefined;
 		}
 	}
 
 	private async _prepareRetry(message: AssistantMessage): Promise<boolean> {
 		const settings = this.settingsManager.getRetrySettings();
-		if (!settings.enabled) {
-			return false;
-		}
-
-		this._retryAttempt++;
-
-		if (this._retryAttempt > settings.maxRetries) {
-			// Preserve the completed attempt count so post-run handling can emit the final failure.
-			this._retryAttempt--;
-			return false;
-		}
+		const maxRetries = retryBudgetForAssistantError(message, settings.maxRetries);
+		const attempt = nextRetryAttempt({
+			enabled: settings.enabled,
+			completedAttempts: this._retryAttempt,
+			maxRetries,
+		});
+		if (attempt === undefined) return false;
+		this._retryAttempt = attempt;
 
 		// Content/safety stop (Fable/Opus/Sonnet): switch model BEFORE delay so retry is not same-model refusal.
 		const failoverTo = await this._maybeFailoverFromSafetyStop(message);
 		// Safety stops are usually immediate false positives — short delay after failover, full backoff otherwise.
-		const delayMs = failoverTo
-			? Math.min(400, settings.baseDelayMs)
-			: settings.baseDelayMs * 2 ** (this._retryAttempt - 1);
+		const delayMs = computeRetryDelayMs(settings.baseDelayMs, attempt, failoverTo !== undefined);
 		const errorMessage = failoverTo
 			? `${message.errorMessage || "content/safety stop"} → failover ${failoverTo}`
 			: message.errorMessage || "Unknown error";
 
 		this._emit({
 			type: "auto_retry_start",
-			attempt: this._retryAttempt,
-			maxAttempts: settings.maxRetries,
+			attempt,
+			maxAttempts: maxRetries,
 			delayMs,
 			errorMessage,
 		});
@@ -5213,23 +5170,6 @@ export class AgentSession {
 		return this._extensionRunner;
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Context budget constants
-// ---------------------------------------------------------------------------
-
-/** Fraction of contextWindow reserved for model response generation. */
-const RESPONSE_RESERVE_RATIO = 0.2;
-/** Fraction of contextWindow held back as safety margin for token-count imprecision. */
-const SAFETY_MARGIN_RATIO = 0.1;
-// Default prompt budget = contextWindow - responseReserve - safetyMargin.
-// With the defaults above (0.2 + 0.1) this yields ~0.70 of contextWindow, but it
-// stays correct when responseReserve is overridden by model.maxTokens.
-/** Absolute floor for maxPromptTokens — below this the budget is meaningless. */
-const MIN_PROMPT_TOKENS = 4000;
-/** Legacy defaults when no model contextWindow is known. */
-const LEGACY_MAX_PROMPT_TOKENS = 60_000;
-const LEGACY_RESPONSE_RESERVE_TOKENS = 8_192;
 
 function parsePositiveIntegerEnv(name: string): number | undefined {
 	const raw = process.env[name];

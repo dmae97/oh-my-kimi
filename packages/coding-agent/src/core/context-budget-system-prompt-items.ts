@@ -39,7 +39,10 @@ export function createSystemPromptBudgetItems(
 		pushContextItems(items, contextFile, queryScore, excerptChars, input.options.includeFullContextFiles !== false);
 	}
 
-	const visibleSkills = input.skills.filter((skill) => !skill.disableModelInvocation);
+	const activeSkillNames = new Set(input.options.activeSkillNames ?? []);
+	const visibleSkills = input.skills.filter(
+		(skill) => !skill.disableModelInvocation || activeSkillNames.has(skill.name),
+	);
 	if (input.includeSkills && input.options.includeSkillInventory !== false && visibleSkills.length > 0) {
 		pushSkillItems(items, visibleSkills, input.options);
 	}
@@ -117,7 +120,7 @@ function renderSkillBudgetItem(skill: Skill, priority: "hard" | "low", relevance
 		priority,
 		relevance,
 		redundancyKey: skill.name,
-		text: renderSkillEntry(skill),
+		text: renderSkillEntry(skill, priority === "hard"),
 	};
 }
 
@@ -170,11 +173,12 @@ function renderSkillHeader(): string {
 	].join("\n");
 }
 
-function renderSkillEntry(skill: Skill): string {
+function renderSkillEntry(skill: Skill, operatorDefault = false): string {
 	return [
 		"  <skill>",
 		`    <name>${escapeXml(skill.name)}</name>`,
 		`    <description>${escapeXml(skill.description)}</description>`,
+		...(operatorDefault ? ["    <activation>operator-default</activation>"] : []),
 		`    <location>${escapeXml(skill.filePath)}</location>`,
 		"  </skill>",
 	].join("\n");

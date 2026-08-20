@@ -2013,8 +2013,9 @@ async function generateModels() {
 	const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 	const CODEX_CONTEXT = 272000;
 	const CODEX_SPARK_CONTEXT = 128000;
-	// GPT-5.6 generation serves a larger window (openai/codex models-manager/models.json: context_window 372000).
+	// Terra/Luna retain the observed Codex model-manager window; Sol exposes OMK's 1M harness window.
 	const CODEX_GPT_56_CONTEXT = 372000;
+	const CODEX_GPT_56_SOL_CONTEXT = 1_000_000;
 	const CODEX_MAX_TOKENS = 128000;
 	const codexModels: Model<"openai-codex-responses">[] = [
 		{
@@ -2074,7 +2075,7 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-			contextWindow: CODEX_GPT_56_CONTEXT,
+			contextWindow: CODEX_GPT_56_SOL_CONTEXT,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
 		{

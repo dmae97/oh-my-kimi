@@ -780,20 +780,16 @@ describe("provider doctor", () => {
 		expect(existsSync(marker)).toBe(false);
 	});
 
-	test("resolves native providers and local Grok defaults without network", async () => {
+	test("resolves native providers without network", async () => {
 		writeFileSync(join(agentDir, "auth.json"), JSON.stringify({ openai: { type: "api_key", key: SENTINEL } }));
 		const native = await diagnoseProvider("openai", { agentDir });
-		const grok = await diagnoseProvider("grok-oauth-proxy", { agentDir });
+		const grok = await diagnoseProvider("xai", { agentDir });
 
 		expect(native.status).toBe("ok");
 		expect(native.origin).toBe("native");
 		expect(native.targetUrl?.startsWith("https://")).toBe(true);
-		expect(grok).toMatchObject({
-			status: "ok",
-			origin: "local-proxy",
-			targetUrl: "http://127.0.0.1:9996/v1",
-			authPresent: true,
-		});
+		expect(grok.origin).toBe("native");
+		expect(grok.targetUrl).toBe("https://api.x.ai/v1");
 		expect(JSON.stringify(native)).not.toContain(SENTINEL);
 	});
 

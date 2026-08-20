@@ -1,6 +1,6 @@
 /**
  * Grok-4.5 harness bind: compaction prefers 4.5; Imagine ids stay blocked on
- * grok-oauth-proxy completions. (Project `.omk/presets.json` is gitignored and
+ * native xAI completions. (Project `.omk/presets.json` is gitignored and
  * is not asserted here — CI clones have no local presets file.)
  */
 import type { Model } from "omk-ai";
@@ -15,7 +15,7 @@ function chat(id: string): Model<"openai-completions"> {
 		name: id,
 		api: "openai-completions",
 		provider: GROK_OAUTH_PROVIDER,
-		baseUrl: "http://127.0.0.1:9996/v1",
+		baseUrl: "https://api.x.ai/v1",
 		reasoning: false,
 		input: ["text"],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -25,13 +25,13 @@ function chat(id: string): Model<"openai-completions"> {
 }
 
 describe("024 grok-4.5 harness bind", () => {
-	it("identifies grok-oauth-proxy as the Grok OAuth provider id", () => {
-		expect(GROK_OAUTH_PROVIDER).toBe("grok-oauth-proxy");
+	it("identifies native xai as the Grok OAuth provider id", () => {
+		expect(GROK_OAUTH_PROVIDER).toBe("xai");
 		expect(isGrokOAuthProvider(GROK_OAUTH_PROVIDER)).toBe(true);
-		expect(isGrokOAuthProvider("xai")).toBe(false);
+		expect(isGrokOAuthProvider("grok-oauth-proxy")).toBe(false);
 	});
 
-	it("blocks imagine models on grok-oauth-proxy and allows grok-4.5", () => {
+	it("blocks imagine models on native xai and allows grok-4.5", () => {
 		expect(() => assertTextChatModelForCompletion("grok-imagine-image", GROK_OAUTH_PROVIDER)).toThrow(/tool-only/);
 		expect(() => assertTextChatModelForCompletion("grok-4.5", GROK_OAUTH_PROVIDER)).not.toThrow();
 	});

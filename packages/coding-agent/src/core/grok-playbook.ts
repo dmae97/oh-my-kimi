@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "../config.ts";
 
-export const GROK_OAUTH_PROVIDER = "grok-oauth-proxy";
+export const GROK_OAUTH_PROVIDER = "xai";
 
 const GROK_PLAYBOOK_FILENAME = "grok.md";
 

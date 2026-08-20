@@ -14,11 +14,14 @@ export type FailoverCandidate = Readonly<{
 /** Models known to emit high false-positive content/safety stops on coding work. */
 export const STICKY_SAFETY_MODEL_RE = /fable/i;
 
+/** Claude lines that must stay on-model when they refuse. No DeepSeek hop. */
+export const NO_SAFETY_FAILOVER_MODEL_RE = /(?:claude-)?(?:fable|opus|sonnet)/i;
+
 /** Default failover chain when a sticky safety model refuses a turn. */
 export const DEFAULT_SAFETY_FAILOVER_CANDIDATES: readonly FailoverCandidate[] = [
 	{ provider: "kimi-coding", id: "k3" },
 	{ provider: "modelstudio-maas", id: "qwen3.8-max-preview" },
-	{ provider: "grok-oauth-proxy", id: "grok-4.5" },
+	{ provider: "xai", id: "grok-4.5" },
 	{ provider: "deepseek", id: "deepseek-v4-pro" },
 	{ provider: "deepseek", id: "deepseek-v4-flash" },
 	{ provider: "modelstudio-maas", id: "deepseek-v4-pro" },
@@ -50,6 +53,15 @@ export function isStickySafetyModel(modelId: string | undefined, provider?: stri
 	if (STICKY_SAFETY_MODEL_RE.test(id)) return true;
 	const p = (provider ?? "").toLowerCase();
 	return p.includes("anthropic") && STICKY_SAFETY_MODEL_RE.test(id);
+}
+
+/** Fable / Opus / Sonnet stay on the requested id after a safety stop. */
+export function isNoSafetyFailoverModel(modelId: string | undefined, provider?: string | undefined): boolean {
+	const id = (modelId ?? "").trim();
+	if (!id) return false;
+	if (NO_SAFETY_FAILOVER_MODEL_RE.test(id)) return true;
+	const p = (provider ?? "").toLowerCase();
+	return p.includes("anthropic") && NO_SAFETY_FAILOVER_MODEL_RE.test(id);
 }
 
 export function isContentSafetyStopMessage(text: string | undefined): boolean {
@@ -95,6 +107,25 @@ export function resolveFailoverCandidates(
 	const custom = settings?.failoverCandidates;
 	if (custom && custom.length > 0) return custom;
 	return DEFAULT_SAFETY_FAILOVER_CANDIDATES;
+}
+
+/** Explicit `--model` / `--provider` pins stay on the requested model. */
+export function shouldHonorSafetyFailover(options: {
+	readonly autoFailoverOnSafetyStop: boolean;
+	readonly modelPinned: boolean;
+	readonly modelId?: string;
+	readonly provider?: string;
+}): boolean {
+	if (!options.autoFailoverOnSafetyStop || options.modelPinned) return false;
+	return !isNoSafetyFailoverModel(options.modelId, options.provider);
+}
+
+/** Sticky-model eject still applies unless the user pinned that model. */
+export function shouldEjectStickySafetyModel(options: {
+	readonly blockStickySafetyModels: boolean;
+	readonly modelPinned: boolean;
+}): boolean {
+	return options.blockStickySafetyModels && !options.modelPinned;
 }
 
 export function resolveProviderResilience(settings: ProviderResilienceSettings | undefined): {

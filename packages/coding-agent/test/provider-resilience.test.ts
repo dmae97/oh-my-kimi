@@ -2,12 +2,15 @@ import { describe, expect, it } from "vitest";
 import {
 	DEFAULT_SAFETY_FAILOVER_CANDIDATES,
 	isContentSafetyStopMessage,
+	isNoSafetyFailoverModel,
 	isOrphanToolCallIdError,
 	isQuotaExhaustionMessage,
 	isStickySafetyModel,
 	isTransientProviderErrorMessage,
 	pickFailoverCandidate,
 	resolveProviderResilience,
+	shouldEjectStickySafetyModel,
+	shouldHonorSafetyFailover,
 	stickySafetyBlockMessage,
 } from "../src/core/provider-resilience.ts";
 
@@ -89,7 +92,7 @@ describe("provider-resilience (root-level)", () => {
 		// Regression lock: failover must NOT re-pick the same candidate every retry.
 		// agent-session keeps a _refusedModels set and excludes them via isAllowed.
 		const candidates = [
-			{ provider: "grok-oauth-proxy", id: "grok-4.5" },
+			{ provider: "xai", id: "grok-4.5" },
 			{ provider: "deepseek", id: "deepseek-v4-pro" },
 			{ provider: "deepseek", id: "deepseek-v4-flash" },
 		];
@@ -98,11 +101,11 @@ describe("provider-resilience (root-level)", () => {
 
 		// 1st refusal: claude-opus-5 → grok-4.5
 		let pick = pickFailoverCandidate(candidates, { provider: "anthropic", id: "claude-opus-5" }, isAllowed);
-		expect(pick).toEqual({ provider: "grok-oauth-proxy", id: "grok-4.5" });
+		expect(pick).toEqual({ provider: "xai", id: "grok-4.5" });
 
 		// grok also refuses → blacklist it, advance to deepseek-v4-pro
-		refused.add("grok-oauth-proxy/grok-4.5");
-		pick = pickFailoverCandidate(candidates, { provider: "grok-oauth-proxy", id: "grok-4.5" }, isAllowed);
+		refused.add("xai/grok-4.5");
+		pick = pickFailoverCandidate(candidates, { provider: "xai", id: "grok-4.5" }, isAllowed);
 		expect(pick).toEqual({ provider: "deepseek", id: "deepseek-v4-pro" });
 
 		// deepseek-pro refuses → advance to deepseek-v4-flash
@@ -114,6 +117,41 @@ describe("provider-resilience (root-level)", () => {
 		refused.add("deepseek/deepseek-v4-flash");
 		pick = pickFailoverCandidate(candidates, { provider: "deepseek", id: "deepseek-v4-flash" }, isAllowed);
 		expect(pick).toBeUndefined();
+	});
+
+	it("honors safety failover only when the model is not CLI-pinned", () => {
+		expect(shouldHonorSafetyFailover({ autoFailoverOnSafetyStop: true, modelPinned: false })).toBe(true);
+		expect(shouldHonorSafetyFailover({ autoFailoverOnSafetyStop: true, modelPinned: true })).toBe(false);
+		expect(shouldHonorSafetyFailover({ autoFailoverOnSafetyStop: false, modelPinned: false })).toBe(false);
+	});
+
+	it("never failovers fable/opus/sonnet on a safety stop", () => {
+		expect(isNoSafetyFailoverModel("claude-fable-5", "anthropic")).toBe(true);
+		expect(isNoSafetyFailoverModel("claude-opus-5", "anthropic")).toBe(true);
+		expect(isNoSafetyFailoverModel("claude-sonnet-5", "anthropic")).toBe(true);
+		expect(isNoSafetyFailoverModel("k3", "kimi-coding")).toBe(false);
+		expect(
+			shouldHonorSafetyFailover({
+				autoFailoverOnSafetyStop: true,
+				modelPinned: false,
+				modelId: "claude-opus-5",
+				provider: "anthropic",
+			}),
+		).toBe(false);
+		expect(
+			shouldHonorSafetyFailover({
+				autoFailoverOnSafetyStop: true,
+				modelPinned: false,
+				modelId: "k3",
+				provider: "kimi-coding",
+			}),
+		).toBe(true);
+	});
+
+	it("ejects sticky models only when they are not CLI-pinned", () => {
+		expect(shouldEjectStickySafetyModel({ blockStickySafetyModels: true, modelPinned: false })).toBe(true);
+		expect(shouldEjectStickySafetyModel({ blockStickySafetyModels: true, modelPinned: true })).toBe(false);
+		expect(shouldEjectStickySafetyModel({ blockStickySafetyModels: false, modelPinned: false })).toBe(false);
 	});
 
 	it("resolves defaults with block + autoFailover on", () => {

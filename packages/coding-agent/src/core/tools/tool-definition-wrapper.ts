@@ -23,6 +23,7 @@ export function wrapToolDefinition<TDetails = unknown>(
 		parameters: definition.parameters,
 		prepareArguments: definition.prepareArguments,
 		executionMode: definition.executionMode,
+		resourceClaims: definition.resourceClaims,
 		get timeoutMs() {
 			const ctx = ctxFactory?.();
 			const timeoutMs = (ctx ? definition.resolveTimeoutMs?.(ctx) : undefined) ?? definition.timeoutMs;
@@ -55,6 +56,7 @@ export function createToolDefinitionFromAgentTool(tool: AgentTool<any>): ToolDef
 		parameters: tool.parameters as any,
 		prepareArguments: tool.prepareArguments,
 		executionMode: tool.executionMode,
+		resourceClaims: tool.resourceClaims,
 		timeoutMs: tool.timeoutMs,
 		execute: async (toolCallId, params, signal, onUpdate) => tool.execute(toolCallId, params, signal, onUpdate),
 	};

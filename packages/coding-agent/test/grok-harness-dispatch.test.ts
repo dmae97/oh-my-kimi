@@ -1,5 +1,5 @@
 /**
- * Grok harness auto-dispatch: when provider is grok-oauth-proxy and OMK_GROK_HARNESS is not off,
+ * Grok harness auto-dispatch: when provider is native xai and OMK_GROK_HARNESS is not off,
  * tryGrokHarnessDispatch applies the grok-harness domain loadout without OMK_DOMAIN_ROUTING=1.
  */
 import { describe, expect, it, vi } from "vitest";
@@ -94,7 +94,7 @@ describe("tryGrokHarnessDispatch", () => {
 		expect(result.loadoutAccessPolicy).toBeUndefined();
 	});
 
-	it("applies grok-harness loadout for grok-oauth-proxy without domain routing opt-in", () => {
+	it("applies grok-harness loadout for native xai without domain routing opt-in", () => {
 		const result = tryGrokHarnessDispatch({
 			provider: GROK_OAUTH_PROVIDER,
 			session: makeSession(),

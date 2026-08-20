@@ -7,7 +7,7 @@
 Pin the package when installing from npm:
 
 ```bash
-omk install npm:omk-book-to-skill@0.95.2
+omk install npm:omk-book-to-skill@0.96.1
 ```
 
 In a source checkout:

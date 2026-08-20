@@ -1,151 +1,58 @@
 <p align="center">
   <img
-    src="readmeasset/omk-marketing-control.webp"
-    alt="OMK//CONTROL provider-neutral routing, evidence gates, and parallel lanes"
+    src="readmeasset/omk-girl-control.png"
+    alt="OMK Girl operating the OMK//CONTROL console with a scoped task DAG and verified evidence panel"
     width="100%"
-  />
-</p>
-
-<p align="center">
-  <img
-    src="readmeasset/omkgirl.png"
-    alt="OMK girl — operator avatar for the OMK//CONTROL coding harness"
-    width="420"
   />
 </p>
 
 <h1 align="center">OMK</h1>
 
 <p align="center">
-  <strong>Open Multi-Agent Kit — provider-neutral coding agent, multi-agent orchestration, and evidence-gated control plane.</strong>
+  <strong>Open Multi-Agent Kit</strong><br />
+  Scope the work. Route the right agents. Verify every release.
 </p>
 
 <p align="center">
-  OMK is an open-source multi-agent coding harness: route work across models,
-  bound parallel lanes, block outcomes, and keep replayable evidence for Codex,
-  Claude Code, OpenCode, and local agents.
-</p>
-
-<p align="center">
-  <em>Keywords:</em> multi-agent orchestration · coding agent CLI · provider-neutral LLM router ·
-  evidence-gated automation · agent skills · MCP · DAG parallel agents · session recovery
+  Provider-neutral coding-agent CLI and multi-agent control plane for Codex,
+  Claude Code, OpenCode, and local models.
 </p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/open-multi-agent-kit"><img alt="npm version" src="https://img.shields.io/npm/v/open-multi-agent-kit?style=flat-square&label=npm" /></a>
-  <a href="https://www.npmjs.com/package/open-multi-agent-kit"><img alt="npm downloads per month" src="https://img.shields.io/npm/dm/open-multi-agent-kit?style=flat-square" /></a>
-  <a href="https://www.npmjs.com/package/open-multi-agent-kit"><img alt="npm total downloads" src="https://img.shields.io/npm/dt/open-multi-agent-kit?style=flat-square&label=total%20downloads" /></a>
-  <a href="https://github.com/dmae97/omk/releases/latest"><img alt="latest release" src="https://img.shields.io/github/v/release/dmae97/omk?style=flat-square&label=release" /></a>
+  <a href="https://www.npmjs.com/package/open-multi-agent-kit"><img alt="npm downloads per month" src="https://img.shields.io/npm/dm/open-multi-agent-kit?style=flat-square" /></a><br />
+  <a href="https://github.com/dmae97/omk/releases/latest"><img alt="latest GitHub release" src="https://img.shields.io/github/v/release/dmae97/omk?style=flat-square&label=release" /></a><br />
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/npm/l/open-multi-agent-kit?style=flat-square" /></a>
   <img alt="supported Node.js version" src="https://img.shields.io/node/v/open-multi-agent-kit?style=flat-square" />
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/open-multi-agent-kit"><img alt="open-multi-agent-kit npm version" src="https://img.shields.io/npm/v/open-multi-agent-kit?style=flat-square&label=open-multi-agent-kit" /></a>
-  <a href="https://www.npmjs.com/package/omk-ai"><img alt="omk-ai npm version" src="https://img.shields.io/npm/v/omk-ai?style=flat-square&label=omk-ai" /></a>
-  <a href="https://www.npmjs.com/package/omk-agent-core"><img alt="omk-agent-core npm version" src="https://img.shields.io/npm/v/omk-agent-core?style=flat-square&label=omk-agent-core" /></a>
-  <a href="https://www.npmjs.com/package/omk-tui"><img alt="omk-tui npm version" src="https://img.shields.io/npm/v/omk-tui?style=flat-square&label=omk-tui" /></a>
-  <a href="https://www.npmjs.com/package/omk-adaptorch-wpl"><img alt="omk-adaptorch-wpl npm version" src="https://img.shields.io/npm/v/omk-adaptorch-wpl?style=flat-square&label=omk-adaptorch-wpl" /></a>
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#control-loop">Control loop</a> ·
+  <a href="#verification-boundary">Safety boundary</a><br />
+  <a href="#published-packages">Packages</a> ·
+  <a href="packages/coding-agent/docs/index.md">Documentation</a>
 </p>
 
 ---
 
-## Scope. Verify. Replay
+## Why OMK
 
-**What is OMK?** A verified, provider-neutral **control plane for coding agents**
-(Codex, Claude Code, OpenCode, local models). It turns a goal into a bounded DAG,
-runs parallel lanes with owned paths, blocks “done” without fresh evidence, and
-stores replayable receipts for review and recovery.
+Coding agents can produce code quickly. They can also overlap work, lose state,
+route to the wrong model, and claim completion before the build is green. OMK
+adds a control plane around that work.
 
-Use OMK when you need multi-agent software engineering with acceptance predicates,
-not chat that only *claims* the build is green.
+| Problem | OMK invariant | Inspectable output |
+| --- | --- | --- |
+| Parallel agents overwrite each other | Owned paths and resource claims bound every lane | DAG and workspace state |
+| A model says “done” too early | Acceptance predicates require fresh evidence | Commands, exits, and receipts |
+| A provider or model changes | Routing stays separate from the execution contract | Provider-attributed attempts |
+| A session stops midway | Replayable state supports session recovery | Ledger, repair plan, durable goal |
 
-| Problem | OMK |
-| --- | --- |
-| Parallel agents overwrite the same work | Resource claims and owned paths bound each lane |
-| An agent says "done" before the build is green | Acceptance predicates block unverified completion |
-| A session crashes midway | Replayable state and session repair preserve the run |
-| The preferred model changes | The control and evidence model stays stable |
+OMK is for engineering work that needs a checkable result, not a convincing chat
+response.
 
----
-
-## OMK in motion
-
-Ten short captures of the control plane's main workflows.
-
-### 1 · Install and boot
-
-<p align="center">
-  <img src="readmeasset/demos/01-install-boot.gif" alt="OMK install and boot" width="820" />
-</p>
-
-### 2 · Goal to DAG
-
-<p align="center">
-  <img src="readmeasset/demos/02-goal-to-dag.gif" alt="OMK goal decomposition into a DAG" width="820" />
-</p>
-
-### 3 · Parallel lanes
-
-<p align="center">
-  <img src="readmeasset/demos/03-parallel-lanes.gif" alt="OMK parallel execution lanes" width="820" />
-</p>
-
-### 4 · Provider routing
-
-<p align="center">
-  <img src="readmeasset/demos/04-provider-routing.gif" alt="OMK provider-neutral routing" width="820" />
-</p>
-
-### 5 · Evidence gate
-
-<p align="center">
-  <img src="readmeasset/demos/05-evidence-gate.gif" alt="OMK evidence gate" width="820" />
-</p>
-
-### 6 · Skill routing
-
-<p align="center">
-  <img src="readmeasset/demos/06-skill-routing.gif" alt="OMK skill routing" width="820" />
-</p>
-
-### 7 · MCP health
-
-<p align="center">
-  <img src="readmeasset/demos/07-mcp-health.gif" alt="OMK MCP health view" width="820" />
-</p>
-
-### 8 · Context budget
-
-<p align="center">
-  <img src="readmeasset/demos/08-context-budget.gif" alt="OMK context budget" width="820" />
-</p>
-
-### 9 · Session doctor
-
-<p align="center">
-  <img src="readmeasset/demos/09-session-doctor.gif" alt="OMK session doctor" width="820" />
-</p>
-
-### 10 · Packages and themes
-
-<p align="center">
-  <img src="readmeasset/demos/10-packages-themes.gif" alt="OMK packages and themes" width="820" />
-</p>
-
----
-
-## What OMK controls
-
-- **Execution scope** — resource claims, owned paths, bounded parallel lanes
-- **Completion** — declared predicates and fresh verification
-- **Evidence** — commands, exit status, workspace state, receipts
-- **Recovery** — replayable session state and repair tooling
-- **Providers** — one operator model across supported coding agents
-
----
-
-## Installation
+## Quick start
 
 ```bash
 npm install -g open-multi-agent-kit --ignore-scripts
@@ -153,264 +60,228 @@ omk --version
 omk
 ```
 
-Or without a global install:
+Without a global install:
 
 ```bash
 npx --ignore-scripts open-multi-agent-kit
 ```
 
-The `open-multi-agent-kit` package ships OMK.
+Requirements: Node.js 22.19 or newer. The published CLI package is
+`open-multi-agent-kit`.
 
----
-
-## OMK//CONTROL TUI
-
-The OMK//CONTROL startup surface is the default operator view.
-The header reads `omk v<package.version> · OMK//CONTROL`, using the
-installed workspace package version as its source of truth.
+## Control loop
 
 <p align="center">
   <img
-    src="readmeasset/omk_tui.png"
-    alt="OMK//CONTROL terminal dashboard"
-    width="100%"
+    src="readmeasset/omk-control-loop.gif"
+    alt="Animated OMK control loop showing Scope, Route, Verify, and Replay"
+    width="900"
   />
 </p>
 
----
+1. **Scope** — turn a goal into a bounded DAG with owned paths, ordered waves,
+   resource claims, and acceptance predicates.
+2. **Route** — select models, agent skills, MCP tools, and extensions for the
+   job without changing the evidence contract.
+3. **Verify** — run the declared build, type, test, audit, and release gates.
+   Required red predicates block completion.
+4. **Replay** — preserve receipts, repair interrupted sessions, and continue
+   durable goals from explicit reducer state.
 
-## Core concepts
+The animation changes once every 1.5 seconds and contains no flashing. The four
+steps above are the complete text alternative.
 
-### Scope
+## OMK//CONTROL
 
-`!omk plan` turns a fuzzy objective into a bounded DAG: owned paths,
-ordered waves, and an acceptance predicate attached to every node before
-a single line of code is written.
+The default operator surface shows active work, routing, context, MCP state, and
+verification signals in one terminal UI.
 
-### Predicates
+<p align="center">
+  <img
+    src="landing/assets/omk_tui.jpg"
+    alt="OMK//CONTROL terminal dashboard showing model routing, tools, and session status"
+    width="960"
+  />
+</p>
 
-The Correctness Wall intercepts writes and runs acceptance predicates.
-A red predicate blocks completion — a green-looking reply alone is not a
-release signal.
+The header reads `omk v<package.version> · OMK//CONTROL`; the installed package
+version is the source of truth.
 
-### Receipts
+## What ships
 
-Every verified run produces a receipt: commands, exit codes, workspace
-state, evidence digest, and timestamps. Receipts are inspectable artifacts,
-not marketing claims.
+### Multi-agent execution
 
-### Replay
+- Bounded DAG parallel agents with deterministic ready-lane ordering.
+- Per-lane owned paths and resource claims.
+- Explicit cancellation, timeout, and retry settlement.
+- Durable goals and checkpointed continuation across bounded rounds.
 
-`omk session doctor` detects unterminated turns and orphan results, then
-plans a dry-run repair against the replay ledger. An
-interrupted run is a recoverable state, not a loss.
+### Evidence and recovery
 
----
+- Acceptance predicates backed by fresh command evidence.
+- Versioned observations, evaluation results, and runtime decisions.
+- Replay ledgers, receipts, session repair, and SDK session inspection.
+- Advisory judging that cannot replace required deterministic gates.
 
-## Supported agents and providers
+### Routing and extensibility
 
-OMK is provider-neutral. The underlying agent can be Codex, Claude Code,
-OpenCode, or a local model; the execution and evidence
-model stays consistent.
+- Provider-neutral model registry through `omk-ai`.
+- Agent skills loaded on demand instead of dumped into every prompt.
+- MCP runtime client with lazy stdio server startup and registered tools.
+- Extensions for tools, commands, events, providers, themes, and UI surfaces.
 
-Providers stay interchangeable. The routing layer picks the best arm
-for the task, but the control plane never changes when you swap models.
-NVIDIA NIM's `z-ai/glm-5.2` entry transmits reasoning effort through `max`.
-Quota and billing-cycle failures can switch to an authenticated resilience
-candidate before retry; see [provider resilience](packages/coding-agent/docs/provider-resilience.md).
-
----
+See [providers](packages/coding-agent/docs/providers.md),
+[MCP](packages/coding-agent/docs/mcp.md),
+[skills](packages/coding-agent/docs/skills.md), and
+[extensions](packages/coding-agent/docs/extensions.md).
 
 ## Verification boundary
 
-OMK is not a security sandbox for arbitrary hostile code by default.
-Supported verification and sandbox modes are documented explicitly.
-Any run without the required evidence is labeled `UNVERIFIED`.
+`AgentSession` built-in local bash uses OS sandbox enforcement by default:
+`sandbox-exec` on macOS and `bwrap` plus unprivileged user namespaces on Linux.
+Local shell spawns restrict writes to the workspace and OS temporary directory,
+disable network access, and fail closed with `sandbox.backend_missing` when an
+enforcement backend is unavailable.
 
-See [containerization.md](packages/coding-agent/docs/containerization.md)
-for sandbox patterns: OpenShell, Gondolin micro-VM, and plain Docker.
+This is **not** read-confidentiality or whole-process containment. Other file
+tools, extension and custom-tool code, injected or remote `BashOperations`, and
+the OMK process keep the permissions of the process running them. Use
+[containerization](packages/coding-agent/docs/containerization.md) when the
+boundary must cover more than built-in local bash. A run without required
+evidence remains `UNVERIFIED`.
 
----
+## Providers
 
-## Extensions, MCP, and skills
+OMK keeps routing separate from control and evidence. Codex, Claude Code,
+OpenCode Zen/Go, Kimi, GLM/ZAI, native xAI/Grok, NVIDIA NIM, and local providers
+can participate through `omk-ai` while the run contract stays stable.
 
-OMK packages distribute skills, extensions, prompts, and themes through
-one control plane. Build a package once, install it through `omk`, pin
-it, scope it to a project when needed.
-
-Public repository skills are listed in [SKILLS.md](SKILLS.md). Operator installs
-can also load hubs such as **`omk-marketing`** (routes the bundled marketing/
-SEO skill pack) without dumping every skill into context.
-
-MCP is a **runtime client**, not just a health view: configured stdio servers are
-started on demand and their tools are registered into the session as
-`<server>__<tool>`. Connection is lazy, and a server that fails to start is
-reported without affecting the rest of the session. See
-[docs/mcp.md](packages/coding-agent/docs/mcp.md), or run
-`node scripts/mcp-smoke.mjs` to see what your configuration actually resolves to.
-
-### Marketing, SEO, and AEO skill map
-
-For growth work, start with `!skill:omk-marketing` (or `/skill:omk-marketing`).
-It routes to the smallest subset of the marketingskills pack. Common intents:
-
-| Intent | Skills to load |
-| --- | --- |
-| **SEO / AEO / discoverability** | `seo-audit`, `ai-seo`, `programmatic-seo`, `schema`, `site-architecture`, `content-strategy` |
-| **Positioning & research** | `product-marketing`, `customer-research`, `competitors`, `competitor-profiling`, `marketing-plan`, `marketing-psychology` |
-| **Copy & content** | `copywriting`, `copy-editing`, `content-strategy`, `emails`, `social`, `video`, `image`, `ad-creative` |
-| **Conversion** | `cro`, `signup`, `onboarding`, `paywalls`, `popups`, `pricing`, `offers`, `ab-test-setup`, `ab-testing` |
-| **Acquisition** | `ads`, `paid` routes via `ads`/`ad-creative`, `cold-email`, `directory-submissions`, `lead-magnets`, `free-tools`, `aso`, `sms` |
-| **Lifecycle & revenue** | `churn-prevention`, `referrals`, `revops`, `sales-enablement`, `prospecting`, `co-marketing`, `community-marketing`, `public-relations`, `launch` |
-| **Measurement & ops** | `analytics`, `marketing-loops`, `marketing-ideas`, `marketing-council` |
-
-Load **one primary skill** (plus at most one supporter). Prefer evidence
-(`analytics`, research) before spend or publish actions.
-
-### Harness Graph (agents × skills × hooks × MCP)
-
-Repository checkouts include a **build-time harness control plane** under
-[`.omk/harness-graph/`](.omk/harness-graph/):
-
-```bash
-bash .omk/harness-graph/run.sh
-# read: .omk/harness-graph/out/dashboard.md  ·  SCORECARD.md
-```
-
-It inventories agent→skill/hook/MCP edges, ranks bipartite SPOFs, clusters skills
-(Louvain), scores association lift, recommends wiring (hybrid CF), and fail-closes
-on new dead links. See the [harness-graph README](.omk/harness-graph/README.md)
-and [scorecard](.omk/harness-graph/SCORECARD.md).
-
-```bash
-# Global, pinned OMK package
-omk install npm:some-omk-package@1.2.3
-
-# Project-local, pinned Git package
-omk install -l git:github.com/example/omk-package@v1.2.3
-
-# Inspect and control installed resources
-omk list
-omk config
-omk update --extensions
-```
-
-A skills-only package is an ordinary OMK package:
-
-```json
-{
-  "name": "omk-workflows",
-  "keywords": ["omk-package"],
-  "omk": {
-    "skills": ["./skills"]
-  }
-}
-```
-
-Use the minimum necessary skills per turn — usually one to three.
-A skill is loaded when it earns its place in the task, not because it
-happens to be installed.
-
----
+Native `xai` keeps subscription OAuth and `XAI_API_KEY` billing separate. See
+[provider setup](packages/coding-agent/docs/providers.md),
+[provider resilience](packages/coding-agent/docs/provider-resilience.md), and
+[Grok integration](packages/coding-agent/docs/grok-harness.md).
 
 ## Published packages
 
-| Package | Description |
-| --------- | ------------- |
-| **[omk-ai](packages/ai)** | Unified multi-provider LLM API (OpenAI, Anthropic, Google, etc.) |
-| **[omk-agent-core](packages/agent)** | Agent runtime with tool calling and state management |
-| **[omk-protocol](packages/protocol)** | Versioned run contracts and pure semantic reducers |
-| **[omk-book-to-skill](packages/book-to-skill)** | Optional document-to-skill compiler and provenance adapter |
-| **[open-multi-agent-kit](packages/coding-agent)** | Interactive coding agent CLI |
-| **[omk-tui](packages/tui)** | Terminal UI library with differential rendering |
+| Package | Purpose |
+| --- | --- |
+| [`open-multi-agent-kit`](packages/coding-agent) | Interactive coding-agent CLI and control plane |
+| [`omk-agent-core`](packages/agent) | Agent runtime, tool execution, and DAG scheduling |
+| [`omk-ai`](packages/ai) | Unified multi-provider LLM API |
+| [`omk-protocol`](packages/protocol) | Versioned run contracts and semantic reducers |
+| [`omk-adaptorch-wpl`](packages/adaptorch-wpl) | Work Packet Loop runtime |
+| [`omk-book-to-skill`](packages/book-to-skill) | Optional document-to-skill compiler |
+| [`omk-tui`](packages/tui) | Differential-rendered terminal UI library |
 
 ```bash
-npm install omk-agent-core   # Agent runtime
-npm install omk-ai           # Multi-provider LLM API
-npm install omk-protocol     # Run contracts and semantic reducers
-omk install npm:omk-book-to-skill@0.95.2  # Optional document compiler
-npm install omk-tui          # Terminal UI
+npm install omk-agent-core
+npm install omk-ai
+npm install omk-protocol
+omk install npm:omk-book-to-skill@0.96.1
+npm install omk-tui
 ```
 
----
+[AdaptOrch MCP](https://adaptorch.ai.kr) is a separate proprietary service; it
+is not part of this repository or the `omk-adaptorch-wpl` package. Invoking it
+requires its own control-plane token.
 
-## Adaptorch MCP integration
+## Documentation
 
-[AdaptOrch MCP](https://adaptorch.ai.kr) is a separate, proprietary
-reliability-kernel service (not part of this monorepo) that OMK can route
-orchestration tasks through: topology-aware DAG routing, multi-model
-synthesis, and consistency verification. Backed by a published paper
-([arXiv:2602.16873](https://arxiv.org/abs/2602.16873)).
-
-The `adaptorch` and `adaptorch-prod` MCP servers plus the `adaptorch-route`
-and `adaptorch-synthesize` skills ship in OMK's default execution preset.
-Actually invoking AdaptOrch still requires an `ADAPTORCH_CONTROL_PLANE_TOKEN`.
-
-This is distinct from `packages/adaptorch-wpl` in this monorepo, the stable
-Work Packet Loop package shipped as a runtime dependency of
-`open-multi-agent-kit` since v0.91.0.
-
----
+- [Documentation index](packages/coding-agent/docs/index.md)
+- [Usage](packages/coding-agent/docs/usage.md)
+- [Providers and models](packages/coding-agent/docs/providers.md)
+- [Automation and SDK](packages/coding-agent/docs/sdk.md)
+- [Run protocol](packages/coding-agent/docs/run-protocol.md)
+- [Sessions and recovery](packages/coding-agent/docs/sessions.md)
+- [Security](packages/coding-agent/docs/security.md)
+- [Containerization](packages/coding-agent/docs/containerization.md)
+- [Public skill catalog](SKILLS.md)
+- [Changelog](packages/coding-agent/CHANGELOG.md)
+- [Release notes for v0.96.1](.github/RELEASE_NOTES_v0.96.1.md)
 
 ## Development
 
 ```bash
-npm ci --ignore-scripts  # Install the locked dependency graph
-npm run build            # Build all packages
-npm run check            # Lint, format, and type check
-npm test                 # Run the hermetic default test suite
-./omk-test.sh            # Run OMK from sources
+npm ci --ignore-scripts
+npm run build
+npm run check
+npm test
+npm run release:local
 ```
 
-## Supply-chain hardening
+Direct dependencies are pinned, CI installs with `--ignore-scripts`, and the
+published CLI includes a generated `npm-shrinkwrap.json`. Read
+[CONTRIBUTING.md](CONTRIBUTING.md) and the
+[development guide](packages/coding-agent/docs/development.md) before sending a
+change.
 
-- Direct external dependencies are pinned to exact versions.
-- `.npmrc` sets `save-exact=true` and `min-release-age=2`.
-- `package-lock.json` is the dependency ground truth.
-- `npm run check` verifies pinned direct deps and the generated shrinkwrap.
-- The published CLI includes `npm-shrinkwrap.json` to pin transitive deps.
-- CI installs with `npm ci --ignore-scripts`; scheduled audits run `npm audit`.
+## FAQ
 
----
+### Is OMK a coding agent or an orchestrator?
 
-## Contributing
+Both. `open-multi-agent-kit` is an interactive coding-agent CLI;
+OMK//CONTROL adds bounded orchestration, routing, evidence gates, and recovery.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and
-[development.md](packages/coding-agent/docs/development.md) for project setup.
+### Does OMK require one specific model provider?
 
-## Documentation
+No. Providers can change while the execution and evidence contracts remain
+stable. Provider-specific capabilities still vary and are documented explicitly.
 
-- [Read the documentation](packages/coding-agent/docs/index.md)
-- [Browse all public Skills](SKILLS.md)
-- [Harness Graph control plane](.omk/harness-graph/README.md)
-- [Changelog (coding-agent / open-multi-agent-kit)](packages/coding-agent/CHANGELOG.md)
-- [Release notes for v0.96.0](.github/RELEASE_NOTES_v0.96.0.md)
-- [Unreleased draft notes](.github/RELEASE_NOTES_UNRELEASED.md)
+### How does OMK decide that work is complete?
 
-### FAQ (AEO)
+Declared acceptance predicates must pass with fresh command evidence. Chat text,
+a reviewer opinion, or stale output cannot replace a required gate.
 
-**Is OMK a coding agent or an orchestrator?** Both: `open-multi-agent-kit` is an
-interactive coding-agent CLI; OMK//CONTROL adds multi-agent DAG lanes, skill/MCP
-routing, and evidence gates on top.
+### Can OMK recover an interrupted run?
 
-**Which models does OMK support?** Provider-neutral — Codex, Claude, OpenCode Zen/Go,
-Kimi, GLM/ZAI, NVIDIA NIM, local providers, and more via `omk-ai`. Swap models
-without changing the control/evidence model.
-
-**How is completion verified?** Acceptance predicates and fresh command evidence.
-Unverified runs are labeled `UNVERIFIED`; green chat is not a release signal.
-
-**Can OMK do marketing/SEO work?** Yes, via skills (`omk-marketing` hub + SEO/CRO/
-content skills listed above). Publishing, ads spend, and outreach still require
-explicit operator confirmation.
-
-**Where do release notes live?** Versioned notes under [`.github/RELEASE_NOTES_v*.md`](.github/);
-the coding-agent [CHANGELOG](packages/coding-agent/CHANGELOG.md) is the source of
-truth and syncs the “Recent releases” block below (`npm run sync:readme-releases`).
+Yes. Replay state, receipts, durable goals, and session repair preserve enough
+structure for bounded recovery instead of silently starting over.
 
 ## Recent releases
 
 <!-- releases:start -->
+
+## Release v0.96.1
+
+### Added
+
+- Added built-in harness loop extensions: identical-loop detection, compaction tool-pair repair, Kimi/K3/GLM/Grok/Claude prompt presets, and `/goal` with automatic continuation plus explicit `pause`, `resume`, evidence-gated `complete`, and `clear` lifecycle commands.
+- Added pass-gated advisory best-of-N selection with strict weighted judge responses, forced-redacted candidate material, deterministic fallback, evaluation-bound request digests, and an explicit `ModelRegistry`-backed LLM adapter.
+- Added digest-bound `Goal / Core / Verified / Open / Next` seam checkpoints to the existing durable-goal journal, including `/goal checkpoint <json>` and checkpoint-aware continuation.
+- Added `omk sdk session status|tail|inspect|send` for external session controllers. Ambiguous selectors now fail closed, writes require exact IDs, active owners block concurrent access, and credential-shaped transcript text is redacted from output.
+- Legacy `read` mode (`OMK_OMP_SEAMS=0`) now reports a private `0700` temporary spill directory with an exclusive `0600` file for recoverable line or byte truncation; it never writes beside or through the source path. A first line that alone exceeds the byte cap remains preview-only.
+
+### Changed
+
+- Sandbox backend probing is now cached per local bash operations instance. All enforce-mode fallback verdicts share the concrete missing-backend diagnosis (`bwrap`, user namespaces, `sandbox-exec`, or unsupported platform). Policy semantics are unchanged.
+- Extracted the session system-prompt assembly from `AgentSession._rebuildSystemPrompt` into the pure `assembleSessionSystemPrompt` module (`core/session-system-prompt.ts`). Provider playbook resolution stays at the call site; the assembly is now directly testable.
+- Extracted the retry/failover decisions from `AgentSession._isRetryableError` and `_prepareRetry` into the pure `core/provider-retry.ts` module (`isRetryableAssistantError`, `nextRetryAttempt`, `computeRetryDelayMs`). Retry ordering, backoff, and failover semantics are unchanged.
+- Extracted the compaction gates from `AgentSession._checkCompaction` into the pure `core/compaction-gate.ts` module (`shouldSkipCompactionCheck`, `isSessionModelOverflow`). Gate ordering and staleness semantics are unchanged.
+- Extracted the failover trigger and refused-model bookkeeping from `AgentSession._maybeFailoverFromSafetyStop` into `core/provider-retry.ts` (`isFailoverTriggerError`, `failoverModelKey`). Chain ordering and blacklist semantics are unchanged.
+- Extracted the context-budget arithmetic from `AgentSession._getContextBudgetOptions` into the pure `core/prompt-budget.ts` module (`computePromptTokenBudget`, `computeResponseReserveTokens`). Env parsing stays at the call site; budget values are unchanged.
+- Extracted the prompt-cache key transition classification from `AgentSession._recordPromptCachePlan` into the pure `core/prompt-cache.ts` module (`classifyPromptCacheTransition`). Counter and break-reason semantics are unchanged.
+- Grok 4.5 / 4.3 now expose `/think max` and `ultra` in the selector. Those aliases still send xAI `reasoning_effort: "high"` because those models have no upstream `xhigh`/`max` tier.
+- Native xAI SuperGrok usage now polls `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits` and shows the weekly SuperGrok pool from `creditUsagePercent`. Stale `grok-oauth-proxy` credentials are dropped from `/login` and `/logout`.
+
+### Fixed
+
+- Durable-goal continuation now records and skips an unavailable WSL/project workspace instead of emitting an `ENODEV` extension stack after every failed provider attempt.
+- Content/safety refusals are capped at one same-model retry when failover is unavailable, preventing the default transport retry budget from replaying the same refusal three times.
+- Fable models remain visible in the model catalog, and a saved Fable default is honored when sticky-safety blocking is disabled.
+- Claude models now omit discovered context files by default, avoiding provider false positives from unrelated instruction text; `OMK_CLAUDE_CONTEXT_FILES=1` restores the full context.
+- Extension `resourceClaims` now survive both tool-definition adapters, allowing `dag-v2` to schedule non-conflicting custom tool calls concurrently instead of treating them as unclaimed exclusive work.
+- Built-in tool-pair repair now uses the real `AgentMessage` contract (`toolCall` blocks and top-level `role: "toolResult"` messages), removing orphan pairs without unsafe message-shape casts.
+- Pinned the transitive development dependency `nanoid` to 3.3.18, clearing GHSA-2v37-7h3g-55p8 from both full and production npm audits.
+
+### Docs
+
+- Redesigned the root README around the Scope → Route → Verify → Replay control loop with a WCAG-aware cyberpunk OMK Girl hero and slow feature GIF generated through GPT Image 2. The root `DESIGN.md` now defines public brand tokens, media budgets, and reduced-motion guidance.
+
+### Removed
+
+- Removed the `grok-oauth-proxy` provider path. Grok harness dispatch, failover, usage, and presets now use native `xai`. Stale `models.json` entries for `grok-oauth-proxy` are ignored instead of reappearing in `/login` and `/model`.
+
+Release notes live in [RELEASE_NOTES_v0.96.1.md](.github/RELEASE_NOTES_v0.96.1.md).
 
 ## Release v0.96.0
 
@@ -450,24 +321,6 @@ Release notes live in [RELEASE_NOTES_v0.96.0.md](.github/RELEASE_NOTES_v0.96.0.m
 - Session bash now defaults to OS sandbox enforcement instead of ledger-only audit mode. macOS `sandbox-exec` and Linux `bwrap` restrict writes to the workspace/temp directories and disable network access; missing backends fail closed. Unwrapped `audit` and disabled `off` modes now require an explicit `OMK_BASH_SANDBOX` value, and unknown values resolve to `enforce`.
 
 Release notes live in [RELEASE_NOTES_v0.95.2.md](.github/RELEASE_NOTES_v0.95.2.md).
-
-## Release v0.95.1
-
-### Added
-
-- **Harness Graph control plane** (`.omk/harness-graph/`): deterministic agents×skills×hooks×MCP inventory with 3-tier skill classification, bipartite SPOF criticality, Louvain communities, association-rule lift, hybrid CF wiring recommendations (`jaccard · idf · lift_boost`), fail-closed `health_gate.py` + debt allowlist, executive `dashboard.md`, review-only `wiring-patch`, synthetic unit + property tests, and CI workflow `.github/workflows/harness-graph.yml`.
-- **Harness Graph ops tooling**: `compact-skills-index.mjs` (demand-union index rebuild), `prune-retired-hooks.mjs` (retired hook capability cleanup), `apply-wiring-patch.py` (half-bundle completion checklist), session-start drift audit hook with optional `HARNESS_GRAPH_STRICT=1`.
-
-### Fixed
-
-- Harness Graph green-metric traps: runtime-derived hook/MCP catalogs (no hardcoded answer keys), bipartite SPOF instead of empty articulation tables, default-only model-drift axis (failover is advisory), skills-index no longer dumps the full on-disk universe into false orphan-active counts.
-
-### Docs
-
-- Root README: AEO/SEO-oriented positioning, FAQ, and marketing/growth skill keyword map (`omk-marketing` + marketingskills pack).
-- Spec/plan/scorecard for harness-graph engineering (`specs/012-harness-graph-engineering/`, `.omk/harness-graph/SCORECARD.md`).
-
-Release notes live in [RELEASE_NOTES_v0.95.1.md](.github/RELEASE_NOTES_v0.95.1.md).
 
 <!-- releases:end -->
 

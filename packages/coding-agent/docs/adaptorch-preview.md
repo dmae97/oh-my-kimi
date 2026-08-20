@@ -34,7 +34,7 @@ Related packages:
 
 관련 경로:
 
-- 실험 WPL 루프: `packages/adaptorch-wpl/` (설계 단계, 기본 CLI 미연결).
+- WPL 루프: `packages/adaptorch-wpl/` (0.91.0부터 안정화, CLI 런타임 의존성으로 포함).
 - 어드바이저리 브리지(기본 비활성): `packages/coding-agent/src/core/adaptorch-bridge.ts`.
 - Grok 세션: [grok-harness.md](./grok-harness.md).
 
@@ -73,7 +73,7 @@ Models execute; **OMK routes, verifies, measures, and controls**. AdaptTorch Pre
 
 ## Grok sessions
 
-For provider presets, Imagine tool discipline, and when to load AdaptOrch skills on Grok chat models, see **[grok-harness.md](./grok-harness.md)** (canonical playbook: `~/.omk/agent/grok.md`).
+For provider presets, Imagine tool discipline, and when to load AdaptOrch skills on Grok chat models, see the canonical **[Grok harness guide](./grok-harness.md)**.
 
 ## Correctness Wall (preview)
 

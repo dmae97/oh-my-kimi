@@ -29,6 +29,7 @@ import { warnDeprecation } from "../utils/deprecation.ts";
 import { stripJsonComments } from "../utils/json.ts";
 import { normalizePath } from "../utils/paths.ts";
 import type { AuthStatus, AuthStorage } from "./auth-storage.ts";
+import { GROK_OAUTH_PROVIDER } from "./grok-playbook.ts";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./provider-display-names.ts";
 import {
 	clearConfigValueCache,
@@ -319,6 +320,14 @@ export type ResolvedRequestAuth =
 			error: string;
 	  };
 
+const RETIRED_GROK_OAUTH_PROXY = "grok-oauth-proxy";
+
+function warnRetiredGrokOAuthProxy(): void {
+	warnDeprecation(
+		`models.json provider "${RETIRED_GROK_OAUTH_PROXY}" is retired. Use native "${GROK_OAUTH_PROVIDER}" OAuth or XAI_API_KEY.`,
+	);
+}
+
 /** Result of loading custom models from models.json */
 interface CustomModelsResult {
 	models: Model<Api>[];
@@ -477,10 +486,7 @@ export class ModelRegistry {
 			}
 		}
 
-		// Root-level: never expose sticky safety models (claude-fable-5) in the catalog/picker.
-		// Override via OMK_ALLOW_STICKY_SAFETY_MODELS=1 only for deliberate experiments.
-		const allowSticky = process.env.OMK_ALLOW_STICKY_SAFETY_MODELS === "1";
-		this.models = allowSticky ? combined : combined.filter((m) => !/fable/i.test(m.id));
+		this.models = combined;
 	}
 
 	/** Load built-in models and apply provider/model overrides */
@@ -557,6 +563,10 @@ export class ModelRegistry {
 			const modelOverrides = new Map<string, Map<string, ModelOverride>>();
 
 			for (const [providerName, providerConfig] of Object.entries(config.providers)) {
+				if (providerName === RETIRED_GROK_OAUTH_PROXY) {
+					warnRetiredGrokOAuthProxy();
+					continue;
+				}
 				if (providerConfig.baseUrl || providerConfig.compat) {
 					overrides.set(providerName, {
 						baseUrl: providerConfig.baseUrl,
@@ -589,6 +599,7 @@ export class ModelRegistry {
 		const builtInProviders = new Set<string>(getProviders());
 
 		for (const [providerName, providerConfig] of Object.entries(config.providers)) {
+			if (providerName === RETIRED_GROK_OAUTH_PROXY) continue;
 			const isBuiltIn = builtInProviders.has(providerName);
 			const hasProviderApi = !!providerConfig.api;
 			const models = providerConfig.models ?? [];
@@ -651,6 +662,10 @@ export class ModelRegistry {
 		};
 
 		for (const [providerName, providerConfig] of Object.entries(config.providers)) {
+			if (providerName === RETIRED_GROK_OAUTH_PROXY) {
+				warnRetiredGrokOAuthProxy();
+				continue;
+			}
 			const modelDefs = providerConfig.models ?? [];
 			if (modelDefs.length === 0) continue; // Override-only, no custom models
 

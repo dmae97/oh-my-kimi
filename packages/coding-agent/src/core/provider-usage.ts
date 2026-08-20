@@ -9,6 +9,7 @@ const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 const CLAUDE_MESSAGES_URL = "https://api.anthropic.com/v1/messages";
 const KIMI_USAGE_URL = "https://api.kimi.com/coding/v1/usages";
+const GROK_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
 const OPENAI_AUTH_CLAIM = "https://api.openai.com/auth";
 const MAX_USAGE_RESPONSE_BYTES = 1024 * 1024;
 const MAX_USAGE_LIMITS = 64;
@@ -38,7 +39,7 @@ export type CodexUsageSnapshot = {
 type ParsedCodexWindow = CodexUsageWindow & { readonly windowSeconds?: number };
 type ObservedCodexWindow = { readonly window: ParsedCodexWindow; readonly observedAt: number };
 type PassiveUsageEntry = { readonly primary?: ObservedCodexWindow; readonly secondary?: ObservedCodexWindow };
-type UsageKind = "codex" | "claude" | "kimi" | "zai" | "unavailable";
+type UsageKind = "codex" | "claude" | "kimi" | "zai" | "grok" | "unavailable";
 type CredentialCandidate = { readonly provider: string; readonly oauthOnly: boolean };
 
 export type SubscriptionUsageSource = {
@@ -66,7 +67,7 @@ const VISIBLE_USAGE_PROVIDERS = [
 	"zai",
 	"modelstudio-maas",
 	"qwen-oauth",
-	"grok-oauth-proxy",
+	"xai",
 ] as const;
 const SOURCES: Readonly<Record<string, SubscriptionUsageSource>> = {
 	"openai-codex": source("CODEX", "codex", [{ provider: "openai-codex", oauthOnly: true }]),
@@ -97,11 +98,7 @@ const SOURCES: Readonly<Record<string, SubscriptionUsageSource>> = {
 		{ provider: "zai-coding-cn", oauthOnly: false },
 		{ provider: "zhipu-coding-plan", oauthOnly: true },
 	]),
-	"grok-oauth-proxy": source("GROK", "unavailable", [
-		{ provider: "grok-oauth-proxy", oauthOnly: true },
-		{ provider: "xai", oauthOnly: true },
-	]),
-	xai: source("GROK", "unavailable", [{ provider: "xai", oauthOnly: true }]),
+	xai: source("GROK", "grok", [{ provider: "xai", oauthOnly: true }]),
 };
 
 function source(
@@ -191,6 +188,10 @@ export async function loadSubscriptionUsage(
 				return await fetchKimiUsage(usageSource.label, credential.apiKey, fetchImpl);
 			case "zai":
 				return await fetchZaiUsage(usageSource.label, provider ?? model.provider, credential, fetchImpl);
+			case "grok":
+				return await fetchGrokUsage(usageSource.label, credential.apiKey, fetchImpl);
+			default:
+				return { label: usageSource.label, windows: [], message: "usage unavailable" };
 		}
 	} catch {
 		return { label: usageSource.label, windows: [], message: "usage unavailable" };
@@ -258,6 +259,25 @@ export function parseKimiUsageSnapshot(
 		}
 	}
 	return windows.length > 0 ? windows.slice(0, 4) : undefined;
+}
+
+export function parseGrokUsageSnapshot(value: unknown): readonly SubscriptionUsageWindow[] | undefined {
+	const config = record(record(value)?.config);
+	if (!config) return undefined;
+	const period = record(config.currentPeriod);
+	const resetsAt = epochSeconds(period?.end) ?? epochSeconds(config.billingPeriodEnd);
+	const percent = finiteNumber(config.creditUsagePercent);
+	const onDemandUsed = finiteNumber(record(config.onDemandUsed)?.val);
+	const onDemandCap = finiteNumber(record(config.onDemandCap)?.val);
+	let usedPercent = percent;
+	if (usedPercent === undefined && onDemandUsed !== undefined && onDemandCap !== undefined && onDemandCap > 0) {
+		usedPercent = (onDemandUsed / onDemandCap) * 100;
+	}
+	if (usedPercent === undefined && (period || resetsAt !== undefined)) usedPercent = 0;
+	if (usedPercent === undefined) return undefined;
+	const periodType = typeof period?.type === "string" ? period.type : "";
+	const label = periodType.includes("MONTHLY") ? "30D" : "7D";
+	return [{ label, usedPercent: clampPercent(usedPercent), ...(resetsAt === undefined ? {} : { resetsAt }) }];
 }
 
 export function parseZaiUsageSnapshot(value: unknown): readonly SubscriptionUsageWindow[] | undefined {
@@ -488,6 +508,19 @@ function parseClaudeQuotaProbeHeaders(headers: Headers, nowMs: number): Provider
 	const primary = parseWindow("5h", FIVE_HOUR_SECONDS);
 	const secondary = parseWindow("7d", SEVEN_DAY_SECONDS);
 	return primary || secondary ? { limitId: "anthropic-unified", primary, secondary } : undefined;
+}
+
+async function fetchGrokUsage(label: string, apiKey: string, fetchImpl: FetchLike): Promise<SubscriptionUsageSnapshot> {
+	const payload = await fetchJson(fetchImpl, GROK_BILLING_URL, {
+		headers: {
+			Authorization: `Bearer ${apiKey}`,
+			Accept: "application/json",
+			"x-xai-token-auth": "xai-grok-cli",
+			"User-Agent": "omk",
+		},
+	});
+	const windows = parseGrokUsageSnapshot(payload);
+	return windows ? { label, windows } : { label, windows: [], message: "usage unavailable" };
 }
 
 async function fetchKimiUsage(label: string, apiKey: string, fetchImpl: FetchLike): Promise<SubscriptionUsageSnapshot> {

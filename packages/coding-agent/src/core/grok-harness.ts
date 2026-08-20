@@ -59,7 +59,7 @@ export function isGrokOAuthProvider(provider: string | undefined): boolean {
 }
 
 /**
- * When true (default), selecting `grok-oauth-proxy` applies the `grok-harness` domain loadout
+ * When true (default), selecting native `xai` applies the `grok-harness` domain loadout
  * (skills/MCP/hooks/tool gate). Set `OMK_GROK_HARNESS=0` to disable.
  */
 export function grokHarnessAutoApplyEnabled(

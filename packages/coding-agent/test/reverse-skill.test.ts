@@ -5,10 +5,21 @@ import {
 	formatReverseSkillMarkdown,
 	normalizeReverseSkillName,
 	planReverseSkillToolChecks,
+	REVERSE_SKILL_ROUTES,
 	routeReverseSkill,
 } from "../src/core/reverse-skill.ts";
 
 describe("reverse skill routing", () => {
+	it("routes repo-to-prompt reconstruction to gitreverse", () => {
+		const decision = routeReverseSkill({
+			query: "Turn https://github.com/vercel/next.js into one prompt I can paste into Cursor to vibe code it from scratch",
+		});
+
+		expect(decision.unmatched).toBe(false);
+		expect(decision.primary?.route.id).toBe("gitreverse");
+		expect(decision.primary?.confidence).toBeGreaterThan(0.5);
+	});
+
 	it("routes frontend signature recovery to js-reverse with browser MCP hints", () => {
 		const decision = routeReverseSkill({
 			query: "Find the frontend signature and encrypted params in a webpack app using CDP breakpoints",
@@ -82,5 +93,13 @@ describe("reverse skill generation", () => {
 		expect(facts.skillPaths).toContain("skills/js-reverse/SKILL.md");
 		expect(facts.tools).toEqual(expect.arrayContaining(["jadx", "apktool", "playwright", "jshookmcp"]));
 		expect(markdown).toContain("name: imported-reverse-pack");
+	});
+
+	it("exposes the gitreverse route for repository-to-prompt workflows", () => {
+		const route = REVERSE_SKILL_ROUTES.find((candidate) => candidate.id === "gitreverse");
+
+		expect(route).toBeDefined();
+		expect(route?.risk).toBe("passive-analysis");
+		expect(route?.mcpHints).toEqual(expect.arrayContaining(["github", "filesystem"]));
 	});
 });

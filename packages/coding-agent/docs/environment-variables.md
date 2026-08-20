@@ -6,7 +6,7 @@ OMK uses environment variables in three ways:
 - OMK sets `OMK_CODING_AGENT` so child processes can detect that they run inside OMK.
 - Commands run by the LLM-callable bash tool receive `PI_*` variables describing the current session.
 
-Provider API-key variables are documented separately in [Providers](providers.md).
+Provider API-key variables are documented separately in [Providers](providers.md). `XAI_API_KEY` is an xAI Platform API-billing credential; it is not the OAuth credential created by `/login` and cannot populate weekly SuperGrok usage/reset.
 
 ## Process Marker
 
@@ -22,7 +22,7 @@ Commands run by the bash tool receive the current session state (the `PI_*` name
 | `PI_SESSION_FILE` | Absolute path to the current session JSONL file; unset for ephemeral sessions |
 | `PI_PROVIDER` | Currently selected model provider |
 | `PI_MODEL` | Currently selected model ID |
-| `PI_REASONING_LEVEL` | Current effective reasoning level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` |
+| `PI_REASONING_LEVEL` | Current effective reasoning level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `ultra` |
 
 The values are resolved when each command starts. Switching models or changing the reasoning level therefore affects the next bash command without restarting OMK. `PI_PROVIDER` and `PI_MODEL` identify the selected OMK model, not a different upstream model that a router may choose internally.
 
@@ -71,7 +71,7 @@ When disabled, OMK removes inherited values for these variables so nested OMK pr
 
 ## OMK Process Configuration
 
-These variables are read by OMK itself:
+These variables are read by OMK itself. The four built-in harness flags below are enabled when unset. Any of `0`, `false`, `off`, `disable`, or `disabled` disables the corresponding built-in; matching is case-insensitive and ignores surrounding whitespace. `--no-extensions` does not disable these first-party built-ins.
 
 | Variable | Description |
 | --- | --- |
@@ -85,9 +85,16 @@ These variables are read by OMK itself:
 | `OMK_HARDWARE_CURSOR` | Set to `1` to show the hardware cursor; see [Terminal setup](terminal-setup.md) |
 | `OMK_CONTEXT_GOVERNOR` | Configure the context-budget governor; see `context-budget-*` sources |
 | `OMK_VERIFIED_BASH` | Default-on verified bash adapter for AgentSession/CLI bash. Set to `0` to opt out and use the legacy unverified path (see [SDK — Evidence and Verification](sdk.md#evidence-and-verification)) |
-| `OMK_BASH_SANDBOX` | Session bash sandbox mode: `enforce` by default (macOS `sandbox-exec` / Linux `bwrap`, workspace/temp writes only, network disabled, fail closed without a backend); explicit `audit` keeps an unwrapped ledger-only compatibility path; `0`/`off` disables the preflight. Unknown values resolve to `enforce` |
+| `OMK_BASH_SANDBOX` | AgentSession built-in local bash mode. Unset or unknown values select `enforce`: macOS `sandbox-exec` or Linux `bwrap`, workspace/temp writes only, network disabled, and fail closed without a usable backend. Explicit `audit` selects the unwrapped ledger-only path; `0`/`off` disables the preflight. Use `off` only when a verified outer whole-process sandbox owns isolation; it does not isolate OMK by itself |
 | `LIVE_E2E` | Test-only: keep provider credentials so live-API e2e suites run on purpose (default scrubbed for hermetic tests) |
 | `OMK_OMP_SEAMS` | Default-on OMP pure seams for `read`/`grep`. Set to `0` to opt out |
+| `OMK_IDENTICAL_LOOP` | Default-on consecutive-loop guard. Warns from the third identical `tool+args` call and blocks the sixth. Set a disabling value to opt out |
+| `OMK_TOOL_PAIR_REPAIR` | Default-on outbound-context repair. Removes unmatched tool-use and tool-result blocks before provider requests without rewriting the transcript. Set a disabling value to opt out |
+| `OMK_PROMPT_PRESET` | Default-on model-specific guidance for supported Claude/Anthropic, Kimi, GLM/ZAI, and Grok/xAI models. Set a disabling value to opt out |
+| `OMK_CLAUDE_CONTEXT_FILES` | Claude models omit discovered `AGENTS.md` and `CLAUDE.md` files by default to prevent unrelated context from causing provider false positives. Set to `1`, `true`, `on`, or `yes` to restore them |
+| `OMK_GOAL_CONTROLLER` | Default-on working-directory `/goal` command and automatic continuation. Goals created by `/goal` use an eight-round cap. Set a disabling value to opt out |
+| `OMK_GROK_HARNESS` | Default-on native `xai` provider dispatch to the `grok-harness` loadout. `0`, `false`, `off`, or `no` disables it |
+| `OMK_DOMAIN_ROUTING` | Set to `1` to enable general prompt-based domain routing. Native xAI harness dispatch does not require it |
 | `VISUAL`, `EDITOR` | External editor fallback when `externalEditor` is unset |
 | `HTTP_PROXY`, `HTTPS_PROXY` | Proxy outbound HTTP requests |
 

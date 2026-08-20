@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.96.1] - 2026-08-20
+
+### Notes
+
+- Version lockstep with `open-multi-agent-kit@0.96.1`; no functional changes in this package.
+
 ## [0.96.0] - 2026-08-16
 
 ## [0.95.2] - 2026-08-15
@@ -37,7 +43,6 @@
 ### Added
 
 - Added B2C Correctness Wall orchestration APIs (`evaluateCorrectnessWall`, policy wall, deep-wall evidence gate, live/fixture OA transports, repair hints/budget, signed receipts) with unit coverage; advisory evidence-gated verdicts only (not formal correctness proof).
-
 
 ## [0.90.5] - 2026-07-07
 

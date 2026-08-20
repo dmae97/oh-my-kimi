@@ -14,7 +14,7 @@
 | `path_hints` | string[] | cwd, owned paths, globs | Optional; used for domain triggers and write-scope checks. |
 | `upstream_tags` | string[] | goal id, lane role, preset | e.g. `grok-adaptorch-prod`, `omk-planner`. |
 | `payload_shape` | object | planner / DAG artifact | Sanitized shape for topology preview only — **no** raw prompts, secrets, or session ids. |
-| `provider_profile` | enum | session | `grok-oauth-proxy` \| `default` \| other registered provider. |
+| `provider_profile` | enum | session | `xai` \| `default` \| other registered provider. |
 | `adaptorch_transport` | optional | MCP grant | If absent, preview runs **local-only** (OMK compose + deterministic fallbacks). |
 | `lane_grants[]` | object[] | root coordinator | Each: scope, authority, skills, MCP, acceptance, evidence path. |
 | `budget_caps` | object | loop / goal | `max_lanes`, `max_dispatch_preview_calls`, wall-clock cap (immutable per preview instance). |

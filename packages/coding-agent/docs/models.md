@@ -11,13 +11,14 @@ Add custom providers and models (Ollama, vLLM, LM Studio, proxies) via `~/.omk/a
 - [Provider Configuration](#provider-configuration)
 - [Model Configuration](#model-configuration)
 - [Overriding Built-in Providers](#overriding-built-in-providers)
+- [Thinking Level Map](#thinking-level-map)
 - [Per-model Overrides](#per-model-overrides)
 - [Anthropic Messages Compatibility](#anthropic-messages-compatibility)
 - [OpenAI Compatibility](#openai-compatibility)
 
 ## Built-in NVIDIA GLM-5.2
 
-With `NVIDIA_API_KEY` configured, `nvidia/z-ai/glm-5.2` supports OMK thinking levels through NVIDIA NIM. Its generated metadata explicitly enables `reasoning_effort`, so `/thinking max` is sent as `reasoning_effort: "max"`. Other NVIDIA models do not inherit that capability automatically.
+With `NVIDIA_API_KEY` configured, `nvidia/z-ai/glm-5.2` supports OMK thinking levels through NVIDIA NIM. Its generated metadata explicitly enables `reasoning_effort`, so `/think max` is sent as `reasoning_effort: "max"`. Other NVIDIA models do not inherit that capability automatically.
 
 ## Minimal Example
 
@@ -226,17 +227,17 @@ Current behavior:
 
 ### Thinking Level Map
 
-Use `thinkingLevelMap` on a model to describe model-specific thinking controls. Keys are omk thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`.
-
-Values are tristate:
+Use `thinkingLevelMap` on a model to describe model-specific thinking controls. `models.json` accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. Built-in metadata can also expose the `ultra` CLI tier, but the current `models.json` schema has no `ultra` key.
 
 | Value | Meaning |
-|-------|---------|
-| omitted | Level is supported and uses the provider's default mapping |
-| string | Level is supported and this value is sent to the provider |
-| `null` | Level is unsupported and hidden/skipped/clamped away |
+| --- | --- |
+| omitted | `off` through `high` use provider defaults; top tiers appear only when explicitly mapped |
+| string | The level is supported and this value is sent to the provider |
+| `null` | The level is unsupported and hidden or skipped during clamping |
 
-Example for a model that only supports off, high, and max reasoning:
+See [Grok harness](grok-harness.md) for the exact built-in Grok mappings.
+
+Example for a model that exposes OMK `high` and `xhigh`, with `xhigh` sent to the provider as `max`:
 
 ```json
 {

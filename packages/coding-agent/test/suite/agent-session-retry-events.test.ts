@@ -73,6 +73,28 @@ describe("AgentSession retry and event characterization", () => {
 		expect(harness.faux.state.callCount).toBe(3);
 	});
 
+	it("caps repeated content/safety refusals at one retry with coherent agent_end events", async () => {
+		const harness = await createHarness({ settings: { retry: { enabled: true, maxRetries: 3, baseDelayMs: 1 } } });
+		harnesses.push(harness);
+		const retryEvents: string[] = [];
+		harness.session.subscribe((event) => {
+			if (event.type === "auto_retry_start") retryEvents.push(`start:${event.attempt}`);
+			if (event.type === "auto_retry_end") retryEvents.push(`end:${event.success}`);
+		});
+		const refusal = fauxAssistantMessage("", {
+			stopReason: "error",
+			errorMessage: "Model ended the turn with a content/safety stop (stop_reason=refusal)",
+		});
+		harness.setResponses([refusal, refusal, fauxAssistantMessage("must not run")]);
+
+		await harness.session.prompt("benign coding task");
+
+		expect(retryEvents).toEqual(["start:1", "end:false"]);
+		expect(harness.eventsOfType("agent_end").map((event) => event.willRetry)).toEqual([true, false]);
+		expect(harness.faux.state.callCount).toBe(2);
+		expect(harness.session.isRetrying).toBe(false);
+	});
+
 	it("exhausts max retries and emits a failure event", async () => {
 		const harness = await createHarness({ settings: { retry: { enabled: true, maxRetries: 2, baseDelayMs: 1 } } });
 		harnesses.push(harness);

@@ -40,7 +40,7 @@ describe("assertTextChatModelForCompletion", () => {
 	it("allows text chat ids and non-Grok providers", () => {
 		expect(() => assertTextChatModelForCompletion("grok-4.3", GROK_OAUTH_PROVIDER)).not.toThrow();
 		expect(() => assertTextChatModelForCompletion("grok-4.5", GROK_OAUTH_PROVIDER)).not.toThrow();
-		expect(() => assertTextChatModelForCompletion("grok-imagine-fast", "xai")).not.toThrow();
+		expect(() => assertTextChatModelForCompletion("grok-imagine-fast", "openrouter")).not.toThrow();
 		expect(() => assertTextChatModelForCompletion("grok-imagine-fast")).not.toThrow();
 	});
 });

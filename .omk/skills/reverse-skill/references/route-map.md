@@ -9,6 +9,7 @@ The TS module implements a compact, OMK-native route map adapted from `zhaoxuya5
 | `radare2` | `skills/radare2/SKILL.md` | CLI recon, strings, imports, offsets | radare2, rabin2, rasm2, radiff2 | filesystem; pre-shell-guard |
 | `js-reverse` | `skills/js-reverse/SKILL.md` | frontend signature, encrypted params, replay | node, playwright, jshookmcp | chrome-devtools, playwright, fetch; session-context |
 | `browser-automation` | `skills/browser-automation/SKILL.md` | open page, screenshot, capture network | playwright, chrome, agent-browser | playwright, chrome-devtools |
+| `gitreverse` | `skills/gitreverse/SKILL.md` | github repo, vibe code, repo → one prompt | git, gh | github, filesystem; protect-secrets, stop-verify |
 | `ctf-sandbox-orchestrator` | `../CTF-Sandbox-Orchestrator/ctf-sandbox-orchestrator/SKILL.md` | CTF, challenge, flag, pwn | python, gdb, pwntools, z3 | filesystem, memory; stop-verify |
 | `api-security` | `skills/api-security/SKILL.md` | REST, GraphQL, JWT, IDOR/BOLA | burp, nuclei, zap | filesystem, github, playwright; protect-secrets |
 | `supply-chain-security` | `skills/supply-chain-security/SKILL.md` | SBOM, CI/CD, lockfiles, secrets | trivy, syft, gitleaks, osv-scanner | filesystem, github; npm-audit-summary |
