@@ -2,7 +2,7 @@
  * Model registry - manages built-in and custom models, provides API key resolution.
  */
 
-import { existsSync, readFileSync } from "fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import {
 	type AnthropicMessagesCompat,
 	type Api,
@@ -412,6 +412,33 @@ export const clearApiKeyCache = clearConfigValueCache;
 /**
  * Model registry - loads and manages models, resolves API keys via AuthStorage.
  */
+/**
+ * SSOT audit helpers for models.json. The file is edited by humans and agent
+ * sessions alike; these make silent entry loss visible instead of silent.
+ */
+let snapshotSequence = 0;
+
+function collectModelIds(config: ModelsConfig): Set<string> {
+	const ids = new Set<string>();
+	for (const [providerName, providerConfig] of Object.entries(config.providers ?? {})) {
+		for (const model of providerConfig.models ?? []) {
+			ids.add(`${providerName}/${model.id}`);
+		}
+	}
+	return ids;
+}
+
+function removedModelIds(previousContent: string, currentContent: string): string[] {
+	try {
+		const parse = (raw: string) => JSON.parse(stripJsonComments(raw)) as ModelsConfig;
+		const before = collectModelIds(parse(previousContent));
+		const after = collectModelIds(parse(currentContent));
+		return [...before].filter((id) => !after.has(id)).sort((a, b) => a.localeCompare(b));
+	} catch {
+		return [];
+	}
+}
+
 export class ModelRegistry {
 	private models: Model<Api>[] = [];
 	private providerRequestConfigs: Map<string, ProviderRequestConfig> = new Map();
@@ -558,6 +585,7 @@ export class ModelRegistry {
 
 			// Additional validation
 			this.validateConfig(config);
+			this.snapshotModelsJson(content, modelsJsonPath);
 
 			const overrides = new Map<string, ProviderOverride>();
 			const modelOverrides = new Map<string, Map<string, ModelOverride>>();
@@ -642,6 +670,53 @@ export class ModelRegistry {
 				if (modelDef.maxTokens !== undefined && modelDef.maxTokens <= 0)
 					throw new Error(`Provider ${providerName}, model ${modelDef.id}: invalid maxTokens`);
 			}
+		}
+	}
+
+	/**
+	 * Keep a bounded audit trail of every successfully-loaded models.json and
+	 * warn when model entries disappear between loads (e.g. another session
+	 * rewrote the file). Best-effort: never blocks model loading.
+	 */
+	private snapshotModelsJson(content: string, modelsJsonPath: string): void {
+		try {
+			const snapshotDir = `${modelsJsonPath}.snapshots`;
+			mkdirSync(snapshotDir, { recursive: true });
+			const previous = this.latestSnapshotPath(snapshotDir);
+			if (previous) {
+				const previousContent = readFileSync(previous, "utf8");
+				if (previousContent !== content) {
+					const removed = removedModelIds(previousContent, content);
+					if (removed.length > 0) {
+						console.warn(
+							`[model-registry] models.json changed since the last load; ${removed.length} model entr${removed.length === 1 ? "y" : "ies"} no longer present: ${removed.join(", ")}. Older versions are kept in ${snapshotDir}.`,
+						);
+					}
+				}
+			}
+			snapshotSequence += 1;
+			const stamp = `${new Date().toISOString().replace(/[:.]/g, "-")}-${snapshotSequence}`;
+			writeFileSync(join(snapshotDir, `${stamp}.json`), content);
+			this.pruneSnapshots(snapshotDir);
+		} catch {
+			// Snapshot failures must never prevent model loading.
+		}
+	}
+
+	private latestSnapshotPath(snapshotDir: string): string | null {
+		if (!existsSync(snapshotDir)) return null;
+		const files = readdirSync(snapshotDir)
+			.filter((file) => file.endsWith(".json"))
+			.sort((a, b) => a.localeCompare(b));
+		return files.length > 0 ? join(snapshotDir, files.at(-1) ?? "") : null;
+	}
+
+	private pruneSnapshots(snapshotDir: string, keep = 10): void {
+		const files = readdirSync(snapshotDir)
+			.filter((file) => file.endsWith(".json"))
+			.sort((a, b) => a.localeCompare(b));
+		for (const stale of files.slice(0, Math.max(0, files.length - keep))) {
+			rmSync(join(snapshotDir, stale ?? ""), { force: true });
 		}
 	}
 

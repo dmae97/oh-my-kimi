@@ -45,6 +45,7 @@ validateHardcodedControlPanelVersions(root, packageVersion);
 // (severity "error", exit 1) so a release cannot re-tag an unmerged release or ship stale docs.
 const tagLineage = checkTagLineage(root, packageVersion, args.release, issues);
 const releaseSurface = checkReleaseSurface(root, packageVersion, args.release, issues);
+const worktreeFreshness = checkWorktreeFreshness(root, args.release, issues);
 
 if (failures.length > 0 || issues.some((issue) => issue.severity === "error")) {
 	for (const failure of failures) {
@@ -79,6 +80,7 @@ console.log(
 			codingAgentReadmeReleaseVersion: releaseSurface.codingAgentReadmeReleaseVersion,
 			releaseNotesLatestVersion: releaseSurface.releaseNotesLatestVersion,
 			drift: releaseSurface.drift,
+			worktrees: worktreeFreshness.worktrees,
 			issues,
 		},
 		null,
@@ -447,6 +449,67 @@ function findLatestReleaseNotesVersion(repoRoot) {
 
 // Runs git read-only (no network, no mutation). Any failure (not a git checkout, no such ref,
 // git missing, etc.) degrades to { ok: false } so callers can skip gracefully instead of crashing.
+// Detects stale git worktrees so verification agents and release operators cannot mistake an
+// abandoned checkout (e.g. a detached-HEAD snapshot under /tmp) for the current tree. The
+// 2026-08-22 v0.96.2 release re-check failed exactly this way: it judged the live constitution
+// from a pre-amendment snapshot. Informational in normal mode; --release mode fails when a
+// release-named worktree is detached or diverged.
+function checkWorktreeFreshness(repoRoot, releaseMode, issues) {
+	const severity = releaseMode ? "error" : "warning";
+	const listing = runGit(repoRoot, ["worktree", "list", "--porcelain"]);
+	if (!listing.ok) {
+		return { worktrees: [] };
+	}
+
+	const mainHead = runGit(repoRoot, ["rev-parse", "main"]);
+	const mainSha = mainHead.ok ? mainHead.stdout.trim() : null;
+
+	const entries = [];
+	let current = null;
+	for (const line of listing.stdout.split("\n")) {
+		if (line.startsWith("worktree ")) {
+			current = { path: line.slice("worktree ".length), branch: null, detached: false };
+			continue;
+		}
+		if (!current) continue;
+		if (line.startsWith("HEAD ")) {
+			current.head = line.slice("HEAD ".length).trim();
+		} else if (line === "detached") {
+			current.detached = true;
+		} else if (line.startsWith("branch ")) {
+			current.branch = line.slice("branch ".length).replace("refs/heads/", "");
+		} else if (line === "") {
+			entries.push(current);
+			current = null;
+		}
+	}
+	if (current) entries.push(current);
+
+	const report = [];
+	for (const [index, entry] of entries.entries()) {
+		if (index === 0) continue; // first entry is the primary checkout
+		const record = { path: entry.path, branch: entry.detached ? "(detached)" : entry.branch ?? "?" };
+		if (mainSha && entry.head) {
+			const ahead = runGit(repoRoot, ["rev-list", "--count", `main..${entry.head}`]);
+			const behind = runGit(repoRoot, ["rev-list", "--count", `${entry.head}..main`]);
+			record.aheadOfMain = ahead.ok ? Number(ahead.stdout.trim() || "0") : null;
+			record.behindMain = behind.ok ? Number(behind.stdout.trim() || "0") : null;
+		}
+		report.push(record);
+
+		const isStale = entry.detached || record.aheadOfMain > 0 || record.behindMain > 0;
+		const isReleaseNamed = /release/i.test(entry.path);
+		if (isReleaseNamed && isStale) {
+			issues.push({
+				id: "stale_release_worktree",
+				severity,
+				message: `Worktree ${entry.path} (${record.branch}) is detached or diverged from main. Do not verify releases against it; remove it with 'git worktree remove' or re-create it from current main.`,
+			});
+		}
+	}
+	return { worktrees: report };
+}
+
 function runGit(repoRoot, gitArgs) {
 	const result = spawnSync("git", gitArgs, { cwd: repoRoot, encoding: "utf8" });
 	if (result.error || result.status !== 0) {

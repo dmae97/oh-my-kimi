@@ -23,20 +23,34 @@
 import { execSync } from "child_process";
 import { readFileSync, writeFileSync, readdirSync, existsSync } from "fs";
 import { join } from "path";
+import { pathToFileURL } from "url";
 
-const RELEASE_TARGET = process.argv[2];
-const BUMP_TYPES = new Set(["minor", "patch"]);
-const RELEASE_BRANCH = "main";
-const SEMVER_RE = /^\d+\.\d+\.\d+$/;
+/**
+ * Constitution guards live here so tests (scripts/test/) can import them.
+ * Policy: there are no major releases; releases run only on RELEASE_BRANCH.
+ */
+export const BUMP_TYPES = new Set(["minor", "patch"]);
+export const RELEASE_BRANCH = "main";
 
-if (RELEASE_TARGET === "major") {
-	console.error("Error: major releases are not allowed (specs/constitution.md). Use minor or patch.");
-	process.exit(1);
+export function isMajorBump(target, current) {
+	return Number(target.split(".")[0]) !== Number(current.split(".")[0]);
 }
 
-if (!RELEASE_TARGET || (!BUMP_TYPES.has(RELEASE_TARGET) && !SEMVER_RE.test(RELEASE_TARGET))) {
-	console.error("Usage: node scripts/release.mjs <minor|patch|x.y.z>");
-	process.exit(1);
+const isMain = Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+const RELEASE_TARGET = process.argv[2];
+const SEMVER_RE = /^\d+\.\d+\.\d+$/;
+
+if (isMain) {
+	if (RELEASE_TARGET === "major") {
+		console.error("Error: major releases are not allowed (specs/constitution.md). Use minor or patch.");
+		process.exit(1);
+	}
+
+	if (!RELEASE_TARGET || (!BUMP_TYPES.has(RELEASE_TARGET) && !SEMVER_RE.test(RELEASE_TARGET))) {
+		console.error("Usage: node scripts/release.mjs <minor|patch|x.y.z>");
+		process.exit(1);
+	}
 }
 
 function run(cmd, options = {}) {
@@ -108,7 +122,7 @@ function bumpOrSetVersion(target) {
 		process.exit(1);
 	}
 
-	if (Number(target.split(".")[0]) !== Number(currentVersion.split(".")[0])) {
+	if (isMajorBump(target, currentVersion)) {
 		console.error(
 			`Error: ${target} is a major bump from ${currentVersion}; major releases are not allowed (specs/constitution.md).`,
 		);
@@ -168,7 +182,8 @@ function addUnreleasedSection() {
 	}
 }
 
-// Main flow
+// Main flow (only when invoked directly; importers get the exported guards)
+if (isMain) {
 console.log("\n=== Release Script ===\n");
 
 // 1. Check the release branch and for uncommitted changes
@@ -241,3 +256,4 @@ run(`git push origin v${version}`);
 console.log();
 
 console.log(`=== Prepared release v${version}; CI publishing starts after the tag push ===`);
+}
