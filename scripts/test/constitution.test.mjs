@@ -8,7 +8,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -125,5 +125,26 @@ describe("constitution: CI-only npm publishing", () => {
 			/`build-binaries\.yml`, `publish-npm` job, environment `npm-publish`, OIDC trusted publishing/,
 			"constitution must pin the publish path",
 		);
+	});
+});
+
+describe("repo hygiene: no backup files in source trees", () => {
+	it("packages/*/src contains no .bak or editor-swap leftovers", () => {
+		const offenders = [];
+		for (const entry of readdirSync(join(root, "packages"), { withFileTypes: true })) {
+			if (!entry.isDirectory()) continue;
+			const srcDir = join(root, "packages", entry.name, "src");
+			if (!existsSync(srcDir)) continue;
+			const stack = [srcDir];
+			while (stack.length > 0) {
+				const dir = stack.pop();
+				for (const item of readdirSync(dir, { withFileTypes: true })) {
+					const full = join(dir, item.name);
+					if (item.isDirectory()) stack.push(full);
+					else if (/\.(bak|bak-[\w-]+|orig|rej)$|~$/.test(item.name)) offenders.push(full.slice(root.length + 1));
+				}
+			}
+		}
+		assert.deepEqual(offenders, [], "remove backup files from source trees (git history keeps them)");
 	});
 });
