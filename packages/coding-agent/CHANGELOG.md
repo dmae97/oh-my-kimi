@@ -6,6 +6,10 @@
 
 - Added global-only `defaultActiveSkills` so operator-selected, user-scoped skill names can stay active in every prompt while full instructions remain on-demand.
 
+### Fixed
+
+- Empty streamed completions (`stop` with no text, thinking, or tool call) are now treated as dead streams and retried within the existing retry budget instead of being accepted as a successful turn.
+
 ## [0.96.2] - 2026-08-21
 
 ### Added

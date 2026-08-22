@@ -1,8 +1,9 @@
-import { fauxAssistantMessage } from "omk-ai";
+import { fauxAssistantMessage, fauxText, fauxThinking, fauxToolCall } from "omk-ai";
 import { describe, expect, it } from "vitest";
 import {
 	computeRetryDelayMs,
 	failoverModelKey,
+	isEmptyStreamedCompletion,
 	isFailoverTriggerError,
 	isRetryableAssistantError,
 	nextRetryAttempt,
@@ -15,7 +16,6 @@ function errorMessage(text: string | undefined) {
 
 describe("isRetryableAssistantError", () => {
 	it("rejects non-error stops and missing error text", () => {
-		expect(isRetryableAssistantError(fauxAssistantMessage([]), 0)).toBe(false);
 		expect(isRetryableAssistantError(errorMessage(undefined), 0)).toBe(false);
 	});
 
@@ -33,8 +33,35 @@ describe("isRetryableAssistantError", () => {
 		expect(isRetryableAssistantError(errorMessage("stop_reason=refusal"), 0)).toBe(true);
 	});
 
+	it("retries empty streamed completions — relay first-token timeout shape", () => {
+		// 2026-08-22 contract change: stop=stop with zero usable output is a dead
+		// stream (silent relay first-token kill on long thinking turns), not an answer.
+		expect(isRetryableAssistantError(fauxAssistantMessage([]), 0)).toBe(true);
+		expect(isRetryableAssistantError(fauxAssistantMessage("   "), 0)).toBe(true);
+		// real output blocks disqualify
+		expect(isRetryableAssistantError(fauxAssistantMessage([fauxThinking("reasoning happened")]), 0)).toBe(false);
+	});
+
 	it("rejects permanent errors", () => {
 		expect(isRetryableAssistantError(errorMessage("Permission denied: read-only filesystem"), 0)).toBe(false);
+	});
+});
+
+describe("isEmptyStreamedCompletion", () => {
+	it("detects stop-shaped completions with no usable output", () => {
+		expect(isEmptyStreamedCompletion(fauxAssistantMessage([]))).toBe(true);
+		expect(isEmptyStreamedCompletion(fauxAssistantMessage("   "))).toBe(true);
+		expect(isEmptyStreamedCompletion(fauxAssistantMessage([fauxText("")]))).toBe(true);
+	});
+
+	it("treats any real output block as a completed stream", () => {
+		expect(isEmptyStreamedCompletion(fauxAssistantMessage([fauxText("answer")]))).toBe(false);
+		expect(isEmptyStreamedCompletion(fauxAssistantMessage([fauxThinking("reasoning")]))).toBe(false);
+		expect(isEmptyStreamedCompletion(fauxAssistantMessage([fauxToolCall("read", { path: "a.ts" })]))).toBe(false);
+	});
+
+	it("ignores non-stop messages — the error path owns those", () => {
+		expect(isEmptyStreamedCompletion(errorMessage("overloaded"))).toBe(false);
 	});
 });
 

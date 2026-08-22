@@ -11,7 +11,29 @@ import {
  * Context overflow is never retryable here — compaction owns that path.
  * Quota exhaustion is retryable so the failover chain can save the turn.
  */
+/**
+ * Empty streamed completion — stop=stop but zero usable output (no text,
+ * thinking, or toolCall). Live signature of relay first-token timeouts
+ * killing long silent thinking turns.
+ * These are transport failures wearing a success shape.
+ */
+export function isEmptyStreamedCompletion(message: AssistantMessage): boolean {
+	if (message.stopReason !== "stop") return false;
+	const content: unknown = message.content;
+	if (!Array.isArray(content)) {
+		return typeof content === "string" ? content.trim().length === 0 : true;
+	}
+	return content.every((block) => {
+		const t = (block as { type?: string } | null)?.type;
+		if (t !== "text") return false; // thinking/toolCall/image = real output
+		return !String((block as { text?: string }).text ?? "").trim();
+	});
+}
+
 export function isRetryableAssistantError(message: AssistantMessage, contextWindow: number): boolean {
+	// An empty streamed completion is a dead stream, not an answer — retry it
+	// regardless of its success-shaped stopReason (bounded by maxRetries).
+	if (isEmptyStreamedCompletion(message)) return true;
 	if (message.stopReason !== "error" || !message.errorMessage) return false;
 	if (isContextOverflow(message, contextWindow)) return false;
 	if (isQuotaExhaustionMessage(message.errorMessage)) return true;
