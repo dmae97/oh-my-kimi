@@ -25,6 +25,7 @@ export const SESSION_TERMINATION_KIND_VALUES = [
 	"process_crash",
 	"configuration",
 	"internal_error",
+	"resource_pressure",
 ] as const;
 
 export type SessionTerminationKind = (typeof SESSION_TERMINATION_KIND_VALUES)[number];
@@ -53,6 +54,8 @@ export type ProviderTerminationCauseCode =
 	| "refusal"
 	| "context_overflow";
 export type ToolTerminationCauseCode = "timeout" | "fatal";
+/** §15.4 resource-aware runtime roadmap: host-pressure termination causes. */
+export type ResourceTerminationCauseCode = "memory" | "disk" | "cpu" | "heap" | "probe_unavailable" | "queue_overflow";
 export type CompactionTerminationCauseCode = "aborted" | "failed" | "stale";
 export type PersistenceTerminationCauseCode =
 	| "read_failed"
@@ -81,7 +84,8 @@ export type SessionTerminationCauseCode =
 	| "process.crash"
 	| `transcript.${TranscriptTerminationCauseCode}`
 	| "configuration.invalid"
-	| "internal.unclassified";
+	| "internal.unclassified"
+	| `resource.${ResourceTerminationCauseCode}`;
 
 export type SessionTerminationCause =
 	| { readonly area: "completed" }
@@ -94,7 +98,8 @@ export type SessionTerminationCause =
 	| { readonly area: "process"; readonly code: "crash" }
 	| { readonly area: "transcript"; readonly code: TranscriptTerminationCauseCode }
 	| { readonly area: "configuration"; readonly code: "invalid" }
-	| { readonly area: "internal"; readonly code: "unclassified" };
+	| { readonly area: "internal"; readonly code: "unclassified" }
+	| { readonly area: "resource"; readonly code: ResourceTerminationCauseCode };
 
 export interface ClassifySessionTerminationInput {
 	readonly sessionId: string;
@@ -188,6 +193,14 @@ const PROVIDER_CAUSE_CODES = new Set<ProviderTerminationCauseCode>([
 	"context_overflow",
 ]);
 const TOOL_CAUSE_CODES = new Set<ToolTerminationCauseCode>(["timeout", "fatal"]);
+const RESOURCE_CAUSE_CODES = new Set<ResourceTerminationCauseCode>([
+	"memory",
+	"disk",
+	"cpu",
+	"heap",
+	"probe_unavailable",
+	"queue_overflow",
+]);
 const COMPACTION_CAUSE_CODES = new Set<CompactionTerminationCauseCode>(["aborted", "failed", "stale"]);
 const PERSISTENCE_CAUSE_CODES = new Set<PersistenceTerminationCauseCode>([
 	"read_failed",
@@ -274,6 +287,12 @@ function assertCause(cause: unknown): asserts cause is SessionTerminationCause {
 			break;
 		case "internal":
 			valid = code === "unclassified" && hasOnlyKeys(cause, ["area", "code"]);
+			break;
+		case "resource":
+			valid =
+				typeof code === "string" &&
+				RESOURCE_CAUSE_CODES.has(code as ResourceTerminationCauseCode) &&
+				hasOnlyKeys(cause, ["area", "code"]);
 			break;
 	}
 	if (!valid) throw new TypeError("cause must be a bounded structured termination cause");
@@ -460,6 +479,15 @@ function classifyCause(cause: SessionTerminationCause, source: SessionTerminatio
 				causeCode: "internal.unclassified",
 				retryable: false,
 			};
+		case "resource":
+			// §15.4: every resource cause is retryable; queue overflow surfaces at
+			// the tool boundary, everything else at preflight admission.
+			return {
+				kind: "resource_pressure",
+				phase: cause.code === "queue_overflow" ? "tool" : "preflight",
+				causeCode: `resource.${cause.code}`,
+				retryable: true,
+			};
 	}
 }
 
@@ -472,7 +500,9 @@ function isSafeToAutoRetry(classification: Classification, input: ClassifySessio
 		input.sideEffects === "none" &&
 		(classification.kind === "provider_rate_limit" ||
 			classification.kind === "provider_network" ||
-			classification.kind === "provider_refusal")
+			classification.kind === "provider_refusal" ||
+			// §15.4 mapping: only cpu pressure is safe to auto-retry (with delay).
+			classification.causeCode === "resource.cpu")
 	);
 }
 
@@ -482,6 +512,8 @@ function nextActionFor(classification: Classification, input: ClassifySessionTer
 			return "No recovery action is required; continue with the next prompt.";
 		case "user_abort":
 			return "Review possible partial side effects, then retry only if intended.";
+		case "resource_pressure":
+			return "Host resources are constrained; reduce load or wait for recovery, then retry.";
 		case "provider_abort":
 			return "Confirm provider availability, then retry the request.";
 		case "provider_auth":

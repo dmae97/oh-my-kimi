@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.96.2] - 2026-08-21
+
+### Fixed
+
+- Clearing redraws repaint only the visible tail, preventing duplicate history from accumulating in scrollback during terminal resize cycles.
+
 ## [0.96.1] - 2026-08-20
 
 ### Notes

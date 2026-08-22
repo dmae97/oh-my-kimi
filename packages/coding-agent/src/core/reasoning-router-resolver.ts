@@ -15,7 +15,7 @@ export type ReasoningTaskClass = "trivial" | "simple-edit" | "code-gen" | "debug
 export type ReasoningLane = "planner" | "security" | "explorer" | "coder" | "reviewer" | "tester";
 
 /** Reasoning ladder used for targets and clamping. Intentionally excludes "off". */
-export const REASONING_LADDER: readonly ThinkingLevel[] = ["minimal", "low", "medium", "high", "xhigh", "max"];
+export const REASONING_LADDER: readonly ThinkingLevel[] = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
 
 /** Static rule table: task class -> recommended ThinkingLevel (before lane adjustment, bias, hint, escalation, and clamping). */
 export const TASK_CLASS_THINKING_LEVELS: Readonly<Record<ReasoningTaskClass, ThinkingLevel>> = {

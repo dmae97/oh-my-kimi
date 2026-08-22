@@ -22,6 +22,7 @@ const DEVICE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code";
 const DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
 const DEFAULT_VERIFICATION_URI = "https://chat.qwen.ai";
 const DEVICE_CODE_TIMEOUT_SECONDS = 15 * 60;
+const QWEN_RESOURCE_HOST_SUFFIXES = ["qwen.ai", "aliyuncs.com"] as const;
 
 type QwenDeviceAuthResponse = {
 	device_code?: string;
@@ -45,19 +46,60 @@ function formEncode(data: Record<string, string>): string {
 	return new URLSearchParams(data).toString();
 }
 
-/** Normalize `resource_url` into an absolute base URL ending in `/v1`. */
+/** Normalize an OAuth `resource_url`, rejecting origins that could receive the bearer token. */
 export function normalizeQwenBaseUrl(resourceUrl: string | undefined): string {
 	if (!resourceUrl || resourceUrl.trim().length === 0) {
 		return DEFAULT_BASE_URL;
 	}
-	const withProtocol = /^https?:\/\//i.test(resourceUrl) ? resourceUrl : `https://${resourceUrl}`;
-	const trimmed = withProtocol.replace(/\/+$/, "");
-	return trimmed.endsWith("/v1") ? trimmed : `${trimmed}/v1`;
+	try {
+		const raw = resourceUrl.trim();
+		const url = new URL(raw.includes("://") ? raw : `https://${raw}`);
+		const hostname = url.hostname.toLowerCase();
+		const approvedHost = QWEN_RESOURCE_HOST_SUFFIXES.some(
+			(suffix) => hostname === suffix || hostname.endsWith(`.${suffix}`),
+		);
+		if (
+			url.protocol !== "https:" ||
+			!approvedHost ||
+			url.username !== "" ||
+			url.password !== "" ||
+			(url.port !== "" && url.port !== "443") ||
+			url.search !== "" ||
+			url.hash !== ""
+		) {
+			throw new Error("unapproved origin");
+		}
+		const path = url.pathname.replace(/\/+$/, "");
+		url.pathname = path.endsWith("/v1") ? path : `${path}/v1`;
+		return url.toString();
+	} catch {
+		throw new Error("Qwen resource_url must use an approved HTTPS origin");
+	}
+}
+
+function normalizeVerificationUri(...candidates: Array<string | undefined>): string {
+	for (const candidate of candidates) {
+		if (!candidate) continue;
+		try {
+			const url = new URL(candidate);
+			if (
+				url.protocol === "https:" &&
+				url.hostname.toLowerCase() === "chat.qwen.ai" &&
+				url.username === "" &&
+				url.password === ""
+			) {
+				return url.toString();
+			}
+		} catch {
+			// Try the next fixed-origin candidate.
+		}
+	}
+	return DEFAULT_VERIFICATION_URI;
 }
 
 function credentialsFromToken(json: QwenTokenResponse, fallbackRefresh?: string): OAuthCredentials {
 	if (!json.access_token) {
-		throw new Error(`Qwen token response missing access_token: ${JSON.stringify(json)}`);
+		throw new Error("Qwen token response missing access_token");
 	}
 	const refresh = json.refresh_token ?? fallbackRefresh;
 	if (!refresh) {
@@ -70,6 +112,7 @@ function credentialsFromToken(json: QwenTokenResponse, fallbackRefresh?: string)
 		expires: Date.now() + expiresInSeconds * 1000 - 30_000,
 	};
 	if (typeof json.resource_url === "string" && json.resource_url.length > 0) {
+		normalizeQwenBaseUrl(json.resource_url);
 		credentials.resource_url = json.resource_url;
 	}
 	return credentials;
@@ -88,12 +131,11 @@ async function requestDeviceCode(challenge: string, signal?: AbortSignal): Promi
 		signal,
 	});
 	if (!response.ok) {
-		const text = await response.text().catch(() => "");
-		throw new Error(`Qwen device code request failed (${response.status}): ${text || response.statusText}`);
+		throw new Error(`Qwen device code request failed (${response.status})`);
 	}
 	const json = (await response.json()) as QwenDeviceAuthResponse;
 	if (!json?.device_code || !json.user_code) {
-		throw new Error(`Invalid Qwen device code response: ${JSON.stringify(json)}`);
+		throw new Error("Invalid Qwen device code response");
 	}
 	return json;
 }
@@ -124,10 +166,7 @@ async function pollForToken(
 			if (response.ok) {
 				const json = (await response.json()) as QwenTokenResponse;
 				if (!json.access_token) {
-					return {
-						status: "failed",
-						message: `Qwen token response missing access_token: ${JSON.stringify(json)}`,
-					};
+					return { status: "failed", message: "Qwen token response missing access_token" };
 				}
 				return { status: "complete", value: credentialsFromToken(json) };
 			}
@@ -145,10 +184,7 @@ async function pollForToken(
 			if (errorCode === "slow_down") {
 				return { status: "slow_down" };
 			}
-			return {
-				status: "failed",
-				message: `Qwen token poll failed (${response.status}): ${text || response.statusText}`,
-			};
+			return { status: "failed", message: `Qwen token poll failed (${response.status})` };
 		},
 	});
 }
@@ -162,7 +198,7 @@ export async function loginQwen(options: {
 	const device = await requestDeviceCode(challenge, options.signal);
 	options.onDeviceCode({
 		userCode: device.user_code ?? "",
-		verificationUri: device.verification_uri_complete || device.verification_uri || DEFAULT_VERIFICATION_URI,
+		verificationUri: normalizeVerificationUri(device.verification_uri_complete, device.verification_uri),
 		intervalSeconds: device.interval,
 		expiresInSeconds: device.expires_in ?? DEVICE_CODE_TIMEOUT_SECONDS,
 	});
@@ -177,8 +213,7 @@ export async function refreshQwenToken(refreshToken: string): Promise<OAuthCrede
 		body: formEncode({ grant_type: "refresh_token", client_id: CLIENT_ID, refresh_token: refreshToken }),
 	});
 	if (!response.ok) {
-		const text = await response.text().catch(() => "");
-		throw new Error(`Qwen token refresh failed (${response.status}): ${text || response.statusText}`);
+		throw new Error(`Qwen token refresh failed (${response.status})`);
 	}
 	const json = (await response.json()) as QwenTokenResponse;
 	return credentialsFromToken(json, refreshToken);

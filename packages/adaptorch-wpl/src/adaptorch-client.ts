@@ -14,7 +14,11 @@
  * no "benchmark" or "verification" tools exist in the shipped surface.
  */
 
-import type { TopologyClassification } from "./types.ts";
+import { isTopologyClassification, type TopologyClassification } from "./types.ts";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 /**
  * Abstract transport for invoking AdaptOrch MCP tools by name.
@@ -119,10 +123,9 @@ export interface AdaptOrchTraceSpan {
 /**
  * Result of `adaptorch_route_topology`.
  *
- * `classification` is the topology router's decision
- * (singleton/pipeline/DAG/ensemble, see doc section "Routing (pre-run
- * planning, local/no dispatch)"); `raw` retains the untyped transport
- * response for callers that need more than the classification.
+ * `classification` is the validated value from the current response's
+ * `topology` field; `raw` retains the transport response for callers that
+ * need the accompanying reason, stages, or features.
  */
 export interface AdaptOrchRouteTopologyResult {
 	classification: TopologyClassification;
@@ -193,20 +196,14 @@ export class AdaptOrchClient {
 		return (await this.transport.callTool("adaptorch_get_traces", { run_id: runId })) as AdaptOrchTraceSpan[];
 	}
 
-	/**
-	 * `adaptorch_route_topology` (read/local). Route a DAG locally through
-	 * AdaptOrch's topology router (singleton/pipeline/DAG/ensemble) without
-	 * submitting a run.
-	 */
+	/** Route a DAG locally and fail closed if the MCP response drifts from the current topology contract. */
 	async routeTopology(payloadShape: unknown): Promise<AdaptOrchRouteTopologyResult> {
 		const raw = await this.transport.callTool("adaptorch_route_topology", { payload_shape: payloadShape });
-		// The transport response is not schema-validated; classification is
-		// extracted best-effort since no official schema is documented.
-		const classification = (raw as { classification?: TopologyClassification } | undefined)?.classification;
-		return {
-			classification: classification as TopologyClassification,
-			raw,
-		};
+		const topology = isRecord(raw) ? raw.topology : undefined;
+		if (!isTopologyClassification(topology)) {
+			throw new Error("AdaptOrch route response has invalid topology");
+		}
+		return { classification: topology, raw };
 	}
 
 	/**

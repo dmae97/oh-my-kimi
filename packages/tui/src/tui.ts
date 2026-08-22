@@ -1225,8 +1225,16 @@ export class TUI extends Container {
 				// routine re-renders.
 				buffer += "\x1b[2J\x1b[H";
 			}
-			for (let i = 0; i < newLines.length; i++) {
-				if (i > 0) buffer += "\r\n";
+			// Clearing redraws (resize, viewport jumps) repaint only the visible
+			// tail: finalized history already lives in the terminal's scrollback,
+			// and re-printing all lines pushed a fresh copy of that history into
+			// scrollback on every resize cycle (TV-wall stacking). The viewport
+			// state below already models the tail-only frame
+			// (previousViewportTop = bufferLength - height). First renders on a
+			// clean screen (clear=false) still print everything.
+			const firstPrinted = clear ? Math.max(0, newLines.length - height) : 0;
+			for (let i = firstPrinted; i < newLines.length; i++) {
+				if (i > firstPrinted) buffer += "\r\n";
 				buffer += newLines[i];
 			}
 			buffer += "\x1b[?2026l"; // End synchronized output

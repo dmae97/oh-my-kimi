@@ -550,6 +550,16 @@ function assertTerminationCoherence(termination: SessionTermination): void {
 					throw new TypeError("termination causeCode is incoherent");
 			}
 			break;
+		case "resource":
+			if (!["memory", "disk", "cpu", "heap", "probe_unavailable", "queue_overflow"].includes(suffix)) {
+				throw new TypeError("termination causeCode is incoherent");
+			}
+			// §15.4: resource causes are always retryable; queue overflow is the
+			// only tool-phase cause, the rest stop at preflight admission.
+			expectedKind = "resource_pressure";
+			expectedPhase = suffix === "queue_overflow" ? "tool" : "preflight";
+			expectedRetryable = true;
+			break;
 		case "tool":
 			if (suffix === "timeout") {
 				expectedKind = "tool_timeout";
@@ -668,7 +678,9 @@ function assertTerminationCoherence(termination: SessionTermination): void {
 		termination.sideEffects === "none" &&
 		(termination.kind === "provider_rate_limit" ||
 			termination.kind === "provider_network" ||
-			termination.kind === "provider_refusal");
+			termination.kind === "provider_refusal" ||
+			// §15.4 mapping: only cpu pressure is safe to auto-retry (with delay).
+			termination.causeCode === "resource.cpu");
 	if (termination.safeToAutoRetry !== expectedSafeToAutoRetry) {
 		throw new TypeError("termination safeToAutoRetry flag is incoherent");
 	}

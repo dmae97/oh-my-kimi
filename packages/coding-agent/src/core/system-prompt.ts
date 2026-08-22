@@ -283,16 +283,11 @@ function formatActiveSkillsForPrompt(
 	}
 	return [
 		`\n\n<active_skills source="${escapeXml(source)}">`,
-		"The user explicitly invoked these skills for this turn. Prefer them when relevant.",
-		...activeSkills.map((skill) =>
-			[
-				"  <skill>",
-				`    <name>${escapeXml(skill.name)}</name>`,
-				`    <description>${escapeXml(skill.description)}</description>`,
-				`    <location>${escapeXml(skill.filePath)}</location>`,
-				"  </skill>",
-			].join("\n"),
-		),
+		"These skills are active for this turn. Settings-based entries are operator defaults, not additional authorization. Apply only when relevant and read full instructions before use.",
+		...activeSkills.flatMap((skill) => [
+			`  <name>${escapeXml(skill.name)}</name>`,
+			...(skill.disableModelInvocation ? [`  <location>${escapeXml(skill.filePath)}</location>`] : []),
+		]),
 		"</active_skills>",
 	].join("\n");
 }

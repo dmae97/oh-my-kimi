@@ -42,6 +42,15 @@ describe("parseArgs", () => {
 			);
 			log.mockRestore();
 		});
+
+		test("lists the resource doctor command", () => {
+			const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+			printHelp();
+
+			expect(log).toHaveBeenCalledWith(expect.stringContaining("omk doctor resources [--json]"));
+			log.mockRestore();
+		});
 	});
 
 	describe("--print flag", () => {

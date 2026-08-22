@@ -19,6 +19,7 @@ import { selectSession } from "./cli/session-picker.ts";
 import { handleCodexBarQuotaCommand } from "./codexbar-cli.ts";
 import { runDoctorProviderCli } from "./commands/doctor-provider-cli.ts";
 import { runPackageDoctorCli } from "./commands/package-doctor-cli.ts";
+import { runResourceDoctorCli } from "./commands/resource-doctor-cli.ts";
 import { runRouterFeedbackCli } from "./commands/router-feedback-cli.ts";
 import { runSdkSessionCli } from "./commands/sdk-session-cli.ts";
 import { runSessionDoctorCli } from "./commands/session-doctor-cli.ts";
@@ -613,6 +614,12 @@ export async function main(args: string[], options?: MainOptions) {
 	const doctorProvider = await runDoctorProviderCli(args);
 	if (doctorProvider.handled) {
 		process.exitCode = doctorProvider.exitCode;
+		return;
+	}
+
+	const resourceDoctor = await runResourceDoctorCli(args);
+	if (resourceDoctor.handled) {
+		process.exitCode = resourceDoctor.exitCode;
 		return;
 	}
 

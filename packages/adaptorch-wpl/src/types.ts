@@ -35,11 +35,23 @@ export type WorkPacketState =
  */
 export type CardinalityMode = "single_call" | "fanout_n";
 
-/**
- * Part 1 §3.1 — the four topology classes `adaptorch_route_topology` can return for a
- * packet's payload, decided once per packet before any `adaptorch_run` call.
- */
-export type TopologyClassification = "singleton" | "pipeline" | "dag" | "ensemble";
+/** Current `adaptorch_route_topology` values, synchronized with AdaptOrch's `Topology` enum. */
+export const TOPOLOGY_CLASSIFICATIONS = [
+	"parallel",
+	"sequential",
+	"hierarchical",
+	"hybrid",
+	"multi_model_ensemble",
+	"multi_turn_debate",
+] as const;
+
+export type TopologyClassification = (typeof TOPOLOGY_CLASSIFICATIONS)[number];
+
+const TOPOLOGY_CLASSIFICATION_SET: ReadonlySet<string> = new Set(TOPOLOGY_CLASSIFICATIONS);
+
+export function isTopologyClassification(value: unknown): value is TopologyClassification {
+	return typeof value === "string" && TOPOLOGY_CLASSIFICATION_SET.has(value);
+}
 
 /**
  * Part 1 §3.3 / §7 — one concrete submission attempt for a Work Packet. A Dispatch Record

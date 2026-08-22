@@ -233,6 +233,7 @@ ${chalk.bold("Commands:")}
   ${APP_NAME} provider doctor <id>      Diagnose a provider as sanitized JSON (--probe-model adds an
                                  opt-in Level-2 generative probe that may incur provider costs)
   ${APP_NAME} session doctor            Inspect or safely repair one session (--session, --repair, --dry-run)
+  ${APP_NAME} doctor resources [--json] Inspect host resource pressure and admission policy
   ${APP_NAME} router-feedback compile-bias  Compile this repository's bounded router bias snapshot
   ${APP_NAME} <command> --help          Show help for install/remove/uninstall/update/list
 

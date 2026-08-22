@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.96.2] - 2026-08-21
+
+### Security
+
+- Qwen OAuth now rejects non-HTTPS or unapproved `resource_url` origins before storing credentials or creating models, constrains device verification links to `chat.qwen.ai`, and never includes token response bodies in errors.
+
 ## [0.96.1] - 2026-08-20
 
 ### Added

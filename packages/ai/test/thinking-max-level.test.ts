@@ -8,7 +8,7 @@ const GLM5_EFFORT_MODEL_IDS = [
 	["fireworks", "accounts/fireworks/models/glm-5p2"],
 	["fireworks", "accounts/fireworks/routers/glm-5p2-fast"],
 	["huggingface", "zai-org/GLM-5.2"],
-	["nvidia", "z-ai/glm-5.2"],
+	// ["nvidia", "z-ai/glm-5.2"] removed: NVIDIA NIM delisted GLM models (verified 2026-08-21, /v1/models has no glm entries)
 	["opencode", "glm-5.2"],
 	["opencode-go", "glm-5.2"],
 	["openrouter", "z-ai/glm-5.2"],
@@ -65,7 +65,8 @@ describe("max thinking level", () => {
 	it.each([
 		["xai", "grok-4.6"],
 		["openrouter", "x-ai/grok-4.6"],
-		["vercel-ai-gateway", "xai/grok-4.6"],
+		// vercel-ai-gateway renamed the xai/ vendor prefix to spacexai/ (upstream catalog drift, 2026-08)
+		["vercel-ai-gateway", "spacexai/grok-4.6"],
 		["github-copilot", "grok-4.6"],
 		["opencode", "grok-4.6"],
 	] as const)("exposes the xhigh thinking level for grok-4.6 on %s (%s)", (provider, id) => {

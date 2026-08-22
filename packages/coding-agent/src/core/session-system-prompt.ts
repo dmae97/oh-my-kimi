@@ -12,6 +12,8 @@ export interface SessionSystemPromptInput {
 	readonly appendSystemPrompt?: readonly string[];
 	readonly providerAppend?: string;
 	readonly skills: readonly Skill[];
+	readonly activeSkillNames?: readonly string[];
+	readonly activeSkillSource?: string;
 	readonly contextFiles: readonly ContextFile[];
 	readonly contextBudget?: BuildSystemPromptOptions["contextBudget"];
 }
@@ -45,6 +47,8 @@ export function assembleSessionSystemPrompt(input: SessionSystemPromptInput): Se
 	const options: BuildSystemPromptOptions = {
 		cwd: input.cwd,
 		skills: [...input.skills],
+		activeSkillNames: input.activeSkillNames ? [...input.activeSkillNames] : undefined,
+		activeSkillSource: input.activeSkillSource,
 		contextFiles: [...input.contextFiles],
 		customPrompt: input.customPrompt,
 		appendSystemPrompt,

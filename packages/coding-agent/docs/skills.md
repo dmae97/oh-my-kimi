@@ -77,6 +77,22 @@ For project-level Claude Code skills, add to `.omk/settings.json`:
 
 This is progressive disclosure: only descriptions are always in context, full instructions load on-demand.
 
+### Default active skills
+
+Set `defaultActiveSkills` in global settings to mark selected discovered skills active in every prompt without repeating `!skill:` invocations:
+
+```json
+{
+  "defaultActiveSkills": ["programming", "review-work", "security-review"]
+}
+```
+
+The global-only setting accepts up to 64 exact skill names, not paths or patterns. Only user-scoped discovered skills can satisfy it; a project skill with the same name is not promoted. Project settings cannot replace or clear the list.
+
+OMK adds a compact active-skills marker containing names and, for explicit-only skills hidden from the normal inventory, the location needed to read them. It does not concatenate every `SKILL.md`; descriptions remain in the normal inventory and full instructions stay on-demand. With context budgeting enabled, active inventory entries receive hard priority. `!skill:` and SDK `activeSkillNames` selections merge for that turn; `/skill:` continues to expand the selected skill directly. Unknown or unavailable names have no prompt effect.
+
+This file is an explicit operator choice, so it may activate a skill whose frontmatter otherwise requires direct invocation. Active skills do not expand authorization and apply only when relevant. Keep the list focused because overlapping language or workflow instructions can conflict.
+
 ## Skill Commands
 
 Skills register as `/skill:name` commands and interactive `!` launcher entries:

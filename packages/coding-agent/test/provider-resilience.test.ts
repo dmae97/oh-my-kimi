@@ -44,6 +44,9 @@ describe("provider-resilience (root-level)", () => {
 		expect(isTransientProviderErrorMessage("terminated")).toBe(true);
 		expect(isTransientProviderErrorMessage("tool_call_id is not found")).toBe(true);
 		expect(isTransientProviderErrorMessage("content/safety stop (stop_reason=refusal)")).toBe(true);
+		// relay-injected synthetic stream errors must retry/failover, not surface
+		expect(isTransientProviderErrorMessage("JSON error injected into SSE stream")).toBe(true);
+		expect(isTransientProviderErrorMessage("payload injected into SSE stream")).toBe(true);
 		expect(isTransientProviderErrorMessage("Authentication failed")).toBe(false);
 	});
 

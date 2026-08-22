@@ -114,10 +114,10 @@ describe("isTerminalState", () => {
 describe("requiresHumanApproval", () => {
 	it("is false when payload and topology are unchanged", () => {
 		const packet = makePacket({
-			topology_decision: { classification: "singleton", decided_at: "t", raw_route_response: null },
+			topology_decision: { classification: "sequential", decided_at: "t", raw_route_response: null },
 		});
 		const loopConfig = makeLoopConfig();
-		expect(requiresHumanApproval(packet, { foo: "bar" }, "singleton", loopConfig)).toBe(false);
+		expect(requiresHumanApproval(packet, { foo: "bar" }, "sequential", loopConfig)).toBe(false);
 	});
 
 	it("is true when the payload differs from the last human-approved baseline", () => {
@@ -128,15 +128,15 @@ describe("requiresHumanApproval", () => {
 
 	it("is true when the topology classification changes", () => {
 		const packet = makePacket({
-			topology_decision: { classification: "singleton", decided_at: "t", raw_route_response: null },
+			topology_decision: { classification: "sequential", decided_at: "t", raw_route_response: null },
 		});
 		const loopConfig = makeLoopConfig();
-		expect(requiresHumanApproval(packet, { foo: "bar" }, "ensemble", loopConfig)).toBe(true);
+		expect(requiresHumanApproval(packet, { foo: "bar" }, "multi_model_ensemble", loopConfig)).toBe(true);
 	});
 
 	it("is always false in pre-approved-batch mode, even with a changed payload", () => {
 		const packet = makePacket();
 		const loopConfig = makeLoopConfig({ pre_approved_batch: true });
-		expect(requiresHumanApproval(packet, { foo: "different" }, "ensemble", loopConfig)).toBe(false);
+		expect(requiresHumanApproval(packet, { foo: "different" }, "multi_model_ensemble", loopConfig)).toBe(false);
 	});
 });

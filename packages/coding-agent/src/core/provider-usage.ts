@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import type { ProviderRateLimitSnapshot, ProviderRateLimitWindow } from "omk-ai";
 import type { AgentSession } from "./agent-session.ts";
@@ -17,6 +18,35 @@ const MAX_PASSIVE_ACCOUNTS = 64;
 const PASSIVE_USAGE_TTL_MS = 6 * 60 * 60 * 1000;
 const CLAUDE_QUOTA_PROBE_COOLDOWN_MS = 60 * 60 * 1000;
 const CLAUDE_QUOTA_PROBE_TIMEOUT_MS = 10_000;
+const QWEN_CLI_TIMEOUT_MS = 15_000;
+const QWEN_CLI_ARGS = ["usage", "summary", "--format", "json"] as const;
+const QWEN_CONNECT_HINT = "connect: npm i -g @qwencloud/qwencloud-cli && qwencloud auth login";
+const QWEN_CLI_ENV_KEYS = [
+	"PATH",
+	"Path",
+	"HOME",
+	"USERPROFILE",
+	"HOMEDRIVE",
+	"HOMEPATH",
+	"APPDATA",
+	"LOCALAPPDATA",
+	"XDG_CONFIG_HOME",
+	"XDG_DATA_HOME",
+	"XDG_CACHE_HOME",
+	"TMPDIR",
+	"TEMP",
+	"TMP",
+	"SystemRoot",
+	"WINDIR",
+	"ComSpec",
+	"PATHEXT",
+	"LANG",
+	"LC_ALL",
+	"LC_CTYPE",
+	"TERM",
+	"SSL_CERT_FILE",
+	"SSL_CERT_DIR",
+] as const;
 
 export type SubscriptionUsageWindow = {
 	readonly label: string;
@@ -39,7 +69,7 @@ export type CodexUsageSnapshot = {
 type ParsedCodexWindow = CodexUsageWindow & { readonly windowSeconds?: number };
 type ObservedCodexWindow = { readonly window: ParsedCodexWindow; readonly observedAt: number };
 type PassiveUsageEntry = { readonly primary?: ObservedCodexWindow; readonly secondary?: ObservedCodexWindow };
-type UsageKind = "codex" | "claude" | "kimi" | "zai" | "grok" | "unavailable";
+type UsageKind = "codex" | "claude" | "kimi" | "zai" | "grok" | "qwen-token-plan" | "unavailable";
 type CredentialCandidate = { readonly provider: string; readonly oauthOnly: boolean };
 
 export type SubscriptionUsageSource = {
@@ -73,12 +103,14 @@ const SOURCES: Readonly<Record<string, SubscriptionUsageSource>> = {
 	"openai-codex": source("CODEX", "codex", [{ provider: "openai-codex", oauthOnly: true }]),
 	anthropic: source("CLAUDE", "claude", [{ provider: "anthropic", oauthOnly: true }], 5 * MINUTE_TTL_MS),
 	"qwen-oauth": source("QWEN", "unavailable", [{ provider: "qwen-oauth", oauthOnly: true }]),
+	// Model Studio exposes no API-key quota endpoint (console gateway is
+	// session-only), so the token-plan quota rides the official QwenCloud
+	// management CLI, which holds its own OAuth credential.
 	"modelstudio-maas": source(
 		"QWEN TOKEN PLAN",
-		"unavailable",
+		"qwen-token-plan",
 		[{ provider: "modelstudio-maas", oauthOnly: false }],
-		MINUTE_TTL_MS,
-		"console-only quota",
+		5 * MINUTE_TTL_MS,
 	),
 	"kimi-code": source("KIMI", "kimi", [
 		{ provider: "kimi-code", oauthOnly: true },
@@ -162,6 +194,7 @@ export async function loadSubscriptionUsage(
 	session: UsageSession,
 	fetchImpl: FetchLike = fetch,
 	provider = session.state.model?.provider,
+	qwenCliRunner: QwenCliRunner = runQwenCli,
 ): Promise<SubscriptionUsageSnapshot | undefined> {
 	const model = session.state.model;
 	const usageSource = getSubscriptionUsageSource(provider);
@@ -174,6 +207,10 @@ export async function loadSubscriptionUsage(
 		};
 	}
 	if (offline()) return { label: usageSource.label, windows: [], message: "offline" };
+	if (usageSource.kind === "qwen-token-plan") {
+		// The QwenCloud CLI authenticates itself; no OMK-held credential is used.
+		return await fetchQwenTokenPlanUsage(usageSource.label, qwenCliRunner);
+	}
 
 	const credential = await resolveCredential(session, usageSource);
 	if (!credential) return { label: usageSource.label, windows: [], message: "usage unavailable" };
@@ -259,6 +296,88 @@ export function parseKimiUsageSnapshot(
 		}
 	}
 	return windows.length > 0 ? windows.slice(0, 4) : undefined;
+}
+
+/** Result of one `qwencloud` invocation; `missing` means the CLI is not installed. */
+export type QwenCliResult =
+	| { readonly kind: "missing" }
+	| { readonly kind: "ran"; readonly exitCode: number; readonly stdout: string };
+export type QwenCliRunner = (args: readonly string[], timeoutMs: number) => Promise<QwenCliResult>;
+
+export function buildQwenCliEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+	const childEnvironment: NodeJS.ProcessEnv = {};
+	for (const key of QWEN_CLI_ENV_KEYS) {
+		const value = source[key];
+		if (value !== undefined) childEnvironment[key] = value;
+	}
+	return childEnvironment;
+}
+
+/** Parse `qwencloud usage summary --format json` → the token-plan 7-day window. */
+export function parseQwenTokenPlanUsage(value: unknown): readonly SubscriptionUsageWindow[] | undefined {
+	const tokenPlan = record(record(value)?.token_plan);
+	if (!tokenPlan || tokenPlan.subscribed === false) return undefined;
+	const resetsAt = epochSeconds(tokenPlan.resetDate);
+	let usedPercent = finiteNumber(tokenPlan.usedPct) ?? finiteNumber(tokenPlan.used_pct);
+	if (usedPercent === undefined) {
+		const total = finiteNumber(tokenPlan.totalCredits);
+		const remaining = finiteNumber(tokenPlan.remainingCredits);
+		if (total !== undefined && remaining !== undefined && total > 0) {
+			usedPercent = ((total - remaining) / total) * 100;
+		}
+	}
+	if (usedPercent === undefined) return undefined;
+	return [{ label: "7D", usedPercent: clampPercent(usedPercent), ...(resetsAt === undefined ? {} : { resetsAt }) }];
+}
+
+export async function fetchQwenTokenPlanUsage(
+	label: string,
+	runner: QwenCliRunner = runQwenCli,
+): Promise<SubscriptionUsageSnapshot> {
+	const unavailable = (message: string): SubscriptionUsageSnapshot => ({ label, windows: [], message });
+	try {
+		const result = await runner(QWEN_CLI_ARGS, QWEN_CLI_TIMEOUT_MS);
+		if (result.kind === "missing") return unavailable(QWEN_CONNECT_HINT);
+		if (result.exitCode === 2) return unavailable("run: qwencloud auth login");
+		if (result.exitCode !== 0 || result.stdout.length > MAX_USAGE_RESPONSE_BYTES) {
+			return unavailable("usage unavailable");
+		}
+		const payload: unknown = JSON.parse(result.stdout);
+		const tokenPlan = record(record(payload)?.token_plan);
+		if (tokenPlan?.subscribed === false) return unavailable("no active token plan");
+		const windows = parseQwenTokenPlanUsage(payload);
+		return windows ? { label, windows } : unavailable("usage unavailable");
+	} catch {
+		return unavailable("usage unavailable");
+	}
+}
+
+function runQwenCli(args: readonly string[], timeoutMs: number): Promise<QwenCliResult> {
+	return new Promise((resolve) => {
+		const binary = process.env.QWENCLOUD_CLI ?? "qwencloud";
+		execFile(
+			binary,
+			[...args],
+			{
+				timeout: timeoutMs,
+				maxBuffer: MAX_USAGE_RESPONSE_BYTES,
+				windowsHide: true,
+				env: buildQwenCliEnvironment(process.env),
+			},
+			(error, stdout) => {
+				if (!error) {
+					resolve({ kind: "ran", exitCode: 0, stdout });
+					return;
+				}
+				const errno = (error as NodeJS.ErrnoException).code;
+				if (errno === "ENOENT") {
+					resolve({ kind: "missing" });
+					return;
+				}
+				resolve({ kind: "ran", exitCode: typeof errno === "number" ? errno : 1, stdout: stdout ?? "" });
+			},
+		);
+	});
 }
 
 export function parseGrokUsageSnapshot(value: unknown): readonly SubscriptionUsageWindow[] | undefined {

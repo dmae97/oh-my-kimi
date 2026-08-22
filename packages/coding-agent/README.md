@@ -45,7 +45,7 @@ OMK stores user configuration under `~/.omk/agent/` and project configuration un
 Install `omk-book-to-skill` to compile documents into reusable skills without adding Python extractors to OMK core:
 
 ```bash
-omk install npm:omk-book-to-skill@0.96.1
+omk install npm:omk-book-to-skill@0.96.2
 ```
 
 It provides compile, update, and verification commands plus a local SHA-256 provenance manifest. See [Book to Skill](https://github.com/dmae97/omk/blob/main/packages/coding-agent/docs/book-to-skill.md).
@@ -179,6 +179,16 @@ The TypeScript SDK exposes session creation, provider configuration, tools, even
 - [Skills](https://github.com/dmae97/omk/blob/main/packages/coding-agent/docs/skills.md)
 - [Themes](https://github.com/dmae97/omk/blob/main/packages/coding-agent/docs/themes.md)
 
+## OMK + AdaptOrch
+
+OMK is a local, MIT-licensed coding agent. AdaptOrch is an optional hosted
+evidence service for reviewing AI-generated patches.
+
+**[Review AdaptOrch plans →](https://adaptorch.com/?utm_source=npm&utm_medium=readme&utm_campaign=omk#pricing)**
+
+AdaptOrch is a separate proprietary service. It is not bundled with OMK and
+requires its own account.
+
 ## Security and Privacy
 
 - Tool access is explicit and can be scoped by path or runtime policy.
@@ -203,7 +213,7 @@ npm test
 
 See [Development](https://github.com/dmae97/omk/blob/main/packages/coding-agent/docs/development.md) and [CONTRIBUTING.md](https://github.com/dmae97/omk/blob/main/CONTRIBUTING.md).
 
-Release notes: [v0.96.1](https://github.com/dmae97/omk/blob/main/.github/RELEASE_NOTES_v0.96.1.md).
+Release notes: [v0.96.2](https://github.com/dmae97/omk/blob/main/.github/RELEASE_NOTES_v0.96.2.md).
 
 ## License
 

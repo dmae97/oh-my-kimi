@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+	buildQwenCliEnvironment,
+	fetchQwenTokenPlanUsage,
 	getConfiguredSubscriptionUsageProviders,
 	getSubscriptionUsageRevision,
 	getSubscriptionUsageSource,
@@ -8,7 +10,9 @@ import {
 	parseCodexUsageSnapshot,
 	parseGrokUsageSnapshot,
 	parseKimiUsageSnapshot,
+	parseQwenTokenPlanUsage,
 	parseZaiUsageSnapshot,
+	type QwenCliRunner,
 	recordClaudePassiveUsage,
 	recordCodexPassiveUsage,
 	supportsSubscriptionUsage,
@@ -334,18 +338,109 @@ describe("subscription usage providers", () => {
 		expect(requests.filter((url) => url.endsWith("/v1/messages"))).toHaveLength(1);
 	});
 
-	it("recognizes the Qwen Token Plan without sending its key to the console-only usage API", async () => {
+	it("loads the Qwen Token Plan 7-day window from the QwenCloud CLI without touching the API key", async () => {
 		const fetchMock = vi.fn();
+		const calls: Array<readonly string[]> = [];
+		const runner: QwenCliRunner = async (args) => {
+			calls.push(args);
+			return {
+				kind: "ran",
+				exitCode: 0,
+				stdout: JSON.stringify({
+					token_plan: {
+						subscribed: true,
+						planName: "Token Plan",
+						status: "valid",
+						totalCredits: 25000,
+						remainingCredits: 7730,
+						usedPct: 69.08,
+						resetDate: "2026-08-24T06:45:00.000Z",
+					},
+				}),
+			};
+		};
 		const result = await loadSubscriptionUsage(
 			session("modelstudio-maas", {
 				configuredProviders: ["modelstudio-maas"],
 				apiKeys: { "modelstudio-maas": "test-token-plan-key" },
 			}) as never,
 			fetchMock,
+			undefined,
+			runner,
 		);
 
 		expect(fetchMock).not.toHaveBeenCalled();
-		expect(result).toEqual({ label: "QWEN TOKEN PLAN", windows: [], message: "console-only quota" });
+		expect(calls).toEqual([["usage", "summary", "--format", "json"]]);
+		expect(result).toEqual({
+			label: "QWEN TOKEN PLAN",
+			windows: [{ label: "7D", usedPercent: 69.08, resetsAt: Date.parse("2026-08-24T06:45:00.000Z") / 1000 }],
+		});
+	});
+
+	it("maps Qwen CLI failure modes to actionable messages", async () => {
+		const load = (result: Awaited<ReturnType<QwenCliRunner>>) =>
+			loadSubscriptionUsage(
+				session("modelstudio-maas", { configuredProviders: ["modelstudio-maas"] }) as never,
+				vi.fn(),
+				undefined,
+				async () => result,
+			);
+		await expect(load({ kind: "missing" })).resolves.toMatchObject({
+			message: "connect: npm i -g @qwencloud/qwencloud-cli && qwencloud auth login",
+		});
+		await expect(load({ kind: "ran", exitCode: 2, stdout: "" })).resolves.toMatchObject({
+			message: "run: qwencloud auth login",
+		});
+		await expect(
+			load({ kind: "ran", exitCode: 0, stdout: JSON.stringify({ token_plan: { subscribed: false } }) }),
+		).resolves.toMatchObject({ message: "no active token plan" });
+		await expect(load({ kind: "ran", exitCode: 0, stdout: "not-json{" })).resolves.toMatchObject({
+			message: "usage unavailable",
+		});
+		await expect(load({ kind: "ran", exitCode: 1, stdout: "" })).resolves.toMatchObject({
+			message: "usage unavailable",
+		});
+	});
+
+	it("passes only non-secret process context to the QwenCloud CLI", () => {
+		const childEnv = buildQwenCliEnvironment({
+			PATH: "/usr/bin",
+			HOME: "/home/operator",
+			LANG: "en_US.UTF-8",
+			OPENAI_API_KEY: "openai-secret",
+			QWEN_API_KEY: "qwen-secret",
+			HTTPS_PROXY: "https://user:password@proxy.example",
+			QWENCLOUD_CLI: "/custom/qwencloud",
+		});
+
+		expect(childEnv).toMatchObject({ PATH: "/usr/bin", HOME: "/home/operator", LANG: "en_US.UTF-8" });
+		expect(childEnv).not.toHaveProperty("OPENAI_API_KEY");
+		expect(childEnv).not.toHaveProperty("QWEN_API_KEY");
+		expect(childEnv).not.toHaveProperty("HTTPS_PROXY");
+		expect(childEnv).not.toHaveProperty("QWENCLOUD_CLI");
+	});
+
+	it("parses token-plan snapshots with percent, credit fallback, and clamping", () => {
+		expect(
+			parseQwenTokenPlanUsage({ token_plan: { usedPct: 69.08, resetDate: "2026-08-24T06:45:00.000Z" } }),
+		).toEqual([{ label: "7D", usedPercent: 69.08, resetsAt: Date.parse("2026-08-24T06:45:00.000Z") / 1000 }]);
+		expect(parseQwenTokenPlanUsage({ token_plan: { totalCredits: 1000, remainingCredits: 250 } })).toEqual([
+			{ label: "7D", usedPercent: 75 },
+		]);
+		expect(parseQwenTokenPlanUsage({ token_plan: { usedPct: 250 } })).toEqual([{ label: "7D", usedPercent: 100 }]);
+		expect(parseQwenTokenPlanUsage({ token_plan: { subscribed: false, usedPct: 10 } })).toBeUndefined();
+		expect(parseQwenTokenPlanUsage({ token_plan: {} })).toBeUndefined();
+		expect(parseQwenTokenPlanUsage({})).toBeUndefined();
+		expect(parseQwenTokenPlanUsage(undefined)).toBeUndefined();
+	});
+
+	it("reports the connect hint when the QwenCloud CLI is not installed", async () => {
+		const snapshot = await fetchQwenTokenPlanUsage("QWEN TOKEN PLAN", async () => ({ kind: "missing" }));
+		expect(snapshot).toEqual({
+			label: "QWEN TOKEN PLAN",
+			windows: [],
+			message: "connect: npm i -g @qwencloud/qwencloud-cli && qwencloud auth login",
+		});
 	});
 
 	it("fetches Claude quota with the stored OAuth token without returning it", async () => {

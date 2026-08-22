@@ -4,7 +4,31 @@ import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
+import type { NotificationSettings } from "./completion-sound.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
+import type { ResourceGovernorSettings } from "./resource-governor-settings.ts";
+
+const MAX_DEFAULT_ACTIVE_SKILLS = 64;
+const SKILL_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
+
+function parseDefaultActiveSkills(value: unknown): string[] {
+	if (value === undefined) return [];
+	if (!Array.isArray(value) || value.length > MAX_DEFAULT_ACTIVE_SKILLS) {
+		throw new Error(`defaultActiveSkills must be an array of at most ${MAX_DEFAULT_ACTIVE_SKILLS} skill names`);
+	}
+	const names: string[] = [];
+	const seen = new Set<string>();
+	for (const item of value) {
+		if (typeof item !== "string" || item.length > 64 || !SKILL_NAME_PATTERN.test(item)) {
+			throw new Error("defaultActiveSkills entries must be valid skill names");
+		}
+		if (!seen.has(item)) {
+			seen.add(item);
+			names.push(item);
+		}
+	}
+	return names;
+}
 
 export interface CompactionSettings {
 	enabled?: boolean; // default: true
@@ -146,6 +170,10 @@ export interface Settings {
 	compaction?: CompactionSettings;
 	contextBudget?: ContextBudgetSettings;
 	agent?: AgentRuntimeSettings;
+	/** Resource-aware runtime governor: observe records, adaptive/strict throttle per-run tool concurrency (docs/settings.md). */
+	resourceGovernor?: ResourceGovernorSettings;
+	/** Completion notifications; `notifications.completionSound` is default-off (docs/settings.md). */
+	notifications?: NotificationSettings;
 	branchSummary?: BranchSummarySettings;
 	retry?: RetrySettings;
 	/** Root-level recovery: block sticky safety models, auto-failover on content/safety stop. */
@@ -161,6 +189,7 @@ export interface Settings {
 	packages?: PackageSource[]; // Array of npm/git package sources (string or object with filtering)
 	extensions?: string[]; // Array of local extension file paths or directories
 	skills?: string[]; // Array of local skill file paths or directories
+	defaultActiveSkills?: string[]; // Skill names marked active in every prompt (default: [])
 	prompts?: string[]; // Array of local prompt template paths or directories
 	themes?: string[]; // Array of local theme file paths or directories
 	enableSkillCommands?: boolean; // default: true - register skills as /skill:name commands
@@ -760,6 +789,14 @@ export class SettingsManager {
 		return structuredClone(this.settings.agent ?? {});
 	}
 
+	getResourceGovernorSettings(): ResourceGovernorSettings {
+		return structuredClone(this.settings.resourceGovernor ?? {});
+	}
+
+	getNotificationSettings(): NotificationSettings {
+		return structuredClone(this.settings.notifications ?? {});
+	}
+
 	setContextBudgetEnabled(enabled: boolean): void {
 		if (!this.globalSettings.contextBudget) {
 			this.globalSettings.contextBudget = {};
@@ -1030,6 +1067,17 @@ export class SettingsManager {
 	setSkillPaths(paths: string[]): void {
 		this.globalSettings.skills = paths;
 		this.markModified("skills");
+		this.save();
+	}
+
+	/** Global-only operator defaults; project settings cannot activate or shadow this profile. */
+	getDefaultActiveSkills(): string[] {
+		return parseDefaultActiveSkills(this.globalSettings.defaultActiveSkills);
+	}
+
+	setDefaultActiveSkills(names: string[]): void {
+		this.globalSettings.defaultActiveSkills = parseDefaultActiveSkills(names);
+		this.markModified("defaultActiveSkills");
 		this.save();
 	}
 

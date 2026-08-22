@@ -168,7 +168,7 @@ describe("buildSystemPrompt context budget", () => {
 		expect(render([])).not.toContain("<name>omk-loop</name>");
 		const pinned = render(["omk-loop"]);
 		expect(pinned).toContain("<name>omk-loop</name>");
-		expect(pinned).toContain("<activation>operator-default</activation>");
+		expect(pinned).toContain("<activation>active</activation>");
 	});
 
 	it("escapes budgeted full context before prompt assembly", () => {

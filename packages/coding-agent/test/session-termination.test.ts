@@ -57,6 +57,8 @@ describe("classifySessionTermination", () => {
 		{ cause: { area: "transcript", code: "duplicate_result" }, kind: "transcript_invalid" },
 		{ cause: { area: "configuration", code: "invalid" }, kind: "configuration" },
 		{ cause: { area: "internal", code: "unclassified" }, kind: "internal_error" },
+		{ cause: { area: "resource", code: "memory" }, kind: "resource_pressure" },
+		{ cause: { area: "resource", code: "queue_overflow" }, kind: "resource_pressure" },
 	];
 
 	it.each(cases)("classifies $kind with stable metadata", ({ cause, kind, source }) => {
@@ -66,6 +68,21 @@ describe("classifySessionTermination", () => {
 		expect(termination.timestamp).toBe(NOW);
 		expect(termination.causeCode).toMatch(/^[a-z_]+\.[a-z_]+$/);
 		expect(Object.isFrozen(termination)).toBe(true);
+	});
+
+	it("maps §15.4 resource causes: retryable, preflight/tool phase, cpu-only auto-retry", () => {
+		for (const code of ["memory", "disk", "cpu", "heap", "probe_unavailable", "queue_overflow"] as const) {
+			const termination = classify({ area: "resource", code });
+			expect(termination.kind).toBe("resource_pressure");
+			expect(termination.causeCode).toBe(`resource.${code}`);
+			expect(termination.retryable).toBe(true);
+			expect(termination.phase).toBe(code === "queue_overflow" ? "tool" : "preflight");
+			// §15.4 mapping table: only cpu is safe to auto-retry (with delay).
+			expect(termination.safeToAutoRetry).toBe(code === "cpu");
+			expect(termination.nextAction).toMatch(/resource|load|recovery/i);
+		}
+		// Auto-retry safety still requires clean side effects.
+		expect(classify({ area: "resource", code: "cpu" }, { sideEffects: "possible" }).safeToAutoRetry).toBe(false);
 	});
 
 	it("gives cancellation-specific compaction recovery advice", () => {

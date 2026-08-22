@@ -177,13 +177,17 @@ Native `xai` keeps subscription OAuth and `XAI_API_KEY` billing separate. See
 npm install omk-agent-core
 npm install omk-ai
 npm install omk-protocol
-omk install npm:omk-book-to-skill@0.96.1
+omk install npm:omk-book-to-skill@0.96.2
 npm install omk-tui
 ```
 
-[AdaptOrch MCP](https://adaptorch.ai.kr) is a separate proprietary service; it
-is not part of this repository or the `omk-adaptorch-wpl` package. Invoking it
-requires its own control-plane token.
+## OMK + AdaptOrch
+
+OMK is the local, MIT-licensed control plane. AdaptOrch is a separate,
+proprietary hosted patch-evidence service. It requires its own account and is
+not part of this repository or the `omk-adaptorch-wpl` package.
+
+**[Review AdaptOrch plans →](https://adaptorch.com/?utm_source=github&utm_medium=readme&utm_campaign=omk#pricing)**
 
 ## Documentation
 
@@ -197,7 +201,7 @@ requires its own control-plane token.
 - [Containerization](packages/coding-agent/docs/containerization.md)
 - [Public skill catalog](SKILLS.md)
 - [Changelog](packages/coding-agent/CHANGELOG.md)
-- [Release notes for v0.96.1](.github/RELEASE_NOTES_v0.96.1.md)
+- [Release notes for v0.96.2](.github/RELEASE_NOTES_v0.96.2.md)
 
 ## Development
 
@@ -240,6 +244,41 @@ structure for bounded recovery instead of silently starting over.
 ## Recent releases
 
 <!-- releases:start -->
+
+## Release v0.96.2
+
+### Added
+
+- Added resource-aware host snapshots, admission decisions, generation-safe per-run tool-cap leases, workload classification, weighted FIFO permits, and `omk doctor resources` / `/resource` operator surfaces.
+- Added internal Vitest, Jest, workspace, and Go shard planners plus a journaled executor with corruption quarantine, completed-shard resume, admission-aware execution, and aggregate `workload_shard_result.v1` evidence. Automatic session-command sharding is not enabled.
+- Added an internal subagent lane launcher that enforces parent admission width and shares its permit pool; live child-launch wiring is not enabled.
+- Added exactly-once `prompt_settled` and an opt-in completion sound.
+- Added a local-only resource observation journal at `.omk/runs/<promptRunId>/resource-observations.jsonl`, recording bounded probe health, admission caps, classification, permit waits, settlement, and sound outcomes without raw host measurements.
+- The `QWEN TOKEN PLAN` status entry now uses the official QwenCloud management CLI to show the seven-day usage window and reset time.
+
+### Changed
+
+- The session-termination classifier now accepts `resource.*` causes for memory, disk, CPU, heap, unavailable probes, and permit queue overflow. Only CPU pressure can qualify for automatic retry; live resource gates currently return bounded block results.
+- `resourceGovernor.mode: "observe"` is the default and records decisions without enforcing caps. Both `"observe"` and `"off"` preserve v0.96.1 scheduling behavior.
+
+### Fixed
+
+- Top-level `omk --help` now lists `omk doctor resources [--json]`.
+- Removed development-only `prepare` and `postinstall` hooks from the published CLI manifest; default npm installs no longer call an unshipped workspace-linking script.
+- Bound resource observations and completion-sound results to their originating prompt journals, including consecutive fast observe-mode runs.
+- Capped workspace shard plans at 16 while preserving every workspace through deterministic chunks.
+- Ensured `prompt_settled` consistently follows `agent_end` as the final run event.
+
+### Security
+
+- Qwen quota discovery never sends an inference API key to a management endpoint, never reads browser cookies, and passes only non-secret process context to the QwenCloud child CLI.
+- Removed the shipped subagent example's `offensive-jailbreak` skill route.
+
+### Docs
+
+- Documented an attributable AdaptOrch.com link for evaluating a separate hosted patch-evidence service; AdaptOrch remains distinct from the MIT-licensed OMK packages.
+
+Release notes live in [RELEASE_NOTES_v0.96.2.md](.github/RELEASE_NOTES_v0.96.2.md).
 
 ## Release v0.96.1
 
@@ -304,23 +343,6 @@ Release notes live in [RELEASE_NOTES_v0.96.1.md](.github/RELEASE_NOTES_v0.96.1.m
 - Local release bundles now include `omk-adaptorch-wpl`, allowing isolated installs of the full packed workspace without resolving that dependency from the registry.
 
 Release notes live in [RELEASE_NOTES_v0.96.0.md](.github/RELEASE_NOTES_v0.96.0.md).
-
-## Release v0.95.2
-
-### Changed
-
-- macOS sessions now derive replay-ledger process identity from bounded BSD `ps -o lstart=` output, so replay-lock acquisition no longer fails closed during AgentSession startup on Darwin while Linux `/proc` behavior remains unchanged.
-- The status rail now verifies connected MCP servers with protocol pings, marks dead processes as failed, and retries failed servers on a bounded slower cadence without spawning idle servers.
-- Interactive UX now includes an empty-editor affordance hint, elapsed-time and interrupt details on the working indicator, transient information notices, width-safe editor scroll borders, and opt-in footer CPU/memory metrics.
-- Extension tools can resolve timeouts from current context. The subagent extension uses this to remove task-count, concurrency, execution-budget, attempt, and outer tool-timeout caps in Ultra while preserving explicit cancellation and non-Ultra limits.
-- The startup control panel now identifies the product with `WELCOME TO OMK` instead of legacy Pi agent branding.
-- Context-budget prompts use compact metadata for valid zero-resource plans while retaining cache-state and legacy optimizer compatibility telemetry; diagnostic and non-empty plans keep full observability, and invalid budgets bypass the plan cache so diagnostics cannot be hidden by a prior hit.
-- The workspace context-budget cache scans every persisted key/value, keeps credential-shaped entries in memory only, and removes unsafe legacy snapshots instead of persisting secret-shaped text.
-- Exact context representations now reuse content-addressed cache entries across different queries and budget sizes instead of forcing avoidable misses.
-- Opt-in reasoning-router learning now isolates default ledgers and compiled bias snapshots per repository or git worktree, captures explicit manual thinking-level overrides as bounded feedback, and keeps updates behind the shipped, deterministic `omk router-feedback compile-bias` between-session command. Snapshot loading rejects nonzero biases below the strong-evidence threshold, unsafe or inconsistent counts, and duplicate cells; compilation uses an exclusive randomized temporary file before atomic rename.
-- Session bash now defaults to OS sandbox enforcement instead of ledger-only audit mode. macOS `sandbox-exec` and Linux `bwrap` restrict writes to the workspace/temp directories and disable network access; missing backends fail closed. Unwrapped `audit` and disabled `off` modes now require an explicit `OMK_BASH_SANDBOX` value, and unknown values resolve to `enforce`.
-
-Release notes live in [RELEASE_NOTES_v0.95.2.md](.github/RELEASE_NOTES_v0.95.2.md).
 
 <!-- releases:end -->
 

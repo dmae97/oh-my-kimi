@@ -255,9 +255,13 @@ interface PromptOptions {
   images?: ImageContent[];
   streamingBehavior?: "steer" | "followUp";
   source?: InputSource;
+  activeSkillNames?: readonly string[];
+  activeSkillSource?: string;
   preflightResult?: (success: boolean) => void;
 }
 ```
+
+`activeSkillNames` marks additional discovered skills active for this turn; `activeSkillSource` labels their provenance. They merge with global `defaultActiveSkills`, prioritize matching inventory entries, and do not expand authorization or inline full skill instructions.
 
 `preflightResult` is called once per `prompt()` invocation:
 

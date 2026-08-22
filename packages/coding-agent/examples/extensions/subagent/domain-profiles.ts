@@ -132,7 +132,6 @@ export const DOMAIN_PROFILES: readonly DomainProfile[] = [
 		],
 		skillPool: [
 			"omk-godmod",
-			"offensive-jailbreak",
 			"reverse-skill",
 			"programming",
 			"insane-search",

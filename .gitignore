@@ -11,6 +11,8 @@ packages/*/dist-firefox/
 *.cpuprofile
 
 # Local orchestration artifacts
+# Per-workspace runtime state written when OMK runs inside a package directory
+packages/*/.omk/
 .omk/*
 !.omk/.codegraph/
 !.omk/.codegraph/.gitignore

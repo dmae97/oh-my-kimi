@@ -180,6 +180,67 @@ Built-in defaults are 30 seconds for `read`, `grep`, `find`, and `ls`; 60 second
 
 The DAG preserves source-order result artifacts. `bash`, unknown tools, and extension tools without explicit resource claims remain exclusive. Tool timeout is logical cancellation: OMK closes the tool call and signals cancellation, but arbitrary JavaScript or external side effects may continue if the tool ignores that signal.
 
+### Resource Governor
+
+The governor probes host capacity (memory, workspace disk, V8 heap, system CPU) and evaluates a resource admission decision, surfaced through `/resource [probe|policy]` in the TUI and `omk doctor resources [--json]` headless. In `observe` mode (default) it records decisions without changing behavior; in `adaptive`/`strict` modes each top-level prompt runs a bounded preflight probe and throttles the effective tool concurrency for that run (never above `agent.maxToolConcurrency`), restoring it when the run settles. Heavy-process caps are enforced at the governed bash boundary; the internal subagent-lane launcher is not wired into live child dispatch. Absent settings keep prior behavior unchanged.
+
+| Setting | Type | Default | Description |
+| --------- | ------ | --------- | ------------- |
+| `resourceGovernor.enabled` | boolean | `true` | `false` forces mode `off` |
+| `resourceGovernor.mode` | string | `"observe"` | `off` (disabled), `observe` (record only), `adaptive`/`strict` (throttle per-run tool concurrency under pressure) |
+| `resourceGovernor.maxProbeMs` | number | `300` | Async probe deadline in ms; valid `50..5000` |
+| `resourceGovernor.cpuSampleMs` | number | `180` | CPU two-sample interval in ms; valid `150..250` |
+| `resourceGovernor.constrainedAvailableMemoryMiB` | number | `1536` | Below this effective available memory the host is `constrained` |
+| `resourceGovernor.criticalAvailableMemoryMiB` | number | `512` | Below this it is `critical`; must be `<=` the constrained threshold |
+| `resourceGovernor.constrainedDiskFreeMiB` | number | `4096` | Workspace free-disk threshold for `constrained` |
+| `resourceGovernor.criticalDiskFreeMiB` | number | `1024` | Workspace free-disk threshold for `critical` |
+| `resourceGovernor.constrainedHeapRatio` | number | `0.75` | V8 heap used/limit ratio for `constrained` |
+| `resourceGovernor.criticalHeapRatio` | number | `0.85` | V8 heap ratio for `critical` |
+| `resourceGovernor.busyCpuPercent` | number | `85` | System CPU percent that throttles; CPU alone never reports `critical` |
+| `resourceGovernor.normalMaxToolConcurrency` | number | `4` | Admission tool cap at `normal` pressure |
+| `resourceGovernor.constrainedMaxToolConcurrency` | number | `2` | Admission tool cap at `constrained` pressure |
+| `resourceGovernor.criticalMaxToolConcurrency` | number | `1` | Admission tool cap at `critical` pressure |
+| `resourceGovernor.normalMaxParallelLanes` | number | `4` | Subagent lane cap at `normal` |
+| `resourceGovernor.constrainedMaxParallelLanes` | number | `2` | Subagent lane cap at `constrained` |
+| `resourceGovernor.criticalMaxParallelLanes` | number | `1` | Subagent lane cap at `critical` |
+| `resourceGovernor.normalMaxHeavyProcesses` | number | `2` | Heavy process cap at `normal` |
+| `resourceGovernor.constrainedMaxHeavyProcesses` | number | `1` | Heavy process cap at `constrained` |
+| `resourceGovernor.criticalMaxHeavyProcesses` | number | `1` | Heavy process cap at `critical` |
+
+Validation is explicit and fail-closed: invalid values are reported (in `/resource policy` and `omk doctor resources --json` under `settingsErrors`) and the defaults apply for the failed area. Caps must satisfy `normal >= constrained >= critical` and stay within `1..64`; critical thresholds must not exceed constrained ones. Admission caps never raise user-configured caps (`agent.maxToolConcurrency` keeps precedence; `0` "unlimited" is limited to the admission cap in `adaptive` and `strict` modes).
+
+`OMK_RESOURCE_GOVERNOR=off|observe|adaptive|strict` overrides the mode for one process, e.g. `OMK_RESOURCE_GOVERNOR=off omk` as a rollback switch.
+
+### Completion Sound
+
+Plays a short system sound when a long prompt finally settles (all retries and continuations drained), only in the interactive TUI on a real TTY — never in RPC, JSON, print mode, or CI. Default off. Backends use fixed executables with fixed arguments (macOS `afplay`, Windows/WSL PowerShell system sound, Linux `canberra-gtk-play`/`paplay`/`aplay`), falling back to the terminal bell. Sound failures are diagnostics only and never affect the prompt outcome.
+
+| Setting | Type | Default | Description |
+| --------- | ------ | --------- | ------------- |
+| `notifications.completionSound.enabled` | boolean | `false` | Master switch; env `OMK_COMPLETION_SOUND` set to `0` or `1` overrides per process |
+| `notifications.completionSound.minDurationMs` | number | `5000` | Only chime for prompts that ran at least this long |
+| `notifications.completionSound.onSuccess` | boolean | `true` | Chime on completed prompts |
+| `notifications.completionSound.onFailure` | boolean | `true` | Chime on failed prompts (user aborts never chime) |
+| `notifications.completionSound.terminalBellFallback` | boolean | `true` | Fall back to the terminal BEL when no sound backend works |
+
+```json
+{
+  "notifications": {
+    "completionSound": { "enabled": true, "minDurationMs": 10000 }
+  }
+}
+```
+
+```json
+{
+  "resourceGovernor": {
+    "mode": "observe",
+    "constrainedAvailableMemoryMiB": 2048,
+    "criticalAvailableMemoryMiB": 512
+  }
+}
+```
+
 ### Branch Summary
 
 | Setting | Type | Default | Description |
@@ -296,11 +357,12 @@ Paths in `~/.omk/agent/settings.json` resolve relative to `~/.omk/agent`. Paths 
 | `packages` | array | `[]` | npm/git packages to load resources from |
 | `extensions` | string[] | `[]` | Local extension file paths or directories |
 | `skills` | string[] | `[]` | Local skill file paths or directories |
+| `defaultActiveSkills` | string[] | `[]` | Global-only list of up to 64 exact user-scoped skill names marked active in every prompt; full instructions remain on-demand |
 | `prompts` | string[] | `[]` | Local prompt template paths or directories |
 | `themes` | string[] | `[]` | Local theme file paths or directories |
 | `enableSkillCommands` | boolean | `true` | Register skills as `/skill:name` commands |
 
-Arrays support glob patterns and exclusions. Use `!pattern` to exclude. Use `+path` to force-include an exact path and `-path` to force-exclude an exact path.
+Resource path arrays (`extensions`, `skills`, `prompts`, and `themes`) support glob patterns and exclusions. Use `!pattern` to exclude, `+path` to force-include an exact path, and `-path` to force-exclude one. `defaultActiveSkills` accepts exact names only.
 
 #### packages
 
@@ -356,7 +418,7 @@ See [packages.md](packages.md) for package management details.
 
 ## Project Overrides
 
-Project settings (`.omk/settings.json`) override global settings. Nested objects are merged. `contextBudget` is the exception: it is read from global settings only.
+Project settings (`.omk/settings.json`) override global settings. Nested objects are merged. Settings marked global-only, including `contextBudget` and `defaultActiveSkills`, are read from global settings only.
 
 ```json
 // ~/.omk/agent/settings.json (global)

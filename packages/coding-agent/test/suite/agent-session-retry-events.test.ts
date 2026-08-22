@@ -276,6 +276,8 @@ describe("AgentSession retry and event characterization", () => {
 			"turn_end",
 			"session_termination",
 			"agent_end",
+			// §16 (M4): settlement is the final event, after agent_end drained.
+			"prompt_settled",
 		]);
 		expect(harness.eventsOfType("session_termination")).toHaveLength(1);
 		expect(harness.eventsOfType("session_termination")[0]?.termination).toMatchObject({
@@ -327,6 +329,7 @@ describe("AgentSession retry and event characterization", () => {
 			"turn_end",
 			"session_termination",
 			"agent_end",
+			"prompt_settled",
 		]);
 		expect(harness.eventsOfType("session_termination")).toHaveLength(1);
 		expect(harness.eventsOfType("session_termination")[0]?.termination).toMatchObject({
@@ -373,7 +376,9 @@ describe("AgentSession retry and event characterization", () => {
 
 		await harness.session.prompt("hi");
 
-		expect(harness.events[harness.events.length - 1]?.type).toBe("agent_end");
+		// §16 (M4): prompt_settled trails agent_end as the final event.
+		expect(harness.events[harness.events.length - 1]?.type).toBe("prompt_settled");
+		expect(harness.events[harness.events.length - 2]?.type).toBe("agent_end");
 	});
 
 	it("emits agent_end for aborted runs and persists the aborted assistant message", async () => {
@@ -395,7 +400,8 @@ describe("AgentSession retry and event characterization", () => {
 		await harness.session.abort();
 		await promptPromise;
 
-		expect(harness.events[harness.events.length - 1]?.type).toBe("agent_end");
+		expect(harness.events[harness.events.length - 1]?.type).toBe("prompt_settled");
+		expect(harness.events[harness.events.length - 2]?.type).toBe("agent_end");
 		const lastMessage = harness.session.messages[harness.session.messages.length - 1];
 		expect(lastMessage?.role).toBe("assistant");
 		if (lastMessage?.role === "assistant") {

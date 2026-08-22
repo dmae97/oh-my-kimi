@@ -118,6 +118,7 @@ import {
 import { emitSessionShutdownEvent } from "./extensions/runner.ts";
 import { assertTextChatModelForCompletion } from "./grok-harness.ts";
 import { grokPlaybookAppendForProvider } from "./grok-playbook.ts";
+import { captureHostResourceSnapshot, type HostResourceSnapshot } from "./host-resource-snapshot.ts";
 import { decideLoadoutAccess, type LoadoutAccessPolicy } from "./loadout-access-policy.ts";
 import { loadMcpServerConfigs } from "./mcp/config.ts";
 import { McpManager, type McpServerConfig, type McpServerStatus } from "./mcp/manager.ts";
@@ -128,6 +129,7 @@ import { type ToolCallMetric, TurnMetricsSink } from "./turn-metrics.ts";
 const DISABLED_ENV_VALUES = new Set(["0", "false", "off", "disable", "disabled"]);
 const MAX_OVERFLOW_RECOVERY_ATTEMPTS = 2;
 const OVERFLOW_RECOVERY_EMERGENCY_TOKENS = 4_096;
+const MAX_RESOURCE_OBSERVATION_JOURNALS = 32;
 
 function isDisabledEnvValue(value: string | undefined): boolean {
 	return value !== undefined && DISABLED_ENV_VALUES.has(value.trim().toLowerCase());
@@ -169,6 +171,13 @@ import type { ModelRegistry } from "./model-registry.ts";
 import { findExactModelReferenceMatch } from "./model-resolver.ts";
 import { computePromptTokenBudget } from "./prompt-budget.ts";
 import { classifyPromptCacheTransition } from "./prompt-cache.ts";
+import {
+	createPromptSettlementState,
+	type PromptSettledEvent,
+	type PromptSettlementOutcome,
+	reducePromptSettlement,
+	settlePromptIfReady,
+} from "./prompt-settlement.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import {
 	isQuotaExhaustionMessage,
@@ -198,7 +207,18 @@ import {
 } from "./reasoning-router-v4.ts";
 import { redactSensitiveText, redactSensitiveTextForced } from "./redaction.ts";
 import { getRepositoryRouterLearningPaths, type RepositoryRouterLearningPaths } from "./repository-learning-scope.ts";
+import { decideResourceAdmission, type ResourceAdmissionDecision } from "./resource-admission.ts";
+import { resolveResourceGovernorSettings } from "./resource-governor-settings.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
+import {
+	admissionObservationFacts,
+	classificationObservationFacts,
+	ResourceObservationJournal,
+	settledObservationFacts,
+	snapshotObservationFacts,
+	soundObservationFacts,
+} from "./resource-observation-journal.ts";
+import { decideResourceSafetyGate, RESOURCE_PRESSURE_REQUIRED_ACTION } from "./resource-safety-gate.ts";
 import {
 	appendRouterFeedbackRecord,
 	ROUTER_FEEDBACK_LEVELS,
@@ -206,8 +226,9 @@ import {
 } from "./router-feedback-collector.ts";
 import type { RunJournalAuditDetails, RunJournalAuditEvent, RunJournalRecord } from "./run-journal.ts";
 import { type RunJournalQuarantineReport, RunJournalStore } from "./run-journal-store.ts";
+import { type RunResourceLease, RunResourceLeaseController } from "./run-resource-lease.ts";
 import { SessionBashRuntime } from "./session-bash-runtime.ts";
-import { SessionBashService } from "./session-bash-service.ts";
+import { type BashResourcePermitGrant, SessionBashService } from "./session-bash-service.ts";
 import { SessionCompactionService } from "./session-compaction-service.ts";
 import type { BranchSummaryEntry, SessionManager } from "./session-manager.ts";
 import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.ts";
@@ -228,6 +249,8 @@ import { createAllToolDefinitions } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
 import { createVerifiedBashOperations } from "./verified-bash-adapter.ts";
 import { resolveSessionWorkspaceScope } from "./verified-bash-runtime.ts";
+import { classifyWorkloadCommand } from "./workload-classifier.ts";
+import { WorkloadPermitError, WorkloadPermitPool, type WorkloadPermitPoolSnapshot } from "./workload-permit-pool.ts";
 
 // ============================================================================
 // Skill Block Parsing
@@ -271,6 +294,7 @@ export type AgentSessionEvent =
 			messages: AgentMessage[];
 			willRetry: boolean;
 	  }
+	| PromptSettledEvent
 	| {
 			type: "queue_update";
 			steering: readonly string[];
@@ -734,6 +758,14 @@ export class AgentSession {
 	private readonly _runJournalStore: RunJournalStore;
 	private _ownedSessionOwnerLease: SessionOwnerLease | undefined;
 	private _activeRunId: string | null = null;
+	// Resource governor (roadmap M2): lease controller owns the temporary tool
+	// cap for governed runs; the last decision backs the §19.4 read-only API.
+	private _resourceLeaseController: RunResourceLeaseController | undefined;
+	private _resourceObservations: ResourceObservationJournal | null = null;
+	private readonly _resourceObservationJournals = new Map<string, ResourceObservationJournal>();
+	private _latestResourcePromptRunId: string | null = null;
+	private _lastResourceAdmission: ResourceAdmissionDecision | null = null;
+	private _workloadPermitPool: WorkloadPermitPool | undefined;
 	private _pendingRuntimeTerminationCause: SessionTerminationCause | undefined;
 	private _activeRunToolTermination:
 		| { toolCallId: string; toolName: string; timeoutMs?: number; executionStarted: boolean }
@@ -821,6 +853,7 @@ export class AgentSession {
 			isStreaming: () => this.isStreaming,
 			pushMessage: (message) => this.agent.state.messages.push(message),
 			appendMessage: (message) => this.sessionManager.appendMessage(message),
+			acquireResourcePermit: (command, signal) => this._acquireBashResourcePermit(command, signal),
 		});
 		this._compactionService = new SessionCompactionService({
 			sessionManager: this.sessionManager,
@@ -2109,7 +2142,18 @@ export class AgentSession {
 		this._promptCacheStablePrefixCharacters = boundary ?? 0;
 	}
 
+	private _getDefaultActiveSkills(): string[] {
+		const trustedSkillNames = new Set(
+			this._resourceLoader
+				.getSkills()
+				.skills.filter((skill) => skill.sourceInfo.scope === "user")
+				.map((skill) => skill.name),
+		);
+		return this.settingsManager.getDefaultActiveSkills().filter((name) => trustedSkillNames.has(name));
+	}
+
 	private _rebuildSystemPrompt(toolNames: string[], model: Model<any> | undefined = this.model): string {
+		const defaultActiveSkills = this._getDefaultActiveSkills();
 		const assembled = assembleSessionSystemPrompt({
 			cwd: this._cwd,
 			toolNames,
@@ -2120,6 +2164,8 @@ export class AgentSession {
 			appendSystemPrompt: this._resourceLoader.getAppendSystemPrompt(),
 			providerAppend: grokPlaybookAppendForProvider(model?.provider),
 			skills: this._resourceLoader.getSkills().skills,
+			activeSkillNames: defaultActiveSkills,
+			activeSkillSource: defaultActiveSkills.length > 0 ? "settings" : undefined,
 			contextFiles: selectContextFilesForModel(this._resourceLoader.getAgentsFiles().agentsFiles, model),
 			contextBudget: this._getContextBudgetOptions(undefined, model),
 		});
@@ -2133,16 +2179,278 @@ export class AgentSession {
 	// =========================================================================
 
 	private async _runAgentPrompt(messages: AgentMessage | AgentMessage[]): Promise<void> {
+		// One identity per top-level run (§16.2): internal retries and
+		// continuations inside this call share it, as does the resource lease.
+		const promptRunId = `prompt-run-${randomUUID()}`;
+		const startedAtEpochMs = Date.now();
+		// Roadmap M2: the lease spans the whole run including internal retries
+		// and continuations, so they share one admission decision (§8.3).
+		const resourceLease = await this._beginResourceGovernedRun(promptRunId);
+		const resourceObservations = this._resourceObservationJournals.get(promptRunId) ?? null;
+		let outcome: PromptSettlementOutcome = "completed";
 		try {
 			await this.agent.prompt(messages);
 			while (await this._handlePostAgentRun()) {
 				await this.agent.continue();
 			}
 		} catch (error) {
+			outcome =
+				this._userAbortRequested || (error instanceof Error && /abort/i.test(error.message)) ? "aborted" : "failed";
 			this._publishRuntimeFailure(error);
 			throw error;
 		} finally {
+			if (resourceLease !== null) {
+				// Generation-safe: a stale release after another run acquired the
+				// lease is a no-op instead of clobbering the newer cap (§8.1).
+				this._resourceLeaseController?.release(resourceLease);
+				resourceObservations?.record("resource_lease_released_v1", { promptRunId });
+			}
 			this._flushPendingBashMessages();
+			// §16.4 (M4): settle only after every in-run continuation drained.
+			this._emitPromptSettledIfReady({ promptRunId, startedAtEpochMs, outcome, resourceObservations });
+		}
+	}
+
+	/**
+	 * Emit `prompt_settled` when the §16.4 conditions hold. Called exactly
+	 * once per promptRunId (from `_runAgentPrompt`'s finally), so the same
+	 * run can never emit twice; late-queued messages block emission
+	 * conservatively — the continuation run settles under its own id.
+	 * Settlement is a UX signal only and must never affect the run (§16.1).
+	 */
+	private _emitPromptSettledIfReady(input: {
+		readonly promptRunId: string;
+		readonly startedAtEpochMs: number;
+		readonly outcome: PromptSettlementOutcome;
+		readonly resourceObservations: ResourceObservationJournal | null;
+	}): void {
+		try {
+			let state = createPromptSettlementState(input.promptRunId, input.startedAtEpochMs);
+			state = reducePromptSettlement(state, { kind: "terminal", outcome: input.outcome });
+			if (this.isStreaming) {
+				state = reducePromptSettlement(state, { kind: "tool", delta: 1 });
+			}
+			if (this.agent.hasQueuedMessages()) {
+				state = reducePromptSettlement(state, { kind: "continuation", delta: 1 });
+			}
+			const settled = settlePromptIfReady(state, Date.now());
+			if (settled.event !== null) {
+				input.resourceObservations?.record("prompt_settled_v1", settledObservationFacts(settled.event));
+				this._emit(settled.event);
+			}
+		} catch {
+			// Never let settlement bookkeeping break a run.
+		}
+	}
+
+	/**
+	 * Resource governor preflight for one top-level run (roadmap §8, §25.3 M2).
+	 *
+	 * - `off`: nothing; v0.96.1 observable behavior is preserved.
+	 * - `observe` (default): fire-and-forget probe records a decision for the
+	 *   §19.4 read-only API; the cap never changes and the prompt is never
+	 *   delayed. The pending probe is bounded (~cpuSampleMs) and never rejects.
+	 * - `adaptive`/`strict`: bounded blocking probe (default 300 ms deadline),
+	 *   then a generation-safe lease applies the effective tool cap for this
+	 *   run. The caller's `finally` releases it exactly once.
+	 *
+	 * Never throws: any probe or policy failure leaves this run ungoverned
+	 * (§2.1: probe failure must not crash or block the prompt).
+	 */
+	private async _beginResourceGovernedRun(promptRunId: string): Promise<RunResourceLease | null> {
+		try {
+			const resolved = resolveResourceGovernorSettings(this.settingsManager.getResourceGovernorSettings());
+			if (resolved.mode === "off") {
+				return null;
+			}
+			const resourceObservations = this._openResourceObservations(promptRunId);
+			const probeOptions = {
+				cwd: this._cwd,
+				maxProbeMs: resolved.maxProbeMs,
+				cpuSampleMs: resolved.cpuSampleMs,
+			};
+			// §7.3: Agent.maxToolConcurrency uses undefined for "unlimited"; the
+			// admission contract uses 0 for the same meaning.
+			const configuredCaps = { maxToolConcurrency: this.agent.maxToolConcurrency ?? 0 };
+			if (resolved.mode === "observe") {
+				void captureHostResourceSnapshot(probeOptions)
+					.then((snapshot) => {
+						const decision = decideResourceAdmission({
+							snapshot,
+							config: resolved.admission,
+							configuredCaps,
+						});
+						if (this._latestResourcePromptRunId === promptRunId) {
+							this._lastResourceAdmission = decision;
+						}
+						resourceObservations?.record("resource_snapshot_v1", snapshotObservationFacts(snapshot));
+						resourceObservations?.record("resource_admission_v1", admissionObservationFacts(decision));
+					})
+					.catch(() => {});
+				return null;
+			}
+			const snapshot = await captureHostResourceSnapshot(probeOptions);
+			const decision = decideResourceAdmission({ snapshot, config: resolved.admission, configuredCaps });
+			if (this._latestResourcePromptRunId === promptRunId) {
+				this._lastResourceAdmission = decision;
+			}
+			resourceObservations?.record("resource_snapshot_v1", snapshotObservationFacts(snapshot));
+			resourceObservations?.record("resource_admission_v1", admissionObservationFacts(decision));
+			this._resourceLeaseController ??= new RunResourceLeaseController({
+				getCap: () => this.agent.maxToolConcurrency,
+				setCap: (cap) => {
+					this.agent.maxToolConcurrency = cap;
+				},
+			});
+			const lease = this._resourceLeaseController.acquire({ promptRunId, decision });
+			resourceObservations?.record("resource_lease_acquired_v1", {
+				decisionId: decision.decisionId,
+				appliedToolCap: decision.maxToolConcurrency,
+			});
+			return lease;
+		} catch {
+			return null;
+		}
+	}
+
+	private _openResourceObservations(promptRunId: string): ResourceObservationJournal | null {
+		this._latestResourcePromptRunId = promptRunId;
+		try {
+			const journal = ResourceObservationJournal.open(this._cwd, promptRunId);
+			this._resourceObservations = journal;
+			this._resourceObservationJournals.set(promptRunId, journal);
+			while (this._resourceObservationJournals.size > MAX_RESOURCE_OBSERVATION_JOURNALS) {
+				const oldestPromptRunId = this._resourceObservationJournals.keys().next().value;
+				if (oldestPromptRunId === undefined) break;
+				this._resourceObservationJournals.delete(oldestPromptRunId);
+			}
+			return journal;
+		} catch {
+			this._resourceObservations = null;
+			this._resourceObservationJournals.delete(promptRunId);
+			return null;
+		}
+	}
+
+	/** §20.2: record the TUI-side completion sound result in its originating run journal. */
+	recordCompletionSoundResult(
+		promptRunId: string,
+		result: import("./completion-sound.ts").CompletionSoundResult,
+	): void {
+		const journal = this._resourceObservationJournals.get(promptRunId);
+		journal?.record("completion_sound_result_v1", soundObservationFacts(result));
+		this._resourceObservationJournals.delete(promptRunId);
+		if (this._latestResourcePromptRunId === promptRunId) {
+			this._latestResourcePromptRunId = null;
+			if (this._resourceObservations === journal) this._resourceObservations = null;
+		}
+	}
+
+	/** §19.4 read-only SDK surface: the most recent resource admission decision, if any. */
+	getCurrentResourceAdmission(): ResourceAdmissionDecision | null {
+		return this._lastResourceAdmission;
+	}
+
+	/** §19.4 read-only SDK surface: capture a fresh host resource snapshot. */
+	async getHostResourceSnapshot(): Promise<HostResourceSnapshot> {
+		const resolved = resolveResourceGovernorSettings(this.settingsManager.getResourceGovernorSettings());
+		return captureHostResourceSnapshot({
+			cwd: this._cwd,
+			maxProbeMs: resolved.maxProbeMs,
+			cpuSampleMs: resolved.cpuSampleMs,
+		});
+	}
+
+	/** §19.4 read-only SDK surface: shared workload permit pool state, if any. */
+	getWorkloadPermitSnapshot(): WorkloadPermitPoolSnapshot | null {
+		return this._workloadPermitPool?.snapshot() ?? null;
+	}
+
+	/**
+	 * §14.1 shared-budget seam: child subagents must reuse this instance
+	 * instead of creating a private pool (host oversubscription). The live
+	 * child launcher wiring lands in M6.
+	 */
+	get workloadPermitPool(): WorkloadPermitPool {
+		this._workloadPermitPool ??= new WorkloadPermitPool();
+		return this._workloadPermitPool;
+	}
+
+	/**
+	 * Resource safety gate for the bash boundary (roadmap §9.4/§11, M3).
+	 * Runs only in adaptive/strict mode with a recorded admission decision;
+	 * observe/off keep v0.96.1 behavior. Never throws: gate machinery
+	 * failures leave the command ungated (§2.1), while computed block
+	 * verdicts and permit rejections return a bounded §11.3 payload.
+	 */
+	private async _acquireBashResourcePermit(command: string, signal: AbortSignal): Promise<BashResourcePermitGrant> {
+		try {
+			const resolved = resolveResourceGovernorSettings(this.settingsManager.getResourceGovernorSettings());
+			if (resolved.mode !== "adaptive" && resolved.mode !== "strict") {
+				return {};
+			}
+			const decision = this._lastResourceAdmission;
+			if (decision === null) {
+				return {};
+			}
+			const classification = classifyWorkloadCommand(command);
+			this._resourceObservations?.record(
+				"workload_classification_v1",
+				classificationObservationFacts(classification),
+			);
+			const verdict = decideResourceSafetyGate({ commandSafety: "allowed", classification, decision });
+			if (verdict.kind === "allow") {
+				return {};
+			}
+			if (verdict.kind === "block") {
+				return { blocked: JSON.stringify(verdict.block) };
+			}
+			this._workloadPermitPool ??= new WorkloadPermitPool({ capacity: decision.maxHeavyProcesses });
+			const pool = this._workloadPermitPool;
+			pool.setCapacity(decision.maxHeavyProcesses);
+			const waitStartedMs = Date.now();
+			this._resourceObservations?.record("workload_permit_wait_v1", {
+				workloadClass: classification.workloadClass,
+				weight: verdict.weight,
+			});
+			try {
+				const permit = await pool.acquire({
+					requestId: `bash-${randomUUID()}`,
+					promptRunId: this._resourceLeaseController?.activeLease?.promptRunId ?? "unleased",
+					workloadClass: classification.workloadClass,
+					weight: verdict.weight,
+					signal,
+					// Bounded §10.3 timeout-aware wait; a settings knob can follow later.
+					timeoutMs: 60_000,
+				});
+				this._resourceObservations?.record("workload_permit_acquired_v1", {
+					workloadClass: classification.workloadClass,
+					weight: verdict.weight,
+					waitMs: Date.now() - waitStartedMs,
+				});
+				return {
+					release: () => {
+						permit.release();
+						this._resourceObservations?.record("workload_permit_released_v1", {
+							workloadClass: classification.workloadClass,
+							weight: verdict.weight,
+						});
+					},
+				};
+			} catch (error) {
+				const code = error instanceof WorkloadPermitError ? error.code : "queue_overflow";
+				return {
+					blocked: JSON.stringify({
+						kind: "resource_pressure",
+						pressure: decision.pressure,
+						action: "defer-heavy",
+						reasonCodes: [...decision.reasons, `resource.permit.${code}`],
+						requiredAction: RESOURCE_PRESSURE_REQUIRED_ACTION,
+					}),
+				};
+			}
+		} catch {
+			return {};
 		}
 	}
 
@@ -2190,8 +2498,14 @@ export class AgentSession {
 		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
 		const preflightResult = options?.preflightResult;
 		let currentText = redactSensitiveText(text);
-		let promptActiveSkillNames = [...(options?.activeSkillNames ?? [])];
-		let promptActiveSkillSource = options?.activeSkillSource;
+		const defaultActiveSkills = this._getDefaultActiveSkills();
+		let promptActiveSkillNames = mergePromptActiveSkillNames(defaultActiveSkills, options?.activeSkillNames ?? []);
+		let promptActiveSkillSource =
+			defaultActiveSkills.length > 0
+				? options?.activeSkillSource
+					? `settings+${options.activeSkillSource}`
+					: "settings"
+				: options?.activeSkillSource;
 		let isBangSkillInvocation = false;
 		if (expandPromptTemplates) {
 			const bangInvocation = parseBangInvocation(text, {
@@ -2206,7 +2520,8 @@ export class AgentSession {
 					promptActiveSkillNames,
 					bangInvocation.activeSkillNames,
 				);
-				promptActiveSkillSource = bangInvocation.source;
+				promptActiveSkillSource =
+					defaultActiveSkills.length > 0 ? `settings+${bangInvocation.source}` : bangInvocation.source;
 			}
 		}
 		let messages: AgentMessage[] | undefined;
@@ -2332,8 +2647,8 @@ export class AgentSession {
 			const turnSystemPromptOptions = {
 				...this._baseSystemPromptOptions,
 				contextBudget: this._getContextBudgetOptions(expandedText),
-				...(promptActiveSkillNames.length > 0 ? { activeSkillNames: promptActiveSkillNames } : {}),
-				...(promptActiveSkillSource ? { activeSkillSource: promptActiveSkillSource } : {}),
+				activeSkillNames: promptActiveSkillNames,
+				activeSkillSource: promptActiveSkillSource,
 			};
 			const turnSystemPrompt = buildSystemPromptPlan(turnSystemPromptOptions);
 

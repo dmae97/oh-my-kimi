@@ -33,6 +33,13 @@ export interface ExecuteBashOptions {
 	sandboxPolicy?: BashSandboxPreflight;
 }
 
+/** Resource gate grant (roadmap §11/M3): §11.3 blocked payload, permit release, or ungated. */
+export interface BashResourcePermitGrant {
+	/** §11.3 structured block JSON; when set the command must not spawn. */
+	readonly blocked?: string;
+	readonly release?: () => void;
+}
+
 export interface SessionBashServiceDeps {
 	readonly settings: SettingsManager;
 	readonly runtime: SessionBashRuntime;
@@ -42,6 +49,12 @@ export interface SessionBashServiceDeps {
 	readonly isStreaming: () => boolean;
 	readonly pushMessage: (message: BashExecutionMessage) => void;
 	readonly appendMessage: (message: BashExecutionMessage) => void;
+	/**
+	 * Optional resource governor gate, invoked AFTER command safety (§9.4
+	 * order) and before any shell spawns. The abort signal cancels a queued
+	 * permit wait. Implementations must never throw.
+	 */
+	readonly acquireResourcePermit?: (command: string, signal: AbortSignal) => Promise<BashResourcePermitGrant>;
 }
 
 function isSandboxDeniedError(error: unknown): error is Error {
@@ -105,8 +118,20 @@ export class SessionBashService {
 		}
 
 		this.abortController = new AbortController();
+		let releaseResourcePermit: (() => void) | undefined;
 
 		try {
+			// Resource safety gate (§9.4: command safety above stays authoritative;
+			// pressure can only throttle or defer an already-allowed command).
+			if (this.deps.acquireResourcePermit) {
+				const grant = await this.deps.acquireResourcePermit(resolvedCommand, this.abortController.signal);
+				if (grant.blocked !== undefined) {
+					const blocked = buildBlockedBashResult(grant.blocked);
+					this.recordBashResult(command, blocked, options);
+					return blocked;
+				}
+				releaseResourcePermit = grant.release;
+			}
 			try {
 				const operations =
 					options?.operations ??
@@ -147,6 +172,8 @@ export class SessionBashService {
 				return blocked;
 			}
 		} finally {
+			// §10.3 exactly-once: the pool treats a repeated release as a no-op.
+			releaseResourcePermit?.();
 			this.abortController = undefined;
 		}
 	}

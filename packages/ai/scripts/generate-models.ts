@@ -1617,6 +1617,12 @@ async function generateModels() {
 			candidate.cost.cacheRead = 0.119;
 		}
 
+		// stealth/ox-alpha exposes the full top-tier thinking ladder (xhigh/max/ultra)
+		// via OpenRouter's normalized reasoning.effort passthrough.
+		if (candidate.provider === "openrouter" && candidate.id === "stealth/ox-alpha") {
+			mergeThinkingLevelMap(candidate, { xhigh: "xhigh", max: "max", ultra: "ultra" });
+		}
+
 		// Enable xhigh/max thinking levels for Qwen reasoning models
 		if (candidate.reasoning && /qwen/i.test(candidate.id)) {
 			mergeThinkingLevelMap(candidate, { xhigh: "high", max: "max" });

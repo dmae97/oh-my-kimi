@@ -3,7 +3,7 @@ import { visibleWidth } from "omk-tui";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { McpServerStatus } from "../src/core/mcp/manager.ts";
 import type { McpInventory, McpServerEntry } from "../src/core/mcp-inventory.ts";
-import { recordClaudePassiveUsage } from "../src/core/provider-usage.ts";
+import { loadSubscriptionUsage, recordClaudePassiveUsage } from "../src/core/provider-usage.ts";
 import {
 	mcpMaxRows,
 	parseCodexUsageSnapshot,
@@ -299,7 +299,7 @@ describe("StatusSidebarComponent (pinned opencode-style rail)", () => {
 		});
 	});
 
-	it("identifies a configured Model Studio Token Plan as console-only quota", async () => {
+	it("renders the Model Studio Token Plan 7-day window from the QwenCloud CLI", async () => {
 		const session = makeSession();
 		session.state.model.provider = "modelstudio-maas";
 		session.modelRegistry.getProviderAuthStatus = (provider) => ({
@@ -311,14 +311,50 @@ describe("StatusSidebarComponent (pinned opencode-style rail)", () => {
 			makeFooterData() as never,
 			() => true,
 			() => 32,
-			{ requestRender },
+			{
+				requestRender,
+				fetchSubscriptionUsage: (usageSession, provider) =>
+					loadSubscriptionUsage(usageSession, undefined, provider, async () => ({
+						kind: "ran",
+						exitCode: 0,
+						stdout: JSON.stringify({
+							token_plan: { subscribed: true, usedPct: 69.08, resetDate: "2026-08-24T06:45:00.000Z" },
+						}),
+					})),
+			},
 		);
 
 		sidebar.render(STATUS_SIDEBAR_WIDTH);
 		await vi.waitFor(() => expect(requestRender).toHaveBeenCalled());
 		const text = stripAnsi(sidebar.render(STATUS_SIDEBAR_WIDTH).join("\n"));
 		expect(text).toContain("QWEN TOKEN PLAN");
-		expect(text).toContain("console-only quota");
+		expect(text).toContain("69%");
+	});
+
+	it("guides connecting the Token Plan when the QwenCloud CLI is missing", async () => {
+		const session = makeSession();
+		session.state.model.provider = "modelstudio-maas";
+		session.modelRegistry.getProviderAuthStatus = (provider) => ({
+			configured: provider === "modelstudio-maas",
+		});
+		const requestRender = vi.fn();
+		const sidebar = new StatusSidebarComponent(
+			() => session as never,
+			makeFooterData() as never,
+			() => true,
+			() => 32,
+			{
+				requestRender,
+				fetchSubscriptionUsage: (usageSession, provider) =>
+					loadSubscriptionUsage(usageSession, undefined, provider, async () => ({ kind: "missing" })),
+			},
+		);
+
+		sidebar.render(STATUS_SIDEBAR_WIDTH);
+		await vi.waitFor(() => expect(requestRender).toHaveBeenCalled());
+		const text = stripAnsi(sidebar.render(STATUS_SIDEBAR_WIDTH).join("\n"));
+		expect(text).toContain("QWEN TOKEN PLAN");
+		expect(text).toContain("connect:");
 	});
 
 	it("renders every configured provider while quota requests settle independently", async () => {

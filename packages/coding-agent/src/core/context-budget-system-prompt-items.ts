@@ -173,12 +173,12 @@ function renderSkillHeader(): string {
 	].join("\n");
 }
 
-function renderSkillEntry(skill: Skill, operatorDefault = false): string {
+function renderSkillEntry(skill: Skill, active = false): string {
 	return [
 		"  <skill>",
 		`    <name>${escapeXml(skill.name)}</name>`,
 		`    <description>${escapeXml(skill.description)}</description>`,
-		...(operatorDefault ? ["    <activation>operator-default</activation>"] : []),
+		...(active ? ["    <activation>active</activation>"] : []),
 		`    <location>${escapeXml(skill.filePath)}</location>`,
 		"  </skill>",
 	].join("\n");

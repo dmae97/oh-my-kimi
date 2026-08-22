@@ -9,6 +9,7 @@
 import { describe, expect, it } from "vitest";
 import { auditCapabilities, classifyAgent, deriveCapabilities } from "./agent-capability-router.ts";
 import { buildCapabilityCatalog } from "./capabilities.ts";
+import { DOMAIN_PROFILES } from "./domain-profiles.ts";
 
 // Built once at module scope from the live skill tree under the agent
 // directory. This is populated during local verification but empty in CI (the
@@ -17,6 +18,12 @@ import { buildCapabilityCatalog } from "./capabilities.ts";
 // MCP/hooks sets are a fixed OMK list and stay populated everywhere.
 const catalog = buildCapabilityCatalog({ agentDir: `${process.env.HOME ?? "/home/yu"}/.omk/agent` });
 const hasSkillCatalog = catalog.skills.size > 0;
+
+describe("domain profile safety", () => {
+	it("does not route agents to offensive jailbreak skills", () => {
+		expect(DOMAIN_PROFILES.flatMap((profile) => profile.skillPool)).not.toContain("offensive-jailbreak");
+	});
+});
 
 describe("classifyAgent", () => {
 	it("classifies by name token: seo-specialist → marketing-content", () => {

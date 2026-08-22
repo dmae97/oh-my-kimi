@@ -3,11 +3,13 @@
  * Release script for OMK
  *
  * Usage:
- *   node scripts/release.mjs <major|minor|patch>
+ *   node scripts/release.mjs <minor|patch>
  *   node scripts/release.mjs <x.y.z>
  *
+ * Policy: there are no major releases (specs/constitution.md).
+ *
  * Steps:
- * 1. Check for uncommitted changes
+ * 1. Check the release branch and for uncommitted changes
  * 2. Bump version via npm run version:xxx or set an explicit version
  * 3. Update CHANGELOG.md files: [Unreleased] -> [version] - date
  * 4. Regenerate release artifacts
@@ -23,11 +25,17 @@ import { readFileSync, writeFileSync, readdirSync, existsSync } from "fs";
 import { join } from "path";
 
 const RELEASE_TARGET = process.argv[2];
-const BUMP_TYPES = new Set(["major", "minor", "patch"]);
+const BUMP_TYPES = new Set(["minor", "patch"]);
+const RELEASE_BRANCH = "main";
 const SEMVER_RE = /^\d+\.\d+\.\d+$/;
 
+if (RELEASE_TARGET === "major") {
+	console.error("Error: major releases are not allowed (specs/constitution.md). Use minor or patch.");
+	process.exit(1);
+}
+
 if (!RELEASE_TARGET || (!BUMP_TYPES.has(RELEASE_TARGET) && !SEMVER_RE.test(RELEASE_TARGET))) {
-	console.error("Usage: node scripts/release.mjs <major|minor|patch|x.y.z>");
+	console.error("Usage: node scripts/release.mjs <minor|patch|x.y.z>");
 	process.exit(1);
 }
 
@@ -100,6 +108,13 @@ function bumpOrSetVersion(target) {
 		process.exit(1);
 	}
 
+	if (Number(target.split(".")[0]) !== Number(currentVersion.split(".")[0])) {
+		console.error(
+			`Error: ${target} is a major bump from ${currentVersion}; major releases are not allowed (specs/constitution.md).`,
+		);
+		process.exit(1);
+	}
+
 	console.log(`Setting explicit version (${target})...`);
 	run(
 		`npm version ${target} --workspaces --include-workspace-root --no-git-tag-version && node scripts/sync-versions.js && npm install --package-lock-only --ignore-scripts`,
@@ -156,7 +171,19 @@ function addUnreleasedSection() {
 // Main flow
 console.log("\n=== Release Script ===\n");
 
-// 1. Check for uncommitted changes
+// 1. Check the release branch and for uncommitted changes
+console.log(`Checking the release branch (${RELEASE_BRANCH})...`);
+const currentBranch = (run("git rev-parse --abbrev-ref HEAD", { silent: true }) || "").trim();
+if (currentBranch !== RELEASE_BRANCH) {
+	console.error(
+		currentBranch === "HEAD"
+			? `Error: HEAD is detached. Release commits and tags must be created on ${RELEASE_BRANCH}.`
+			: `Error: on branch '${currentBranch}'. Releases must run on ${RELEASE_BRANCH}.`,
+	);
+	process.exit(1);
+}
+console.log(`  On ${RELEASE_BRANCH}\n`);
+
 console.log("Checking for uncommitted changes...");
 const status = run("git status --porcelain", { silent: true });
 if (status && status.trim()) {

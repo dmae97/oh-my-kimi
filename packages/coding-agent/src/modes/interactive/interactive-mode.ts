@@ -62,6 +62,11 @@ import {
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.ts";
 import { type AgentSessionRuntime, SessionImportFileNotFoundError } from "../../core/agent-session-runtime.ts";
 import { type BangInvocation, parseBangInvocation } from "../../core/bang-skill-invocation.ts";
+import {
+	CompletionSoundService,
+	resolveCompletionSoundSettings,
+	selectCompletionSoundCandidates,
+} from "../../core/completion-sound.ts";
 import type {
 	AutocompleteProviderFactory,
 	EditorFactory,
@@ -74,12 +79,20 @@ import type {
 } from "../../core/extensions/index.ts";
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.ts";
 import { OMK_GITHUB_REPOSITORY_URL } from "../../core/github-repository.ts";
+import { captureHostResourceSnapshot } from "../../core/host-resource-snapshot.ts";
 import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/http-dispatcher.ts";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import { createCompactionSummaryMessage } from "../../core/messages.ts";
 import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.ts";
 import { DefaultPackageManager } from "../../core/package-manager.ts";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "../../core/provider-display-names.ts";
+import { decideResourceAdmission } from "../../core/resource-admission.ts";
+import {
+	formatResourcePolicyLines,
+	formatResourceProbeLines,
+	formatResourceSummaryLines,
+	resolveResourceGovernorSettings,
+} from "../../core/resource-governor-settings.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
 import { type SessionContext, SessionManager } from "../../core/session-manager.ts";
@@ -2900,6 +2913,11 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
+			if (text === "/resource" || text.startsWith("/resource ")) {
+				this.editor.setText("");
+				await this.handleResourceCommand(text);
+				return;
+			}
 			if (text === "/star") {
 				this.handleStarCommand();
 				return true;
@@ -3057,6 +3075,13 @@ export class InteractiveMode {
 		this.footer.invalidate();
 
 		switch (event.type) {
+			case "prompt_settled":
+				// §17 (M4): fire-and-forget — the sound must never delay the prompt
+				// path or change outcomes; failures are diagnostics only.
+				void this._completionSoundService()
+					.handleSettled(event)
+					.then((result) => this.session.recordCompletionSoundResult(event.promptRunId, result));
+				break;
 			case "agent_start":
 				this.workingStartedAt = Date.now();
 				this.pendingTools.clear();
@@ -5854,6 +5879,74 @@ export class InteractiveMode {
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(theme.fg("dim", `Session name set: ${name}`), 1, 0));
 		this.ui.requestRender();
+	}
+
+	/**
+	 * `/resource [probe|policy]` (roadmap §19.1, observe-only in this release):
+	 * summary shows pressure/action/effective caps, `probe` shows verbose local
+	 * host details, `policy` shows mode/thresholds/caps. Permits and shards
+	 * views arrive with their subsystems (M3/M5).
+	 */
+	private async handleResourceCommand(text: string): Promise<void> {
+		const subcommand = text.replace(/^\/resource\s*/, "").trim();
+		if (subcommand !== "" && subcommand !== "probe" && subcommand !== "policy") {
+			this.showWarning("Usage: /resource [probe|policy]");
+			this.ui.requestRender();
+			return;
+		}
+		const resolved = resolveResourceGovernorSettings(this.settingsManager.getResourceGovernorSettings());
+		const lines: string[] = [];
+		if (subcommand === "policy") {
+			lines.push(theme.bold("Resource Policy"), "", ...formatResourcePolicyLines(resolved));
+		} else {
+			const snapshot = await captureHostResourceSnapshot({
+				maxProbeMs: resolved.maxProbeMs,
+				cpuSampleMs: resolved.cpuSampleMs,
+			});
+			if (subcommand === "probe") {
+				lines.push(theme.bold("Resource Probe"), "", ...formatResourceProbeLines(snapshot));
+			} else {
+				const decision = decideResourceAdmission({
+					snapshot,
+					config: resolved.admission,
+					configuredCaps: {
+						maxToolConcurrency: this.settingsManager.getAgentRuntimeSettings().maxToolConcurrency,
+					},
+				});
+				lines.push(theme.bold("Resource Status"), "", ...formatResourceSummaryLines(resolved.mode, decision));
+			}
+			for (const error of resolved.errors) {
+				lines.push(theme.fg("dim", `settings error: ${error}`));
+			}
+		}
+		this.chatContainer.addChild(new Spacer(1));
+		this.chatContainer.addChild(new Text(lines.join("\n"), 1, 0));
+		this.ui.requestRender();
+	}
+
+	private _completionSound: CompletionSoundService | undefined;
+
+	/** §17.4: sounds play only on this interactive TTY surface, never RPC/JSON/print/CI. */
+	private _completionSoundService(): CompletionSoundService {
+		this._completionSound ??= new CompletionSoundService({
+			getSettings: () => this.settingsManager.getNotificationSettings().completionSound,
+			surface: () => ({
+				isTui: true,
+				isTty: process.stdout.isTTY === true,
+				isCi: process.env.CI !== undefined && process.env.CI !== "",
+			}),
+			candidates: () => {
+				const resolved = resolveCompletionSoundSettings(
+					this.settingsManager.getNotificationSettings().completionSound,
+				);
+				return selectCompletionSoundCandidates({
+					platform: process.platform,
+					isWsl: process.platform === "linux" && /microsoft/i.test(os.release()),
+					terminalBellFallback: resolved.terminalBellFallback,
+				});
+			},
+		});
+		return this._completionSound;
 	}
 
 	private handleSessionCommand(): void {

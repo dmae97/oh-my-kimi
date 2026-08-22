@@ -241,6 +241,9 @@ describe("RunJournal writer", () => {
 			{ area: "process", code: "crash" },
 			{ area: "configuration", code: "invalid" },
 			{ area: "internal", code: "unclassified" },
+			// §15.4 resource causes cover both phases: preflight (memory) and tool (queue_overflow).
+			{ area: "resource", code: "memory" },
+			{ area: "resource", code: "queue_overflow" },
 		];
 		const producedKinds = new Set<string>();
 		for (const [index, cause] of causes.entries()) {

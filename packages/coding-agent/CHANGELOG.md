@@ -2,6 +2,43 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added global-only `defaultActiveSkills` so operator-selected, user-scoped skill names can stay active in every prompt while full instructions remain on-demand.
+
+## [0.96.2] - 2026-08-21
+
+### Added
+
+- Added resource-aware host snapshots, admission decisions, generation-safe per-run tool-cap leases, workload classification, weighted FIFO permits, and `omk doctor resources` / `/resource` operator surfaces.
+- Added internal Vitest, Jest, workspace, and Go shard planners plus a journaled executor with corruption quarantine, completed-shard resume, admission-aware execution, and aggregate `workload_shard_result.v1` evidence. Automatic session-command sharding is not enabled.
+- Added an internal subagent lane launcher that enforces parent admission width and shares its permit pool; live child-launch wiring is not enabled.
+- Added exactly-once `prompt_settled` and an opt-in completion sound.
+- Added a local-only resource observation journal at `.omk/runs/<promptRunId>/resource-observations.jsonl`, recording bounded probe health, admission caps, classification, permit waits, settlement, and sound outcomes without raw host measurements.
+- The `QWEN TOKEN PLAN` status entry now uses the official QwenCloud management CLI to show the seven-day usage window and reset time.
+
+### Changed
+
+- The session-termination classifier now accepts `resource.*` causes for memory, disk, CPU, heap, unavailable probes, and permit queue overflow. Only CPU pressure can qualify for automatic retry; live resource gates currently return bounded block results.
+- `resourceGovernor.mode: "observe"` is the default and records decisions without enforcing caps. Both `"observe"` and `"off"` preserve v0.96.1 scheduling behavior.
+
+### Fixed
+
+- Top-level `omk --help` now lists `omk doctor resources [--json]`.
+- Removed development-only `prepare` and `postinstall` hooks from the published CLI manifest; default npm installs no longer call an unshipped workspace-linking script.
+- Bound resource observations and completion-sound results to their originating prompt journals, including consecutive fast observe-mode runs.
+- Capped workspace shard plans at 16 while preserving every workspace through deterministic chunks.
+- Ensured `prompt_settled` consistently follows `agent_end` as the final run event.
+
+### Security
+
+- Qwen quota discovery never sends an inference API key to a management endpoint, never reads browser cookies, and passes only non-secret process context to the QwenCloud child CLI.
+- Removed the shipped subagent example's `offensive-jailbreak` skill route.
+
+### Docs
+
+- Documented an attributable AdaptOrch.com link for evaluating a separate hosted patch-evidence service; AdaptOrch remains distinct from the MIT-licensed OMK packages.
+
 ## [0.96.1] - 2026-08-20
 
 ### Added

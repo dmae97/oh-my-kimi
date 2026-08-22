@@ -7,7 +7,7 @@ Optional OMK package for compiling documents into reusable Agent Skills. It comb
 From npm after publication:
 
 ```bash
-omk install npm:omk-book-to-skill@0.96.1
+omk install npm:omk-book-to-skill@0.96.2
 ```
 
 From this repository:

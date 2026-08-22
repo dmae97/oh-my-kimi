@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.96.2] - 2026-08-21
+
+### Fixed
+
+- Updated the topology client to read and validate AdaptOrch's current `topology` response field and six supported topology values. Malformed or obsolete responses now fail closed before approval comparisons.
+
 ## [0.96.1] - 2026-08-20
 
 ### Notes

@@ -94,6 +94,12 @@ describe("Qwen OAuth provider", () => {
 		expect(normalizeQwenBaseUrl(undefined)).toBe("https://dashscope.aliyuncs.com/compatible-mode/v1");
 	});
 
+	it("rejects non-HTTPS and unapproved resource origins", () => {
+		expect(() => normalizeQwenBaseUrl("http://portal.qwen.ai")).toThrow("approved HTTPS origin");
+		expect(() => normalizeQwenBaseUrl("https://attacker.example/v1")).toThrow("approved HTTPS origin");
+		expect(() => normalizeQwenBaseUrl("https://portal.qwen.ai@attacker.example/v1")).toThrow("approved HTTPS origin");
+	});
+
 	it("adds default Qwen models at resource_url without clobbering user models or duplicating ids", () => {
 		const cred: OAuthCredentials = { access: "a", refresh: "r", expires: Date.now(), resource_url: "portal.qwen.ai" };
 		// Pre-existing: an unrelated model, a user-custom qwen model, and one that collides with a default id.
@@ -144,6 +150,21 @@ describe("Qwen OAuth provider", () => {
 		expect(creds.refresh).toBe("ref");
 		expect(creds.resource_url).toBe("portal.qwen.ai");
 		expect(fetchMock).toHaveBeenCalled();
+	});
+
+	it("does not expose token response bodies in refresh errors", async () => {
+		const secret = "secret-token-value";
+		vi.spyOn(globalThis, "fetch").mockResolvedValue(
+			jsonResponse({ access_token: secret, refresh_token: secret, error: "invalid_grant" }, 401),
+		);
+
+		const error = await refreshQwenToken("old-refresh").then(
+			() => undefined,
+			(reason: unknown) => reason,
+		);
+
+		expect(String(error)).not.toContain(secret);
+		expect(String(error)).toContain("Qwen token refresh failed (401)");
 	});
 
 	it("refreshes tokens against the token endpoint", async () => {

@@ -65,7 +65,9 @@ describe("test harness", () => {
 
 		const receipt = harness.latestReceipt();
 		expect(receipt.events[0]?.type).toBe("agent_start");
-		expect(receipt.events.at(-1)?.type).toBe("agent_end");
+		// §16 (M4): prompt_settled trails agent_end as the run's final event.
+		expect(receipt.events.at(-1)?.type).toBe("prompt_settled");
+		expect(receipt.events.at(-2)?.type).toBe("agent_end");
 		expect(receipt.contexts).toHaveLength(1);
 		expect(receipt.assistantMessages[0]?.stopReason).toBe("stop");
 	});
