@@ -229,7 +229,7 @@ not part of this repository or the `omk-adaptorch-wpl` package.
 - [Containerization](packages/coding-agent/docs/containerization.md)
 - [Public skill catalog](SKILLS.md)
 - [Changelog](packages/coding-agent/CHANGELOG.md)
-- [Release notes for v0.96.2](.github/RELEASE_NOTES_v0.96.2.md)
+- [Release notes for v0.97.0](.github/RELEASE_NOTES_v0.97.0.md)
 
 ## Development
 
@@ -272,6 +272,32 @@ structure for bounded recovery instead of silently starting over.
 ## Recent releases
 
 <!-- releases:start -->
+
+## Release v0.97.0
+
+### Added
+
+- Added the repository-understanding default: a generated `openwiki/` evidence index with grounded, staleness-tracked claims, OpenWiki managed blocks in root `AGENTS.md`/`CLAUDE.md`, a scheduled `openwiki-update` GitHub Actions workflow (Gemini provider by default), and a README section describing the local-wiki protocol for fresh sessions. The vendored `oh-my-pi` tree was removed; README now acknowledges pi (badlogic/pi-mono) and oh-my-pi as upstream origins.
+- Added global-only `defaultActiveSkills` so operator-selected, user-scoped skill names can stay active in every prompt while full instructions remain on-demand.
+- The model registry now keeps a bounded audit trail of every successfully loaded `models.json` (last 10 snapshots) and warns when model entries disappear between loads, so silent config rewrites by other sessions surface immediately instead of losing custom models.
+- Images pasted or dragged into the interactive editor now attach as preview chips above the input through a bounded in-memory attachment store instead of per-paste temp files. Attachments are released exactly when their prompt is accepted and stay attached for retry when the turn fails before acceptance.
+- Compaction summarization now walks the configured resilience failover chain once when the summarization model hits quota/billing exhaustion; if every candidate is also quota-blocked it fails with a new non-retryable `compaction.quota_exhausted` termination cause whose guidance points at `/model`, `compaction.model`, or waiting for reset.
+- Upstream availability failures (gateway 5xx passthroughs, streams ending without a finish reason) are classified as network errors, and the retry path first rotates to another authenticated route serving the same underlying model family before falling back to the standard retry/failover chain.
+
+### Changed
+
+- YOLO mode (`OMK_YOLO` / `OMK_COMMAND_SAFETY=0` / `OMK_DISABLE_COMMAND_SAFETY`) is now evaluated in one place, the shared command-safety gate decision engine: every verdict — including block-tier commands and privilege prompts — runs without prompting, and the RPC headless bash safety floor honors the same opt-out.
+- Refreshed the bundled model catalog (new DeepSeek V4 Flash Vision experimental routes and Thinking Machines Inkling free routes; removed dead free-tier aliases).
+
+### Security
+
+- The bash command-safety classifier now extracts command substitutions (`$(...)`, backticks, `<(...)`/`>(...)`) with quote-aware matching and recursively classifies their bodies up to a bounded depth, merging every risk signal by severity instead of returning on the first hit, so a destructive body such as `echo $(rm -rf ~)` can no longer ride behind a benign-looking outer command.
+
+### Fixed
+
+- Empty streamed completions (`stop` with no text, thinking, or tool call) are now treated as dead streams and retried within the existing retry budget instead of being accepted as a successful turn.
+
+Release notes live in [RELEASE_NOTES_v0.97.0.md](.github/RELEASE_NOTES_v0.97.0.md).
 
 ## Release v0.96.2
 
@@ -349,28 +375,6 @@ Release notes live in [RELEASE_NOTES_v0.96.2.md](.github/RELEASE_NOTES_v0.96.2.m
 - Removed the `grok-oauth-proxy` provider path. Grok harness dispatch, failover, usage, and presets now use native `xai`. Stale `models.json` entries for `grok-oauth-proxy` are ignored instead of reappearing in `/login` and `/model`.
 
 Release notes live in [RELEASE_NOTES_v0.96.1.md](.github/RELEASE_NOTES_v0.96.1.md).
-
-## Release v0.96.0
-
-### Added
-
-- Added `omk-protocol`, the versioned `TaskSpec -> ExecutionAttempt -> Observation -> EvaluationResult -> RuntimeDecision` contract package, with runtime validators, explicit waivers, and pure semantic and runtime-decision reducers.
-- Added `evidenceReceiptToObservation()` to project integrity-checked EvidenceReceipt v3 cores into immutable protocol facts. Legacy mutable `EvidenceStatus` and `TaskContract` verdict APIs remain compatible but are deprecated.
-- Added the optional `omk-book-to-skill` package with compile/update commands, a pinned upstream workflow, advisory generated-skill scanning, and SHA-256 source/artifact provenance checks. Python extractors remain outside OMK core.
-- Added deterministically seeded, bounded `fast-check` model and property suites for WPL transitions, replay migration and CAS, evidence freshness, subagent topology, run-journal CAS, and timeout/abort settlement ordering.
-
-### Changed
-
-- New replay events declare `jcs-rfc8785-v2` and hash RFC 8785-canonical payloads. Events without an algorithm remain verified as `json-stringify-v1`; mixed ledgers and exports preserve legacy records without rewriting them.
-
-### Fixed
-
-- NVIDIA NIM's `z-ai/glm-5.2` entry now transmits `reasoning_effort`, including the generated `max` thinking level; other NVIDIA models keep conservative compatibility defaults.
-- Billing-cycle and quota exhaustion, including provider 403 usage-limit responses, now classify as `provider.rate_limit` and can switch to the first configured, authenticated resilience candidate before retry. Each attempt remains journaled, and a recovered retry ends with a later `completed` termination.
-- Subagent DAG scheduling now sorts simultaneously ready lanes by lane ID, so topology aggregation does not depend on input insertion order.
-- Local release bundles now include `omk-adaptorch-wpl`, allowing isolated installs of the full packed workspace without resolving that dependency from the registry.
-
-Release notes live in [RELEASE_NOTES_v0.96.0.md](.github/RELEASE_NOTES_v0.96.0.md).
 
 <!-- releases:end -->
 
