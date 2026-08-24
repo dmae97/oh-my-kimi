@@ -144,6 +144,27 @@ function getChangelogs() {
 		.filter((path) => existsSync(path));
 }
 
+export function releaseNotesExist(version, root = ".") {
+	return existsSync(join(root, ".github", `RELEASE_NOTES_v${version}.md`));
+}
+
+// packages/coding-agent/README.md carries two versioned references that must move
+// with every release: the release-notes link and the install example pin.
+export function updateCodingAgentReadme(version, path = "packages/coding-agent/README.md") {
+	const content = readFileSync(path, "utf-8");
+	const updated = content
+		.replace(
+			/\[v\d+\.\d+\.\d+\]\(([^)]*RELEASE_NOTES_v)\d+\.\d+\.\d+(\.md)\)/g,
+			`[v${version}]($1${version}$2)`,
+		)
+		.replace(/RELEASE_NOTES_v\d+\.\d+\.\d+\.md/g, `RELEASE_NOTES_v${version}.md`)
+		.replace(/npm:omk-book-to-skill@\d+\.\d+\.\d+/g, `npm:omk-book-to-skill@${version}`);
+	if (updated !== content) {
+		writeFileSync(path, updated);
+		console.log(`  Updated ${path} version references to ${version}`);
+	}
+}
+
 function updateChangelogsForRelease(version) {
 	const date = new Date().toISOString().split("T")[0];
 	const changelogs = getChangelogs();
@@ -182,6 +203,14 @@ function addUnreleasedSection() {
 	}
 }
 
+export function computeTargetVersion(target, current) {
+	if (BUMP_TYPES.has(target)) {
+		const [major, minor, patch] = current.split(".").map(Number);
+		return target === "minor" ? `${major}.${minor + 1}.0` : `${major}.${minor}.${patch + 1}`;
+	}
+	return target;
+}
+
 // Main flow (only when invoked directly; importers get the exported guards)
 if (isMain) {
 console.log("\n=== Release Script ===\n");
@@ -208,13 +237,27 @@ if (status && status.trim()) {
 }
 console.log("  Working directory clean\n");
 
+// 1.5. Fail fast: release notes for the target version must exist before any
+// side effect (version bump rewrites every package.json and the lockfile).
+const expectedVersion = computeTargetVersion(RELEASE_TARGET, getVersion());
+if (!releaseNotesExist(expectedVersion)) {
+	console.error(
+		`Error: .github/RELEASE_NOTES_v${expectedVersion}.md does not exist. Write the release notes first, then re-run.`,
+	);
+	process.exit(1);
+}
+
 // 2. Bump or set version
 const version = bumpOrSetVersion(RELEASE_TARGET);
 console.log(`  New version: ${version}\n`);
 
-// 3. Update changelogs
+// 3. Update changelogs, then sync the README release surface BEFORE the
+// consistency gate: the gate compares README against the new changelog
+// version, so syncing after it always fails.
 console.log("Updating CHANGELOG.md files...");
 updateChangelogsForRelease(version);
+updateCodingAgentReadme(version);
+run("node scripts/sync-readme-releases.mjs");
 run("node scripts/check-release-consistency.mjs --release");
 console.log();
 
@@ -223,7 +266,6 @@ console.log("Regenerating release artifacts...");
 run("npm --prefix packages/ai run generate-models");
 run("npm --prefix packages/ai run generate-image-models");
 run("npm run shrinkwrap:coding-agent");
-run("node scripts/sync-readme-releases.mjs");
 console.log();
 
 // 5. Run checks
