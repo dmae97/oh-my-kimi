@@ -3,6 +3,12 @@ import type { ContextBudgetItemV2, ContextBudgetPriorityV2, ContextBudgetTierV2 
 export interface PlannedItemV2 {
 	readonly item: ContextBudgetItemV2;
 	readonly fullTokens: number;
+	/**
+	 * Cheapest non-omit representation cost, i.e. the true marginal cost of
+	 * admitting this item at all. Equals `fullTokens` when the item has no
+	 * cheaper pointer/summary/headroom representation.
+	 */
+	readonly admissibleTokens: number;
 	readonly contentHash: string;
 	readonly baseScore: number;
 	redundancyPenalty: number;
@@ -73,18 +79,29 @@ export function applyRedundancyPenalties(items: readonly PlannedItemV2[]): Map<s
 	return penalties;
 }
 
+/**
+ * Order optional items for the budgeted 0/1 knapsack the planner greedily fills.
+ *
+ * Value density (effective score per token) is the primary key. Ordering by
+ * priority class first would let a single expensive `high` item evict an
+ * arbitrary number of far denser `medium` items, which makes the greedy
+ * unbounded-bad against the optimal packing. Priority still shapes the outcome
+ * through `PRIORITY_WEIGHT_V2` in the score numerator, and non-negotiable
+ * context uses `hard`/`required`, which the planner pins before this ordering
+ * is consulted. Remaining keys break ties into a deterministic total order.
+ */
 export function compareOptionalForSelection(a: PlannedItemV2, b: PlannedItemV2): number {
-	const priorityDelta = priorityRank(b.item.priority) - priorityRank(a.item.priority);
-	if (priorityDelta !== 0) {
-		return priorityDelta;
-	}
-	if (b.effectiveScore !== a.effectiveScore) {
-		return b.effectiveScore - a.effectiveScore;
-	}
 	const aDensity = density(a);
 	const bDensity = density(b);
 	if (bDensity !== aDensity) {
 		return bDensity - aDensity;
+	}
+	if (b.effectiveScore !== a.effectiveScore) {
+		return b.effectiveScore - a.effectiveScore;
+	}
+	const priorityDelta = priorityRank(b.item.priority) - priorityRank(a.item.priority);
+	if (priorityDelta !== 0) {
+		return priorityDelta;
 	}
 	if (a.fullTokens !== b.fullTokens) {
 		return a.fullTokens - b.fullTokens;
@@ -125,9 +142,15 @@ function redundancyPenalty(tokens: number): number {
 	return Math.max(10, Math.sqrt(Math.max(0, tokens)) * 0.8);
 }
 
+/**
+ * Value per token of the CHEAPEST admissible representation. Dividing by
+ * `fullTokens` would systematically penalize retrievable or summarizable items,
+ * which are exactly the items the planner admits cheaply when the budget is
+ * tight — the regime where this ordering decides anything at all.
+ */
 function density(planned: PlannedItemV2): number {
 	if (!Number.isFinite(planned.effectiveScore) || planned.effectiveScore <= 0) {
 		return planned.effectiveScore > 0 ? planned.effectiveScore : 0;
 	}
-	return planned.effectiveScore / Math.max(planned.fullTokens, 1);
+	return planned.effectiveScore / Math.max(planned.admissibleTokens, 1);
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	buildContextBudgetRepresentationCacheKeyV2,
 	CONTEXT_BUDGET_POLICY_VERSION_V2,
+	CONTEXT_BUDGET_SELECTION_POLICY_V2,
 	computeContextBudgetQueryIntentHashV2,
 	computeContextBudgetRepresentationFingerprintV2,
 	contentHashOf,
@@ -117,6 +118,7 @@ describe("context budget v2 exact cache", () => {
 		const summaryKey = buildContextBudgetRepresentationCacheKeyV2({
 			budgetBucket: "4000",
 			compressorId: "none",
+			selectionPolicyVersion: CONTEXT_BUDGET_SELECTION_POLICY_V2,
 			modelId: "gpt-cache-test",
 			namespace: "context-budget-v2",
 			policyVersion: CONTEXT_BUDGET_POLICY_VERSION_V2,

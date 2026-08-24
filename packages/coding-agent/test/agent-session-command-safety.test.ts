@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BeforeToolCallContext } from "omk-agent-core";
 import { getModel } from "omk-ai";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import commandSafetyGate from "../src/core/extensions/builtin/command-safety-gate.ts";
 import { ModelRegistry } from "../src/core/model-registry.ts";
@@ -34,7 +34,17 @@ function bashToolCallContext(command: string): BeforeToolCallContext {
 	} as unknown as BeforeToolCallContext;
 }
 
+// Hermetic regardless of runner: pin safety env off (the shared vitest setup
+// scrubs OMK_* but a bare single-file run without the package config does not).
+beforeEach(() => {
+	vi.stubEnv("OMK_YOLO", "");
+	vi.stubEnv("OMK_COMMAND_SAFETY", "");
+	vi.stubEnv("OMK_DISABLE_COMMAND_SAFETY", "");
+	vi.stubEnv("OMK_COMMAND_SAFETY_ASSUME_YES", "");
+});
+
 afterEach(() => {
+	vi.unstubAllEnvs();
 	for (const dir of tempDirs.splice(0, tempDirs.length)) {
 		rmSync(dir, { recursive: true, force: true });
 	}

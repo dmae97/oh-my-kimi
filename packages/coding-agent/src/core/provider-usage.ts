@@ -20,6 +20,8 @@ const CLAUDE_QUOTA_PROBE_COOLDOWN_MS = 60 * 60 * 1000;
 const CLAUDE_QUOTA_PROBE_TIMEOUT_MS = 10_000;
 const QWEN_CLI_TIMEOUT_MS = 15_000;
 const QWEN_CLI_ARGS = ["usage", "summary", "--format", "json"] as const;
+const qwenBillingArgs = (month: string): readonly string[] =>
+	["billing", "breakdown", "--from", month, "--to", month, "--group-by", "model", "--format", "json"] as const;
 const QWEN_CONNECT_HINT = "connect: npm i -g @qwencloud/qwencloud-cli && qwencloud auth login";
 const QWEN_CLI_ENV_KEYS = [
 	"PATH",
@@ -344,12 +346,75 @@ export async function fetchQwenTokenPlanUsage(
 		}
 		const payload: unknown = JSON.parse(result.stdout);
 		const tokenPlan = record(record(payload)?.token_plan);
-		if (tokenPlan?.subscribed === false) return unavailable("no active token plan");
+		if (tokenPlan?.subscribed === false) {
+			const periodTo = record(record(payload)?.period)?.to;
+			const month = typeof periodTo === "string" ? periodTo.slice(0, 7) : new Date().toISOString().slice(0, 7);
+			return unavailable(await billingFallbackMessage(runner, month, payload));
+		}
 		const windows = parseQwenTokenPlanUsage(payload);
 		return windows ? { label, windows } : unavailable("usage unavailable");
 	} catch {
 		return unavailable("usage unavailable");
 	}
+}
+
+/** No active token plan: fall back to settled billing — subscription charge + PAYG spend — when the CLI reports it. */
+async function billingFallbackMessage(runner: QwenCliRunner, month: string, summaryPayload: unknown): Promise<string> {
+	try {
+		const result = await runner(qwenBillingArgs(month), QWEN_CLI_TIMEOUT_MS);
+		if (result.kind !== "ran" || result.exitCode !== 0 || result.stdout.length > MAX_USAGE_RESPONSE_BYTES) {
+			return paygFallbackMessage(summaryPayload);
+		}
+		const billing = parseBillingBreakdown(JSON.parse(result.stdout));
+		const cur = billing.currency === undefined || billing.currency === "USD" ? "$" : `${billing.currency} `;
+		const parts: string[] = [];
+		if (billing.subscription !== undefined && billing.subscription > 0) {
+			parts.push(`subscription ${cur}${billing.subscription.toFixed(2)}`);
+		}
+		const payg = billing.payg ?? paygTotalCost(summaryPayload);
+		if (payg !== undefined && payg > 0) parts.push(`PAYG ${cur}${payg.toFixed(2)}`);
+		if (parts.length === 0) return "no active token plan";
+		return `${parts.join(" · ")} (${month})`;
+	} catch {
+		return paygFallbackMessage(summaryPayload);
+	}
+}
+
+/** Split settled billing rows into the fixed subscription charge vs per-model PAYG spend. */
+function parseBillingBreakdown(payload: unknown): { subscription?: number; payg?: number; currency?: string } {
+	const data = record(payload);
+	const rows = Array.isArray(data?.rows) ? data.rows : [];
+	let subscription: number | undefined;
+	let payg = 0;
+	let paygSeen = false;
+	for (const raw of rows) {
+		const row = record(raw);
+		const amount = finiteNumber(row?.amount);
+		if (amount === undefined) continue;
+		const key = typeof row?.groupKey === "string" ? row.groupKey : "";
+		if (key === "__tax__") continue;
+		if (key === "DIMENSION_FILTER_NULL_VALUE") subscription = (subscription ?? 0) + amount;
+		else {
+			payg += amount;
+			paygSeen = true;
+		}
+	}
+	const currency = typeof data?.currency === "string" ? data.currency : undefined;
+	return { subscription, payg: paygSeen ? payg : undefined, currency };
+}
+
+function paygTotalCost(payload: unknown): number | undefined {
+	return finiteNumber(record(record(record(payload)?.pay_as_you_go)?.total)?.cost);
+}
+
+/** No active token plan: fall back to the account's pay-as-you-go spend when the CLI reports it. */
+function paygFallbackMessage(payload: unknown): string {
+	const cost = paygTotalCost(payload);
+	if (cost === undefined) return "no active token plan";
+	const currency = "$";
+	const period = record(record(payload)?.period);
+	const from = typeof period?.from === "string" ? period.from.slice(0, 7) : undefined;
+	return `no token plan · PAYG ${currency}${cost.toFixed(2)}${from ? ` (${from})` : ""}`;
 }
 
 function runQwenCli(args: readonly string[], timeoutMs: number): Promise<QwenCliResult> {

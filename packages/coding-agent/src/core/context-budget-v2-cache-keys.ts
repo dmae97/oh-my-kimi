@@ -4,6 +4,7 @@ import {
 	type ContextCacheInvalidationSnapshot,
 	serializeContextCacheSnapshot,
 } from "./context-budget-v2-cache-invalidation.ts";
+import { CONTEXT_BUDGET_SELECTION_POLICY_V2 } from "./context-budget-v2-types.ts";
 
 const DEFAULT_CACHE_NAMESPACE = "context-budget-v2";
 const DEFAULT_TOKENIZER_ID = "heuristic-v1";
@@ -42,6 +43,8 @@ export interface ContextBudgetCacheKeyBaseV2 {
 	readonly modelId: string;
 	readonly tokenizerId: string;
 	readonly policyVersion: string;
+	/** Selection-policy token; separate from `policyVersion`, which is public. */
+	readonly selectionPolicyVersion: string;
 	readonly queryIntentHash: string;
 	readonly queryIntentCluster?: string;
 	readonly budgetBucket: string;
@@ -57,6 +60,7 @@ export function createContextBudgetCacheKeyBaseV2(input: {
 	readonly modelId: string;
 	readonly tokenizerId?: string;
 	readonly policyVersion: string;
+	readonly selectionPolicyVersion?: string;
 	readonly query?: string;
 	readonly queryIntentHash?: string;
 	readonly queryIntentCluster?: string;
@@ -73,6 +77,7 @@ export function createContextBudgetCacheKeyBaseV2(input: {
 		modelId: input.modelId,
 		tokenizerId: input.tokenizerId ?? DEFAULT_TOKENIZER_ID,
 		policyVersion: input.policyVersion,
+		selectionPolicyVersion: input.selectionPolicyVersion ?? CONTEXT_BUDGET_SELECTION_POLICY_V2,
 		queryIntentHash,
 		queryIntentCluster: input.queryIntentCluster ?? queryIntentHash,
 		budgetBucket: input.budgetBucket ?? "unknown",

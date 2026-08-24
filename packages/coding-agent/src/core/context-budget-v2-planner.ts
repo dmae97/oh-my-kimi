@@ -69,7 +69,7 @@ export function planPromptContextBudgetV2(input: PromptContextBudgetInputV2): Pr
 		...DEFAULT_TIER_POLICY_V2,
 		...(input.tierPolicy ?? {}),
 	};
-	const basePlanned = createPlannedItems(input.items, input.tokenCounter, modelId);
+	const basePlanned = createPlannedItems(input.items, input.tokenCounter, modelId, qualityPolicy);
 	applyPlannerRedundancyPenalties(basePlanned);
 	const rawTokens = basePlanned.reduce((sum, planned) => sum + planned.fullTokens, 0);
 
@@ -81,6 +81,7 @@ export function planPromptContextBudgetV2(input: PromptContextBudgetInputV2): Pr
 		modelId,
 		namespace: input.cacheNamespace,
 		policyVersion,
+		selectionPolicyVersion: input.selectionPolicyVersion,
 		query: input.query,
 		queryIntentHash: input.queryIntentHash,
 		redactionPolicyHash: input.redactionPolicyHash,

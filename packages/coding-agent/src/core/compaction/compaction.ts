@@ -16,6 +16,7 @@ import {
 	createCompactionSummaryMessage,
 	createCustomMessage,
 } from "../messages.ts";
+import { isQuotaExhaustionMessage } from "../provider-resilience.ts";
 import { buildSessionContext, type CompactionEntry, type SessionEntry } from "../session-manager.ts";
 import {
 	computeFileLists,
@@ -830,10 +831,72 @@ Be concise. Focus on what's needed to understand the kept suffix.`;
  * Generate summaries for compaction using prepared data.
  * Returns CompactionResult - SessionManager adds uuid/parentUuid when saving.
  *
+ * When {@link failoverModels} is provided and the primary model fails with a
+ * quota/billing exhaustion error (same-model retry is useless until reset),
+ * the whole summarization is retried once with each candidate in order. Only
+ * quota-class errors are absorbed; any other failure surfaces immediately.
+ *
  * @param preparation - Pre-calculated preparation from prepareCompaction()
  * @param customInstructions - Optional custom focus for the summary
  */
 export async function compact(
+	preparation: CompactionPreparation,
+	model: Model<any>,
+	apiKey: string | undefined,
+	headers?: Record<string, string>,
+	customInstructions?: string,
+	signal?: AbortSignal,
+	thinkingLevel?: ThinkingLevel,
+	streamFn?: StreamFn,
+	retry?: RetryPolicy,
+	callbacks?: RetryCallbacks,
+	failoverModels?: readonly Model<any>[],
+): Promise<CompactionResult> {
+	try {
+		return await compactWithModel(
+			preparation,
+			model,
+			apiKey,
+			headers,
+			customInstructions,
+			signal,
+			thinkingLevel,
+			streamFn,
+			retry,
+			callbacks,
+		);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		if (!isQuotaExhaustionMessage(message) || !failoverModels || failoverModels.length === 0) throw error;
+		for (const candidate of failoverModels) {
+			if (candidate.provider === model.provider && candidate.id === model.id) continue;
+			if (signal?.aborted) throw error;
+			try {
+				return await compactWithModel(
+					preparation,
+					candidate,
+					apiKey,
+					headers,
+					customInstructions,
+					signal,
+					thinkingLevel,
+					streamFn,
+					retry,
+					callbacks,
+				);
+			} catch (candidateError) {
+				const candidateMessage = candidateError instanceof Error ? candidateError.message : String(candidateError);
+				if (!isQuotaExhaustionMessage(candidateMessage)) throw candidateError;
+				// Candidate is also quota-blocked — try the next one.
+			}
+		}
+		// Every candidate is quota-blocked too: surface the primary failure.
+		throw error;
+	}
+}
+
+/** Single-model compaction attempt (no failover). Implementation of {@link compact}. */
+async function compactWithModel(
 	preparation: CompactionPreparation,
 	model: Model<any>,
 	apiKey: string | undefined,

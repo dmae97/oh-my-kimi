@@ -38,6 +38,9 @@ const GIT_GLOBAL_OPTIONS_WITH_VALUE = new Set(["-C", "-c", "--git-dir", "--work-
 /** Maximum recursion depth when unwrapping shell wrappers (bash -c, eval, xargs, find -exec). */
 const MAX_WRAP_DEPTH = 6;
 
+/** Maximum recursion depth when extracting nested command substitutions ($(), backticks). */
+const MAX_SUBSTITUTION_DEPTH = 6;
+
 /** Executables that run an inline command string passed via a `-c`-style flag. */
 const SHELL_WRAPPERS = new Set(["bash", "sh", "zsh", "dash", "ksh", "ash"]);
 
@@ -99,6 +102,121 @@ const XARGS_OPTIONS_WITH_VALUE = new Set([
 ]);
 
 const HOME_VARIABLE_RM_TARGETS = new Set(["$home", "$" + "{home}", "$home/", "$" + "{home}/"]);
+
+/**
+ * Index of the parenthesis matching the one at {@link openIndex}, honoring
+ * quotes and backslash escapes so a `)` inside quotes does not terminate the
+ * substitution body. Returns -1 when unmatched.
+ */
+function findMatchingParen(text: string, openIndex: number): number {
+	let depth = 0;
+	let quote: "'" | '"' | undefined;
+	for (let index = openIndex; index < text.length; index += 1) {
+		const character = text[index];
+		if (character === "\\") {
+			index += 1;
+			continue;
+		}
+		if (quote) {
+			if (character === quote) quote = undefined;
+			continue;
+		}
+		if (character === "'" || character === '"') {
+			quote = character;
+			continue;
+		}
+		if (character === "(") depth += 1;
+		else if (character === ")") {
+			depth -= 1;
+			if (depth === 0) return index;
+		}
+	}
+	return -1;
+}
+
+/** Index of the unescaped backtick closing the substitution opened at {@link openIndex}. */
+function findClosingBacktick(text: string, openIndex: number): number {
+	for (let index = openIndex + 1; index < text.length; index += 1) {
+		if (text[index] === "\\") {
+			index += 1;
+			continue;
+		}
+		if (text[index] === "`") return index;
+	}
+	return -1;
+}
+
+/**
+ * Collect the command strings bash executes via command/process substitution:
+ * `$(cmd)`, backticks, `<(cmd)`, and `>(cmd)`. Single-quoted regions never
+ * expand and are skipped; double-quoted regions expand, so `$()`/backticks
+ * inside them are collected. Bodies are recursed into for nested
+ * substitutions up to {@link MAX_SUBSTITUTION_DEPTH}.
+ */
+export function extractCommandSubstitutions(command: string, depth = 0): string[] {
+	if (depth >= MAX_SUBSTITUTION_DEPTH) return [];
+	const bodies: string[] = [];
+	let quote: "'" | '"' | undefined;
+	for (let index = 0; index < command.length; index += 1) {
+		const character = command[index];
+		if (quote === "'") {
+			// No expansion of any kind happens inside single quotes.
+			if (character === "'") quote = undefined;
+			continue;
+		}
+		if (character === "\\") {
+			index += 1;
+			continue;
+		}
+		if (!quote && (character === "'" || character === '"')) {
+			quote = character;
+			continue;
+		}
+		if (character === "$" && command[index + 1] === "(") {
+			const close = findMatchingParen(command, index + 1);
+			if (close === -1) break;
+			const body = command.slice(index + 2, close);
+			bodies.push(body);
+			bodies.push(...extractCommandSubstitutions(body, depth + 1));
+			index = close;
+			continue;
+		}
+		if (character === "`") {
+			const close = findClosingBacktick(command, index);
+			if (close === -1) break;
+			const body = command.slice(index + 1, close);
+			bodies.push(body);
+			bodies.push(...extractCommandSubstitutions(body, depth + 1));
+			index = close;
+			continue;
+		}
+		// Process substitution is only valid unquoted.
+		if (!quote && (character === "<" || character === ">") && command[index + 1] === "(") {
+			const close = findMatchingParen(command, index + 1);
+			if (close === -1) break;
+			const body = command.slice(index + 2, close);
+			bodies.push(body);
+			bodies.push(...extractCommandSubstitutions(body, depth + 1));
+			index = close;
+		}
+	}
+	return bodies;
+}
+
+/**
+ * Classify every command-substitution body embedded in {@link command}.
+ * Bash executes these regardless of how benign the surrounding command looks,
+ * so `echo $(rm -rf ~)` must not sail through as allow-tier.
+ */
+function classifySubstitutionBodies(command: string, depth: number): CommandVerdict | null {
+	if (depth >= MAX_WRAP_DEPTH) return null;
+	let worst: CommandVerdict | null = null;
+	for (const body of extractCommandSubstitutions(command)) {
+		const bodyVerdict = classifyShellCommandInternal(body, depth + 1);
+		if (!worst || RISK_RANK[bodyVerdict.risk] > RISK_RANK[worst.risk]) worst = bodyVerdict;
+	}
+	return worst;
+}
 
 function verdict(risk: CommandRisk, rule: string, reason: string): CommandVerdict {
 	return { risk, rule, reason };
@@ -568,21 +686,28 @@ function classifySingleCommand(command: string, depth: number): CommandVerdict {
 	const trimmed = command.trim();
 	if (!trimmed) return allowVerdict();
 
-	const destructiveFilesystem = classifyDestructiveFilesystemCommand(trimmed);
-	if (destructiveFilesystem) return destructiveFilesystem;
+	// Merge every signal by risk rank instead of returning on the first hit so a
+	// dangerous substitution body cannot hide behind a benign-looking or merely
+	// confirm-tier surrounding command (e.g. `git stash $(mkfs.ext4 /dev/sda)`).
+	let selected: CommandVerdict | undefined;
+	const consider = (candidate: CommandVerdict | null) => {
+		if (candidate && (!selected || RISK_RANK[candidate.risk] > RISK_RANK[selected.risk])) {
+			selected = candidate;
+		}
+	};
+
+	consider(classifyDestructiveFilesystemCommand(trimmed));
 
 	const wrapped = classifyWrappedCommand(trimmed, depth);
-	if (wrapped && wrapped.risk === "block") return wrapped;
+	consider(wrapped?.risk === "block" ? wrapped : null);
 
-	const protectedGit = classifyProtectedGitCommand(trimmed);
-	if (protectedGit) return protectedGit;
+	consider(classifyProtectedGitCommand(trimmed));
+	consider(classifyPrivilegeCommand(trimmed));
 
-	const privilege = classifyPrivilegeCommand(trimmed);
-	if (privilege) return privilege;
+	consider(wrapped && RISK_RANK[wrapped.risk] > RISK_RANK.allow ? wrapped : null);
+	consider(classifySubstitutionBodies(trimmed, depth));
 
-	if (wrapped && RISK_RANK[wrapped.risk] > RISK_RANK.allow) return wrapped;
-
-	return allowVerdict();
+	return selected ?? allowVerdict();
 }
 
 function classifyShellCommandInternal(command: string, depth: number): CommandVerdict {

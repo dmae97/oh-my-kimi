@@ -172,6 +172,7 @@ export {
 	buildContextBudgetMaterializedRepresentationCacheKeyV2,
 	buildContextBudgetPlanCacheKeyV2,
 	CONTEXT_BUDGET_POLICY_VERSION_V2,
+	CONTEXT_BUDGET_SELECTION_POLICY_V2,
 	type ContextBudgetCacheProviderV2,
 	type ContextCacheInvalidationEvent,
 	type ContextCacheInvalidationSnapshot,

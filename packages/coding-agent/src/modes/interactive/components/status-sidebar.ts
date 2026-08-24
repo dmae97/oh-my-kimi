@@ -21,7 +21,13 @@ import { stripAnsi } from "../../../utils/ansi.ts";
 import { type ThemeColor, theme } from "../theme/theme.ts";
 import { boxBottom, boxTextLine, boxTop, sidebarRule } from "./control-panel-box.ts";
 import { classifyMcpStability } from "./control-panel-runtime-status.ts";
-import { formatBytes, formatCwdForFooter, formatPackageIntake, formatTokens } from "./footer.ts";
+import {
+	formatBytes,
+	formatCwdForFooter,
+	formatEndpointForFooter,
+	formatPackageIntake,
+	formatTokens,
+} from "./footer.ts";
 import { keyText } from "./keybinding-hints.ts";
 
 export const STATUS_SIDEBAR_WIDTH = 34;
@@ -162,6 +168,10 @@ export class StatusSidebarComponent implements Component {
 		lines.push(
 			boxTextLine(width, `${theme.fg("muted", "id   ")}${theme.fg("accent", state.model?.id ?? "no-model")}`),
 		);
+		const endpointHost = formatEndpointForFooter(state.model?.baseUrl);
+		if (endpointHost) {
+			lines.push(boxTextLine(width, `${theme.fg("muted", "endp ")}${theme.fg("dim", endpointHost)}`));
+		}
 		if (state.model?.reasoning) {
 			lines.push(
 				boxTextLine(width, `${theme.fg("muted", "think ")}${theme.fg("mdCode", state.thinkingLevel || "off")}`),
@@ -321,6 +331,10 @@ export class StatusSidebarComponent implements Component {
 			const snapshot = this.subscriptionUsage.get(provider);
 			const label = snapshot?.label ?? source?.label;
 			if (!label) continue;
+			const activeEndpoint =
+				provider === this.getSession().state.model?.provider
+					? formatEndpointForFooter(this.getSession().state.model?.baseUrl)
+					: undefined;
 			if (!snapshot) {
 				if (this.subscriptionUsageInFlight.has(provider)) {
 					lines.push(boxTextLine(width, `${theme.fg("accent", label)} ${theme.fg("dim", "loading…")}`));
@@ -329,10 +343,12 @@ export class StatusSidebarComponent implements Component {
 			}
 			if (snapshot.windows.length === 0) {
 				lines.push(boxTextLine(width, theme.fg("accent", label)));
+				if (activeEndpoint) lines.push(boxTextLine(width, theme.fg("dim", activeEndpoint)));
 				lines.push(boxTextLine(width, theme.fg("dim", snapshot.message ?? "usage unavailable")));
 				continue;
 			}
 			lines.push(boxTextLine(width, theme.fg("accent", label)));
+			if (activeEndpoint) lines.push(boxTextLine(width, theme.fg("dim", activeEndpoint)));
 			for (const window of snapshot.windows) {
 				lines.push(boxTextLine(width, usageMeter(window.label, window, width)));
 			}

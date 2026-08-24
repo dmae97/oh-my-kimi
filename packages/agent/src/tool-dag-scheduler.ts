@@ -29,6 +29,7 @@ import {
 	canonicalizeClaims,
 	claimsConflict,
 	type ResolveToolClaimsOptions,
+	resolutionsConflict,
 	resolveToolClaimsForCall,
 	type ToolClaimResolution,
 	type ToolResourceClaim,
@@ -167,6 +168,39 @@ export function assignDagLevels(entries: readonly ResolvedClaimEntry[]): number[
 		}
 	}
 	return levels.map((level) => level.indices);
+}
+
+/**
+ * Direct conflicting predecessors for each source-ordered entry: `result[i]`
+ * lists every earlier position `i` must wait for.
+ *
+ * This is the precedence graph that {@link assignDagLevels} approximates with a
+ * barrier schedule. Levels force every call in level N+1 to wait for ALL of
+ * level N, so one slow unrelated call in a level delays the whole next level.
+ * Dependency edges only connect calls that actually conflict, so a consumer can
+ * start each call as soon as its own predecessors settle.
+ *
+ * Deterministic and stable: the result is a pure function of the source-ordered
+ * canonicalized claims, and every list is ascending and strictly earlier-only.
+ * Transitively-implied edges are kept rather than reduced — waiting on an
+ * already-finished ancestor costs nothing and keeps this a simple pure scan.
+ *
+ * The graph is never deeper than the barrier schedule: for any `j` in
+ * `result[i]`, `i` conflicts with an entry in level `j`, so
+ * `level(i) >= level(j) + 1`, and depth follows by induction.
+ */
+export function assignDagDependencies(entries: readonly ResolvedClaimEntry[]): number[][] {
+	const dependencies: number[][] = [];
+	for (let index = 0; index < entries.length; index++) {
+		const blockers: number[] = [];
+		for (let earlier = 0; earlier < index; earlier++) {
+			if (resolutionsConflict(entries[earlier].resolution, entries[index].resolution)) {
+				blockers.push(earlier);
+			}
+		}
+		dependencies.push(blockers);
+	}
+	return dependencies;
 }
 
 /**

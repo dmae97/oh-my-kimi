@@ -1,5 +1,5 @@
 import { applyPatch } from "diff";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,11 +15,6 @@ import {
 	createWriteTool,
 } from "../src/index.ts";
 import * as shellModule from "../src/utils/shell.ts";
-
-// These tests assert the legacy OMK read/grep presentation format. Pin the
-// OMP seam opt-out (ADR-OMP-009) so they exercise the fallback path; the
-// default-on seam path is covered by omp-seam-wiring.test.ts.
-process.env.OMK_OMP_SEAMS = "0";
 
 // Hosts may have a locale configured that is not installed (e.g. LC_ALL=ko_KR.UTF-8),
 // which makes spawned shells print a setlocale warning on stderr and break exact
@@ -55,9 +50,9 @@ describe("Coding Agent Tools", () => {
 	let testDir: string;
 
 	beforeEach(() => {
-		// Create a unique temporary directory for each test
-		testDir = join(tmpdir(), `coding-agent-test-${Date.now()}`);
-		mkdirSync(testDir, { recursive: true });
+		// mkdtemp, not Date.now(): millisecond names collide between adjacent tests,
+		// so one test's afterEach could delete the directory another was still using.
+		testDir = mkdtempSync(join(tmpdir(), "coding-agent-test-"));
 	});
 
 	afterEach(() => {
@@ -711,8 +706,12 @@ describe("Coding Agent Tools", () => {
 				path: testFile,
 			});
 
+			// Matches are grouped under one path header instead of repeating the
+			// path on every row; the file must still be identifiable.
 			const output = getTextOutput(result);
-			expect(output).toContain("example.txt:2: match line");
+			expect(output).toContain("example.txt");
+			expect(output).toContain("2: match line");
+			expect(output).toContain("example.txt\n2: match line");
 		});
 
 		it("should respect global limit and include context lines", async () => {
@@ -827,8 +826,7 @@ describe("edit tool fuzzy matching", () => {
 	let testDir: string;
 
 	beforeEach(() => {
-		testDir = join(tmpdir(), `coding-agent-fuzzy-test-${Date.now()}`);
-		mkdirSync(testDir, { recursive: true });
+		testDir = mkdtempSync(join(tmpdir(), "coding-agent-fuzzy-test-"));
 	});
 
 	afterEach(() => {
@@ -1003,8 +1001,7 @@ describe("edit tool CRLF handling", () => {
 	let testDir: string;
 
 	beforeEach(() => {
-		testDir = join(tmpdir(), `coding-agent-crlf-test-${Date.now()}`);
-		mkdirSync(testDir, { recursive: true });
+		testDir = mkdtempSync(join(tmpdir(), "coding-agent-crlf-test-"));
 	});
 
 	afterEach(() => {

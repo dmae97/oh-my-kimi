@@ -9,14 +9,6 @@ import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts"
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { ensureTool } from "../../utils/tools-manager.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
-import type { OmpPureSeams } from "./omp-pure-seams.ts";
-import {
-	formatOmpIssues,
-	getOmpSeams,
-	type OmpSearchPlan,
-	planSearch as ompPlanSearch,
-	presentSearch as ompPresentSearch,
-} from "./omp-seam-runtime.ts";
 import { resolveToCwd } from "./path-utils.ts";
 import { getTextOutput, invalidArgText, shortenPath, str } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -193,29 +185,6 @@ export function createGrepToolDefinition(
 							return;
 						}
 
-						const ompSeamsPromise = getOmpSeams();
-						let ompSeams: OmpPureSeams | undefined;
-						let ompSearchPlan: OmpSearchPlan | undefined;
-						if (ompSeamsPromise) {
-							// OMP seam path (OMK_OMP_SEAMS=1): validation and presentation are
-							// delegated to the vendored pure search seam (ADR-OMP-008). The host
-							// still runs ripgrep and supplies the raw matches.
-							ompSeams = await ompSeamsPromise;
-							const planned = ompPlanSearch(ompSeams, {
-								pattern,
-								path: searchDir,
-								glob,
-								ignoreCase,
-								literal,
-								context,
-								limit,
-							});
-							if (!planned.ok) {
-								throw new Error(`Invalid search request: ${formatOmpIssues(planned.issues)}`);
-							}
-							ompSearchPlan = planned.plan;
-						}
-
 						const contextValue = context && context > 0 ? context : 0;
 						const effectiveLimit = Math.max(1, limit ?? DEFAULT_LIMIT);
 						const formatPath = (filePath: string): string => {
@@ -344,34 +313,13 @@ export function createGrepToolDefinition(
 								return;
 							}
 
-							// OMP seam presentation: the seam renders a deterministic grouped
-							// view of host-supplied matches. Context-line rendering has no seam
-							// equivalent, so context>0 keeps the OMK formatter (ADR-OMP-008).
-							if (ompSeams && ompSearchPlan && contextValue === 0) {
-								const hostMatches = matches.map((match) => ({
-									file: formatPath(match.filePath),
-									line: match.lineNumber,
-									text: (match.lineText ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "").replace(/\n$/, ""),
-								}));
-								const presented = ompPresentSearch(ompSeams, ompSearchPlan, hostMatches);
-								if (!presented.ok) {
-									settle(() => reject(new Error("OMP search presentation failed: conflicting match facts")));
-									return;
-								}
-								let output = presented.presentation.text;
-								if (matchLimitReached) {
-									output += `\n\n[${effectiveLimit} matches limit reached. Use limit=${effectiveLimit * 2} for more, or refine pattern]`;
-								}
-								settle(() =>
-									resolve({
-										content: [{ type: "text", text: output }],
-										details: matchLimitReached ? { matchLimitReached: effectiveLimit } : undefined,
-									}),
-								);
-								return;
-							}
-
 							// Format matches after streaming finishes so custom readFile() backends can be async.
+							// Consecutive matches in one file share a single path header. This is a
+							// run-length compression, not a reordering: rows keep their exact order,
+							// and a lone match costs the same as `path:line:` because the separator
+							// simply becomes the newline. Repeating full paths per row spends 20-33%
+							// of a targeted search's output on the same few paths.
+							let headerPath: string | undefined;
 							for (const match of matches) {
 								if (contextValue === 0 && match.lineText !== undefined) {
 									const relativePath = formatPath(match.filePath);
@@ -381,8 +329,14 @@ export function createGrepToolDefinition(
 										.replace(/\n$/, "");
 									const { text: truncatedText, wasTruncated } = truncateLine(sanitized);
 									if (wasTruncated) linesTruncated = true;
-									outputLines.push(`${relativePath}:${match.lineNumber}: ${truncatedText}`);
+									if (relativePath !== headerPath) {
+										outputLines.push(relativePath);
+										headerPath = relativePath;
+									}
+									outputLines.push(`${match.lineNumber}: ${truncatedText}`);
 								} else {
+									// Context blocks carry their own per-line path prefix.
+									headerPath = undefined;
 									const block = await formatBlock(match.filePath, match.lineNumber);
 									outputLines.push(...block);
 								}

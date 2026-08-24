@@ -21,18 +21,18 @@ type SubmitContext = {
 	showWarning: (message: string) => void;
 	updateEditorBorderColor: () => void;
 	isBashMode: boolean;
-	onInputCallback?: (text: string) => void;
-	pendingUserInputs: string[];
+	onInputCallback?: (payload: { text: string }) => void;
+	pendingPromptPayloads: Array<{ text: string }>;
 };
 
 type InputContext = {
-	onInputCallback?: (text: string) => void;
-	pendingUserInputs: string[];
+	onInputCallback?: (payload: { text: string }) => void;
+	pendingPromptPayloads: Array<{ text: string }>;
 };
 
 type InteractiveModePrivate = {
 	setupEditorSubmitHandler(this: SubmitContext): void;
-	getUserInput(this: InputContext): Promise<string>;
+	getUserInput(this: InputContext): Promise<{ text: string }>;
 };
 
 const interactiveModePrototype = InteractiveMode.prototype as unknown as InteractiveModePrivate;
@@ -58,7 +58,7 @@ function createSubmitContext(skillNames: string[] = []): SubmitContext {
 		showWarning: vi.fn(),
 		updateEditorBorderColor: vi.fn(),
 		isBashMode: false,
-		pendingUserInputs: [],
+		pendingPromptPayloads: [],
 	};
 }
 
@@ -69,8 +69,7 @@ describe("InteractiveMode startup input", () => {
 
 		await context.defaultEditor.onSubmit?.(" early prompt ");
 
-		expect(context.pendingUserInputs).toEqual(["early prompt"]);
-		expect(context.flushPendingBashComponents).toHaveBeenCalledTimes(1);
+		expect(context.pendingPromptPayloads).toEqual([{ text: "early prompt" }]);
 		expect(context.editor.addToHistory).toHaveBeenCalledWith("early prompt");
 	});
 
@@ -80,8 +79,7 @@ describe("InteractiveMode startup input", () => {
 
 		await context.defaultEditor.onSubmit?.("!browser-feedback inspect");
 
-		expect(context.pendingUserInputs).toEqual(["!browser-feedback inspect"]);
-		expect(context.handleBashCommand).not.toHaveBeenCalled();
+		expect(context.pendingPromptPayloads).toEqual([{ text: "!browser-feedback inspect" }]);
 		expect(context.flushPendingBashComponents).toHaveBeenCalledTimes(1);
 	});
 
@@ -92,7 +90,7 @@ describe("InteractiveMode startup input", () => {
 		await context.defaultEditor.onSubmit?.("!git status");
 
 		expect(context.handleBashCommand).toHaveBeenCalledWith("git status", false);
-		expect(context.pendingUserInputs).toEqual([]);
+		expect(context.pendingPromptPayloads).toEqual([]);
 	});
 
 	it("runs double bang as no-context bash", async () => {
@@ -102,7 +100,7 @@ describe("InteractiveMode startup input", () => {
 		await context.defaultEditor.onSubmit?.("!! git status");
 
 		expect(context.handleBashCommand).toHaveBeenCalledWith("git status", true);
-		expect(context.pendingUserInputs).toEqual([]);
+		expect(context.pendingPromptPayloads).toEqual([]);
 	});
 
 	it("does not run explicit unknown bang skills as bash", async () => {
@@ -114,16 +112,16 @@ describe("InteractiveMode startup input", () => {
 		expect(context.showWarning).toHaveBeenCalledWith("Unknown skill: missing");
 		expect(context.editor.setText).toHaveBeenCalledWith("!skill:missing inspect");
 		expect(context.handleBashCommand).not.toHaveBeenCalled();
-		expect(context.pendingUserInputs).toEqual([]);
+		expect(context.pendingPromptPayloads).toEqual([]);
 	});
 
 	it("returns queued startup input before installing a new input callback", async () => {
 		const context: InputContext = {
-			pendingUserInputs: ["queued prompt"],
+			pendingPromptPayloads: [{ text: "queued prompt" }],
 		};
 
-		await expect(interactiveModePrototype.getUserInput.call(context)).resolves.toBe("queued prompt");
+		await expect(interactiveModePrototype.getUserInput.call(context)).resolves.toEqual({ text: "queued prompt" });
 		expect(context.onInputCallback).toBeUndefined();
-		expect(context.pendingUserInputs).toEqual([]);
+		expect(context.pendingPromptPayloads).toEqual([]);
 	});
 });

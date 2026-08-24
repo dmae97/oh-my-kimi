@@ -54,6 +54,9 @@ export function buildContextBudgetPlanCacheKeyV2(input: {
 	return `context-plan:${sha256Canonical({
 		availableTokens: input.availableTokens,
 		budgetBucket: input.keyBase.budgetBucket,
+		// Only the PLAN key carries this: representation entries are content-addressed
+		// by source hash and kind, so a selection-order change cannot invalidate them.
+		selectionPolicyVersion: input.keyBase.selectionPolicyVersion,
 		items: input.planned
 			.map((planned) => ({
 				ageTurns: bucketAgeTurnsForCacheKeyV2(planned.item.ageTurns),

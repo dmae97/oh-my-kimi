@@ -3,7 +3,8 @@
  *
  * Both use the same authorization-code flow with a local callback server;
  * only client credentials, scopes, and project-discovery logic differ.
- * Adapted from vendor/oh-my-pi for Node.js (no Bun dependencies).
+ * Originally adapted from the oh-my-pi project for Node.js (no Bun dependencies);
+ * that tree is no longer vendored here (ADR-OMP-010).
  */
 import type { Server } from "node:http";
 import { oauthErrorHtml, oauthSuccessHtml } from "./oauth-page.ts";

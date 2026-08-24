@@ -6,6 +6,7 @@ OMK can recover an agent turn from provider failures that are unlikely to succee
 - billing-cycle or quota exhaustion
 - orphaned `tool_call_id` protocol errors
 - transient transport and server failures
+- gateway/upstream availability failures (5xx passthroughs, streams that end without a finish reason)
 
 This is availability behavior, not a safety bypass. Provider safety policy and the user's configured model access remain authoritative.
 
@@ -53,6 +54,8 @@ A content/safety stop gets at most one automatic retry, including a retry that s
 
 Recognized quota shapes include billing-cycle usage limits, `insufficient_quota`, exhausted balances, `GoUsageLimitError`, `FreeUsageLimitError`, and out-of-budget responses. These are classified as `provider.rate_limit`, even when a provider wraps them in HTTP 403.
 
+Gateway/upstream availability failures — "503 Upstream request failed", "Endpoint is unavailable", or a stream that ended without a finish reason — are classified as `provider.network`: transport problems that heal by retry or model switch, never by transcript sanitization.
+
 The default candidate order is:
 
 1. `kimi-coding/k3`
@@ -62,6 +65,14 @@ The default candidate order is:
 5. `deepseek/deepseek-v4-flash`
 6. `modelstudio-maas/deepseek-v4-pro`
 7. `kimi-coding/kimi-for-coding`
+
+## Same-model route rotation
+
+The same underlying model is often served by several provider routes (for example `openrouter/stealth/ox-alpha` and `opencode-go/ox-alpha-free`). When the active route fails with an upstream availability error, OMK rotates to another authenticated route of the same model family before touching the cross-model failover chain, so the retry lands on a live endpoint instead of hammering the dead one.
+
+Routes already visited this turn and routes without configured authentication are excluded from rotation. Route rotation runs inside the normal retry budget; when no sibling route remains, the standard failover behavior applies.
+
+Compaction summarization reuses the same chain: when the summarization model hits quota/billing exhaustion, the configured failover candidates are tried once each before the run fails with a non-retryable `compaction.quota_exhausted` termination cause. See [Compaction](compaction.md).
 
 ## Retry and termination events
 

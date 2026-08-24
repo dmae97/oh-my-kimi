@@ -37,10 +37,25 @@ export interface OptionalSelectionState {
 	readonly usedTokens: number;
 }
 
+/**
+ * Cheapest non-omit representation cost for an item, i.e. what admitting it
+ * actually costs when the budget is tight. Falls back to full text when no
+ * cheaper representation exists.
+ */
+function minAdmissibleTokens(candidates: readonly ContextRepresentationCandidateV2[], fullTokens: number): number {
+	let min = Number.POSITIVE_INFINITY;
+	for (const candidate of candidates) {
+		if (candidate.kind === "omit") continue;
+		if (candidate.estimatedTokens < min) min = candidate.estimatedTokens;
+	}
+	return Math.max(1, Number.isFinite(min) ? min : fullTokens);
+}
+
 export function createPlannedItems(
 	items: readonly ContextBudgetItemV2[],
 	tokenCounter: TokenCounterAdapter | undefined,
 	modelId: string,
+	qualityPolicy?: Parameters<typeof deriveRepresentationCandidates>[1],
 ): PlannedItemV2[] {
 	const counter = tokenCounter ?? createFallbackTokenCounter();
 	return items.map((item) => {
@@ -50,9 +65,12 @@ export function createPlannedItems(
 		const fullTokens = fullTextTokens(itemWithTokens);
 		const isHard = item.priority === "hard" || item.required === true;
 		const baseScore = isHard ? Number.POSITIVE_INFINITY : scoreContextBudgetItemV2(itemWithTokens, fullTokens);
+		const candidates =
+			itemWithTokens.representations ?? deriveRepresentationCandidates(itemWithTokens, qualityPolicy);
 		return {
 			item: itemWithTokens,
 			fullTokens,
+			admissibleTokens: minAdmissibleTokens(candidates, fullTokens),
 			contentHash: contentHashOf(item.text),
 			baseScore,
 			redundancyPenalty: 0,

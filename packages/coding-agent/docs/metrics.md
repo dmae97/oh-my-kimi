@@ -3,6 +3,76 @@
 OMK records one JSON line per agent turn so harness changes can be measured
 instead of guessed.
 
+## CLI harness SOTA target
+
+OMK targets state-of-the-art quality as a CLI coding-agent harness. **SOTA is
+not verified.** This is a product target, not a statement that the current
+release leads a benchmark or a named competitor cohort.
+
+The target covers the harness layer:
+
+| Dimension | Primary measure |
+| --- | --- |
+| Task success | solved tasks and pass rate |
+| Cost efficiency | model cost and tokens per solved task |
+| Latency | wall-clock p50/p95 per solved task |
+| Context efficiency | input, cache, compaction, and tool-output tokens per solved task |
+| Tool reliability | failure, retry, refusal, and intervention rates |
+| Orchestration | critical-path time, useful concurrency, and duplicate work |
+| Recovery | interrupted-run resume accuracy and repeated-run variance |
+| Safety | policy violations, unauthorized effects, and false-positive blocks |
+| Maintainability | complexity, module-size debt, and regression-gate health |
+
+No single feature count or self-score establishes leadership. OMK reports a
+dimension-specific result unless a preregistered aggregation defines an overall
+score.
+
+### Controlled comparison contract
+
+A comparative harness run MUST hold the **same model**, **same provider** and
+model configuration, **same task** and revision, **same budget**, equivalent
+tool permissions, and comparable container, hardware, region, and concurrency
+constant. The harness is the treatment variable. If a factor cannot be held
+constant, the report must label the result non-comparative.
+
+Every comparative report must include:
+
+- the date, harness versions, and **named comparison cohort**, with its inclusion rule frozen before execution;
+- immutable model, provider, container, environment, and configuration identities;
+- the task manifest, seeds, public prompt or sanitized prompt digest, budgets, run order, and stop policy;
+- sanitized per-task outcomes plus cost, token, latency, retry, and intervention data;
+- the confidence interval, significance threshold, minimum effect, and statistical test chosen before inspecting the result;
+- the exact commands and immutable manifests needed for **reproducible evidence**.
+
+Use paired A/B measurements. Randomize or interleave pair order when provider or
+machine drift can bias one side. Do not combine values produced by different
+methods, working directories, task revisions, or warm/cold conditions. A
+roadmap projection remains a hypothesis even when its inputs are measured.
+
+### Evidence privacy
+
+Benchmark evidence is private by default. Public artifacts may contain public
+or synthetic task identifiers, version and image digests, allowlisted runtime
+metadata, sanitized outcomes, and aggregate statistics. They must not contain
+credentials, private prompts, proprietary source, raw tool arguments or output,
+environment values, personal data, or absolute user paths.
+
+Keep restricted raw evidence local or in an access-controlled store with an
+explicit owner and retention period. Normalize paths, redact content, scan for
+secrets and PII, and obtain human approval before publication. Digests and
+public task manifests preserve reproducibility without disclosing restricted
+content.
+
+A public “SOTA,” “best,” “leading,” or “#1” claim requires a dated controlled
+comparison that places OMK on the relevant quality/cost/latency frontier without
+violating declared safety and regression floors. Until then, use “targets
+state-of-the-art quality.”
+
+[Harbor's Terminal-Bench runner](https://www.harborframework.com/docs/tutorials/running-terminal-bench)
+and the [SWE-bench containerized harness](https://www.swebench.com/SWE-bench/api/harness/)
+are reference evaluation surfaces. Their presence or a selected task list is
+infrastructure, not a benchmark result.
+
 This is separate from the two things that already existed:
 
 | Surface | Purpose |
@@ -83,5 +153,7 @@ node scripts/tb-mini-suite.mjs --seed 7    # a different fixed subset
 
 Selection is a pure function of (tasks directory, seed, size): the same inputs
 always produce the same task list, which is the whole point of using it as a
-regression gate. The scoring run itself requires Docker, `harbor`, and real
-model spend — it is deliberately not wired into `npm run check`.
+regression gate. Selection alone is not a capability result. The scoring run
+itself requires Docker, `harbor`, and real model spend — it is deliberately not
+wired into `npm run check`. Any comparison produced from it must follow the
+controlled comparison contract above.

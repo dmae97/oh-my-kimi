@@ -57,6 +57,7 @@ export { scoreContextBudgetItemV2 } from "./context-budget-v2-scoring.ts";
 export {
 	ALL_TIERS_V2,
 	CONTEXT_BUDGET_POLICY_VERSION_V2,
+	CONTEXT_BUDGET_SELECTION_POLICY_V2,
 	type ContextBudgetCacheProviderV2,
 	type ContextBudgetCacheTokenTelemetryV2,
 	type ContextBudgetMaterializedVerificationV2,

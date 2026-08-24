@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	buildContextBudgetMaterializedRepresentationCacheKeyV2,
 	CONTEXT_BUDGET_POLICY_VERSION_V2,
+	CONTEXT_BUDGET_SELECTION_POLICY_V2,
 	type ContextBudgetItemV2,
 	computeContextBudgetOutputTextHashV2,
 	computeContextBudgetQueryIntentHashV2,
@@ -46,6 +47,7 @@ function materializedKeyFor(
 		key: buildContextBudgetMaterializedRepresentationCacheKeyV2({
 			budgetBucket,
 			compressorId: "none",
+			selectionPolicyVersion: CONTEXT_BUDGET_SELECTION_POLICY_V2,
 			modelId: "gpt-cache-test",
 			namespace: "context-budget-v2",
 			policyVersion: CONTEXT_BUDGET_POLICY_VERSION_V2,

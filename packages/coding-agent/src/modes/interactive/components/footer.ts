@@ -60,6 +60,23 @@ export function formatCwdForFooter(cwd: string, home: string | undefined): strin
 }
 
 /**
+ * Extract the provider endpoint host from a model base URL for footer display.
+ * Returns undefined when the URL is missing or unparsable so callers can fall
+ * back to provider-only display.
+ */
+export function formatEndpointForFooter(baseUrl: string | undefined): string | undefined {
+	if (!baseUrl) return undefined;
+	try {
+		let hostname = new URL(baseUrl).hostname;
+		// Aliyun hosts carry a long shared suffix that adds no information in a rail.
+		if (hostname.endsWith(".aliyuncs.com")) hostname = hostname.slice(0, -".aliyuncs.com".length);
+		return hostname || undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
  * Footer component that shows pwd, token stats, and context usage.
  * Computes token/context stats from session, gets git branch and extension statuses from provider.
  */
@@ -265,7 +282,13 @@ export class FooterComponent implements Component {
 		// Prepend the provider in parentheses if there are multiple providers and there's enough room
 		let rightSide = rightSideWithoutProvider;
 		if (this.footerData.getAvailableProviderCount() > 1 && state.model) {
-			rightSide = `(${state.model!.provider}) ${rightSideWithoutProvider}`;
+			const endpointHost = formatEndpointForFooter(state.model.baseUrl);
+			const providerLabel = endpointHost ? `${state.model.provider} · ${endpointHost}` : state.model.provider;
+			rightSide = `(${providerLabel}) ${rightSideWithoutProvider}`;
+			if (endpointHost && statsLeftWidth + minPadding + visibleWidth(rightSide) > width) {
+				// Too wide with endpoint host; fall back to provider-only
+				rightSide = `(${state.model.provider}) ${rightSideWithoutProvider}`;
+			}
 			if (statsLeftWidth + minPadding + visibleWidth(rightSide) > width) {
 				// Too wide, fall back
 				rightSide = rightSideWithoutProvider;

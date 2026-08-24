@@ -23,6 +23,20 @@ remain outside this local chain.
 Files named `*.hard.md`, `*.stub.md`, archived snapshots, `backups/`, and `v7/` are not
 active unless a session explicitly selects them.
 
+## Repo understanding bootstrap (omk-wiki)
+
+Fresh sessions start with high repo understanding via two local artifacts:
+
+| Artifact | Layer | Entry point | Freshness |
+|---|---|---|---|
+| `openwiki/` | agent-readable wiki (OpenWiki, grounded claims) | `openwiki/overview.md` — read first | stale claims flagged in `openwiki/.claims/` |
+| `.understand-anything/knowledge-graph.json` | structural KG (Understand-Anything) | `project_report` tool / UA dashboard | auto-updated via hooks; `omk-wiki status` checks vs HEAD |
+
+Protocol: run `omk-wiki status` → read `openwiki/overview.md` before deep file scans →
+drill down symbols via UA KG / `module_report` → if `WIKI:absent` or `drift=behind-code`,
+offer `omk-wiki init|update` (spends LLM credits — run only with user approval).
+Details: `~/.omk/agent/skills/omk-wiki/SKILL.md`.
+
 ## Sources of truth
 
 | Concern | Canonical source | Drift check |
@@ -122,3 +136,16 @@ node skills/omk-godmod/scripts/check-doc-integrity.mjs --check
 
 See [`INTEGRITY.md`](INTEGRITY.md) before resolving a mismatch. MD5 detects accidental
 drift; it does not authenticate a tree controlled by an attacker.
+
+<!-- OPENWIKI:START -->
+
+## OpenWiki
+
+This repository has a generated `openwiki/` evidence index. It is optional just-in-time context, not required startup reading.
+
+- Treat source code and tests as authoritative. A brief's unknowns and review items are verification gaps, not automatic requirements.
+- Prefer the narrowest quiet validation that proves the changed behavior. Preserve complete failure output.
+
+The scheduled OpenWiki GitHub Actions workflow refreshes the repository wiki. Do not hand-edit generated OpenWiki pages unless explicitly asked; prefer updating source code/docs and letting OpenWiki regenerate.
+
+<!-- OPENWIKI:END -->

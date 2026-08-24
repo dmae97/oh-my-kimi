@@ -5,17 +5,12 @@
  * and score-saturation stats. Read-only; prints JSON to stdout.
  */
 import { classifyTaskV4 } from "../../src/core/reasoning-router-v4.ts";
-import {
-	computeGoldSetSplit,
-	GOLD_SET,
-	summarizeGoldSetSplit,
-} from "../../test/fixtures/reasoning-router-gold-set.ts";
+import { GOLD_SET, summarizeGoldSetSplit } from "../../test/fixtures/reasoning-router-gold-set.ts";
 import {
 	computeCalibrationMetrics,
 } from "./calibration.ts";
 
-const split = computeGoldSetSplit(GOLD_SET);
-console.error("split:", JSON.stringify(summarizeGoldSetSplit(GOLD_SET, split)));
+console.error("split:", JSON.stringify(summarizeGoldSetSplit(GOLD_SET)));
 
 const samples = GOLD_SET.map((entry) => {
 	const v = classifyTaskV4({ prompt: entry.prompt });

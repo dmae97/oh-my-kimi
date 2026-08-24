@@ -10,7 +10,23 @@ import type {
 import type { TokenCounterAdapter } from "./context-budget-token-counter.ts";
 import type { ContextCacheInvalidationSnapshot } from "./context-budget-v2-cache-invalidation.ts";
 
+/**
+ * Public optimizer identifier. It is reported in the system prompt and used as a
+ * cache namespace, so it must stay stable across internal policy changes.
+ */
 export const CONTEXT_BUDGET_POLICY_VERSION_V2 = "context-budget-v2";
+
+/**
+ * Internal token for the optional-item selection policy, kept separate from the
+ * public identifier so a scoring or ordering change can invalidate cached plans
+ * without renaming the optimizer. Bump it whenever the selected set can differ
+ * for identical inputs; otherwise plans built under the previous policy keep
+ * being served for the whole cache TTL, including from disk.
+ *
+ * `sel-2`: density-ordered selection over the cheapest admissible representation
+ * (previously priority-class-ordered over full-text tokens).
+ */
+export const CONTEXT_BUDGET_SELECTION_POLICY_V2 = "sel-2";
 
 /** Fixed compatibility telemetry for the removed legacy token optimizer. */
 export interface TokenOptimizerRuntimeStatus {
@@ -57,6 +73,8 @@ export interface PromptContextBudgetInputV2 {
 	readonly modelId?: string;
 	readonly tokenizerId?: string;
 	readonly policyVersion?: string;
+	/** Overrides {@link CONTEXT_BUDGET_SELECTION_POLICY_V2}. */
+	readonly selectionPolicyVersion?: string;
 	readonly promptHash?: string;
 	readonly query?: string;
 	readonly items: readonly ContextBudgetItemV2[];

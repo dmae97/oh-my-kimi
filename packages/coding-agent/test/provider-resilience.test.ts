@@ -7,8 +7,11 @@ import {
 	isQuotaExhaustionMessage,
 	isStickySafetyModel,
 	isTransientProviderErrorMessage,
+	isUpstreamUnavailableMessage,
+	modelRouteFamily,
 	pickFailoverCandidate,
 	resolveProviderResilience,
+	sameModelRouteCandidates,
 	shouldEjectStickySafetyModel,
 	shouldHonorSafetyFailover,
 	stickySafetyBlockMessage,
@@ -197,5 +200,48 @@ describe("isQuotaExhaustionMessage", () => {
 		expect(isQuotaExhaustionMessage("invalid api key")).toBe(false);
 		expect(isQuotaExhaustionMessage("429 too many requests")).toBe(false);
 		expect(isQuotaExhaustionMessage(undefined)).toBe(false);
+	});
+});
+
+describe("isUpstreamUnavailableMessage", () => {
+	it("matches gateway 5xx passthroughs and dropped streams", () => {
+		expect(isUpstreamUnavailableMessage("503 Upstream request failed: Endpoint is unavailable.")).toBe(true);
+		expect(isUpstreamUnavailableMessage("Stream ended without finish_reason")).toBe(true);
+		expect(isUpstreamUnavailableMessage("502 Bad Gateway")).toBe(true);
+		expect(isUpstreamUnavailableMessage("upstream connect error")).toBe(true);
+	});
+
+	it("does not match transcript-shape or auth errors", () => {
+		expect(isUpstreamUnavailableMessage("tool_call_id is not found")).toBe(false);
+		expect(isUpstreamUnavailableMessage("401 unauthorized")).toBe(false);
+		expect(isUpstreamUnavailableMessage("429 too many requests")).toBe(false);
+		expect(isUpstreamUnavailableMessage(undefined)).toBe(false);
+	});
+});
+
+describe("model route families (ox-alpha rotation)", () => {
+	const openrouterRoute = { provider: "openrouter", id: "stealth/ox-alpha", name: "Ox Alpha" };
+	const opencodeGoRoute = { provider: "opencode-go", id: "ox-alpha-free", name: "Ox Alpha Free (Unlimited)" };
+	const opencodeRoute = { provider: "opencode", id: "x-preview-f-free", name: "Ox Alpha Free (Unlimited)" };
+	const kimiRoute = { provider: "kimi-coding", id: "k3", name: "Kimi K3" };
+
+	it("groups ox-alpha alias routes by id or display name", () => {
+		expect(modelRouteFamily(openrouterRoute)).toBe("ox-alpha");
+		expect(modelRouteFamily(opencodeGoRoute)).toBe("ox-alpha");
+		// x-preview-f-free only aligns through its display name.
+		expect(
+			modelRouteFamily({ provider: "opencode", id: "x-preview-f-free", name: "Ox Alpha Free (Unlimited)" }),
+		).toBe("ox-alpha");
+		expect(modelRouteFamily(kimiRoute)).toBeUndefined();
+		// Near-miss ids must not match: boundary before "ox" is required.
+		expect(modelRouteFamily({ provider: "p", id: "box-alpha-pro", name: "Box Alpha Pro" })).toBeUndefined();
+	});
+
+	it("lists the other routes of the same family, excluding the failed one", () => {
+		const available = [openrouterRoute, opencodeGoRoute, opencodeRoute, kimiRoute];
+		expect(sameModelRouteCandidates(opencodeGoRoute, available)).toEqual([openrouterRoute, opencodeRoute]);
+		expect(sameModelRouteCandidates(openrouterRoute, available)).toEqual([opencodeGoRoute, opencodeRoute]);
+		// Non-family models have no rotation targets.
+		expect(sameModelRouteCandidates(kimiRoute, available)).toEqual([]);
 	});
 });

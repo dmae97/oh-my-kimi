@@ -1,8 +1,9 @@
 import { closeSync, constants, fstatSync, openSync, readSync, realpathSync, statSync } from "node:fs";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 const MAX_EXTENSION_FILES = 256;
 const MAX_EXTENSION_BYTES = 1_048_576;
+const SOURCE_EXTENSIONS = [".ts", ".mts", ".cts", ".tsx", ".js", ".mjs", ".cjs", ".jsx"] as const;
 
 export const PACKAGE_DOCTOR_SUPPORTED_EVENTS = new Set([
 	"resources_discover",
@@ -20,6 +21,7 @@ export const PACKAGE_DOCTOR_SUPPORTED_EVENTS = new Set([
 	"before_agent_start",
 	"agent_start",
 	"agent_end",
+	"agent_settled",
 	"turn_start",
 	"turn_end",
 	"message_start",
@@ -48,6 +50,62 @@ function packageRelativePath(root: string, path: string): string | null {
 	return candidate.replace(/\\/gu, "/");
 }
 
+/**
+ * True only for an existing regular file. A bare `existsSync` also matches the
+ * directory a specifier like `./nested` names, which would shadow its real
+ * `./nested/index.ts` target.
+ */
+function isFilePath(path: string): boolean {
+	try {
+		return statSync(path).isFile();
+	} catch {
+		return false;
+	}
+}
+
+/** Candidate on-disk paths for one relative import specifier. */
+function resolutionCandidates(fromFile: string, specifier: string): string[] {
+	const base = resolve(dirname(fromFile), specifier);
+	const candidates = [base];
+	for (const extension of SOURCE_EXTENSIONS) {
+		candidates.push(`${base}${extension}`, resolve(base, `index${extension}`));
+	}
+	// TypeScript source commonly imports its own emitted specifier (`./x.js`).
+	const rewritten = base.replace(/\.(?:js|mjs|cjs|jsx)$/u, "");
+	if (rewritten !== base) {
+		for (const extension of SOURCE_EXTENSIONS) candidates.push(`${rewritten}${extension}`);
+	}
+	return candidates;
+}
+
+/**
+ * Relative imports of `text` that resolve to a real file inside the package.
+ * Bare specifiers (`node:fs`, `some-package`) are dependencies, not package
+ * source, and anything resolving outside the root is dropped rather than read.
+ */
+function relativeImportTargets(root: string, fromFile: string, text: string): string[] {
+	const targets: string[] = [];
+	for (const specifier of importedSpecifiers(text)) {
+		if (!specifier.startsWith("./") && !specifier.startsWith("../")) continue;
+		for (const candidate of resolutionCandidates(fromFile, specifier)) {
+			if (packageRelativePath(root, candidate) === null) continue;
+			if (!isFilePath(candidate)) continue;
+			targets.push(candidate);
+			break;
+		}
+	}
+	return targets;
+}
+
+/**
+ * Read every package-owned extension source reachable from the manifest entries.
+ *
+ * Scanning only the declared entry files made the compatibility verdict wrong
+ * for any package that keeps handlers in imported modules, so the walk follows
+ * relative imports transitively. Package-external reads stay impossible: a
+ * candidate must resolve inside the root, and each open still verifies the
+ * realpath, refuses symlinks, and matches device/inode before reading.
+ */
 export function scanPackageExtensionSources(
 	root: string,
 	extensions: string[],
@@ -55,12 +113,23 @@ export function scanPackageExtensionSources(
 	const sources: ScannedPackageSource[] = [];
 	const skipped: string[] = [];
 	const realRoot = realpathSync(root);
-	for (const path of [...new Set(extensions)].slice(0, MAX_EXTENSION_FILES)) {
+	const seen = new Set<string>();
+	const queue = [...new Set(extensions)];
+	let truncated = extensions.length > MAX_EXTENSION_FILES;
+
+	while (queue.length > 0) {
+		if (sources.length >= MAX_EXTENSION_FILES) {
+			truncated = true;
+			break;
+		}
+		const path = queue.shift() as string;
 		const file = packageRelativePath(root, path);
 		if (file === null) {
 			skipped.push("<outside-package>");
 			continue;
 		}
+		if (seen.has(file)) continue;
+		seen.add(file);
 		let fd: number | undefined;
 		try {
 			const realPath = realpathSync(path);
@@ -86,14 +155,16 @@ export function scanPackageExtensionSources(
 				skipped.push(file);
 				continue;
 			}
-			sources.push({ file, text: buffer.subarray(0, offset).toString("utf8") });
+			const text = buffer.subarray(0, offset).toString("utf8");
+			sources.push({ file, text });
+			queue.push(...relativeImportTargets(root, path, text));
 		} catch {
 			skipped.push(file);
 		} finally {
 			if (fd !== undefined) closeSync(fd);
 		}
 	}
-	if (extensions.length > MAX_EXTENSION_FILES) skipped.push("<file-limit>");
+	if (truncated) skipped.push("<file-limit>");
 	return { sources, skipped };
 }
 

@@ -1212,7 +1212,7 @@ export class TUI extends Container {
 		newLines = this.applyLineResets(newLines);
 
 		// Helper to optionally clear the visible viewport and render all new lines
-		const fullRender = (clear: boolean): void => {
+		const fullRender = (clear: boolean, fromRow?: number): void => {
 			this.fullRedrawCount += 1;
 			let buffer = "\x1b[?2026h"; // Begin synchronized output
 			if (clear) {
@@ -1232,7 +1232,18 @@ export class TUI extends Container {
 			// state below already models the tail-only frame
 			// (previousViewportTop = bufferLength - height). First renders on a
 			// clean screen (clear=false) still print everything.
-			const firstPrinted = clear ? Math.max(0, newLines.length - height) : 0;
+			const tailStart = Math.max(0, newLines.length - height);
+			// Content changes above the viewport pass fromRow: those rows already
+			// scrolled into immutable terminal scrollback with stale content, and a
+			// tail-only repaint would never emit the update at all (permanently
+			// clipped/corrupted transcript when scrolling). Reprinting from
+			// fromRow duplicates only the changed region and lands the newest copy
+			// adjacent to the live viewport. Resize/viewport jumps omit fromRow and
+			// keep the tail-only behavior that prevents TV-wall stacking.
+			let firstPrinted = 0;
+			if (clear) {
+				firstPrinted = fromRow === undefined ? tailStart : Math.min(fromRow, tailStart);
+			}
 			for (let i = firstPrinted; i < newLines.length; i++) {
 				if (i > firstPrinted) buffer += "\r\n";
 				buffer += newLines[i];
@@ -1287,20 +1298,6 @@ export class TUI extends Container {
 			return;
 		}
 
-		// Content shrunk below the working area and no overlays - re-render to clear empty rows
-		// (overlays need the padding, so only do this when no overlays are active)
-		// Configurable via setClearOnShrink() or OMK_CLEAR_ON_SHRINK=0 env var
-		if (
-			finalLines === undefined &&
-			this.clearOnShrink &&
-			newLines.length < this.maxLinesRendered &&
-			this.overlayStack.length === 0
-		) {
-			logRedraw(`clearOnShrink (maxLinesRendered=${this.maxLinesRendered})`);
-			fullRender(true);
-			return;
-		}
-
 		// Find first and last changed lines
 		let firstChanged = -1;
 		let lastChanged = -1;
@@ -1316,15 +1313,33 @@ export class TUI extends Container {
 				lastChanged = i;
 			}
 		}
+		if (firstChanged !== -1) {
+			lastChanged = this.expandLastChangedForKittyImages(firstChanged, lastChanged);
+		}
+
+		// Content shrunk below the working area and no overlays - re-render to clear empty rows
+		// (overlays need the padding, so only do this when no overlays are active)
+		// Configurable via setClearOnShrink() or OMK_CLEAR_ON_SHRINK=0 env var
+		if (
+			finalLines === undefined &&
+			this.clearOnShrink &&
+			newLines.length < this.maxLinesRendered &&
+			this.overlayStack.length === 0
+		) {
+			logRedraw(`clearOnShrink (maxLinesRendered=${this.maxLinesRendered})`);
+			// Repaint from the first changed row: a shrink above the viewport
+			// (e.g. loader swapped for a smaller result) shifts every row below it,
+			// and the pre-shift copies already scrolled into scrollback.
+			fullRender(true, firstChanged === -1 ? undefined : firstChanged);
+			return;
+		}
+
 		const appendedLines = newLines.length > this.previousLines.length;
 		if (appendedLines) {
 			if (firstChanged === -1) {
 				firstChanged = this.previousLines.length;
 			}
 			lastChanged = newLines.length - 1;
-		}
-		if (firstChanged !== -1) {
-			lastChanged = this.expandLastChangedForKittyImages(firstChanged, lastChanged);
 		}
 		const appendStart = appendedLines && firstChanged === this.previousLines.length && firstChanged > 0;
 
@@ -1388,7 +1403,7 @@ export class TUI extends Container {
 		// If the first changed line is above the previous viewport, we need a full redraw.
 		if (firstChanged < prevViewportTop) {
 			logRedraw(`firstChanged < viewportTop (${firstChanged} < ${prevViewportTop})`);
-			fullRender(true);
+			fullRender(true, firstChanged);
 			return;
 		}
 

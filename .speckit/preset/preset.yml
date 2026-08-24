@@ -1,0 +1,60 @@
+schema_version: "1.0"
+
+preset:
+  id: "omk"
+  name: "OMK CLI Harness Governance"
+  version: "1.3.0"
+  description: "Project-scoped OMK preset for DAG execution, evidence gates, and controlled CLI harness evaluation."
+  author: "dmae97"
+  repository: "https://github.com/dmae97/omk"
+
+requires:
+  speckit_version: ">=0.16.4"
+
+provides:
+  templates:
+    - type: "template"
+      name: "spec-template"
+      file: "templates/spec-template.md"
+      description: "Agent-oriented specification with CLI harness impact and evidence fields"
+      strategy: "replace"
+
+    - type: "template"
+      name: "plan-template"
+      file: "templates/plan-template.md"
+      description: "Implementation plan with OMK routing, benchmark controls, and quality gates"
+      strategy: "replace"
+
+    - type: "template"
+      name: "tasks-template"
+      file: "templates/tasks-template.md"
+      description: "DAG-ready tasks with metric, baseline, regression, and evidence metadata"
+      strategy: "replace"
+
+    - type: "command"
+      name: "speckit.constitution"
+      file: "commands/constitution.md"
+      description: "Update the tracked OMK constitution and runtime mirror"
+      replaces: "speckit.constitution"
+      strategy: "replace"
+
+    - type: "command"
+      name: "speckit.plan"
+      file: "commands/plan.md"
+      description: "Generate an OMK plan that carries harness evidence contracts"
+      replaces: "speckit.plan"
+      strategy: "replace"
+
+    - type: "command"
+      name: "speckit.tasks"
+      file: "commands/tasks.md"
+      description: "Generate OMK DAG tasks with executable metric verification"
+      replaces: "speckit.tasks"
+      strategy: "replace"
+
+tags:
+  - "omk"
+  - "cli-harness"
+  - "dag"
+  - "evidence-gates"
+  - "benchmark-governance"

@@ -6,6 +6,18 @@ The canonical source tree for the installed local OMK launcher is `/home/yu/omk`
 
 When a change must affect the running OMK TUI, apply it under `/home/yu/omk`, not a separate checkout such as `/home/yu/open-multi-agent-kit`, and rebuild the affected package so `dist/` matches `src/`.
 
+## CLI Harness Leadership Target
+
+OMK MUST target state-of-the-art quality as a CLI coding-agent harness. This is a product objective, not a current-status claim. The target applies to the harness layer—task completion, cost, latency, context and tool efficiency, orchestration, safety, recovery, reliability, and maintainability—not to base-model quality alone.
+
+Every harness-affecting specification created or materially revised on or after 2026-08-25 MUST classify its impact as `advance`, `preserve`, or `not applicable`. Earlier specs are grandfathered until materially revised. An `advance` specification MUST name a versioned baseline, measurable acceptance target, regression floor, exact verification command, and evidence artifact. A `preserve` specification MUST identify the metrics that cannot regress. A `not applicable` classification MUST explain why.
+
+Comparative evaluation MUST hold the same model, same provider and model configuration, same task and revision, same budget, equivalent tool permissions, and comparable environment constant. Reports MUST freeze the dated, named comparison cohort and statistical confidence rule before execution, then provide reproducible evidence sanitized to the operator's data-authority scope. Self-scores, feature counts, test counts, and roadmap projections do not prove leadership. Public claims such as “state of the art,” “best,” “leading,” or “#1” require that controlled evidence; otherwise use “targets.”
+
+Benchmark artifacts MUST NOT expose secrets, credentials, private prompts, proprietary source, raw tool output, environment values, personal data, or absolute user paths. Public reports use public or synthetic tasks unless the data owner explicitly approves sanitized publication. Raw restricted evidence stays local or in an access-controlled store with declared retention. Path normalization, secret/PII scanning, and human review are mandatory before publication.
+
+The measurement, privacy, and claim protocol is defined in `packages/coding-agent/docs/metrics.md`.
+
 ## Runtime Change Rule
 
 For coding-agent TUI behavior changes:
@@ -33,3 +45,11 @@ npm publishing runs in CI (`build-binaries.yml`, `publish-npm` job, environment 
 ## Safety and Evidence
 
 Do not read or copy secrets into spec-kit artifacts. Keep evidence to command names, exit status, changed paths, and concise summaries.
+
+## Governance
+
+`specs/constitution.md` and `specs/templates/` are the authored sources of truth. `.speckit/preset/` is the tracked, project-scoped distributable mirror referenced by `.speckit/config.yaml`; CI MUST verify byte parity and the matching preset version. `.specify/` and user-global presets are generated caches, never authority and never required by a clean checkout.
+
+Local cache synchronization MUST flow one way from the tracked project sources. Reject symlinked or non-user-owned targets, write through a temporary file and atomic rename, and verify the content digest. Never reverse-sync generated state. Constitution amendments require corresponding template and constitution-test updates when they change specification obligations.
+
+**Version**: 1.1.0 | **Ratified**: 2026-06-25 | **Last Amended**: 2026-08-25

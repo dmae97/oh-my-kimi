@@ -15,6 +15,7 @@ import {
 	buildBlockedBashResult,
 	evaluateCommandGate,
 	isCommandSafetyAssumeYesEnabled,
+	isCommandSafetyDisabled,
 } from "./extensions/builtin/command-safety-gate.ts";
 import type { LoadoutAccessPolicy } from "./loadout-access-policy.ts";
 import { assertLoadoutAccess, decideLoadoutAccess } from "./loadout-access-policy.ts";
@@ -92,8 +93,9 @@ export class SessionBashService {
 		}
 
 		// Non-negotiable safety floor for headless callers (RPC bash): hard-deny
-		// block-tier commands before any shell is spawned.
-		if (options?.safetyGate === "headless") {
+		// block-tier commands before any shell is spawned. YOLO mode opts out of
+		// the entire gate — the floor included — so nothing prompts or denies.
+		if (options?.safetyGate === "headless" && !isCommandSafetyDisabled()) {
 			const floorVerdict = classifyShellCommand(command);
 			if (floorVerdict.risk === "block") {
 				throw new Error(`OMK §0.1 safety floor blocked bash: [${floorVerdict.rule}] ${floorVerdict.reason}`);

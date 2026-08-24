@@ -91,6 +91,65 @@ export function isOrphanToolCallIdError(text: string | undefined): boolean {
 }
 
 /**
+ * Transient upstream availability failures: gateway 5xx passthroughs
+ * ("503 Upstream request failed", "Endpoint is unavailable") and dropped
+ * streams that never carried a finish reason ("Stream ended without
+ * finish_reason"). Transport problems, not transcript-shape problems — they
+ * heal by backoff/retry or switching model, never by transcript sanitization.
+ */
+export function isUpstreamUnavailableMessage(text: string | undefined): boolean {
+	if (!text) return false;
+	return /upstream(?: request)? failed|upstream connect|endpoint (?:is )?unavailable|stream ended without finish_reason|\b50[0234]\b/i.test(
+		text,
+	);
+}
+
+/**
+ * Route families: the same underlying model served by several provider
+ * routes. Matched on the model id OR display name so alias routes like
+ * `openrouter/stealth/ox-alpha`, `opencode-go/ox-alpha-free`, and
+ * `opencode/x-preview-f-free` ("Ox Alpha Free (Unlimited)") rotate as one
+ * ox-alpha family.
+ */
+const MODEL_ROUTE_FAMILIES: readonly { readonly pattern: RegExp; readonly family: string }[] = [
+	{ pattern: /(?:^|[-_/])ox[-_ ]?alpha(?:[-_/\s(]|$)/i, family: "ox-alpha" },
+];
+
+/** Family key for a model route, or undefined when it has no known alias group. */
+export function modelRouteFamily(model: {
+	readonly provider?: string | undefined;
+	readonly id: string;
+	readonly name?: string | undefined;
+}): string | undefined {
+	for (const { pattern, family } of MODEL_ROUTE_FAMILIES) {
+		if (pattern.test(model.id)) return family;
+		if (model.name && pattern.test(model.name)) return family;
+	}
+	return undefined;
+}
+
+/**
+ * Alternative provider routes serving the same model family as
+ * {@link failed}, in registry order, excluding the failed route itself.
+ * Callers filter by authentication and per-turn failure bookkeeping.
+ */
+export function sameModelRouteCandidates<
+	T extends { readonly provider: string; readonly id: string; readonly name?: string | undefined },
+>(
+	failed: { readonly provider: string; readonly id: string; readonly name?: string | undefined },
+	available: readonly T[],
+): T[] {
+	const family = modelRouteFamily(failed);
+	if (!family) return [];
+	const candidates: T[] = [];
+	for (const model of available) {
+		if (model.provider === failed.provider && model.id === failed.id) continue;
+		if (modelRouteFamily(model) === family) candidates.push(model);
+	}
+	return candidates;
+}
+
+/**
  * Errors the agent loop may auto-retry (after optional failover / message sanitize).
  * Kept in one place so agent-session and tests share the same contract.
  */

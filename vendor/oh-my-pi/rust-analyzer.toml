@@ -1,5 +1,0 @@
-[imports]
-granularity = { enforce = true, group = "crate" }
-preferNoStd = false
-preferPrelude = true
-prefix = "crate"

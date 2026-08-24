@@ -4,6 +4,8 @@ Provider-neutral terminal coding agent with multi-agent orchestration, scoped to
 
 OMK supports interactive terminal use, non-interactive output, RPC integration, and an embeddable TypeScript SDK. It works with API-key and subscription providers without making one provider the control plane.
 
+OMK targets state-of-the-art quality as a CLI coding-agent harness; it does not currently claim verified SOTA status. Comparative claims follow the same-model, reproducible protocol in [Turn metrics and harness evaluation](https://github.com/dmae97/omk/blob/main/packages/coding-agent/docs/metrics.md).
+
 ## Install
 
 Requires Node.js 22.19 or newer. Built-in local bash also requires `sandbox-exec` on macOS or `bwrap` plus unprivileged user namespaces on Linux. Enforcement is enabled by default and fails closed with `sandbox.backend_missing`; see [Containerization](https://github.com/dmae97/omk/blob/main/packages/coding-agent/docs/containerization.md).

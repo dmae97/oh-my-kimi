@@ -610,7 +610,7 @@ function isImageContentPart(part: unknown): boolean {
  * carries image blocks while the session model is text-only.
  *
  * `contextWindow`/`maxTokens` are NOT inherited from the session model — they
- * describe the actual Codex backend limits (400K window), which callers rely on
+ * describe the OMK GPT-5.6 family contract (1M window), which callers rely on
  * for compaction thresholds and overflow detection.
  */
 export const VISION_ROUTE_MODEL = {
@@ -621,7 +621,7 @@ export const VISION_ROUTE_MODEL = {
 	baseUrl: "https://chatgpt.com/backend-api",
 	reasoning: true,
 	input: ["text", "image"] as const,
-	contextWindow: 400000,
+	contextWindow: 1_000_000,
 	maxTokens: 128000,
 } as const;
 

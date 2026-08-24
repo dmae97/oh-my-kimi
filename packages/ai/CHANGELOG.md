@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Every GPT-5.6 route now advertises OMK's uniform 1,000,000-token context window, including Codex Sol, Terra, Luna, and MoA.
+
 ## [0.96.2] - 2026-08-21
 
 ### Security

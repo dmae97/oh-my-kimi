@@ -505,15 +505,24 @@ The `systemPromptOptions` field gives extensions access to the same structured d
 
 Inside `before_agent_start`, `event.systemPrompt` and `ctx.getSystemPrompt()` both reflect the chained system prompt as of the current handler. Later `before_agent_start` handlers can still modify it again.
 
-#### agent_start / agent_end
+#### agent_start / agent_end / agent_settled
 
-Fired once per user prompt.
+`agent_start` and `agent_end` fire once per agent-loop attempt. When the session
+retries a transient provider failure, the prompt produces several `agent_end`
+events, so `agent_end` alone does not mark the end of the work.
+
+`agent_settled` fires once, immediately after the `agent_end` that no retry
+follows. Use it to release per-run state exactly once.
 
 ```typescript
 omk.on("agent_start", async (_event, ctx) => {});
 
 omk.on("agent_end", async (event, ctx) => {
-  // event.messages - messages from this prompt
+  // event.messages - messages from this attempt; a retry may still follow
+});
+
+omk.on("agent_settled", async (event, ctx) => {
+  // No retry follows. Safe to clear activity, finalize queues, or release locks.
 });
 ```
 

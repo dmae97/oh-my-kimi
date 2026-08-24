@@ -138,3 +138,6 @@ collect.sh
 /AGENTS.GODMODE.hard.md
 /AGENTS.override.hard.md
 /AGENTS.stub.md
+
+# OpenWiki generation in progress locally; commit generated content when complete
+/openwiki/

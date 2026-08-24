@@ -182,8 +182,11 @@ import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts
 import {
 	isQuotaExhaustionMessage,
 	isStickySafetyModel,
+	isUpstreamUnavailableMessage,
 	pickFailoverCandidate,
+	resolveFailoverCandidates,
 	resolveProviderResilience,
+	sameModelRouteCandidates,
 	shouldEjectStickySafetyModel,
 	shouldHonorSafetyFailover,
 	stickySafetyBlockMessage,
@@ -1044,6 +1047,12 @@ export class AgentSession {
 		if (/auth|unauthori[sz]ed|forbidden|invalid.?api.?key|no api key|401|403|\/login/i.test(text)) {
 			return { area: "provider", code: "auth" };
 		}
+		// Gateway/upstream 5xx and dropped streams are transport failures, not
+		// transcript-shape problems. Classify as network so the guidance points to
+		// retry/model-switch instead of the protocol sanitize path.
+		if (isUpstreamUnavailableMessage(text)) {
+			return { area: "provider", code: "network" };
+		}
 		// Kimi/K3 + OpenAI-compat: orphan tool results after dropped error assistants.
 		// Sanitize-and-retry (transform-messages drops orphans), not a hard tool fatal.
 		if (/tool_call_id\s+is\s+not\s+found|tool_call_id\s+not\s+found|unknown\s+tool_call_id/i.test(text)) {
@@ -1066,6 +1075,9 @@ export class AgentSession {
 		}
 		if (/auth|api key|unauthori[sz]ed|forbidden|401|403|\/login/i.test(message)) {
 			return { area: "provider", code: "auth" };
+		}
+		if (isUpstreamUnavailableMessage(message)) {
+			return { area: "provider", code: "network" };
 		}
 		if (/context.+overflow|context window|too many tokens/i.test(message)) {
 			return { area: "provider", code: "context_overflow" };
@@ -1589,6 +1601,11 @@ export class AgentSession {
 			await this._extensionRunner.emit({ type: "agent_start" });
 		} else if (event.type === "agent_end") {
 			await this._extensionRunner.emit({ type: "agent_end", messages: event.messages });
+			// `agent_end` fires once per attempt. Extensions that release per-run
+			// state need the boundary no retry follows, so mark it explicitly.
+			if (!this._willRetryAfterAgentEnd(event)) {
+				await this._extensionRunner.emit({ type: "agent_settled", messages: event.messages });
+			}
 		} else if (event.type === "turn_start") {
 			this._turnMetricsState = {
 				startedAtEpochMs: Date.now(),
@@ -3645,6 +3662,24 @@ export class AgentSession {
 	}
 
 	/**
+	 * Authenticated failover candidates for compaction summarization, in
+	 * resilience-chain order, excluding the primary compaction model itself.
+	 * Used when the primary model's quota is exhausted (same-model retry is
+	 * useless until reset; another provider can still save the compaction).
+	 */
+	private _compactionFailoverModels(primary: Model<Api>): Model<Api>[] {
+		const candidates = resolveFailoverCandidates(this.settingsManager.getProviderResilienceSettings());
+		const available = this._modelRegistry.getAvailable();
+		const models: Model<Api>[] = [];
+		for (const candidate of candidates) {
+			if (candidate.provider === primary.provider && candidate.id === primary.id) continue;
+			const resolved = available.find((m) => m.provider === candidate.provider && m.id === candidate.id);
+			if (resolved) models.push(resolved);
+		}
+		return models;
+	}
+
+	/**
 	 * Manually compact the session context.
 	 * Aborts current agent operation first.
 	 * @param customInstructions Optional instructions for the compaction summary
@@ -3724,6 +3759,7 @@ export class AgentSession {
 					this.agent.streamFn,
 					this.settingsManager.getRetrySettings(),
 					this._summarizationRetryCallbacks({ source: "compaction", reason: "manual" }),
+					this._compactionFailoverModels(compactionModel),
 				);
 				summary = result.summary;
 				firstKeptEntryId = result.firstKeptEntryId;
@@ -3764,9 +3800,10 @@ export class AgentSession {
 			const message = error instanceof Error ? error.message : String(error);
 			const aborted = message === "Compaction cancelled" || (error instanceof Error && error.name === "AbortError");
 			const stale = /stale|session changed during compaction|already compacted/i.test(message);
-			let compactionCode: "aborted" | "stale" | "failed" = "failed";
+			let compactionCode: "aborted" | "stale" | "failed" | "quota_exhausted" = "failed";
 			if (aborted) compactionCode = "aborted";
 			else if (stale) compactionCode = "stale";
+			else if (isQuotaExhaustionMessage(message)) compactionCode = "quota_exhausted";
 			const timestamp = new Date().toISOString();
 			this._publishTermination(
 				classifySessionTermination({
@@ -3824,7 +3861,7 @@ export class AgentSession {
 	/**
 	 * Effective context window for the upcoming turn.
 	 * Image-bearing turns with a text-only session model are auto-routed to the
-	 * vision model (gpt-5.6-luna, 400K) — that window is the real limit. Text-only
+	 * vision model (gpt-5.6-luna, 1M) — that window is the real limit. Text-only
 	 * turns keep the session model's (typically much larger) window.
 	 */
 	private _effectiveTurnContextWindow(pendingMessages: AgentMessage[], sessionWindow: number): number {
@@ -4104,6 +4141,7 @@ export class AgentSession {
 					this.agent.streamFn,
 					this.settingsManager.getRetrySettings(),
 					this._summarizationRetryCallbacks({ source: "compaction", reason }),
+					this._compactionFailoverModels(compactionModel),
 				);
 				summary = compactResult.summary;
 				firstKeptEntryId = compactResult.firstKeptEntryId;
@@ -4821,6 +4859,39 @@ export class AgentSession {
 	}
 
 	/**
+	 * Rotate to another authenticated provider route serving the SAME model
+	 * family (e.g. openrouter/stealth/ox-alpha ↔ opencode-go/ox-alpha-free ↔
+	 * opencode/x-preview-f-free). Used when the current route fails with an
+	 * upstream availability error — same-model retry would hammer a dead
+	 * endpoint while the identical model is one route away. Visited and
+	 * unauthenticated routes are marked in {@link _refusedModels} so repeat
+	 * failures advance the rotation within the turn.
+	 */
+	private async _maybeRotateModelRoutes(): Promise<string | undefined> {
+		const current = this.model;
+		if (!current) return undefined;
+		const candidates = sameModelRouteCandidates(current, this._modelRegistry.getAvailable());
+		for (const candidate of candidates) {
+			const key = failoverModelKey(candidate.provider, candidate.id);
+			if (this._refusedModels.has(key)) continue;
+			const next = this._modelRegistry.find(candidate.provider, candidate.id);
+			if (!next || !this._modelRegistry.hasConfiguredAuth(next)) {
+				this._refusedModels.add(key);
+				continue;
+			}
+			try {
+				await this.setModel(next);
+				// The old route just failed upstream — keep it out of this turn's retries.
+				this._refusedModels.add(failoverModelKey(current.provider, current.id));
+				return `${next.provider}/${next.id}`;
+			} catch {
+				this._refusedModels.add(key);
+			}
+		}
+		return undefined;
+	}
+
+	/**
 	 * Content/safety stops (stop_reason=refusal) are often false positives on coding turns
 	 * for Fable AND Claude Opus/Sonnet. Retrying the same model usually reprints the refusal —
 	 * switch via provider-resilience chain first. Failover targets still skip sticky models.
@@ -4886,12 +4957,20 @@ export class AgentSession {
 		if (attempt === undefined) return false;
 		this._retryAttempt = attempt;
 
+		// Upstream-unavailable (gateway 5xx / dropped stream): rotate to another
+		// authenticated route of the SAME model family so the retry lands on a
+		// live endpoint instead of hammering the dead one.
+		const rotatedTo = isUpstreamUnavailableMessage(message.errorMessage)
+			? await this._maybeRotateModelRoutes()
+			: undefined;
+
 		// Content/safety stop (Fable/Opus/Sonnet): switch model BEFORE delay so retry is not same-model refusal.
 		const failoverTo = await this._maybeFailoverFromSafetyStop(message);
+		const switchedVia = failoverTo ? `failover ${failoverTo}` : rotatedTo ? `route ${rotatedTo}` : undefined;
 		// Safety stops are usually immediate false positives — short delay after failover, full backoff otherwise.
-		const delayMs = computeRetryDelayMs(settings.baseDelayMs, attempt, failoverTo !== undefined);
-		const errorMessage = failoverTo
-			? `${message.errorMessage || "content/safety stop"} → failover ${failoverTo}`
+		const delayMs = computeRetryDelayMs(settings.baseDelayMs, attempt, switchedVia !== undefined);
+		const errorMessage = switchedVia
+			? `${message.errorMessage || "content/safety stop"} → ${switchedVia}`
 			: message.errorMessage || "Unknown error";
 
 		this._emit({

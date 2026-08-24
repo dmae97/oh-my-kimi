@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed above-viewport content changes never reaching the terminal: clearing redraws repainted only the visible tail, so a row that had already scrolled into scrollback kept its stale content forever (clipped assistant answers, phantom loaders when scrolling). Clearing redraws triggered by content changes now reprint from the first changed row; resize/viewport jumps keep the tail-only behavior that prevents TV-wall stacking.
+
 ## [0.96.2] - 2026-08-21
 
 ### Fixed

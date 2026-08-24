@@ -16,6 +16,7 @@ import {
 	untrackDetachedChildPid,
 } from "../../utils/shell.ts";
 import { classifyShellCommand } from "../command-safety.ts";
+import { isCommandSafetyDisabled } from "../extensions/builtin/command-safety-gate.ts";
 import type { ExtensionContext, ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
 import { assertLoadoutAccess, type LoadoutAccessGuard } from "../loadout-access-policy.ts";
 import { detectSandboxBackend } from "../sandbox/backend.ts";
@@ -396,16 +397,8 @@ export function createBashToolDefinition(
 			});
 
 			// Safety floor: re-classify the EFFECTIVE command after commandPrefix/spawnHook.
-			// Skipped entirely in YOLO mode (OMK_YOLO=1 / OMK_COMMAND_SAFETY=0).
-			const yolo =
-				process.env.OMK_YOLO === "1" ||
-				process.env.OMK_YOLO === "true" ||
-				process.env.OMK_DISABLE_COMMAND_SAFETY === "1" ||
-				process.env.OMK_DISABLE_COMMAND_SAFETY === "true" ||
-				["0", "false", "off", "disable", "disabled"].includes(
-					String(process.env.OMK_COMMAND_SAFETY ?? "").toLowerCase(),
-				);
-			if (!yolo) {
+			// Skipped entirely in YOLO mode (env contract in isCommandSafetyDisabled).
+			if (!isCommandSafetyDisabled()) {
 				const effectiveVerdict = classifyShellCommand(spawnContext.command);
 				if (effectiveVerdict.risk === "block") {
 					throw new Error(`command-safety: blocked\n[${effectiveVerdict.rule}] ${effectiveVerdict.reason}`);

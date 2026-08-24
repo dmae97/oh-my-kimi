@@ -664,6 +664,17 @@ export interface AgentEndEvent {
 	messages: AgentMessage[];
 }
 
+/**
+ * Fired once after an agent run fully settles: the `agent_end` that no retry
+ * follows. `agent_end` fires once per attempt, so on its own it cannot mark the
+ * end of the work when the session retries a transient provider failure. This
+ * is the boundary at which per-run state may be released exactly once.
+ */
+export interface AgentSettledEvent {
+	type: "agent_settled";
+	messages: AgentMessage[];
+}
+
 /** Fired at the start of each turn */
 export interface TurnStartEvent {
 	type: "turn_start";
@@ -978,6 +989,7 @@ export type ExtensionEvent =
 	| BeforeAgentStartEvent
 	| AgentStartEvent
 	| AgentEndEvent
+	| AgentSettledEvent
 	| TurnStartEvent
 	| TurnEndEvent
 	| MessageStartEvent
@@ -1132,6 +1144,7 @@ export interface ExtensionAPI {
 	on(event: "before_agent_start", handler: ExtensionHandler<BeforeAgentStartEvent, BeforeAgentStartEventResult>): void;
 	on(event: "agent_start", handler: ExtensionHandler<AgentStartEvent>): void;
 	on(event: "agent_end", handler: ExtensionHandler<AgentEndEvent>): void;
+	on(event: "agent_settled", handler: ExtensionHandler<AgentSettledEvent>): void;
 	on(event: "turn_start", handler: ExtensionHandler<TurnStartEvent>): void;
 	on(event: "turn_end", handler: ExtensionHandler<TurnEndEvent>): void;
 	on(event: "message_start", handler: ExtensionHandler<MessageStartEvent>): void;

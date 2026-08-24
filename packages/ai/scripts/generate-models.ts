@@ -313,7 +313,7 @@ function isGemma4Model(modelId: string): boolean {
 	return /gemma-?4/.test(modelId.toLowerCase());
 }
 
-function applyThinkingLevelMetadata(model: Model<any>): void {
+function applyModelMetadata(model: Model<Api>): void {
 	if (isGlm5ReasoningEffortModel(model.id)) {
 		mergeThinkingLevelMap(model, GLM5_REASONING_EFFORT_THINKING_LEVEL_MAP);
 	}
@@ -353,8 +353,8 @@ function applyThinkingLevelMetadata(model: Model<any>): void {
 		// GPT-5.6 family efforts: none, low, medium, high, xhigh, max (no minimal).
 		mergeThinkingLevelMap(model, { minimal: null });
 	}
-	if (model.id.includes("gpt-5.6")) {
-		// GPT-5.6 family adds a max effort tier above xhigh.
+	if (model.id.toLowerCase().includes("gpt-5.6")) {
+		model.contextWindow = 1_000_000;
 		mergeThinkingLevelMap(model, { max: "max" });
 	}
 	if (
@@ -482,11 +482,26 @@ async function fetchOpenRouterModels(): Promise<Model<any>[]> {
 	try {
 		console.log("Fetching models from OpenRouter API...");
 		const response = await fetch("https://openrouter.ai/api/v1/models");
-		const data = await response.json();
+		const data = (await response.json()) as {
+			data?: Array<{
+				id: string;
+				name: string;
+				supported_parameters?: string[];
+				architecture?: { modality?: string };
+				pricing?: {
+					prompt?: string;
+					completion?: string;
+					input_cache_read?: string;
+					input_cache_write?: string;
+				};
+				context_length?: number;
+				top_provider?: { max_completion_tokens?: number };
+			}>;
+		};
 
 		const models: Model<any>[] = [];
 
-		for (const model of data.data) {
+		for (const model of data.data ?? []) {
 			// Only include models that support tools
 			if (!model.supported_parameters?.includes("tools")) continue;
 
@@ -540,7 +555,8 @@ async function fetchAiGatewayModels(): Promise<Model<any>[]> {
 	try {
 		console.log("Fetching models from Vercel AI Gateway API...");
 		const response = await fetch(`${AI_GATEWAY_MODELS_URL}/models`);
-		const data = await response.json();
+		// Shape is validated below with Array.isArray before the AiGatewayModel cast.
+		const data = (await response.json()) as { data?: unknown };
 		const models: Model<any>[] = [];
 
 		const toNumber = (value: string | number | undefined): number => {
@@ -729,13 +745,16 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 	try {
 		console.log("Fetching models from models.dev API...");
 		const response = await fetch("https://models.dev/api.json");
-		const data = await response.json();
+		// models.dev returns a provider-keyed catalog. Typing it once at the source keeps
+		// every per-provider pass below checked instead of operating on `unknown`.
+		const data = (await response.json()) as Record<
+			string,
+			{ models?: Record<string, ModelsDevModel> } | undefined
+		>;
 
 		// Record upstream-declared xhigh effort support before the per-provider passes run, so
 		// thinking metadata can consult real catalog data rather than hardcoded model versions.
-		for (const providerData of Object.values(
-			data as Record<string, { models?: Record<string, ModelsDevModel> } | undefined>,
-		)) {
+		for (const providerData of Object.values(data)) {
 			for (const [modelId, model] of Object.entries(providerData?.models ?? {})) {
 				const effortValues = model.reasoning_options?.find((option) => option.type === "effort")?.values;
 				if (effortValues?.includes("xhigh")) UPSTREAM_XHIGH_EFFORT_IDS.add(normalizeUpstreamModelId(modelId));
@@ -1233,9 +1252,10 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 		] as const;
 
 		for (const variant of opencodeVariants) {
-			if (!data[variant.key]?.models) continue;
+			const variantModels = data[variant.key]?.models;
+			if (!variantModels) continue;
 
-			for (const [modelId, model] of Object.entries(data[variant.key].models)) {
+			for (const [modelId, model] of Object.entries(variantModels)) {
 				const m = model as ModelsDevModel & { status?: string };
 				if (m.tool_call !== true) continue;
 				if (m.status === "deprecated") continue;
@@ -2015,13 +2035,12 @@ async function generateModels() {
 
 	// OpenAI Codex (ChatGPT OAuth) models
 	// NOTE: These are not fetched from models.dev; we keep a small, explicit list to avoid aliases.
-	// Context window is based on observed server limits (400s above ~272k), not marketing numbers.
+	// Older Codex windows follow observed limits; GPT-5.6 uses OMK's family-wide contract below.
 	const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 	const CODEX_CONTEXT = 272000;
 	const CODEX_SPARK_CONTEXT = 128000;
-	// Terra/Luna retain the observed Codex model-manager window; Sol exposes OMK's 1M harness window.
-	const CODEX_GPT_56_CONTEXT = 372000;
-	const CODEX_GPT_56_SOL_CONTEXT = 1_000_000;
+	// OMK exposes one family-wide context contract for every GPT-5.6 route.
+	const CODEX_GPT_56_CONTEXT = 1_000_000;
 	const CODEX_MAX_TOKENS = 128000;
 	const codexModels: Model<"openai-codex-responses">[] = [
 		{
@@ -2081,7 +2100,7 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-			contextWindow: CODEX_GPT_56_SOL_CONTEXT,
+			contextWindow: CODEX_GPT_56_CONTEXT,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
 		{
@@ -2106,8 +2125,8 @@ async function generateModels() {
 			input: ["text", "image"],
 			// Composite usage is calculated from the concrete Sol/Terra calls.
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			// Reserve room for the bounded adviser analyses added before synthesis.
-			contextWindow: 300000,
+			// Adviser caps independently bound the extra synthesis context.
+			contextWindow: CODEX_GPT_56_CONTEXT,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
 		{
@@ -2403,7 +2422,7 @@ async function generateModels() {
 	allModels.push(...azureOpenAiModels);
 
 	for (const model of allModels) {
-		applyThinkingLevelMetadata(model);
+		applyModelMetadata(model);
 	}
 
 	// Group by provider and deduplicate by model ID

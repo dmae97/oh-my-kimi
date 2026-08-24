@@ -21,6 +21,11 @@
 			"@earendil-works/omk-agent-old/*": ["./packages/agent-old/src/*"]
 		}
 	},
-	"include": ["packages/*/src/**/*", "packages/*/test/**/*", "packages/coding-agent/examples/**/*"],
+	"include": [
+		"packages/*/src/**/*",
+		"packages/*/test/**/*",
+		"packages/*/scripts/**/*",
+		"packages/coding-agent/examples/**/*"
+	],
 	"exclude": ["**/dist/**"]
 }

@@ -39,7 +39,7 @@ export interface CommandGateOptions {
 	confirm?: ConfirmFn;
 	/** Interactive policy for non-privilege `confirm`-tier verdicts. Defaults to "ask". */
 	interactiveConfirmPolicy?: "ask" | "allow";
-	/** Headless policy for `confirm`-tier verdicts. `priv.*` is never allowed. Defaults to "deny". */
+	/** Headless policy for `confirm`-tier verdicts. `priv.*` is never allowed outside YOLO. Defaults to "deny". */
 	headlessConfirmPolicy?: "deny" | "allow";
 	/** Extra substrings that promote allow/confirm verdicts to block. Never relaxes a block. */
 	extraDeny?: string[];
@@ -102,6 +102,8 @@ export function evaluateBashToolCall(
 /**
  * Shared gate decision for any bash command (LLM tool call, user bash, RPC bash).
  *
+ * - YOLO   => undefined (full disable: every verdict — block, confirm, priv.* —
+ *            runs without prompting; see {@link isCommandSafetyDisabled}).
  * - block  => deny.
  * - confirm => hasUI ? (approved ? undefined : deny) : (policy === "allow" && !priv ? undefined : deny).
  * - allow  => undefined (preserve later extensions / default execution).
@@ -110,6 +112,11 @@ export async function evaluateCommandGate(
 	command: string,
 	opts: CommandGateOptions,
 ): Promise<{ deny: boolean; reason: string } | undefined> {
+	// YOLO mode: the operator opted out of the entire gate — no prompts for any
+	// verdict, including privilege escalation. Kept inside the pure decision
+	// engine so every direct caller (gate extension, RPC headless bash) inherits it.
+	if (isCommandSafetyDisabled()) return undefined;
+
 	const verdict = classifyWithExtraDeny(command, opts.extraDeny);
 
 	if (verdict.risk === "allow") return undefined;

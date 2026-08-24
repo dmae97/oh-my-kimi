@@ -1,6 +1,8 @@
 # OMK Documentation
 
-OMK is a provider-neutral coding agent with multi-agent orchestration, durable harness controls, replayable sessions, SDK/RPC integration, and evidence-backed verification. Its core stays small while extensions, skills, prompts, themes, and packages add workflows.
+OMK is a provider-neutral coding agent with multi-agent orchestration, durable harness controls, replayable sessions, SDK/RPC integration, and evidence-backed verification. Extensions, skills, prompts, themes, and packages add workflows without changing the run contract.
+
+OMK targets state-of-the-art quality as a CLI coding-agent harness. That target is not a claim of current leadership; see [Turn metrics and harness evaluation](metrics.md) for the qualification rules and current status.
 
 ## Quick start
 
@@ -59,6 +61,7 @@ For the full first-run flow, see [Quickstart](quickstart.md).
 
 - [SDK and Session Control](sdk.md) - embed omk, reuse policy helpers, or inspect stored sessions from scripts.
 - [Run Protocol and Durable Goals](run-protocol.md) - canonical run contracts and the durable-goal lifecycle.
+- [Turn metrics and harness evaluation](metrics.md) - cost, latency, tool reliability, capability baselines, and comparative-claim rules.
 - [RPC mode](rpc.md) - integrate over stdin/stdout JSONL.
 - [JSON event stream mode](json.md) - print mode with structured events.
 - [TUI components](tui.md) - build custom terminal UI for extensions.

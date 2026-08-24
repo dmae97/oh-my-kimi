@@ -52,6 +52,17 @@ adds a control plane around that work.
 OMK is for engineering work that needs a checkable result, not a convincing chat
 response.
 
+## Harness target
+
+OMK targets state-of-the-art quality as a CLI coding-agent harness. The target
+covers reliable task completion, cost and latency, context and tool efficiency,
+bounded orchestration, safe execution, recovery, and verifiable outcomes.
+
+**Current status: SOTA is not verified.** OMK does not claim leadership from
+feature counts, test counts, self-scores, or roadmap projections. A comparative
+claim requires a dated, reproducible, same-model evaluation against a named
+cohort. See the [measurement protocol](packages/coding-agent/docs/metrics.md).
+
 ## Quick start
 
 ```bash
@@ -181,6 +192,22 @@ omk install npm:omk-book-to-skill@0.96.2
 npm install omk-tui
 ```
 
+## Repository understanding (local wiki, default)
+
+OMK repositories keep a self-maintaining local wiki so every fresh agent session
+starts with high repo understanding:
+
+- **`openwiki/`** — an agent-readable wiki (OpenWiki) whose factual claims stay
+  pinned to versioned source evidence; when code changes, stale claims are
+  flagged instead of silently trusted. Refreshed by the scheduled
+  [OpenWiki workflow](.github/workflows/openwiki-update.yml); read
+  `openwiki/overview.md` before deep file scans.
+- **`.understand-anything/`** — a structural knowledge graph
+  (Understand-Anything) for symbol-level drill-down via `project_report` /
+  `module_report`.
+
+Source and tests remain authoritative; the wiki is grounded, not gospel.
+
 ## OMK + AdaptOrch
 
 OMK is the local, MIT-licensed control plane. AdaptOrch is a separate,
@@ -193,6 +220,7 @@ not part of this repository or the `omk-adaptorch-wpl` package.
 
 - [Documentation index](packages/coding-agent/docs/index.md)
 - [Usage](packages/coding-agent/docs/usage.md)
+- [Turn metrics and harness evaluation](packages/coding-agent/docs/metrics.md)
 - [Providers and models](packages/coding-agent/docs/providers.md)
 - [Automation and SDK](packages/coding-agent/docs/sdk.md)
 - [Run protocol](packages/coding-agent/docs/run-protocol.md)
@@ -345,6 +373,15 @@ Release notes live in [RELEASE_NOTES_v0.96.1.md](.github/RELEASE_NOTES_v0.96.1.m
 Release notes live in [RELEASE_NOTES_v0.96.0.md](.github/RELEASE_NOTES_v0.96.0.md).
 
 <!-- releases:end -->
+
+## Acknowledgments
+
+OMK builds on [pi](https://github.com/badlogic/pi-mono) — Mario Zechner's
+MIT-licensed coding-agent harness — and began from the
+[oh-my-pi](https://github.com/can1357/oh-my-pi) fork. The vendored tree was
+removed in this release line; OMK `0.9x` is OMK-native (see
+[`specs/constitution.md`](specs/constitution.md)), and the design debt to both
+projects stands. Thank you.
 
 ## License
 

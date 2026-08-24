@@ -84,6 +84,8 @@ describe("AgentSession runtime termination production", () => {
 		["429 too many requests", "provider_rate_limit", "provider.rate_limit"],
 		["403 You've reached your usage limit for this billing cycle", "provider_rate_limit", "provider.rate_limit"],
 		["fetch failed: connection reset", "provider_network", "provider.network"],
+		["503 Upstream request failed: Endpoint is unavailable.", "provider_network", "provider.network"],
+		["Stream ended without finish_reason", "provider_network", "provider.network"],
 		["provider returned an invalid response frame", "provider_protocol", "provider.protocol"],
 		["context_length_exceeded", "context_overflow", "provider.context_overflow"],
 		["tool execution failed fatally", "tool_fatal", "tool.fatal"],
@@ -161,6 +163,74 @@ describe("AgentSession runtime termination production", () => {
 			modelRegistry.unregisterProvider(fallback.getModel().provider);
 			primary.unregister();
 			fallback.unregister();
+		}
+	});
+
+	it("rotates to another provider route of the same model family on upstream-unavailable errors", async () => {
+		const primary = registerFauxProvider({
+			provider: `faux-route-a-${Date.now()}`,
+			models: [{ id: "ox-alpha-test-a", name: "Ox Alpha Test Route", reasoning: false }],
+		});
+		const alternate = registerFauxProvider({
+			provider: `faux-route-b-${Date.now()}`,
+			models: [{ id: "ox-alpha-test-b", name: "Ox Alpha Test Route B", reasoning: false }],
+		});
+		primary.setResponses([
+			fauxAssistantMessage("", {
+				stopReason: "error",
+				errorMessage: "503 Upstream request failed: Endpoint is unavailable.",
+			}),
+		]);
+		alternate.setResponses([fauxAssistantMessage("recovered via route b")]);
+
+		const authStorage = AuthStorage.inMemory();
+		authStorage.setRuntimeApiKey(primary.getModel().provider, "a-key");
+		authStorage.setRuntimeApiKey(alternate.getModel().provider, "b-key");
+		const modelRegistry = ModelRegistry.inMemory(authStorage);
+		for (const route of [primary, alternate]) {
+			modelRegistry.registerProvider(route.getModel().provider, {
+				api: route.api,
+				apiKey: "key",
+				baseUrl: route.getModel().baseUrl,
+				models: [...route.models],
+			});
+		}
+		// No explicit failoverCandidates: rotation must discover the alternate
+		// route purely through the model-family match. Auto-compaction stays off
+		// so the post-turn summary cannot consume another faux response.
+		const settingsManager = SettingsManager.inMemory({
+			retry: { enabled: true, maxRetries: 2, baseDelayMs: 0 },
+			compaction: { enabled: false },
+		} as never);
+		const { session } = await createAgentSession({
+			cwd,
+			agentDir,
+			authStorage,
+			modelRegistry,
+			model: primary.getModel(),
+			sessionManager: SessionManager.create(cwd, sessionDir),
+			settingsManager,
+		});
+		const events: AgentSessionEvent[] = [];
+		session.subscribe((event) => void events.push(event));
+
+		try {
+			await session.prompt("recover from upstream outage");
+
+			expect(primary.state.callCount).toBe(1);
+			expect(alternate.state.callCount).toBe(1);
+			expect(session.model?.provider).toBe(alternate.getModel().provider);
+			expect(terminationEvents(events).map((event) => event.termination.kind)).toEqual([
+				"provider_network",
+				"completed",
+			]);
+			expect(events.some((event) => event.type === "auto_retry_start")).toBe(true);
+		} finally {
+			session.dispose();
+			for (const route of [primary, alternate]) {
+				modelRegistry.unregisterProvider(route.getModel().provider);
+				route.unregister();
+			}
 		}
 	});
 

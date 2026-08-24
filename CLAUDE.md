@@ -100,3 +100,11 @@ quarantined to `QUARANTINE-20260702/CLAUDE.md.system-prompt-artifact` because it
 (models reciting their own system prompt is a known confabulation pattern) and, even if partially accurate,
 is not OMK's to store. Do not restore it or treat it as authoritative — Claude's real behavior is governed by
 Anthropic, not by this file.
+
+<!-- OPENWIKI:START -->
+
+## OpenWiki
+
+See [AGENTS.md](AGENTS.md) for OpenWiki agent instructions.
+
+<!-- OPENWIKI:END -->

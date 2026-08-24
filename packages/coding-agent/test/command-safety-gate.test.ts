@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import commandSafetyGate, {
 	evaluateBashToolCall,
+	evaluateCommandGate,
 	evaluateUserBash,
 	isCommandSafetyAssumeYesEnabled,
 	isCommandSafetyDisabled,
@@ -40,6 +41,17 @@ function bashToolCall(command: string): ToolCallEvent {
 function userBash(command: string): UserBashEvent {
 	return { type: "user_bash", command, excludeFromContext: false, cwd: "/tmp" };
 }
+
+// Hermetic regardless of runner: developer shells on this project export
+// OMK_YOLO=1 / OMK_COMMAND_SAFETY=0; the shared vitest setup scrubs them, but
+// pin here too so a bare single-file run without the package config stays
+// deterministic. Individual tests override via vi.stubEnv as needed.
+beforeEach(() => {
+	vi.stubEnv("OMK_YOLO", "");
+	vi.stubEnv("OMK_COMMAND_SAFETY", "");
+	vi.stubEnv("OMK_DISABLE_COMMAND_SAFETY", "");
+	vi.stubEnv("OMK_COMMAND_SAFETY_ASSUME_YES", "");
+});
 
 afterEach(() => {
 	vi.unstubAllEnvs();
@@ -281,5 +293,44 @@ describe("commandSafetyGate factory", () => {
 		it("default env keeps safety on", () => {
 			expect(isCommandSafetyDisabled({})).toBe(false);
 		});
+
+		it("OMK_YOLO=yes and OMK_YOLO=on also disable (shared env contract)", () => {
+			expect(isCommandSafetyDisabled({ OMK_YOLO: "yes" })).toBe(true);
+			expect(isCommandSafetyDisabled({ OMK_YOLO: "on" })).toBe(true);
+			expect(isCommandSafetyDisabled({ OMK_DISABLE_COMMAND_SAFETY: "yes" })).toBe(true);
+		});
+	});
+});
+
+describe("YOLO mode allows everything without prompting", () => {
+	it("gate decision engine allows block, confirm, and privilege commands with no prompt", async () => {
+		vi.stubEnv("OMK_YOLO", "1");
+		const confirm = vi.fn(async () => false);
+		for (const command of ["rm -rf /", "git reset --hard", "sudo rm -rf /"]) {
+			const decision = await evaluateCommandGate(command, { hasUI: true, confirm });
+			expect(decision, command).toBeUndefined();
+			const headless = await evaluateCommandGate(command, { hasUI: false, headlessConfirmPolicy: "deny" });
+			expect(headless, `${command} (headless)`).toBeUndefined();
+		}
+		expect(confirm).not.toHaveBeenCalled();
+	});
+
+	it("factory registers no handlers under YOLO so nothing can prompt", () => {
+		vi.stubEnv("OMK_YOLO", "1");
+		const { omk, handlers } = createFakeOmk();
+		commandSafetyGate(omk);
+		expect(handlers.get("tool_call") ?? []).toHaveLength(0);
+		expect(handlers.get("user_bash") ?? []).toHaveLength(0);
+	});
+
+	it("assume-yes alone still never auto-allows privilege escalation", async () => {
+		vi.stubEnv("OMK_COMMAND_SAFETY_ASSUME_YES", "1");
+		const decision = await evaluateCommandGate("sudo ls", {
+			hasUI: true,
+			confirm: async () => false,
+			interactiveConfirmPolicy: "allow",
+			headlessConfirmPolicy: "allow",
+		});
+		expect(decision).toMatchObject({ deny: true });
 	});
 });

@@ -3,11 +3,11 @@
  *
  * When a text-only session model (e.g. deepseek-v4-flash) serves a turn whose
  * transcript carries image blocks, the agent loop auto-routes the request to
- * the vision model (openai-codex/gpt-5.6-luna, 400K window). Two failures used
+ * the vision model (openai-codex/gpt-5.6-luna, 1M window). Two failures used
  * to follow:
  *
  * 1. Threshold compaction was computed against the session model's window
- *    (deepseek 1M -> ~700K), so the vision request overflowed (400K) before
+ *    (deepseek 1M -> ~700K), so an undersized vision-route window could overflow before
  *    compaction could fire.
  * 2. A context_overflow error surfaced from the auto-routed vision model was
  *    ignored by `_checkCompaction` because the message model differs from the
@@ -84,7 +84,7 @@ describe("AgentSession vision-route compaction", () => {
 		createSession();
 		// @ts-expect-error private method under test
 		const effective = session._effectiveTurnContextWindow([{ role: "user", content: [imageMessage()] }], 1_000_000);
-		expect(effective).toBe(400_000); // gpt-5.6-luna window, not deepseek 1M
+		expect(effective).toBe(1_000_000); // GPT-5.6 Luna uses the family-wide 1M window
 	});
 
 	it("keeps the session-model window for text-only turns", async () => {

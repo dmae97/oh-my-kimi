@@ -4,7 +4,6 @@
  * Handles TUI rendering and user interaction, delegating business logic to AgentSession.
  */
 
-import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -19,11 +18,22 @@ import {
 	type OAuthProviderId,
 	type OAuthSelectPrompt,
 } from "omk-ai";
+import { AttachmentStore } from "../../core/attachment-store.ts";
+import { describePromptImageAttachment, type PromptImageAttachment } from "../../core/prompt-attachment.ts";
+import { createAttachmentStrip } from "./components/attachment-strip.ts";
+
+/** A user prompt ready for AgentSession: text plus optional image attachments. */
+export interface InteractivePromptPayload {
+	text: string;
+	images?: ImageContent[];
+	/** Snapshot of attachment ids sent with this prompt; consumed after acceptance. */
+	imageIds?: readonly string[];
+}
+
 import type {
 	AutocompleteItem,
 	AutocompleteProvider,
 	EditorComponent,
-	Keybinding,
 	KeyId,
 	MarkdownTheme,
 	OverlayHandle,
@@ -103,7 +113,7 @@ import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { getChangelogPath, getNewEntries, parseChangelog } from "../../utils/changelog.ts";
 import { copyToClipboard } from "../../utils/clipboard.ts";
-import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
+import { readClipboardImage } from "../../utils/clipboard-image.ts";
 import { parseGitUrl } from "../../utils/git.ts";
 import { openBrowser } from "../../utils/open-browser.ts";
 import { getCwdRelativePath } from "../../utils/paths.ts";
@@ -378,8 +388,12 @@ export class InteractiveMode {
 	private keybindings: KeybindingsManager;
 	private version: string;
 	private isInitialized = false;
-	private onInputCallback?: (text: string) => void;
-	private pendingUserInputs: string[] = [];
+	private onInputCallback?: (payload: InteractivePromptPayload) => void;
+	private pendingPromptPayloads: InteractivePromptPayload[] = [];
+	private readonly attachmentStore = new AttachmentStore();
+	private draftAttachmentIds: string[] = [];
+	private readonly attachmentStripContainer = new Container();
+	private interactiveLoopActive = true;
 	private loadingAnimation: Loader | undefined = undefined;
 	// Wall-clock start of the current agent turn, for the working loader elapsed suffix
 	private workingStartedAt: number | undefined = undefined;
@@ -896,6 +910,7 @@ export class InteractiveMode {
 		this.ui.addChild(this.statusContainer);
 		this.renderWidgets(); // Initialize with default spacer
 		this.ui.addChild(this.widgetContainerAbove);
+		this.ui.addChild(this.attachmentStripContainer);
 		this.ui.addChild(this.editorContainer);
 		this.ui.addChild(this.widgetContainerBelow);
 		this.ui.addChild(this.noticeContainer);
@@ -1052,12 +1067,15 @@ export class InteractiveMode {
 		}
 
 		// Main interactive loop
-		while (true) {
-			const userInput = await this.getUserInput();
+		while (this.interactiveLoopActive) {
+			const payload = await this.getUserInput();
 			const previousTermination = this.session.lastTermination;
 			try {
-				await this.session.prompt(userInput);
+				await this.session.prompt(payload.text, payload.images ? { images: payload.images } : undefined);
+				// Acceptance: release exactly the attachments that were sent.
+				if (payload.imageIds && payload.imageIds.length > 0) this.consumeDraftAttachments(payload.imageIds);
 			} catch (error: unknown) {
+				// Preflight/model failure: attachments stay attached for retry.
 				this.showPromptError(error, previousTermination);
 			}
 		}
@@ -1638,11 +1656,13 @@ export class InteractiveMode {
 		const addLoadedSection = (
 			name: string,
 			collapsedBody: string | (() => string),
-			expandedBody: string | (() => string) = collapsedBody,
+			expandedBody?: string | (() => string),
 			color: ThemeColor = "mdHeading",
 		): void => {
+			const resolvedExpandedBody = expandedBody ?? collapsedBody;
 			const getCollapsedBody = typeof collapsedBody === "function" ? collapsedBody : () => collapsedBody;
-			const getExpandedBody = typeof expandedBody === "function" ? expandedBody : () => expandedBody;
+			const getExpandedBody =
+				typeof resolvedExpandedBody === "function" ? resolvedExpandedBody : () => resolvedExpandedBody;
 			const section = new ExpandableText(
 				() => `${sectionHeader(name, color)}\n${getCollapsedBody()}`,
 				() => `${sectionHeader(name, color)}\n${getExpandedBody()}`,
@@ -2825,19 +2845,102 @@ export class InteractiveMode {
 			if (!image) {
 				return;
 			}
+			let attachment: PromptImageAttachment;
+			try {
+				attachment = this.attachmentStore.put(new Uint8Array(image.bytes), "clipboard");
+			} catch (error) {
+				this.showWarning(error instanceof Error ? error.message : String(error));
+				return;
+			}
+			this.draftAttachmentIds.push(attachment.id);
+			this.refreshAttachmentStrip();
+		} catch (error) {
+			this.showWarning(`Clipboard paste failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
 
-			// Write to temp file
-			const tmpDir = os.tmpdir();
-			const ext = extensionForImageMimeType(image.mimeType) ?? "png";
-			const fileName = `omk-clipboard-${crypto.randomUUID()}.${ext}`;
-			const filePath = path.join(tmpDir, fileName);
-			fs.writeFileSync(filePath, Buffer.from(image.bytes));
+	/** Rebuild the preview strip above the editor from the current draft ids. */
+	private refreshAttachmentStrip(): void {
+		this.attachmentStripContainer.clear();
+		const items = this.draftAttachmentIds
+			.map((id) => this.attachmentStore.get(id))
+			.filter((item): item is PromptImageAttachment => item !== undefined);
+		if (items.length > 0) {
+			this.attachmentStripContainer.addChild(
+				createAttachmentStrip(items, (id) => this.attachmentStore.getBytes(id)),
+			);
+		}
+		this.ui.requestRender();
+	}
 
-			// Insert file path directly
-			this.editor.insertTextAtCursor?.(filePath);
-			this.ui.requestRender();
-		} catch {
-			// Silently ignore clipboard errors (may not have permission, etc.)
+	private materializeDraftImages(ids: readonly string[]): ImageContent[] {
+		return this.attachmentStore.materializeImages(ids);
+	}
+
+	/** Release exactly the attachments that were accepted with a sent prompt. */
+	private consumeDraftAttachments(ids: readonly string[]): void {
+		for (const id of ids) {
+			this.attachmentStore.remove(id);
+			const index = this.draftAttachmentIds.indexOf(id);
+			if (index >= 0) this.draftAttachmentIds.splice(index, 1);
+		}
+		this.refreshAttachmentStrip();
+	}
+
+	private clearDraftAttachments(): void {
+		this.draftAttachmentIds = [];
+		this.attachmentStore.clear();
+		this.refreshAttachmentStrip();
+	}
+
+	private removeLastDraftAttachment(): void {
+		const id = this.draftAttachmentIds.pop();
+		if (id) this.attachmentStore.remove(id);
+		this.refreshAttachmentStrip();
+	}
+
+	private isVisionCapable(): boolean {
+		const model = this.session.model as Model<any> | undefined;
+		return Array.isArray(model?.input) ? model.input.includes("image") : true;
+	}
+
+	private handleAttachCommand(argument: string): void {
+		const [verb, rest] = argument.split(/\s+/);
+		switch (verb ?? "") {
+			case "":
+			case "list": {
+				const items = this.draftAttachmentIds
+					.map((id) => this.attachmentStore.get(id))
+					.filter((item): item is PromptImageAttachment => item !== undefined);
+				if (items.length === 0) {
+					this.showStatus("No image attachments.");
+				} else {
+					this.showStatus(
+						items.map((item, index) => `${index + 1}. ${describePromptImageAttachment(item)}`).join(" · "),
+					);
+				}
+				break;
+			}
+			case "clear":
+				this.clearDraftAttachments();
+				this.showStatus("Image attachments cleared.");
+				break;
+			case "remove":
+			case "rm": {
+				const position = Number.parseInt(rest ?? "", 10);
+				if (Number.isFinite(position) && position >= 1 && position <= this.draftAttachmentIds.length) {
+					const id = this.draftAttachmentIds.splice(position - 1, 1)[0];
+					if (id) this.attachmentStore.remove(id);
+				} else {
+					this.removeLastDraftAttachment();
+				}
+				this.refreshAttachmentStrip();
+				this.showStatus("Image attachment removed.");
+				break;
+			}
+			default:
+				this.showStatus("Usage: /attach [list|clear|remove [n]]");
+				break;
 		}
 	}
 
@@ -2858,9 +2961,16 @@ export class InteractiveMode {
 	private setupEditorSubmitHandler(): void {
 		this.defaultEditor.onSubmit = async (text: string) => {
 			text = text.trim();
-			if (!text) return;
+			const draftImageIds = [...(this.draftAttachmentIds ?? [])];
+			const hasAttachments = draftImageIds.length > 0;
+			if (!text && !hasAttachments) return;
 
 			// Handle commands
+			if (text === "/attach" || text.startsWith("/attach ")) {
+				this.editor.setText("");
+				this.handleAttachCommand(text.slice("/attach".length).trim());
+				return;
+			}
 			if (text === "/settings") {
 				this.showSettingsSelector();
 				this.editor.setText("");
@@ -3025,8 +3135,26 @@ export class InteractiveMode {
 				}
 			}
 
+			let draftImages: ImageContent[] | undefined;
+			if (hasAttachments) {
+				try {
+					draftImages = this.materializeDraftImages(draftImageIds);
+				} catch (error) {
+					this.showWarning(error instanceof Error ? error.message : String(error));
+					return;
+				}
+				if (!this.isVisionCapable()) {
+					this.showWarning("The selected model cannot accept images. Switch model (/model) or run /attach clear.");
+					return;
+				}
+			}
+
 			// Queue input during compaction (extension commands execute immediately)
 			if (this.session.isCompacting) {
+				if (hasAttachments) {
+					this.showWarning("Attachments are held while compaction finishes — resubmit after it completes.");
+					return;
+				}
 				if (this.isExtensionCommand(text)) {
 					this.editor.addToHistory?.(text);
 					this.editor.setText("");
@@ -3042,7 +3170,12 @@ export class InteractiveMode {
 			if (this.session.isStreaming) {
 				this.editor.addToHistory?.(text);
 				this.editor.setText("");
-				await this.session.prompt(text, { streamingBehavior: "steer" });
+				await this.session.prompt(
+					text,
+					draftImages ? { images: draftImages, streamingBehavior: "steer" } : { streamingBehavior: "steer" },
+				);
+				// Queued without throwing: acceptance — release exactly what was sent.
+				if (draftImageIds.length > 0) this.consumeDraftAttachments(draftImageIds);
 				this.updatePendingMessagesDisplay();
 				this.ui.requestRender();
 				return;
@@ -3052,10 +3185,13 @@ export class InteractiveMode {
 			// First, move any pending bash components to chat
 			this.flushPendingBashComponents();
 
+			const payload: InteractivePromptPayload = draftImages
+				? { text, images: draftImages, imageIds: draftImageIds }
+				: { text };
 			if (this.onInputCallback) {
-				this.onInputCallback(text);
+				this.onInputCallback(payload);
 			} else {
-				this.pendingUserInputs.push(text);
+				this.pendingPromptPayloads.push(payload);
 			}
 			this.editor.addToHistory?.(text);
 		};
@@ -3702,16 +3838,16 @@ export class InteractiveMode {
 		}
 	}
 
-	async getUserInput(): Promise<string> {
-		const queuedInput = this.pendingUserInputs.shift();
-		if (queuedInput !== undefined) {
-			return queuedInput;
+	async getUserInput(): Promise<InteractivePromptPayload> {
+		const queuedPayload = this.pendingPromptPayloads.shift();
+		if (queuedPayload !== undefined) {
+			return queuedPayload;
 		}
 
 		return new Promise((resolve) => {
-			this.onInputCallback = (text: string) => {
+			this.onInputCallback = (payload: InteractivePromptPayload) => {
 				this.onInputCallback = undefined;
-				resolve(text);
+				resolve(payload);
 			};
 		});
 	}
@@ -3763,6 +3899,7 @@ export class InteractiveMode {
 	private isShuttingDown = false;
 
 	private async shutdown(options?: { fromSignal?: boolean }): Promise<void> {
+		this.interactiveLoopActive = false;
 		if (this.isShuttingDown) return;
 		this.isShuttingDown = true;
 		this.unregisterSignalHandlers();
@@ -6057,36 +6194,33 @@ export class InteractiveMode {
 	/**
 	 * Get capitalized display string for an editor keybinding action.
 	 */
-	private getEditorKeyDisplay(action: Keybinding): string {
-		return keyDisplayText(action);
-	}
 
-	private handleHotkeysCommand(): void {
+	public handleHotkeysCommand(): void {
 		// Navigation keybindings
-		const cursorUp = this.getEditorKeyDisplay("tui.editor.cursorUp");
-		const cursorDown = this.getEditorKeyDisplay("tui.editor.cursorDown");
-		const cursorLeft = this.getEditorKeyDisplay("tui.editor.cursorLeft");
-		const cursorRight = this.getEditorKeyDisplay("tui.editor.cursorRight");
-		const cursorWordLeft = this.getEditorKeyDisplay("tui.editor.cursorWordLeft");
-		const cursorWordRight = this.getEditorKeyDisplay("tui.editor.cursorWordRight");
-		const cursorLineStart = this.getEditorKeyDisplay("tui.editor.cursorLineStart");
-		const cursorLineEnd = this.getEditorKeyDisplay("tui.editor.cursorLineEnd");
-		const jumpForward = this.getEditorKeyDisplay("tui.editor.jumpForward");
-		const jumpBackward = this.getEditorKeyDisplay("tui.editor.jumpBackward");
-		const pageUp = this.getEditorKeyDisplay("tui.editor.pageUp");
-		const pageDown = this.getEditorKeyDisplay("tui.editor.pageDown");
+		const cursorUp = keyDisplayText("tui.editor.cursorUp");
+		const cursorDown = keyDisplayText("tui.editor.cursorDown");
+		const cursorLeft = keyDisplayText("tui.editor.cursorLeft");
+		const cursorRight = keyDisplayText("tui.editor.cursorRight");
+		const cursorWordLeft = keyDisplayText("tui.editor.cursorWordLeft");
+		const cursorWordRight = keyDisplayText("tui.editor.cursorWordRight");
+		const cursorLineStart = keyDisplayText("tui.editor.cursorLineStart");
+		const cursorLineEnd = keyDisplayText("tui.editor.cursorLineEnd");
+		const jumpForward = keyDisplayText("tui.editor.jumpForward");
+		const jumpBackward = keyDisplayText("tui.editor.jumpBackward");
+		const pageUp = keyDisplayText("tui.editor.pageUp");
+		const pageDown = keyDisplayText("tui.editor.pageDown");
 
 		// Editing keybindings
-		const submit = this.getEditorKeyDisplay("tui.input.submit");
-		const newLine = this.getEditorKeyDisplay("tui.input.newLine");
-		const deleteWordBackward = this.getEditorKeyDisplay("tui.editor.deleteWordBackward");
-		const deleteWordForward = this.getEditorKeyDisplay("tui.editor.deleteWordForward");
-		const deleteToLineStart = this.getEditorKeyDisplay("tui.editor.deleteToLineStart");
-		const deleteToLineEnd = this.getEditorKeyDisplay("tui.editor.deleteToLineEnd");
-		const yank = this.getEditorKeyDisplay("tui.editor.yank");
-		const yankPop = this.getEditorKeyDisplay("tui.editor.yankPop");
-		const undo = this.getEditorKeyDisplay("tui.editor.undo");
-		const tab = this.getEditorKeyDisplay("tui.input.tab");
+		const submit = keyDisplayText("tui.input.submit");
+		const newLine = keyDisplayText("tui.input.newLine");
+		const deleteWordBackward = keyDisplayText("tui.editor.deleteWordBackward");
+		const deleteWordForward = keyDisplayText("tui.editor.deleteWordForward");
+		const deleteToLineStart = keyDisplayText("tui.editor.deleteToLineStart");
+		const deleteToLineEnd = keyDisplayText("tui.editor.deleteToLineEnd");
+		const yank = keyDisplayText("tui.editor.yank");
+		const yankPop = keyDisplayText("tui.editor.yankPop");
+		const undo = keyDisplayText("tui.editor.undo");
+		const tab = keyDisplayText("tui.input.tab");
 
 		// App keybindings
 		const interrupt = this.getAppKeyDisplay("app.interrupt");

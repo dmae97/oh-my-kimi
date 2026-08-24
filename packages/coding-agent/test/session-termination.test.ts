@@ -93,6 +93,18 @@ describe("classifySessionTermination", () => {
 		expect(termination.nextAction).not.toMatch(/barrier|stale transaction/i);
 	});
 
+	it("classifies compaction quota exhaustion as non-retryable with switch-model guidance", () => {
+		const termination = classify({ area: "compaction", code: "quota_exhausted" });
+
+		expect(termination.kind).toBe("compaction");
+		expect(termination.causeCode).toBe("compaction.quota_exhausted");
+		// Same-model retries cannot heal quota exhaustion until the cycle resets.
+		expect(termination.retryable).toBe(false);
+		expect(termination.safeToAutoRetry).toBe(false);
+		expect(termination.nextAction).toMatch(/quota is exhausted/i);
+		expect(termination.nextAction).toMatch(/switch model|wait for the quota reset/i);
+	});
+
 	it("Given provider_auth, When formatted, Then it preserves the diagnostic and stable recovery fields", () => {
 		const termination = classifySessionTermination({
 			sessionId: "session-1",

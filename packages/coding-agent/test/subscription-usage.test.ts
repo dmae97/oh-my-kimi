@@ -623,3 +623,55 @@ describe("subscription usage providers", () => {
 		});
 	});
 });
+
+describe("qwen token-plan billing fallback", () => {
+	const summaryJson = JSON.stringify({
+		period: { from: "2026-08-01", to: "2026-08-23" },
+		token_plan: { subscribed: false, planName: "Token Plan", totalCredits: 0, remainingCredits: 0, usedPct: 0 },
+		pay_as_you_go: {
+			models: [{ model_id: "kimi-k3", usage: { tokens: 8650291 }, cost: 4.9045, currency: "USD" }],
+			total: { cost: 11.1401, currency: "USD" },
+		},
+	});
+	const billingJson = JSON.stringify({
+		period: { from: "2026-08-01", to: "2026-08-31" },
+		currency: "USD",
+		rows: [
+			{ groupKey: "DIMENSION_FILTER_NULL_VALUE", groupLabel: "-", amount: "68.000000000000" },
+			{ groupKey: "kimi-k3", groupLabel: "kimi-k3", amount: "6.941095800000" },
+			{ groupKey: "qwen3.8-max", groupLabel: "qwen3.8-max", amount: "6.129200000000" },
+			{ groupKey: "deepseek-v4-pro", groupLabel: "deepseek-v4-pro", amount: "0.106432800000" },
+			{ groupKey: "__tax__", groupLabel: "Tax", amount: "6.8" },
+		],
+	});
+
+	function billingRunner(args: readonly string[]) {
+		const isBilling = args[0] === "billing";
+		return Promise.resolve({ kind: "ran" as const, exitCode: 0, stdout: isBilling ? billingJson : summaryJson });
+	}
+
+	it("shows the subscription charge plus PAYG spend when billing data exists", async () => {
+		const snapshot = await fetchQwenTokenPlanUsage("QWEN TOKEN PLAN", billingRunner);
+		expect(snapshot.windows).toEqual([]);
+		expect(snapshot.message).toBe("subscription $68.00 · PAYG $13.18 (2026-08)");
+	});
+
+	it("falls back to summary PAYG when the billing call fails", async () => {
+		const snapshot = await fetchQwenTokenPlanUsage("QWEN TOKEN PLAN", async (args) =>
+			args[0] === "billing"
+				? { kind: "ran" as const, exitCode: 1, stdout: "" }
+				: { kind: "ran" as const, exitCode: 0, stdout: summaryJson },
+		);
+		expect(snapshot.message).toBe("no token plan · PAYG $11.14 (2026-08)");
+	});
+
+	it("keeps the plain message when nothing exists", async () => {
+		const stdout = JSON.stringify({ token_plan: { subscribed: false } });
+		const snapshot = await fetchQwenTokenPlanUsage("QWEN TOKEN PLAN", async (args) =>
+			args[0] === "billing"
+				? { kind: "ran" as const, exitCode: 0, stdout: JSON.stringify({ rows: [], currency: "USD" }) }
+				: { kind: "ran" as const, exitCode: 0, stdout },
+		);
+		expect(snapshot.message).toBe("no active token plan");
+	});
+});

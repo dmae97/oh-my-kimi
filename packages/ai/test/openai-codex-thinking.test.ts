@@ -17,7 +17,13 @@ function mockToken(): string {
 }
 
 function reasoningEffort(init: RequestInit | undefined): string | undefined {
-	const parsed: unknown = JSON.parse(String(init?.body));
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(String(init?.body));
+	} catch (error) {
+		if (error instanceof SyntaxError) return undefined;
+		throw error;
+	}
 	if (typeof parsed !== "object" || parsed === null || !("reasoning" in parsed)) return undefined;
 	const reasoning = parsed.reasoning;
 	return typeof reasoning === "object" && reasoning !== null && "effort" in reasoning
@@ -56,10 +62,10 @@ afterEach(() => {
 });
 
 describe("GPT-5.6 Codex thinking metadata", () => {
-	it("advertises a 1M context window only for the Sol harness", () => {
-		expect(getCodexModel("gpt-5.6-sol").contextWindow).toBe(1_000_000);
-		expect(getCodexModel("gpt-5.6-terra").contextWindow).toBe(372_000);
-		expect(getCodexModel("gpt-5.6-luna").contextWindow).toBe(372_000);
+	it("advertises a 1M context window for every GPT-5.6 Codex model", () => {
+		for (const modelId of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-moa", "gpt-5.6-luna"] as const) {
+			expect(getCodexModel(modelId).contextWindow).toBe(1_000_000);
+		}
 	});
 
 	it.each([

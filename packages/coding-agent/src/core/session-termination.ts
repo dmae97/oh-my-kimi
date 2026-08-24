@@ -56,7 +56,7 @@ export type ProviderTerminationCauseCode =
 export type ToolTerminationCauseCode = "timeout" | "fatal";
 /** §15.4 resource-aware runtime roadmap: host-pressure termination causes. */
 export type ResourceTerminationCauseCode = "memory" | "disk" | "cpu" | "heap" | "probe_unavailable" | "queue_overflow";
-export type CompactionTerminationCauseCode = "aborted" | "failed" | "stale";
+export type CompactionTerminationCauseCode = "aborted" | "failed" | "stale" | "quota_exhausted";
 export type PersistenceTerminationCauseCode =
 	| "read_failed"
 	| "append_failed"
@@ -201,7 +201,12 @@ const RESOURCE_CAUSE_CODES = new Set<ResourceTerminationCauseCode>([
 	"probe_unavailable",
 	"queue_overflow",
 ]);
-const COMPACTION_CAUSE_CODES = new Set<CompactionTerminationCauseCode>(["aborted", "failed", "stale"]);
+const COMPACTION_CAUSE_CODES = new Set<CompactionTerminationCauseCode>([
+	"aborted",
+	"failed",
+	"stale",
+	"quota_exhausted",
+]);
 const PERSISTENCE_CAUSE_CODES = new Set<PersistenceTerminationCauseCode>([
 	"read_failed",
 	"append_failed",
@@ -432,7 +437,9 @@ function classifyCause(cause: SessionTerminationCause, source: SessionTerminatio
 				kind: "compaction",
 				phase: "compaction",
 				causeCode: `compaction.${cause.code}`,
-				retryable: true,
+				// Quota exhaustion does not heal by retrying: same-model retries
+				// keep failing until the provider cycle resets or the model changes.
+				retryable: cause.code !== "quota_exhausted",
 			};
 		case "persistence":
 			return {
@@ -538,6 +545,8 @@ function nextActionFor(classification: Classification, input: ClassifySessionTer
 					return "Retry /compact if cancellation was unintended; avoid Escape while compaction is running.";
 				case "compaction.stale":
 					return "Retry /compact after pending session changes settle.";
+				case "compaction.quota_exhausted":
+					return "The summarization model's quota is exhausted — retrying cannot help yet. Switch model (/model), set compaction.model in settings, or wait for the quota reset, then retry /compact. OMK already tried the failover chain automatically.";
 				default:
 					return "Resolve the reported compaction error, then retry /compact.";
 			}

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SandboxPolicy } from "../src/core/sandbox/policy.ts";
 import type { BashOperations, BashSandboxPreflight } from "../src/core/tools/bash.ts";
 import { createHarness, type Harness } from "./suite/harness.ts";
@@ -10,6 +10,15 @@ import { createHarness, type Harness } from "./suite/harness.ts";
  */
 describe("RPC bash command-safety gate (executeBash safetyGate)", () => {
 	const harnesses: Harness[] = [];
+
+	// Hermetic regardless of runner: pin safety env off (the shared vitest setup
+	// scrubs OMK_* but a bare single-file run without the package config does not).
+	beforeEach(() => {
+		vi.stubEnv("OMK_YOLO", "");
+		vi.stubEnv("OMK_COMMAND_SAFETY", "");
+		vi.stubEnv("OMK_DISABLE_COMMAND_SAFETY", "");
+		vi.stubEnv("OMK_COMMAND_SAFETY_ASSUME_YES", "");
+	});
 
 	afterEach(() => {
 		vi.unstubAllEnvs();
