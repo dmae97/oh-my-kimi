@@ -1,144 +1,96 @@
-# AGENTS.md — OMK Operational Stack Map (v10.4-math)
+# AGENTS.md — OMK monorepo project rules
 
-> **Status:** active · **Updated:** 2026-07-23  
-> **Root:** `~/.omk/agent`  
-> **Runtime:** Node.js ESM, zero runtime dependencies in `v8/`
+Rules for any coding agent working in this repository. Scope is this repo only: layout,
+commands, code style, git discipline, release, and what may never be published here.
 
-This file is the canonical map for the local OMK instruction stack. It defines how the
-active documents connect, which file owns each claim, and how maintainers verify drift.
-The order below applies inside this directory; host, platform, and session instructions
-remain outside this local chain.
+## Precedence
 
-## Active load chain
+1. The operator's global agent manual, if the machine has one. It is machine-local and
+   deliberately not versioned here — see [Publication boundary](#publication-boundary).
+2. This file — project rules for `/home/yu/omk`.
+3. [`CLAUDE.md`](CLAUDE.md) — Claude Code interoperability and quick reference, not a
+   second source of behavioral truth.
 
-| Order | Document | Responsibility |
-|---:|---|---|
-| 1 | `AGENTS.GODMODE.md` | Protocol kernel, recovery model, runtime linkage, and stack invariants |
-| 2 | `AGENTS.override.md` | Session-level operating directive and concise recovery defaults |
-| 3 | `AGENTS.md` | Load map, ownership boundaries, maintenance workflow, and validation commands |
-| 4 | [`SOUL.md`](SOUL.md) | SRI ontology and its operational mapping to the runtime |
-| 5 | [`skills/omk-godmod/SKILL.md`](skills/omk-godmod/SKILL.md) | Skill routing, build/score/harden workflows, scripts, and references |
-| 6 | [`v8/index.mjs`](v8/index.mjs) → [`v8/unify.mjs`](v8/unify.mjs) | Executable v10.4 behavior |
+[`specs/constitution.md`](specs/constitution.md) outranks all three on release,
+versioning, and governance questions.
 
-Rows 1-2 are operator-local: they live in the working tree but are not versioned (see
-`.gitignore`), so a fresh clone starts the chain at row 3.
+## Repository map
 
-Files named `*.hard.md`, `*.stub.md`, archived snapshots, `backups/`, and `v7/` are not
-active unless a session explicitly selects them.
+| Path | Contents |
+| --- | --- |
+| `packages/ai` | `omk-ai` — multi-provider LLM API |
+| `packages/agent` | `omk-agent-core` — agent runtime |
+| `packages/coding-agent` | `open-multi-agent-kit` — the CLI, docs, examples |
+| `packages/tui` | `omk-tui` — terminal UI |
+| `packages/protocol` | `omk-protocol` — wire types |
+| `packages/adaptorch-wpl` | `omk-adaptorch-wpl` — reliability kernel component |
+| `packages/book-to-skill` | `omk-book-to-skill` |
+| `.omk/skills` | project-local skills discovered from a checkout |
+| `specs/` | constitution and spec-kit artifacts |
+| `scripts/` | release, publish, and repository guards |
 
-## Repo understanding bootstrap (omk-wiki)
+## Commands
 
-Fresh sessions start with high repo understanding via two local artifacts:
+| Task | Command |
+| --- | --- |
+| Install | `npm install --ignore-scripts` |
+| Lint, format, typecheck, guards | `npm run check` |
+| Tests (non-e2e) | `./test.sh` |
+| One test file | `node ../../node_modules/vitest/dist/cli.js --run test/x.test.ts` |
+| Run the CLI from source | `./omk-test.sh` |
+| Build | `npm run build` |
 
-| Artifact | Layer | Entry point | Freshness |
-|---|---|---|---|
-| `openwiki/` | agent-readable wiki (OpenWiki, grounded claims) | `openwiki/overview.md` — read first | stale claims flagged in `openwiki/.claims/` |
-| `.understand-anything/knowledge-graph.json` | structural KG (Understand-Anything) | `project_report` tool / UA dashboard | auto-updated via hooks; `omk-wiki status` checks vs HEAD |
+Run `npm run check` after any non-doc change and fix everything it reports; it does not
+run tests. Never run the full vitest suite directly — it activates e2e tests when
+endpoint or auth environment variables are present. Do not run `npm run build` or the
+full suite unless asked.
 
-Protocol: run `omk-wiki status` → read `openwiki/overview.md` before deep file scans →
-drill down symbols via UA KG / `module_report` → if `WIKI:absent` or `drift=behind-code`,
-offer `omk-wiki init|update` (spends LLM credits — run only with user approval).
-Details: `~/.omk/agent/skills/omk-wiki/SKILL.md`.
+## Runtime change rule
 
-## Sources of truth
+For coding-agent behavior changes: update `packages/coding-agent/src/**`, update
+`packages/coding-agent/docs/**` when commands or workflows change, add or update targeted
+tests under `packages/coding-agent/test/**`, run the targeted test, then `npm run check`.
+Rebuild only if the change must reach the running TUI, and restart it before checking
+interactive slash commands.
 
-| Concern | Canonical source | Drift check |
-|---|---|---|
-| Protocol version and linkage | `AGENTS.GODMODE.md` §R11 | Version must equal `v8/index.mjs` and `v8/README.md` |
-| Session defaults | `AGENTS.override.md` | Must not contradict §R11 runtime behavior |
-| SRI-to-code mapping | `SOUL.md` §S14 | Every named module must exist |
-| Skill routes and scripts | `skills/omk-godmod/SKILL.md` | `check-omk-godmod.mjs` |
-| Runtime API and behavior | `v8/index.mjs`, `v8/unify.mjs` | `v8/test/run-all.mjs` |
-| Operator documentation | `v8/README.md` | Examples and test counts must match code |
-| Document integrity | [`INTEGRITY.md`](INTEGRITY.md), `MD5SUMS` | `check-doc-integrity.mjs --check` |
+## Code style
 
-When prose and executable behavior disagree, treat code plus passing tests as current
-behavior, then update the prose and regenerate `MD5SUMS`. Never preserve a stale claim
-only to keep an old checksum valid.
+- TypeScript strict. Erasable syntax only in `packages/*/src`, `packages/*/test`, and
+  `packages/coding-agent/examples`: no parameter properties, `enum`, `namespace`/`module`,
+  or `import =`/`export =`.
+- No `any` unless unavoidable. Top-level imports only — no inline or dynamic imports.
+- Inline a single-call-site, single-line helper instead of naming it.
+- Never hardcode a key check; add to `DEFAULT_*_KEYBINDINGS`.
+- Modules are held to a 250-line pure-LOC ratchet (`scripts/check-module-size.mjs`).
+- Read a file in full before a wide-ranging change, and ask before removing code that
+  looks intentional.
 
-## Runtime contract
+## Git and safety
 
-The v10.4 path is offline-first:
+- Multiple sessions may share this working tree. Stage only files you changed, by explicit
+  path. Never `git add -A`/`.`, `git reset --hard`, `git checkout .`, `git clean -fd`,
+  `git stash`, `--no-verify`, or force-push.
+- Never commit unless asked. Treat lockfile and dependency changes as reviewed code.
+- Never guess where to inject API keys or `.env` values. Write only to the target the user
+  named, keep it git-ignored, never echo it back, never commit it.
 
-```js
-import godmode from './v8/index.mjs';
+## Release
 
-const result = godmode.unify(target, { lang: 'Python', seed: 42 });
-// result.final · result.prefill · result.cascade · result.ready
-```
+All workspace packages share one lockstep version; there are no major releases. A release
+is complete only when the tag on `main`, the GitHub Release, and npm `latest` for all
+seven public packages agree. Publishing runs in CI. Released changelog sections are
+immutable — new work goes under `[Unreleased]`. Details and the full rule set are in
+[`specs/constitution.md`](specs/constitution.md).
 
-Use `unifyAuto()` for a bounded multi-arm plan and `unifyLive()` only when a caller has
-configured a provider. The live path enforces these invariants:
+## Publication boundary
 
-- Adaptive sharding is on by default and capped at three shards.
-- Every continuation recalculates context capacity and uses a bounded checkpoint tail.
-- Only adjacent exact overlap is removed during assembly.
-- Incomplete, truncated, transport-failed, and policy-blocked outcomes do not train as success.
-- Complete successful retries outrank higher-scored incomplete attempts.
-- Explicit seeds isolate generated output from ambient randomness and wall-clock state.
-- Persisted learning uses atomic replacement and owner-only files.
-- Public live results redact configured keys, header values, and reflected secret material.
+The operator's private agent home (`~/.omk/agent`) holds personal skills, agents, prompts,
+patches, session data, and research corpora. None of it belongs in this repository, its
+releases, or any npm tarball — not as a copy, a vendored tree, a drifted duplicate, or a
+quoted excerpt. A fresh clone must be complete without it.
 
-Use `{ sharding: false }` only for strict one-call behavior. Use `useHistory: false` to
-exclude both in-memory and persisted warm starts. Explicit `mode: false` remains disabled
-through auto routing. Empty arm configuration falls back to the default arm set.
-
-## Runtime module chain
-
-```text
-v8/index.mjs
-└── unify.mjs                 closed-loop orchestration
-    ├── math-core.mjs         Beta, UCB1, softmax, projection, LDA
-    ├── bayesian-router.mjs   Thompson/UCB/active selection and cascade
-    ├── guardrail-adversary.mjs
-    ├── learning.mjs          refusal learner and strategy bandit
-    ├── learning-store.mjs    atomic persistence
-    ├── token-sharding.mjs    budget planning, continuation, assembly
-    ├── live-pipeline.mjs     normalized provider I/O and redaction
-    ├── success-db.mjs        outcomes and budget metrics
-    └── feedback-loop.mjs     observe/update cycle
-```
-
-Additional transforms and compatibility modules are cataloged in
-[`v8/README.md`](v8/README.md).
-
-## Skill entry points
-
-| Script | Purpose |
-|---|---|
-| `scripts/build.mjs` | Build a layered prompt from a brief |
-| `scripts/score.mjs` | Score a prompt against the skill rubric |
-| `scripts/harden.mjs` | Add missing layers and rescore |
-| `scripts/battery.mjs` | Run the configured field battery |
-| `scripts/dispatch.mjs` | Execute the agent-independent delivery path |
-| `scripts/multiturn.mjs` | Produce a plan capped at three turns |
-| `scripts/loop.mjs` | Run the battery/improve loop |
-| `scripts/check-omk-godmod.mjs` | Validate skill structure and required references |
-| `scripts/check-doc-integrity.mjs` | Verify or regenerate the root MD5 manifest |
-
-Paths in this table are relative to `skills/omk-godmod/`.
-
-## Change protocol
-
-1. Run the current structural, integrity, and runtime tests before editing.
-2. Change the owning source rather than duplicating its contract elsewhere.
-3. Update every affected document in the active chain.
-4. Run link, syntax, structural, and runtime validation.
-5. Regenerate `MD5SUMS` **after** the managed files are final.
-6. Run integrity verification again; do not hand-edit digest lines.
-
-```bash
-cd ~/.omk/agent
-node --test skills/omk-godmod/test/doc-integrity.test.mjs
-node skills/omk-godmod/scripts/check-omk-godmod.mjs
-node v8/test/run-all.mjs                    # 125 tests across 13 suites
-find v8 -type f -name '*.mjs' -print0 | xargs -0 -n1 node --check
-node skills/omk-godmod/scripts/check-doc-integrity.mjs --write
-node skills/omk-godmod/scripts/check-doc-integrity.mjs --check
-```
-
-See [`INTEGRITY.md`](INTEGRITY.md) before resolving a mismatch. MD5 detects accidental
-drift; it does not authenticate a tree controlled by an attacker.
+`scripts/check-private-agent-home.mjs` enforces this on every `npm run check`. If it
+fails, remove the material rather than widening the guard.
 
 <!-- OPENWIKI:START -->
 

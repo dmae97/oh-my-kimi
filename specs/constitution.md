@@ -6,6 +6,14 @@ The canonical source tree for the installed local OMK launcher is `/home/yu/omk`
 
 When a change must affect the running OMK TUI, apply it under `/home/yu/omk`, not a separate checkout such as `/home/yu/open-multi-agent-kit`, and rebuild the affected package so `dist/` matches `src/`.
 
+## Owner-Private Agent Home
+
+`/home/yu/.omk/agent` is the owner's private agent home: the personal skills, agents, prompts, patches, session data, and research corpora of `dmae97`. It is machine-local, separately versioned, and MUST NOT reach this repository, its releases, or any published npm tarball — not as a copy, a vendored tree, a drifted duplicate, or a quoted excerpt.
+
+The repository's own `AGENTS.md` carries this project's rules and nothing else. The global operating manual stays at `~/.omk/agent/AGENTS.md` and is never mirrored here; a fresh clone MUST be complete without it.
+
+`scripts/check-private-agent-home.mjs` enforces the boundary on every `npm run check`: declared private artifacts stay git-ignored and untracked, no tracked file carries the private operating-stack signature, and no tracked file duplicates a private agent-home document. Publishable content is authored under `packages/**`, `.omk/skills/**`, `specs/**`, and the root docs. Promoting a private skill to public content is a deliberate port, reviewed for secrets, credentials, and personal paths first.
+
 ## CLI Harness Leadership Target
 
 OMK MUST target state-of-the-art quality as a CLI coding-agent harness. This is a product objective, not a current-status claim. The target applies to the harness layer—task completion, cost, latency, context and tool efficiency, orchestration, safety, recovery, reliability, and maintainability—not to base-model quality alone.
@@ -52,4 +60,4 @@ Do not read or copy secrets into spec-kit artifacts. Keep evidence to command na
 
 Local cache synchronization MUST flow one way from the tracked project sources. Reject symlinked or non-user-owned targets, write through a temporary file and atomic rename, and verify the content digest. Never reverse-sync generated state. Constitution amendments require corresponding template and constitution-test updates when they change specification obligations.
 
-**Version**: 1.1.0 | **Ratified**: 2026-06-25 | **Last Amended**: 2026-08-25
+**Version**: 1.2.0 | **Ratified**: 2026-06-25 | **Last Amended**: 2026-08-25
