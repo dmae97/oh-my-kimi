@@ -116,6 +116,7 @@ collect.sh
 # Local strategy drafts, kept outside package and release content.
 /OMK_REBRAND_VIRAL_MARKETING_MASTERPLAN_KO.md
 /claw-stack-agentic-os-v2.md
+/.agents/
 
 # Local GJC session runtime state (token logs, runtime-state, workflow gates) — never version.
 .gjc/
@@ -126,16 +127,22 @@ collect.sh
 # Local code-intel tool caches
 .serena/
 .understand-anything/
+.bigpowers/
 
 # Nested independent extension workspace (own lockfile/config); kept out of the monorepo tree.
 /pi-extensions/
 .turbo/
 .turbo/**
 
-# Local-only scratch / operator protocol notes (not package content)
+# Local-only scratch / operator protocol notes (not package content).
+# The root AGENTS.md stays versioned — the OpenWiki workflow writes its managed block —
+# but the ~/.omk/agent protocol kernel and session directive it loads are operator-local,
+# like their *.hard.md twins.
 /dashscope-call.py
 /maas-media.py
+/AGENTS.GODMODE.md
 /AGENTS.GODMODE.hard.md
+/AGENTS.override.md
 /AGENTS.override.hard.md
 /AGENTS.stub.md
 

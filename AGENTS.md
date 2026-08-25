@@ -13,12 +13,15 @@ remain outside this local chain.
 
 | Order | Document | Responsibility |
 |---:|---|---|
-| 1 | [`AGENTS.GODMODE.md`](AGENTS.GODMODE.md) | Protocol kernel, recovery model, runtime linkage, and stack invariants |
-| 2 | [`AGENTS.override.md`](AGENTS.override.md) | Session-level operating directive and concise recovery defaults |
+| 1 | `AGENTS.GODMODE.md` | Protocol kernel, recovery model, runtime linkage, and stack invariants |
+| 2 | `AGENTS.override.md` | Session-level operating directive and concise recovery defaults |
 | 3 | `AGENTS.md` | Load map, ownership boundaries, maintenance workflow, and validation commands |
 | 4 | [`SOUL.md`](SOUL.md) | SRI ontology and its operational mapping to the runtime |
 | 5 | [`skills/omk-godmod/SKILL.md`](skills/omk-godmod/SKILL.md) | Skill routing, build/score/harden workflows, scripts, and references |
 | 6 | [`v8/index.mjs`](v8/index.mjs) → [`v8/unify.mjs`](v8/unify.mjs) | Executable v10.4 behavior |
+
+Rows 1-2 are operator-local: they live in the working tree but are not versioned (see
+`.gitignore`), so a fresh clone starts the chain at row 3.
 
 Files named `*.hard.md`, `*.stub.md`, archived snapshots, `backups/`, and `v7/` are not
 active unless a session explicitly selects them.
