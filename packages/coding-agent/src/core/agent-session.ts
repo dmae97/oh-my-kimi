@@ -25,11 +25,10 @@ import {
 	cleanupSessionResources,
 	deriveContextPromptCacheKey,
 	getSupportedThinkingLevels,
-	isContextOverflow,
+	isBuiltinStreamFn,
 	modelsAreEqual,
 	type RetryCallbacks,
 	resetApiProviders,
-	streamSimple,
 } from "omk-ai";
 import { APP_NAME, VERSION } from "../config.ts";
 import type { ReplayLedgerManager } from "../guardrails/evidence-system.ts";
@@ -164,6 +163,7 @@ function firstTextContent(result: unknown): string | undefined {
 	return undefined;
 }
 
+import { createImmutableMessageSnapshot } from "./agent-session-snapshot.ts";
 import { redactCredentialShapedContent } from "./compaction/transaction.ts";
 import type { CustomMessage } from "./messages.ts";
 import { selectContextFilesForModel } from "./model-prompt-policy.ts";
@@ -171,13 +171,7 @@ import type { ModelRegistry } from "./model-registry.ts";
 import { findExactModelReferenceMatch } from "./model-resolver.ts";
 import { computePromptTokenBudget } from "./prompt-budget.ts";
 import { classifyPromptCacheTransition } from "./prompt-cache.ts";
-import {
-	createPromptSettlementState,
-	type PromptSettledEvent,
-	type PromptSettlementOutcome,
-	reducePromptSettlement,
-	settlePromptIfReady,
-} from "./prompt-settlement.ts";
+import * as promptSettlement from "./prompt-settlement.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import {
 	isQuotaExhaustionMessage,
@@ -233,6 +227,12 @@ import { type RunResourceLease, RunResourceLeaseController } from "./run-resourc
 import { SessionBashRuntime } from "./session-bash-runtime.ts";
 import { type BashResourcePermitGrant, SessionBashService } from "./session-bash-service.ts";
 import { SessionCompactionService } from "./session-compaction-service.ts";
+import {
+	preflightFailureCause,
+	providerFailureCause,
+	runtimeFailureCause,
+	terminationMessage,
+} from "./session-failure-cause.ts";
 import type { BranchSummaryEntry, SessionManager } from "./session-manager.ts";
 import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.ts";
 import { acquireSessionOwnerLeaseSync, type SessionOwnerLease } from "./session-owner-lease.ts";
@@ -297,7 +297,7 @@ export type AgentSessionEvent =
 			messages: AgentMessage[];
 			willRetry: boolean;
 	  }
-	| PromptSettledEvent
+	| promptSettlement.PromptSettledEvent
 	| {
 			type: "queue_update";
 			steering: readonly string[];
@@ -542,112 +542,6 @@ function toolNameSetsEqual(left: readonly string[], right: readonly string[]): b
 	);
 }
 
-function snapshotContractError(reason: string): Error {
-	return new Error(`Finalized message replacement must be a plain serializable snapshot: ${reason}`);
-}
-
-/**
- * Clone a finalized message replacement into the JSON-compatible snapshot
- * persisted by SessionManager. Undefined remains allowed as ordinary optional
- * message data: JSON omits object properties with undefined values and writes
- * undefined array elements as null.
- */
-function clonePlainSnapshot(
-	value: unknown,
-	ancestors = new WeakSet<object>(),
-	copies = new WeakMap<object, unknown>(),
-): unknown {
-	if (value === null) return value;
-
-	switch (typeof value) {
-		case "string":
-		case "boolean":
-		case "undefined":
-			return value;
-		case "number":
-			if (!Number.isFinite(value)) {
-				throw snapshotContractError("non-finite number values are not allowed");
-			}
-			return value;
-		case "bigint":
-			throw snapshotContractError("bigint values are not allowed");
-		case "function":
-		case "symbol":
-			throw snapshotContractError(`${typeof value} values are not allowed`);
-		case "object":
-			break;
-		default:
-			throw snapshotContractError(`${typeof value} values are not allowed`);
-	}
-
-	if (ancestors.has(value)) {
-		throw snapshotContractError("cyclic values are not allowed");
-	}
-	if (copies.has(value)) {
-		return copies.get(value);
-	}
-	ancestors.add(value);
-
-	try {
-		if (Array.isArray(value)) {
-			const copy: unknown[] = [];
-			copy.length = value.length;
-			copies.set(value, copy);
-			for (const key of Reflect.ownKeys(value)) {
-				if (key === "length") continue;
-				if (typeof key !== "string" || !/^(0|[1-9]\d*)$/.test(key) || Number(key) >= value.length) {
-					throw snapshotContractError("arrays may only contain indexed values");
-				}
-				const descriptor = Object.getOwnPropertyDescriptor(value, key);
-				if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
-					throw snapshotContractError("accessor or non-enumerable properties are not allowed");
-				}
-				copy[Number(key)] = clonePlainSnapshot(descriptor.value, ancestors, copies);
-			}
-			return copy;
-		}
-
-		const prototype = Object.getPrototypeOf(value);
-		if (prototype !== Object.prototype && prototype !== null) {
-			throw snapshotContractError("non-plain objects are not allowed");
-		}
-
-		const copy = Object.create(prototype) as Record<string, unknown>;
-		copies.set(value, copy);
-		for (const key of Reflect.ownKeys(value)) {
-			if (typeof key !== "string") {
-				throw snapshotContractError("symbol-keyed properties are not allowed");
-			}
-			const descriptor = Object.getOwnPropertyDescriptor(value, key);
-			if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
-				throw snapshotContractError("accessor or non-enumerable properties are not allowed");
-			}
-			Object.defineProperty(copy, key, {
-				value: clonePlainSnapshot(descriptor.value, ancestors, copies),
-				enumerable: true,
-				configurable: true,
-				writable: true,
-			});
-		}
-		return copy;
-	} finally {
-		ancestors.delete(value);
-	}
-}
-
-function freezeSnapshot<T>(value: T, seen = new WeakSet<object>()): T {
-	if (value === null || typeof value !== "object" || seen.has(value)) return value;
-	seen.add(value);
-	for (const child of Object.values(value as Record<string, unknown>)) {
-		freezeSnapshot(child, seen);
-	}
-	return Object.freeze(value);
-}
-
-function createImmutableMessageSnapshot(message: AgentMessage): AgentMessage {
-	return freezeSnapshot(clonePlainSnapshot(message) as AgentMessage);
-}
-
 // ============================================================================
 // AgentSession Class
 // ============================================================================
@@ -785,7 +679,7 @@ export class AgentSession {
 
 	// Model registry for API key resolution
 	private _modelRegistry: ModelRegistry;
-	/** Lazy, in-memory only; never shared across sessions or persisted. */
+	/** Lazy provider: representations persist per workspace by default; plans stay session-memory-only. */
 	private _contextBudgetCacheProvider: ContextBudgetCacheProviderV2 | undefined;
 	private _contextCacheInvalidationSnapshot: ContextCacheInvalidationSnapshot;
 
@@ -1017,83 +911,6 @@ export class AgentSession {
 		this._appendReplayEvent(event, details);
 	}
 
-	private _terminationMessage(value: string | undefined, fallback: string): string {
-		const redacted = redactSensitiveText(value?.trim() || fallback)
-			.replace(/\0/g, "")
-			.slice(0, 512);
-		return redacted || fallback;
-	}
-
-	private _providerFailureCause(message: AssistantMessage): SessionTerminationCause {
-		const text = message.errorMessage ?? "";
-		if (isContextOverflow(message, this.model?.contextWindow ?? 0)) {
-			return { area: "provider", code: "context_overflow" };
-		}
-		// Fable/Claude often emit stop_reason=refusal on benign turns (false positive).
-		// Match broadly so we never mislabel these as provider.protocol.
-		if (
-			/stop_reason\s*=\s*(refusal|sensitive)|content\/safety stop|safety stop|provider\.refusal|kind=provider_refusal/i.test(
-				text,
-			)
-		) {
-			return { area: "provider", code: "refusal" };
-		}
-		// Quota/billing exhaustion is checked BEFORE the generic 401/403 auth
-		// patterns: "403 ... usage limit for this billing cycle" is transient per
-		// cycle and must fail over, not terminate the turn as an auth error.
-		if (isQuotaExhaustionMessage(text) || /rate.?limit|too many requests|429/i.test(text)) {
-			return { area: "provider", code: "rate_limit" };
-		}
-		if (/auth|unauthori[sz]ed|forbidden|invalid.?api.?key|no api key|401|403|\/login/i.test(text)) {
-			return { area: "provider", code: "auth" };
-		}
-		// Gateway/upstream 5xx and dropped streams are transport failures, not
-		// transcript-shape problems. Classify as network so the guidance points to
-		// retry/model-switch instead of the protocol sanitize path.
-		if (isUpstreamUnavailableMessage(text)) {
-			return { area: "provider", code: "network" };
-		}
-		// Kimi/K3 + OpenAI-compat: orphan tool results after dropped error assistants.
-		// Sanitize-and-retry (transform-messages drops orphans), not a hard tool fatal.
-		if (/tool_call_id\s+is\s+not\s+found|tool_call_id\s+not\s+found|unknown\s+tool_call_id/i.test(text)) {
-			return { area: "provider", code: "protocol" };
-		}
-		if (/tool.+timed? out|tool.+timeout/i.test(text)) return { area: "tool", code: "timeout" };
-		if (/\btool\b/i.test(text) && !/tool_call_id/i.test(text)) return { area: "tool", code: "fatal" };
-		if (/network|fetch failed|connection|socket|websocket|timed? out|timeout|dns|econn|^terminated$/i.test(text)) {
-			return { area: "provider", code: "network" };
-		}
-		return { area: "provider", code: "protocol" };
-	}
-
-	private _classifyPreflightCause(message: string): SessionTerminationCause {
-		if (!this.model || /no model|model selected|model is required/i.test(message)) {
-			return { area: "configuration", code: "invalid" };
-		}
-		if (isQuotaExhaustionMessage(message)) {
-			return { area: "provider", code: "rate_limit" };
-		}
-		if (/auth|api key|unauthori[sz]ed|forbidden|401|403|\/login/i.test(message)) {
-			return { area: "provider", code: "auth" };
-		}
-		if (isUpstreamUnavailableMessage(message)) {
-			return { area: "provider", code: "network" };
-		}
-		if (/context.+overflow|context window|too many tokens/i.test(message)) {
-			return { area: "provider", code: "context_overflow" };
-		}
-		if (/duplicate.?result/i.test(message)) return { area: "transcript", code: "duplicate_result" };
-		if (/orphan.?result/i.test(message)) return { area: "transcript", code: "orphan_result" };
-		if (/duplicate.?call/i.test(message)) return { area: "transcript", code: "duplicate_call_id" };
-		if (/transcript|missing.?result/i.test(message)) return { area: "transcript", code: "missing_result" };
-		if (/compaction/i.test(message)) return { area: "compaction", code: "failed" };
-		if (/fsync/i.test(message)) return { area: "persistence", code: "fsync_failed" };
-		if (/lock/i.test(message)) return { area: "persistence", code: "lock_failed" };
-		if (/append|persist|write/i.test(message)) return { area: "persistence", code: "append_failed" };
-		if (/tool/i.test(message)) return { area: "tool", code: "fatal" };
-		return { area: "internal", code: "unclassified" };
-	}
-
 	private _classifyRunTermination(
 		runId: string,
 		event: Extract<AgentEvent, { type: "agent_end" }>,
@@ -1124,13 +941,13 @@ export class AgentSession {
 			message = "Agent run ended without an assistant result.";
 		} else if (assistant.stopReason === "aborted") {
 			cause = this._userAbortRequested ? { area: "user", code: "abort" } : { area: "provider", code: "abort" };
-			message = this._terminationMessage(
+			message = terminationMessage(
 				assistant.errorMessage,
 				this._userAbortRequested ? "The user aborted the run." : "The provider aborted the run.",
 			);
 		} else if (assistant.stopReason === "error") {
-			cause = this._providerFailureCause(assistant);
-			message = this._terminationMessage(assistant.errorMessage, "The provider request failed.");
+			cause = providerFailureCause(assistant, this.model?.contextWindow ?? 0);
+			message = terminationMessage(assistant.errorMessage, "The provider request failed.");
 		} else {
 			cause = { area: "completed" };
 			message = "Run completed.";
@@ -1161,28 +978,8 @@ export class AgentSession {
 		this._emit({ type: "session_termination", termination });
 	}
 
-	private _runtimeFailureCause(error: unknown): SessionTerminationCause {
-		if (this._pendingRuntimeTerminationCause) return this._pendingRuntimeTerminationCause;
-		const code =
-			typeof error === "object" && error !== null && "code" in error ? Reflect.get(error, "code") : undefined;
-		if (
-			typeof code === "string" &&
-			new Set(["EACCES", "EDQUOT", "EFBIG", "EIO", "EISDIR", "EMFILE", "ENFILE", "ENOSPC", "EPERM", "EROFS"]).has(
-				code,
-			)
-		) {
-			return { area: "persistence", code: "append_failed" };
-		}
-		const message = error instanceof Error ? error.message : String(error);
-		if (/compaction.+stale|session changed during compaction/i.test(message)) {
-			return { area: "compaction", code: "stale" };
-		}
-		if (/compaction/i.test(message)) return { area: "compaction", code: "failed" };
-		return { area: "internal", code: "unclassified" };
-	}
-
 	private _publishRuntimeFailure(error: unknown): void {
-		const cause = this._runtimeFailureCause(error);
+		const cause = this._pendingRuntimeTerminationCause ?? runtimeFailureCause(error);
 		const runId = this._activeRunId ?? `runtime-${randomUUID()}`;
 		const timestamp = new Date().toISOString();
 		let message = "The AgentSession runtime failed before completing the run.";
@@ -1354,7 +1151,7 @@ export class AgentSession {
 		apiKey?: string;
 		headers?: Record<string, string>;
 	}> {
-		if (this.agent.streamFn === streamSimple) {
+		if (isBuiltinStreamFn(this.agent.streamFn)) {
 			return this._getRequiredRequestAuth(model);
 		}
 
@@ -2204,18 +2001,18 @@ export class AgentSession {
 		// and continuations, so they share one admission decision (§8.3).
 		const resourceLease = await this._beginResourceGovernedRun(promptRunId);
 		const resourceObservations = this._resourceObservationJournals.get(promptRunId) ?? null;
-		let outcome: PromptSettlementOutcome = "completed";
+		let outcome: promptSettlement.PromptSettlementOutcome = "completed";
 		try {
 			await this.agent.prompt(messages);
 			while (await this._handlePostAgentRun()) {
 				await this.agent.continue();
 			}
 		} catch (error) {
-			outcome =
-				this._userAbortRequested || (error instanceof Error && /abort/i.test(error.message)) ? "aborted" : "failed";
+			outcome = "failed";
 			this._publishRuntimeFailure(error);
 			throw error;
 		} finally {
+			outcome = promptSettlement.resolvePromptSettlementOutcome(outcome, this._lastTermination?.kind);
 			if (resourceLease !== null) {
 				// Generation-safe: a stale release after another run acquired the
 				// lease is a no-op instead of clobbering the newer cap (§8.1).
@@ -2238,19 +2035,19 @@ export class AgentSession {
 	private _emitPromptSettledIfReady(input: {
 		readonly promptRunId: string;
 		readonly startedAtEpochMs: number;
-		readonly outcome: PromptSettlementOutcome;
+		readonly outcome: promptSettlement.PromptSettlementOutcome;
 		readonly resourceObservations: ResourceObservationJournal | null;
 	}): void {
 		try {
-			let state = createPromptSettlementState(input.promptRunId, input.startedAtEpochMs);
-			state = reducePromptSettlement(state, { kind: "terminal", outcome: input.outcome });
+			let state = promptSettlement.createPromptSettlementState(input.promptRunId, input.startedAtEpochMs);
+			state = promptSettlement.reducePromptSettlement(state, { kind: "terminal", outcome: input.outcome });
 			if (this.isStreaming) {
-				state = reducePromptSettlement(state, { kind: "tool", delta: 1 });
+				state = promptSettlement.reducePromptSettlement(state, { kind: "tool", delta: 1 });
 			}
 			if (this.agent.hasQueuedMessages()) {
-				state = reducePromptSettlement(state, { kind: "continuation", delta: 1 });
+				state = promptSettlement.reducePromptSettlement(state, { kind: "continuation", delta: 1 });
 			}
-			const settled = settlePromptIfReady(state, Date.now());
+			const settled = promptSettlement.settlePromptIfReady(state, Date.now());
 			if (settled.event !== null) {
 				input.resourceObservations?.record("prompt_settled_v1", settledObservationFacts(settled.event));
 				this._emit(settled.event);
@@ -2562,7 +2359,7 @@ export class AgentSession {
 					currentText,
 					currentImages,
 					options?.source ?? "interactive",
-					this.isStreaming ? options?.streamingBehavior : undefined,
+					this.isStreaming || this.isRetrying ? options?.streamingBehavior : undefined,
 				);
 				if (inputResult.action === "handled") {
 					preflightResult?.(true);
@@ -2582,8 +2379,8 @@ export class AgentSession {
 			}
 			expandedText = redactSensitiveText(expandedText);
 
-			// If streaming, queue via steer() or followUp() based on option
-			if (this.isStreaming) {
+			// While a run or its retry backoff owns the session, queue instead of starting a competing top-level prompt.
+			if (this.isStreaming || this.isRetrying) {
 				if (!options?.streamingBehavior) {
 					throw new Error(
 						"Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
@@ -2709,7 +2506,7 @@ export class AgentSession {
 		} catch (error) {
 			preflightResult?.(false);
 			const rawMessage = error instanceof Error ? error.message : String(error);
-			const cause = this._classifyPreflightCause(rawMessage);
+			const cause = preflightFailureCause(rawMessage, Boolean(this.model));
 			const timestamp = new Date().toISOString();
 			this._publishTermination(
 				classifySessionTermination({
@@ -2717,7 +2514,7 @@ export class AgentSession {
 					runId: `preflight-${randomUUID()}`,
 					timestamp,
 					source: "observed",
-					message: this._terminationMessage(rawMessage, "Prompt preflight failed."),
+					message: terminationMessage(rawMessage, "Prompt preflight failed."),
 					cause,
 					sideEffects: "none",
 					...(this.model ? { provider: this.model.provider, model: this.model.id } : {}),
@@ -3151,7 +2948,7 @@ export class AgentSession {
 
 	private async _cycleAvailableModel(direction: "forward" | "backward"): Promise<ModelCycleResult | undefined> {
 		const resilience = resolveProviderResilience(this.settingsManager.getProviderResilienceSettings());
-		const raw = await this._modelRegistry.getAvailable();
+		const raw = this._modelRegistry.getAvailable();
 		// Hard-kill sticky safety models from the cycle list (Fable must not re-enter via hotkey).
 		const availableModels = resilience.blockStickySafetyModels
 			? raw.filter((m) => !isStickySafetyModel(m.id, m.provider))
@@ -3385,8 +3182,8 @@ export class AgentSession {
 	/**
 	 * Context-pressure band 0..3 from the projected token estimate over the
 	 * model context window (reuses estimateProjectedContextTokens). 0..<0.5,
-	 * 1..<0.75, 2..<0.9, 3..>=0.9. Inert under DEFAULT_WEIGHTS (no pressure
-	 * coefficient); computed for future calibrated weight presets.
+	 * 1..<0.75, 2..<0.9, 3..>=0.9. The released default pressure coefficient
+	 * is 1 and participates only after the classifier has prompt evidence.
 	 */
 	private _computePressureBucket(): number {
 		const contextWindow = this.model?.contextWindow ?? 0;
@@ -3811,7 +3608,7 @@ export class AgentSession {
 					runId: `compaction-${randomUUID()}`,
 					timestamp,
 					source: "observed",
-					message: this._terminationMessage(message, "Manual compaction failed."),
+					message: terminationMessage(message, "Manual compaction failed."),
 					cause: { area: "compaction", code: compactionCode },
 					sideEffects: committedCompaction ? "confirmed" : "none",
 					...(this.model ? { provider: this.model.provider, model: this.model.id } : {}),
@@ -4051,7 +3848,7 @@ export class AgentSession {
 			const compactionModel = this._resolveCompactionModel(this.model);
 			let apiKey: string | undefined;
 			let headers: Record<string, string> | undefined;
-			if (this.agent.streamFn === streamSimple) {
+			if (isBuiltinStreamFn(this.agent.streamFn)) {
 				const authResult = await this._modelRegistry.getApiKeyAndHeaders(compactionModel);
 				if (!authResult.ok || !authResult.apiKey) {
 					const providerLabel = compactionModel.provider;
