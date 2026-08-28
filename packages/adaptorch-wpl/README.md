@@ -46,4 +46,31 @@ The default coding-agent source has no production importer that turns this packa
 - Loop-level budgets (`max_dispatch_attempts`, `max_loop_duration`, dispatch-call budget) are
   immutable for a loop instance's lifetime; raising them requires a new instance under the same review.
 
+## AdaptOrch, the hosted service
+
+This package is open source and MIT-licensed, like the rest of OMK. **AdaptOrch
+itself is a separate, proprietary hosted patch-evidence service that requires
+its own account.** Nothing here calls it by default: `adaptorch-client.ts` is a
+typed wrapper that a caller must configure and drive, and the coding agent's
+`adaptorch-bridge.ts` is advisory-only, default-off, and its current transport
+returns no hint.
+
+The division is deliberate. OMK stays the local control plane that decides and
+executes; AdaptOrch is a place to aggregate patch evidence across workspaces.
+An advisory path must not acquire execution authority, because that is what
+keeps a remote suggestion from becoming a local action.
+
+What the service is for, in the terms this package already uses: the Outcome
+Adjudicator, deep wall, and signed receipts here produce verification evidence
+locally, and AdaptOrch is the hosted counterpart for teams that want that
+evidence collected outside a single machine.
+
+**[Review AdaptOrch plans →](https://adaptorch.com/?utm_source=github&utm_medium=package-readme&utm_campaign=omk-adaptorch-wpl#pricing)**
+
+Claim boundary, unchanged from the rest of this repository: AdaptOrch's
+published claim boundary describes its evidence as **advisory, not proof of
+patch correctness**. A verification pass, a manifest hash, or a signed receipt
+is evidence about a run, not authorization to ship it. Use of this package does
+not require an AdaptOrch account, and installing OMK does not create one.
+
 Preview spec: [`../coding-agent/docs/adaptorch-preview.md`](../coding-agent/docs/adaptorch-preview.md)
