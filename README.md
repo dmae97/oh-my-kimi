@@ -212,9 +212,13 @@ security gates below:
 - **`scripts/check-openwiki.mjs`** — worktree checker. An `interrupted` corpus
   now fails unless `openwiki/.manual-review.json` binds a review to the exact
   corpus digest, and every frontmatter symbol must bind to one of that page's
-  own `source_paths` as a whole identifier. Release remains blocked until
-  generator outputs are allowlisted and secret/private-path scans run before
-  upload and PR creation.
+  own `source_paths` as a whole identifier.
+- **`scripts/check-openwiki-output.mjs`** — output gate. The scheduled workflow
+  may write, upload, and open a PR for `openwiki/` and nothing else, so a model
+  reading this repository cannot reach `AGENTS.md`, `CLAUDE.md`, or the workflow
+  that runs it. The gate runs once before the artifact leaves the read-only
+  generating job and again before the PR, because the publishing job holds write
+  permissions the first one does not.
 - **`.understand-anything/`** — optional local structural graph used by Pi Lens;
   it is not published or injected into prompts by default.
 

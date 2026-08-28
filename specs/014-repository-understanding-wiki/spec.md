@@ -47,13 +47,29 @@ evidence anchors before any of it reaches a PR or `main`.
    of that page's own `source_paths:` as a whole identifier; a symbol that only
    names a declared path is accepted, since that is already an exact path
    binding. Global substring presence is gone.
-3. The generator artifact and PR steps must allowlist `openwiki/**` only. Generated
-   `AGENTS.md`, `CLAUDE.md`, workflow files, and other authority surfaces must be
-   rejected.
-4. Secret, private-path, and authority-file scans must pass before artifact upload
-   and again before PR creation.
+3. **Closed (2026-08-28).** The artifact and pull-request steps carry `openwiki`
+   and nothing else. `AGENTS.md`, `CLAUDE.md`, and the workflow file are no
+   longer produced, uploaded, or added to a PR by this workflow; their OpenWiki
+   managed blocks become human-maintained text.
+4. **Closed (2026-08-28).** `scripts/check-openwiki-output.mjs` runs twice: in
+   the generating job before upload, and again in the publishing job before the
+   PR. It rejects any changed path outside `openwiki/` and scans the admitted
+   corpus for credential shapes and operator-private paths, reporting file and
+   label without ever echoing the match.
 
-Until 3 and 4 close, generator output must not reach a PR unreviewed.
+### Why the gate runs twice
+
+The publishing job holds `contents: write` and `pull-requests: write`, which the
+generating job does not, and the artifact crosses a job boundary to reach it. It
+is re-checked as untrusted input rather than trusted because an earlier job
+approved it.
+
+The threat this closes is concrete: the generator is a model writing into a
+checkout it also reads. While the workflow carried `AGENTS.md`, `CLAUDE.md`, and
+its own file, repository content could reach the rules agents follow, or the CI
+job itself. Both allowlists are now `openwiki` alone, and
+`scripts/test/openwiki-workflow.test.mjs` fails the build if either widens
+again — verified by re-adding `AGENTS.md` and observing the failure.
 
 ### Corpus removal (2026-08-28)
 

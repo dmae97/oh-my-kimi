@@ -63,16 +63,20 @@ jobs:
       - name: Validate wiki integrity
         run: node scripts/check-openwiki.mjs
 
+      # Spec 014 blockers 3 and 4, before anything leaves this job. The
+      # generator is a model writing into a checkout: if it can touch AGENTS.md,
+      # CLAUDE.md, or this workflow, then content it reads can rewrite the rules
+      # agents follow or the job itself. Fail closed here rather than uploading.
+      - name: Enforce generator output allowlist and scans
+        run: node scripts/check-openwiki-output.mjs
+
       - name: Upload generated wiki
         # actions/upload-artifact v4.6.2
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
           name: openwiki-update-${{ github.run_id }}
-          path: |
-            openwiki
-            AGENTS.md
-            CLAUDE.md
-            .github/workflows/openwiki-update.yml
+          # openwiki/ only. Authority surfaces are never carried out of this job.
+          path: openwiki
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
@@ -94,17 +98,21 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: openwiki-update-${{ github.run_id }}
-          path: .
+          path: openwiki
+
+      # Spec 014 blocker 4 requires the scans to pass again here. This job holds
+      # write and pull-request permissions that the generating job does not, and
+      # the artifact crossed a job boundary to reach it, so it is re-checked as
+      # untrusted input rather than trusted because an earlier job approved it.
+      - name: Re-enforce allowlist and scans before publishing
+        run: node scripts/check-openwiki-output.mjs
 
       - name: Create OpenWiki update pull request
         uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          add-paths: |
-            openwiki
-            AGENTS.md
-            CLAUDE.md
-            .github/workflows/openwiki-update.yml
+          # openwiki/ only; an authority-surface edit can never reach a PR.
+          add-paths: openwiki
           branch: openwiki/update
           commit-message: "docs: update OpenWiki"
           title: "docs: update OpenWiki"
