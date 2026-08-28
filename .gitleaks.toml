@@ -1,0 +1,15 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Generated external clones and benchmark fixtures"
+paths = [
+  '''(^|/)\.omk/goals/''',
+  '''(^|/)\.omk/runs/''',
+  '''(^|/)\.omk/worktrees/''',
+  '''(^|/)\.omx/state/''',
+  '''(^|/)\.pi/open-multi-agent-kit/''',
+  '''(^|/)~/t3mp3st-lab/T3MP3ST/''',
+  '''(^|/)packages/ai/dist/''',
+  '''(^|/)pi-extensions/artifacts/''',
+]

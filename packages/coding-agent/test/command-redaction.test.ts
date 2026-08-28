@@ -74,7 +74,7 @@ describe("command redaction tokenizer", () => {
 
 	it("tokenizes Authorization headers while preserving the scheme", () => {
 		const bearer = redactCommandDescriptor(
-			shell("curl -H 'Authorization: Bearer synthetic-secret-bearer-value' https://example.test"),
+			shell("curl -H 'Authorization: Bearer synthetic-secret-bearer-value' https://example.test"), // gitleaks:allow -- intentional fake credential fixture
 		);
 		expect(bearer.command).toEqual(shell("curl -H 'Authorization: Bearer [REDACTED]' https://example.test"));
 		expect(bearer.summary.placeholders).toEqual([{ type: "authorization-header", count: 1 }]);
@@ -235,7 +235,7 @@ describe("command redaction tokenizer", () => {
 		expect(scripted.command).toEqual(shell("curl -H 'Cookie: [REDACTED]' https://example.test"));
 		expect(scripted.summary.placeholders).toEqual([{ type: "cookie-header", count: 1 }]);
 
-		const element = redactCommandDescriptor(argv("curl", ["-H", "Cookie: sid=synthetic-cookie-element; theme=dark"]));
+		const element = redactCommandDescriptor(argv("curl", ["-H", "Cookie: sid=synthetic-cookie-element; theme=dark"])); // gitleaks:allow -- intentional fake credential fixture
 		expect(element.command).toEqual(argv("curl", ["-H", "Cookie: [REDACTED]"]));
 		expect(element.summary.placeholders).toEqual([{ type: "cookie-header", count: 1 }]);
 	});
@@ -284,7 +284,7 @@ describe("command redaction tokenizer", () => {
 		const result = redactCommandDescriptor(
 			shell(
 				"API_TOKEN=synthetic-env-one deploy --token synthetic-cli-one --password synthetic-cli-two && " +
-					"curl -H 'Authorization: Bearer synthetic-bearer-one' https://example.test",
+					"curl -H 'Authorization: Bearer synthetic-bearer-one' https://example.test", // gitleaks:allow -- intentional fake credential fixture
 			),
 		);
 		expect(result.summary.placeholders).toEqual([

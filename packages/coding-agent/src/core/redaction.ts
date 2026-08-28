@@ -27,7 +27,7 @@ const KNOWN_CREDENTIAL_PATTERNS = [
 	/\bAIza[A-Za-z0-9_-]{20,}\b/g,
 	/\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g,
 	/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g,
-	/\bxox[abprs]-[A-Za-z0-9-]{20,}\b/g,
+	/\bxox[eabprs]-[A-Za-z0-9-]{20,}\b/g,
 	/\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b/g,
 	/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g,
 ] as const;

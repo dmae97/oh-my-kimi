@@ -4,9 +4,9 @@ import { redactSensitiveText } from "../src/core/redaction.ts";
 describe("redactSensitiveText", () => {
 	it("masks labelled, bearer, and recognizable API-key values", () => {
 		const input =
-			'Authorization: Bearer synthetic-bearer-value; OPENAI_API_KEY=synthetic-environment-key; https://example.test/callback?api_key=synthetic-api-key&ok=1; {"x-api-key":"synthetic-header-value"}; sk-example-xxxxxxxxxxxxxxxxxxxxxxxx';
+			'Authorization: Bearer synthetic-bearer-value; OPENAI_API_KEY=synthetic-environment-key; https://example.test/callback?api_key=synthetic-api-key&ok=1; {"x-api-key":"synthetic-header-value"}; sk-example-xxxxxxxxxxxxxxxxxxxxxxxx; xoxe-1234567890-abcdefghijklmnop';
 		const expected =
-			'Authorization: Bearer [REDACTED]; OPENAI_API_KEY=[REDACTED]; https://example.test/callback?api_key=[REDACTED]&ok=1; {"x-api-key":"[REDACTED]"}; [REDACTED]';
+			'Authorization: Bearer [REDACTED]; OPENAI_API_KEY=[REDACTED]; https://example.test/callback?api_key=[REDACTED]&ok=1; {"x-api-key":"[REDACTED]"}; [REDACTED]; [REDACTED]';
 
 		expect(redactSensitiveText(input)).toBe(expected);
 		expect(redactSensitiveText(expected)).toBe(expected);
