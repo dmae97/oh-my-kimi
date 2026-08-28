@@ -280,17 +280,19 @@ function estimateTextAndImageContentChars(content: string | Array<{ type: string
 
 /** Estimate token count for one message using a conservative character heuristic. */
 export function estimateTokens(message: AgentMessage): number {
-	let chars = 0;
-
 	switch (message.role) {
-		case "user": {
-			chars = estimateTextAndImageContentChars(
-				(message as { content: string | Array<{ type: string; text?: string }> }).content,
+		case "user":
+			return (
+				ESTIMATED_MESSAGE_OVERHEAD_TOKENS +
+				Math.ceil(
+					estimateTextAndImageContentChars(
+						(message as { content: string | Array<{ type: string; text?: string }> }).content,
+					) / 4,
+				)
 			);
-			return ESTIMATED_MESSAGE_OVERHEAD_TOKENS + Math.ceil(chars / 4);
-		}
 		case "assistant": {
 			const assistant = message as AssistantMessage;
+			let chars = 0;
 			for (const block of assistant.content) {
 				if (block.type === "text") {
 					chars += block.text.length;
@@ -303,25 +305,18 @@ export function estimateTokens(message: AgentMessage): number {
 			return ESTIMATED_MESSAGE_OVERHEAD_TOKENS + Math.ceil(chars / 4);
 		}
 		case "custom":
-		case "toolResult": {
-			chars = estimateTextAndImageContentChars(message.content);
-			return ESTIMATED_MESSAGE_OVERHEAD_TOKENS + Math.ceil(chars / 4);
-		}
-		case "bashExecution": {
-			chars = message.command.length + message.output.length;
-			return ESTIMATED_MESSAGE_OVERHEAD_TOKENS + Math.ceil(chars / 4);
-		}
+		case "toolResult":
+			return ESTIMATED_MESSAGE_OVERHEAD_TOKENS + Math.ceil(estimateTextAndImageContentChars(message.content) / 4);
+		case "bashExecution":
+			return ESTIMATED_MESSAGE_OVERHEAD_TOKENS + Math.ceil((message.command.length + message.output.length) / 4);
 		case "branchSummary":
-		case "compactionSummary": {
-			chars = message.summary.length;
-			return ESTIMATED_MESSAGE_OVERHEAD_TOKENS + Math.ceil(chars / 4);
-		}
+		case "compactionSummary":
+			return ESTIMATED_MESSAGE_OVERHEAD_TOKENS + Math.ceil(message.summary.length / 4);
+		default:
+			// Keep unknown runtime extensions conservative: compaction may trigger
+			// earlier, never after the previous estimate would have triggered it.
+			return ESTIMATED_UNKNOWN_MESSAGE_TOKENS;
 	}
-
-	// Invariant: this estimate is always >= the old estimate for every message,
-	// so compaction can only trigger earlier, never later; this conservative
-	// floor aligns with the compact-before-context-headroom-overflow fix.
-	return ESTIMATED_UNKNOWN_MESSAGE_TOKENS;
 }
 function findValidCutPoints(entries: SessionTreeEntry[], startIndex: number, endIndex: number): number[] {
 	const cutPoints: number[] = [];
@@ -340,6 +335,7 @@ function findValidCutPoints(entries: SessionTreeEntry[], startIndex: number, end
 						cutPoints.push(i);
 						break;
 					case "toolResult":
+					default:
 						break;
 				}
 				break;
@@ -354,6 +350,7 @@ function findValidCutPoints(entries: SessionTreeEntry[], startIndex: number, end
 			case "label":
 			case "session_info":
 			case "leaf":
+			default:
 				break;
 		}
 		if (entry.type === "branch_summary" || entry.type === "custom_message") {

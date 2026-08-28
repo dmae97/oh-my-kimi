@@ -11,10 +11,12 @@ import {
 	DEFAULT_COMPACTION_SETTINGS,
 	estimateContextTokens,
 	estimateProjectedContextTokens,
+	extractCompactionRuleSources,
 	findCutPoint,
 	getCompactionHeadroomThreshold,
 	getLastAssistantUsage,
 	prepareCompaction,
+	renderPreservedRulesBlock,
 	shouldCompact,
 } from "../src/core/compaction/index.ts";
 import {
@@ -94,7 +96,7 @@ function createMessageEntry(message: AgentMessage): SessionMessageEntry {
 	return entry;
 }
 
-function createCompactionEntry(summary: string, firstKeptEntryId: string): CompactionEntry {
+function createCompactionEntry(summary: string, firstKeptEntryId: string, details?: unknown): CompactionEntry {
 	const id = `test-id-${entryCounter++}`;
 	const entry: CompactionEntry = {
 		type: "compaction",
@@ -104,6 +106,7 @@ function createCompactionEntry(summary: string, firstKeptEntryId: string): Compa
 		summary,
 		firstKeptEntryId,
 		tokensBefore: 10000,
+		...(details !== undefined ? { details } : {}),
 	};
 	lastId = id;
 	return entry;
@@ -441,13 +444,24 @@ describe("buildSessionContext", () => {
 
 describe("prepareCompaction with previous compaction", () => {
 	it("should preserve kept messages across repeated compactions when they still fit", () => {
-		const u1 = createMessageEntry(createUserMessage("user msg 1 (summarized by compaction1)"));
+		const u1 = createMessageEntry(
+			createUserMessage("RULE: preserve exact evidence\nuser msg 1 (summarized by compaction1)"),
+		);
 		const a1 = createMessageEntry(createAssistantMessage("assistant msg 1"));
 		const u2 = createMessageEntry(createUserMessage("user msg 2 - kept by compaction1"));
 		const a2 = createMessageEntry(createAssistantMessage("assistant msg 2"));
 		const u3 = createMessageEntry(createUserMessage("user msg 3 - kept by compaction1"));
 		const a3 = createMessageEntry(createAssistantMessage("assistant msg 3", createMockUsage(5000, 1000)));
-		const compaction1 = createCompactionEntry("First summary", u2.id);
+		const preservedRules = extractCompactionRuleSources([u1]);
+		const compaction1 = createCompactionEntry(
+			`First summary\n\n${renderPreservedRulesBlock(preservedRules)}`,
+			u2.id,
+			{
+				readFiles: [],
+				modifiedFiles: [],
+				preservedRules,
+			},
+		);
 		const u4 = createMessageEntry(createUserMessage("user msg 4 (new after compaction1)"));
 		const a4 = createMessageEntry(createAssistantMessage("assistant msg 4", createMockUsage(8000, 2000)));
 
@@ -457,7 +471,8 @@ describe("prepareCompaction with previous compaction", () => {
 
 		expect(preparation).toBeDefined();
 		expect(preparation!.firstKeptEntryId).toBe(u2.id);
-		expect(preparation!.previousSummary).toBe("First summary");
+		expect(preparation!.previousSummary).toContain("First summary");
+		expect(preparation!.previousRuleHistory?.rules).toEqual(preservedRules);
 		expect(extractText(preparation!.messagesToSummarize)).not.toContain("First summary");
 		expect(preparation!.tokensBefore).toBe(estimateContextTokens(contextBefore.messages).tokens);
 

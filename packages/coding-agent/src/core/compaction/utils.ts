@@ -4,6 +4,20 @@
 
 import type { AgentMessage } from "omk-agent-core";
 import type { Message } from "omk-ai";
+import { createBranchSummaryMessage, createCustomMessage } from "../messages.ts";
+import type { CompactionEntry, SessionEntry } from "../session-manager.ts";
+
+export function getMessageFromEntryForCompaction(entry: SessionEntry): AgentMessage | undefined {
+	if (entry.type === "compaction") return undefined;
+	if (entry.type === "message") return entry.message;
+	if (entry.type === "custom_message") {
+		return createCustomMessage(entry.customType, entry.content, entry.display, entry.details, entry.timestamp);
+	}
+	if (entry.type === "branch_summary") {
+		return createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp);
+	}
+	return undefined;
+}
 
 // ============================================================================
 // File Operation Tracking
@@ -21,6 +35,29 @@ export function createFileOps(): FileOperations {
 		written: new Set(),
 		edited: new Set(),
 	};
+}
+
+/** Collect current and prior-compaction file operations for the next summary. */
+export function extractCompactionFileOperations(
+	messages: readonly AgentMessage[],
+	entries: readonly SessionEntry[],
+	previousCompactionIndex: number,
+): FileOperations {
+	const fileOps = createFileOps();
+	if (previousCompactionIndex >= 0) {
+		const previous = entries[previousCompactionIndex] as CompactionEntry;
+		if (!previous.fromHook && previous.details) {
+			const details = previous.details as { readonly readFiles?: unknown; readonly modifiedFiles?: unknown };
+			if (Array.isArray(details.readFiles)) {
+				for (const file of details.readFiles) if (typeof file === "string") fileOps.read.add(file);
+			}
+			if (Array.isArray(details.modifiedFiles)) {
+				for (const file of details.modifiedFiles) if (typeof file === "string") fileOps.edited.add(file);
+			}
+		}
+	}
+	for (const message of messages) extractFileOpsFromMessage(message, fileOps);
+	return fileOps;
 }
 
 /**

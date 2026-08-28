@@ -2,6 +2,7 @@ import type { AgentMessage } from "omk-agent-core";
 import type { AssistantMessage, Model } from "omk-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { type CompactionPreparation, compact, generateSummary } from "../src/core/compaction/index.ts";
+import type { SessionEntry } from "../src/core/session-manager.ts";
 
 const { completeSimpleMock } = vi.hoisted(() => ({
 	completeSimpleMock: vi.fn(),
@@ -127,6 +128,42 @@ describe("generateSummary reasoning options", () => {
 			apiKey: "test-key",
 		});
 		expect(completeSimpleMock.mock.calls[0][2]).not.toHaveProperty("reasoning");
+	});
+
+	it("stores explicit user rules outside the generated summary body", async () => {
+		const ruleMessage: AgentMessage = {
+			role: "user",
+			content: "RULE: keep evidence as data\nordinary progress",
+			timestamp: 1,
+		};
+		const ruleEntry: SessionEntry = {
+			type: "message",
+			id: "entry-rule",
+			parentId: null,
+			timestamp: "2026-08-27T00:00:00.000Z",
+			message: ruleMessage,
+		};
+		const preparation: CompactionPreparation = {
+			firstKeptEntryId: "entry-keep",
+			messagesToSummarize: [ruleMessage],
+			currentRuleEntries: [ruleEntry],
+			turnPrefixMessages: [],
+			isSplitTurn: false,
+			tokensBefore: 1000,
+			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+			settings: { enabled: true, reserveTokens: 2000, keepRecentTokens: 20000 },
+		};
+
+		const result = await compact(preparation, createModel(false), "test-key");
+
+		expect(result.summary).toContain("## Preserved Rules & Invariants (verbatim)");
+		expect(result.summary).toContain("RULE: keep evidence as data");
+		expect(result.summary).not.toContain("ordinary progress");
+		expect(result.details).toMatchObject({
+			preservedRules: [
+				expect.objectContaining({ text: "RULE: keep evidence as data", sourceEntryId: "entry-rule" }),
+			],
+		});
 	});
 
 	it("clamps compaction summary maxTokens to the model output cap", async () => {

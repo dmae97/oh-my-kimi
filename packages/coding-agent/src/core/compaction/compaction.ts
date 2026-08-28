@@ -10,20 +10,22 @@ import { uuidv7 } from "omk-agent-core";
 import type { AssistantMessage, Context, Model, SimpleStreamOptions, Usage } from "omk-ai";
 import { completeSimple, type RetryCallbacks, type RetryPolicy, retryAssistantCall } from "omk-ai";
 import { computeReservedTokenBudget } from "../context-budget-reserved-tokens.ts";
-import {
-	convertToLlm,
-	createBranchSummaryMessage,
-	createCompactionSummaryMessage,
-	createCustomMessage,
-} from "../messages.ts";
+import { convertToLlm } from "../messages.ts";
 import { isQuotaExhaustionMessage } from "../provider-resilience.ts";
 import { buildSessionContext, type CompactionEntry, type SessionEntry } from "../session-manager.ts";
 import {
+	applyCompactionKnowledgeTriage,
+	buildCompactionRuleHistory,
+	type CompactionRuleHistory,
+	type PreservedRuleRecord,
+} from "./knowledge-triage.ts";
+import {
 	computeFileLists,
-	createFileOps,
+	extractCompactionFileOperations,
 	extractFileOpsFromMessage,
 	type FileOperations,
 	formatFileOperations,
+	getMessageFromEntryForCompaction,
 	SUMMARIZATION_SYSTEM_PROMPT,
 	serializeConversation,
 } from "./utils.ts";
@@ -36,70 +38,13 @@ import {
 export interface CompactionDetails {
 	readFiles: string[];
 	modifiedFiles: string[];
-}
-
-/**
- * Extract file operations from messages and previous compaction entries.
- */
-function extractFileOperations(
-	messages: AgentMessage[],
-	entries: SessionEntry[],
-	prevCompactionIndex: number,
-): FileOperations {
-	const fileOps = createFileOps();
-
-	if (prevCompactionIndex >= 0) {
-		const prevCompaction = entries[prevCompactionIndex] as CompactionEntry;
-		if (!prevCompaction.fromHook && prevCompaction.details) {
-			// fromHook field kept for session file compatibility
-			const details = prevCompaction.details as CompactionDetails;
-			if (Array.isArray(details.readFiles)) {
-				for (const f of details.readFiles) fileOps.read.add(f);
-			}
-			if (Array.isArray(details.modifiedFiles)) {
-				for (const f of details.modifiedFiles) fileOps.edited.add(f);
-			}
-		}
-	}
-
-	// Extract from tool calls in messages
-	for (const msg of messages) {
-		extractFileOpsFromMessage(msg, fileOps);
-	}
-
-	return fileOps;
+	/** Deterministically extracted, source-bound user rules carried outside LLM rewriting. */
+	preservedRules?: PreservedRuleRecord[];
 }
 
 // ============================================================================
 // Message Extraction
 // ============================================================================
-
-/**
- * Extract AgentMessage from an entry if it produces one.
- * Returns undefined for entries that don't contribute to LLM context.
- */
-function getMessageFromEntry(entry: SessionEntry): AgentMessage | undefined {
-	if (entry.type === "message") {
-		return entry.message;
-	}
-	if (entry.type === "custom_message") {
-		return createCustomMessage(entry.customType, entry.content, entry.display, entry.details, entry.timestamp);
-	}
-	if (entry.type === "branch_summary") {
-		return createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp);
-	}
-	if (entry.type === "compaction") {
-		return createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp);
-	}
-	return undefined;
-}
-
-function getMessageFromEntryForCompaction(entry: SessionEntry): AgentMessage | undefined {
-	if (entry.type === "compaction") {
-		return undefined;
-	}
-	return getMessageFromEntry(entry);
-}
 
 /** Result from compact() - SessionManager adds uuid/parentUuid when saving */
 export interface CompactionResult<T = unknown> {
@@ -553,7 +498,7 @@ Use this EXACT format:
 - [Any data, examples, or references needed to continue]
 - [Or "(none)" if not applicable]
 
-Keep each section concise. Preserve exact file paths, function names, and error messages.`;
+Keep each section concise. Preserve exact file paths, function names, and error messages. Do not create a Preserved Rules & Invariants section; OMK injects it deterministically after generation.`;
 
 const UPDATE_SUMMARIZATION_PROMPT = `The messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.
 
@@ -592,7 +537,7 @@ Use this EXACT format:
 ## Critical Context
 - [Preserve important context, add new if needed]
 
-Keep each section concise. Preserve exact file paths, function names, and error messages.`;
+Keep each section concise. Preserve exact file paths, function names, and error messages. Do not create a Preserved Rules & Invariants section; OMK injects it deterministically after generation.`;
 
 function createSummarizationOptions(
 	model: Model<any>,
@@ -725,6 +670,10 @@ export interface CompactionPreparation {
 	tokensBefore: number;
 	/** Summary from previous compaction, for iterative update */
 	previousSummary?: string;
+	/** Source-verified rule history from the prior default compaction. */
+	previousRuleHistory?: CompactionRuleHistory;
+	/** Exact session entries covered by this compaction's rule extraction. */
+	currentRuleEntries?: readonly SessionEntry[];
 	/** File operations extracted from messagesToSummarize */
 	fileOps: FileOperations;
 	/** Compaction settions from settings.jsonl	*/
@@ -748,10 +697,12 @@ export function prepareCompaction(
 	}
 
 	let previousSummary: string | undefined;
+	let previousRuleHistory: CompactionRuleHistory | undefined;
 	let boundaryStart = 0;
 	if (prevCompactionIndex >= 0) {
 		const prevCompaction = pathEntries[prevCompactionIndex] as CompactionEntry;
 		previousSummary = prevCompaction.summary;
+		previousRuleHistory = buildCompactionRuleHistory(prevCompaction, pathEntries);
 		const firstKeptEntryIndex = pathEntries.findIndex((entry) => entry.id === prevCompaction.firstKeptEntryId);
 		boundaryStart = firstKeptEntryIndex >= 0 ? firstKeptEntryIndex : prevCompactionIndex + 1;
 	}
@@ -787,7 +738,11 @@ export function prepareCompaction(
 	}
 
 	// Extract file operations from messages and previous compaction
-	const fileOps = extractFileOperations(messagesToSummarize, pathEntries, prevCompactionIndex);
+	const fileOps = extractCompactionFileOperations(messagesToSummarize, pathEntries, prevCompactionIndex);
+	const currentRuleEntries = [
+		...pathEntries.slice(boundaryStart, historyEnd),
+		...(cutPoint.isSplitTurn ? pathEntries.slice(cutPoint.turnStartIndex, cutPoint.firstKeptEntryIndex) : []),
+	];
 
 	// Also extract file ops from turn prefix if splitting
 	if (cutPoint.isSplitTurn) {
@@ -803,6 +758,8 @@ export function prepareCompaction(
 		isSplitTurn: cutPoint.isSplitTurn,
 		tokensBefore,
 		previousSummary,
+		previousRuleHistory,
+		currentRuleEntries,
 		fileOps,
 		settings,
 	};
@@ -915,6 +872,8 @@ async function compactWithModel(
 		isSplitTurn,
 		tokensBefore,
 		previousSummary,
+		previousRuleHistory,
+		currentRuleEntries,
 		fileOps,
 		settings,
 	} = preparation;
@@ -974,6 +933,16 @@ async function compactWithModel(
 		);
 	}
 
+	const triage = applyCompactionKnowledgeTriage({
+		generatedSummary: summary,
+		currentMessages: [...messagesToSummarize, ...turnPrefixMessages],
+		currentEntries: currentRuleEntries,
+		previousRules: previousRuleHistory?.rules,
+		previousSummary,
+		previousEntries: previousRuleHistory?.entries,
+	});
+	summary = triage.summary;
+
 	// Compute file lists and append to summary
 	const { readFiles, modifiedFiles } = computeFileLists(fileOps);
 	summary += formatFileOperations(readFiles, modifiedFiles);
@@ -986,7 +955,7 @@ async function compactWithModel(
 		summary,
 		firstKeptEntryId,
 		tokensBefore,
-		details: { readFiles, modifiedFiles } as CompactionDetails,
+		details: { readFiles, modifiedFiles, preservedRules: [...triage.preservedRules] } as CompactionDetails,
 	};
 }
 
