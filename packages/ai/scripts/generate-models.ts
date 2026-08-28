@@ -15,6 +15,35 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const packageRoot = join(__dirname, "..");
 
+/**
+ * Upstream sources that returned nothing because the fetch failed.
+ *
+ * Each provider pass used to swallow its error and return an empty result, so a
+ * timeout, rate limit, or transient 5xx silently deleted that provider from the
+ * catalog while the script still exited 0. The committed file would then be
+ * replaced by a truncated one whose diff is indistinguishable from upstream
+ * retiring models. Regenerating is only reviewable if a short read fails loudly.
+ */
+const fetchFailures: string[] = [];
+
+function recordFetchFailure(source: string, error: unknown): void {
+	console.error(`Failed to fetch ${source} models:`, error);
+	fetchFailures.push(source);
+}
+
+/** Throw unless every upstream source answered, so a partial catalog is never written. */
+function assertUpstreamComplete(allowPartial: boolean): void {
+	if (fetchFailures.length === 0) return;
+	console.error(`\n${fetchFailures.length} upstream source(s) failed: ${fetchFailures.join(", ")}`);
+	if (allowPartial) {
+		console.error("Continuing with a partial catalog because --allow-partial was passed.");
+		return;
+	}
+	console.error("Refusing to overwrite the committed catalog with a partial one.");
+	console.error("Re-run when the sources are reachable, or pass --allow-partial if the loss is real.");
+	process.exit(1);
+}
+
 interface ModelsDevModel {
 	id: string;
 	name: string;
@@ -473,7 +502,7 @@ async function fetchNvidiaNimModelIds(): Promise<Map<string, string>> {
 		console.log(`Fetched ${data.data?.length ?? 0} model IDs from NVIDIA NIM`);
 		return modelIds;
 	} catch (error) {
-		console.error("Failed to fetch NVIDIA NIM models:", error);
+		recordFetchFailure("NVIDIA NIM", error);
 		return new Map();
 	}
 }
@@ -546,7 +575,7 @@ async function fetchOpenRouterModels(): Promise<Model<any>[]> {
 		console.log(`Fetched ${models.length} tool-capable models from OpenRouter`);
 		return models;
 	} catch (error) {
-		console.error("Failed to fetch OpenRouter models:", error);
+		recordFetchFailure("OpenRouter", error);
 		return [];
 	}
 }
@@ -605,7 +634,7 @@ async function fetchAiGatewayModels(): Promise<Model<any>[]> {
 		console.log(`Fetched ${models.length} tool-capable models from Vercel AI Gateway`);
 		return models;
 	} catch (error) {
-		console.error("Failed to fetch Vercel AI Gateway models:", error);
+		recordFetchFailure("Vercel AI Gateway", error);
 		return [];
 	}
 }
@@ -1554,7 +1583,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 		console.log(`Loaded ${models.length} tool-capable models from models.dev`);
 		return models;
 	} catch (error) {
-		console.error("Failed to load models.dev data:", error);
+		recordFetchFailure("models.dev", error);
 		return [];
 	}
 }
@@ -2492,6 +2521,9 @@ export const MODELS = {
 
 	output += `} as const;
 `;
+
+	// Refuse to replace the committed catalog when a source was merely unreachable.
+	assertUpstreamComplete(process.argv.includes("--allow-partial"));
 
 	// Write file
 	writeFileSync(join(packageRoot, "src/models.generated.ts"), output);

@@ -71,8 +71,10 @@ async function fetchOpenRouterImageModels(): Promise<ImagesModel<"openrouter-ima
 		console.log(`Fetched ${models.length} image models from OpenRouter`);
 		return models;
 	} catch (error) {
-		console.error("Failed to fetch OpenRouter image models:", error);
-		return [];
+		// Rethrow rather than returning []: swallowing the error wrote an empty
+		// catalog over the committed one and still exited 0, so an unreachable
+		// endpoint was indistinguishable from OpenRouter retiring every image model.
+		throw new Error("Failed to fetch OpenRouter image models", { cause: error });
 	}
 }
 
@@ -126,6 +128,9 @@ ${providerEntries}
 
 async function main(): Promise<void> {
 	const models = await fetchOpenRouterImageModels();
+	if (models.length === 0) {
+		throw new Error("OpenRouter returned no image models; refusing to overwrite the committed catalog.");
+	}
 	const output = generateImageModelsFile(models);
 	const outputPath = join(packageRoot, "src", "image-models.generated.ts");
 	writeFileSync(outputPath, output, "utf-8");

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- The model catalog generators no longer overwrite the committed catalog after a short read. Each provider pass caught its own fetch error and returned an empty result, so a timeout, rate limit, or transient 5xx deleted that provider from the catalog while the script still exited 0 — and the resulting diff is indistinguishable from upstream retiring models, which makes the regeneration unreviewable. `generate-models` now records every failed source and refuses to write, listing what failed and offering `--allow-partial` for a loss that is real; `generate-image-models` throws instead of writing an empty catalog. Verified in a network namespace with no connectivity: both exit 1 and leave the committed files byte-identical. Zyloo keeps its own fallback because it degrades to a curated six-model constant that matches the live list rather than to nothing.
+
 ## [0.97.0] - 2026-08-24
 
 ### Changed
