@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const allowValue = process.env.OMK_ALLOW_LOCKFILE_CHANGE;
 const allowed = allowValue === "1" || allowValue === "true" || allowValue === "yes";
@@ -51,8 +53,25 @@ function isWorkspacePackagePath(lockPath) {
 	return lockPath.startsWith("packages/");
 }
 
-function hasOnlyWorkspacePackageChanges(changes) {
-	return changes.length > 0 && changes.every((change) => isWorkspacePackagePath(change.lockPath));
+/**
+ * The workspace root is keyed `""` in the lockfile, so it never matched
+ * `packages/`. Every release bumps the root version, which meant the exemption
+ * below never applied to the one change it exists for and the guard blocked
+ * every release commit. Only a version-field difference is exempt here: a
+ * dependency added at the root still changes another field, or adds a
+ * `node_modules/*` entry, and is still caught.
+ */
+function isMechanicalRootVersionBump({ lockPath, oldEntry, newEntry }) {
+	if (lockPath !== "") return false;
+	if (!oldEntry || !newEntry) return false;
+	return JSON.stringify({ ...oldEntry, version: null }) === JSON.stringify({ ...newEntry, version: null });
+}
+
+export function hasOnlyWorkspacePackageChanges(changes) {
+	return (
+		changes.length > 0 &&
+		changes.every((change) => isWorkspacePackagePath(change.lockPath) || isMechanicalRootVersionBump(change))
+	);
 }
 
 function summarizeLockfileChange(changes) {
@@ -74,6 +93,9 @@ function summarizeLockfileChange(changes) {
 	return summary;
 }
 
+if (!(process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))) {
+	// Imported for its helpers (tests); the guard below is a CLI side effect.
+} else {
 const stagedFiles = git(["diff", "--cached", "--name-only"])
 	.split("\n")
 	.map((line) => line.trim())
@@ -118,3 +140,4 @@ console.error("");
 console.error("If this lockfile change is intentional, commit with:");
 console.error("  OMK_ALLOW_LOCKFILE_CHANGE=1 git commit ...");
 process.exit(1);
+}
