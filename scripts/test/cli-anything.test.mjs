@@ -99,3 +99,29 @@ describe("cli-anything catalog entry", () => {
 		assert.match(catalog, /\[`cli-anything`\]\(\.omk\/skills\/cli-anything\/SKILL\.md\)/);
 	});
 });
+
+/**
+ * The catalog states a skill count in prose, twice, and nothing derived it from the
+ * table. Adding two skills left both numbers reading 29 against 31 rows, and a
+ * catalog that miscounts itself is not one a reader can trust about anything else.
+ */
+describe("skill catalog self-consistency", () => {
+	const catalog = readFileSync(join(repoRoot, "SKILLS.md"), "utf8");
+	const rows = catalog.split("\n").filter((line) => line.startsWith("| [`")).length;
+
+	it("states a count that matches the rows it lists", () => {
+		const claims = [...catalog.matchAll(/\*\*(\d+) project-local skills\*\*|all (\d+) skills above/g)].map(
+			(match) => Number(match[1] ?? match[2]),
+		);
+		assert.ok(claims.length >= 2, "SKILLS.md should state the count where it did before");
+		for (const claim of claims) {
+			assert.equal(claim, rows, `SKILLS.md claims ${claim} skills but lists ${rows} rows`);
+		}
+	});
+
+	it("points every catalog row at a file that exists", () => {
+		for (const [, target] of catalog.matchAll(/^\| \[`[^`]+`\]\(([^)]+)\)/gm)) {
+			assert.ok(existsSync(join(repoRoot, target)), `catalog row points at missing ${target}`);
+		}
+	});
+});

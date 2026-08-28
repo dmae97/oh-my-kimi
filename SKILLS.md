@@ -1,6 +1,6 @@
 # Public Skills
 
-OMK currently publishes **29 project-local skills** in this repository under [`.omk/skills`](.omk/skills). When OMK runs from a repository checkout, it discovers these skills automatically and loads them on demand.
+OMK currently publishes **31 project-local skills** in this repository under [`.omk/skills`](.omk/skills). When OMK runs from a repository checkout, it discovers these skills automatically and loads them on demand.
 
 These repository skills are **not bundled into the `open-multi-agent-kit` npm package**. The package publishes only the paths declared in [`packages/coding-agent/package.json`](packages/coding-agent/package.json). See the [skills documentation](packages/coding-agent/docs/skills.md) for discovery rules and packaging your own skills.
 
@@ -14,6 +14,7 @@ Invoke any available skill with `!skill:<name>` or `/skill:<name>`. `caveman` is
 | [`clone-website`](.omk/skills/clone-website/SKILL.md) | Reverse-engineer and rebuild websites with bounded parallel builders. |
 | [`cli-anything`](.omk/skills/cli-anything/SKILL.md) | Build a CLI harness that lets an agent drive GUI-only software. Paired with the [`cli-anything`](.omk/extensions/cli-anything/README.md) extension. |
 | [`omk-computeruse`](.omk/skills/omk-computeruse/SKILL.md) | Route desktop, browser, Stagehand, and WSL-to-Windows computer-use tasks. |
+| [`omk-higgsfield`](.omk/skills/omk-higgsfield/SKILL.md) | Drive the Higgsfield CLI for generated media, Soul ID, marketing studio, and site deployment. |
 | [`reverse-skill`](.omk/skills/reverse-skill/SKILL.md) | Route and adapt reverse-engineering and security workflow packs. |
 | [`omk-engine`](.omk/skills/omk-engine/SKILL.md) | Project-local OMK operating profile: repository workflow config and small skill-set selection. |
 | [`omk-harness-loop`](.omk/skills/omk-harness-loop/SKILL.md) | Route harness-loop work through the identical-loop guard, tool-pair repair, prompt presets, and `/goal` continuation. |
@@ -63,8 +64,9 @@ Invoke any available skill with `!skill:<name>` or `/skill:<name>`. `caveman` is
 
 ## Distribution and provenance
 
-- **Public repository:** all 29 skills above are tracked in Git.
+- **Public repository:** all 31 skills above are tracked in Git.
 - **Repository checkout:** OMK discovers them as project-local skills.
 - **npm package:** none of these root-level `.omk/skills` files are currently included in `open-multi-agent-kit`.
 - **Vendored content:** [`taste-skill`](.omk/skills/taste-skill/SOURCE.md), [`caveman`](.omk/skills/caveman/SOURCE.md), [`ponytail`](.omk/skills/ponytail/SKILL.md), and [`clone-website`](.omk/skills/clone-website/LICENSE-THIRD-PARTY) retain their source and license notices.
+- **Derived, not vendored:** [`omk-higgsfield`](.omk/skills/omk-higgsfield/SOURCE.md) is original prose pinned to an upstream commit; it copies no upstream file.
 - **Excluded from this inventory:** machine-local skills, test fixtures, examples, scratch data, goal snapshots, and worktrees.
