@@ -99,7 +99,7 @@ export function snapshotObservationFacts(snapshot: {
 	};
 }
 
-/** §15.2 example shape: pressure, action, and the three caps. */
+/** §15.2 example shape: pressure, action, caps, and bounded reason codes. */
 export function admissionObservationFacts(decision: ResourceAdmissionDecision): ResourceObservationFacts {
 	return {
 		decisionId: decision.decisionId,
@@ -109,6 +109,7 @@ export function admissionObservationFacts(decision: ResourceAdmissionDecision): 
 		maxToolConcurrency: decision.maxToolConcurrency,
 		maxParallelLanes: decision.maxParallelLanes,
 		maxHeavyProcesses: decision.maxHeavyProcesses,
+		reasons: decision.reasons.slice(0, 8).join(","),
 	};
 }
 
@@ -211,7 +212,7 @@ export class ResourceObservationJournal {
 		for (let index = 0; index < lines.length && records.length < MAX_RECORDS; index++) {
 			const line = lines[index].trim();
 			if (line === "") continue;
-			const parsed = parseObservationLine(line);
+			const parsed = parseResourceObservationLine(line);
 			if (parsed === null) {
 				diagnostics.push(`line ${index + 1}: invalid observation record`);
 				continue;
@@ -224,7 +225,7 @@ export class ResourceObservationJournal {
 
 const KIND_SET: ReadonlySet<string> = new Set(RESOURCE_OBSERVATION_KINDS);
 
-function parseObservationLine(line: string): ResourceObservationRecord | null {
+export function parseResourceObservationLine(line: string): ResourceObservationRecord | null {
 	if (line.length > MAX_LINE_BYTES) return null;
 	let value: unknown;
 	try {

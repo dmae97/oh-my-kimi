@@ -46,6 +46,7 @@ describe("observation fact builders (§15.2 privacy)", () => {
 			maxToolConcurrency: 2,
 			maxParallelLanes: 2,
 			maxHeavyProcesses: 1,
+			reasons: "resource.memory.low",
 		});
 	});
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { runResourceDoctorCli } from "../src/commands/resource-doctor-cli.ts";
+import { type ResourceObservationReport, runResourceDoctorCli } from "../src/commands/resource-doctor-cli.ts";
 import {
 	HOST_RESOURCE_SNAPSHOT_VERSION,
 	type HostResourceProbeOptions,
@@ -32,15 +32,40 @@ function snapshot(overrides: Partial<HostResourceSnapshot> = {}): HostResourceSn
 	};
 }
 
+function observationReport(overrides: Partial<ResourceObservationReport> = {}): ResourceObservationReport {
+	return {
+		schemaVersion: 1,
+		journalsScanned: 40,
+		admissionRecords: 35,
+		reasonRecords: 35,
+		reasonCoverageComplete: true,
+		pressure: { normal: 25, constrained: 8, critical: 2 },
+		actions: { allow: 25, throttle: 8, "defer-heavy": 2 },
+		wouldHaveThrottled: 10,
+		probePartial: 1,
+		probeTimeout: 0,
+		diagnostics: 0,
+		truncated: false,
+		minimumSampleSize: 30,
+		minimumSampleMet: true,
+		humanReviewRequired: true,
+		...overrides,
+	};
+}
+
 function collectLines(): { lines: string[]; writeLine: (line: string) => void } {
 	const lines: string[] = [];
 	return { lines, writeLine: (line) => lines.push(line) };
 }
 
 function parseReport(lines: readonly string[]): ResourceDoctorReport {
+	return parseJsonOutput<ResourceDoctorReport>(lines);
+}
+
+function parseJsonOutput<T>(lines: readonly string[]): T {
 	const text = lines.join("\n");
 	try {
-		return JSON.parse(text) as ResourceDoctorReport;
+		return JSON.parse(text) as T;
 	} catch (error) {
 		throw new Error(`doctor --json output was not valid JSON: ${text.slice(0, 200)} (${String(error)})`);
 	}
@@ -59,14 +84,56 @@ describe("runResourceDoctorCli", () => {
 		const outcome = await runResourceDoctorCli(["doctor", "resources", "--verbose"], { writeLine });
 		expect(outcome).toEqual({ handled: true, exitCode: 2 });
 		expect(lines.join("\n")).toContain("Unknown argument: --verbose");
-		expect(lines.join("\n")).toContain("Usage: omk doctor resources [--json]");
+		expect(lines.join("\n")).toContain("Usage: omk doctor resources [--json] [--report]");
 	});
 
 	it("prints usage for --help", async () => {
 		const { lines, writeLine } = collectLines();
 		const outcome = await runResourceDoctorCli(["doctor", "resources", "--help"], { writeLine });
 		expect(outcome).toEqual({ handled: true, exitCode: 0 });
-		expect(lines).toEqual(["Usage: omk doctor resources [--json]"]);
+		expect(lines).toEqual(["Usage: omk doctor resources [--json] [--report]"]);
+	});
+
+	it("renders a bounded historical report without probing the host", async () => {
+		const { lines, writeLine } = collectLines();
+		let captureCalls = 0;
+		const outcome = await runResourceDoctorCli(["doctor", "resources", "--report"], {
+			writeLine,
+			cwd: "/workspace",
+			collectReport: (cwd) => {
+				expect(cwd).toBe("/workspace");
+				return observationReport();
+			},
+			capture: async () => {
+				captureCalls += 1;
+				return snapshot();
+			},
+		});
+
+		expect(outcome).toEqual({ handled: true, exitCode: 0 });
+		expect(captureCalls).toBe(0);
+		const text = lines.join("\n");
+		expect(text).toContain("Resource observation report");
+		expect(text).toContain("admission records: 35");
+		expect(text).toContain("would have throttled: 10");
+		expect(text).toContain("minimum sample: 35/30 (met)");
+		expect(text).toContain("human review: required");
+	});
+
+	it("emits the historical report schema with --report --json", async () => {
+		const { lines, writeLine } = collectLines();
+		const outcome = await runResourceDoctorCli(["doctor", "resources", "--report", "--json"], {
+			writeLine,
+			collectReport: () => observationReport({ truncated: true, diagnostics: 2 }),
+		});
+
+		expect(outcome).toEqual({ handled: true, exitCode: 0 });
+		expect(parseJsonOutput<ResourceObservationReport>(lines)).toMatchObject({
+			schemaVersion: 1,
+			truncated: true,
+			diagnostics: 2,
+			humanReviewRequired: true,
+		});
 	});
 
 	it("renders the human report with summary and verbose probe sections", async () => {

@@ -1,10 +1,12 @@
-import type {
-	ResourceAdmissionConfig,
-	ResourceAdmissionConfigOverrides,
-	ResourceGovernorMode,
-} from "./resource-admission.ts";
+import type { ResourceAdmissionConfigOverrides, ResourceGovernorMode } from "./resource-admission.ts";
 import { resolveResourceAdmissionConfig } from "./resource-admission.ts";
+import type { ResolvedResourceGovernorSettings } from "./resource-governor-types.ts";
 import { MAX_CPU_SAMPLE_MS, MIN_CPU_SAMPLE_MS } from "./system-cpu-sampler.ts";
+
+// The shape lives in `resource-governor-types.ts` so the formatter can describe
+// it without importing this module back. Re-exported because this module is the
+// governor's entry point and callers already import the name from here.
+export type { ResolvedResourceGovernorSettings };
 
 export {
 	buildResourceDoctorReport,
@@ -25,8 +27,9 @@ export {
  *
  * Resolved values feed the `/resource` command, `omk doctor resources`, and
  * the M2 prompt preflight: `observe` records decisions only, while
- * `adaptive`/`strict` let the run lease throttle per-run tool concurrency.
- * Lane and heavy-process caps become authoritative in later milestones.
+ * `adaptive`/`strict` throttle per-run tool concurrency and governed bash
+ * heavy-process permits. Subagent lane caps remain internal until the live
+ * child-dispatch path uses `launchSubagentLanes()`.
  */
 
 /** Additive settings block (§18, §29.1: absent block keeps v0.96.1 behavior). */
@@ -59,16 +62,6 @@ export interface ResourceGovernorSettings {
 export const RESOURCE_GOVERNOR_MODE_ENV = "OMK_RESOURCE_GOVERNOR";
 export const DEFAULT_RESOURCE_GOVERNOR_MODE: ResourceGovernorMode = "observe";
 const RESOURCE_GOVERNOR_MODES: ReadonlySet<string> = new Set(["off", "observe", "adaptive", "strict"]);
-
-export interface ResolvedResourceGovernorSettings {
-	readonly mode: ResourceGovernorMode;
-	/** Only present when the setting is valid; the probe applies its own defaults otherwise. */
-	readonly maxProbeMs?: number;
-	readonly cpuSampleMs?: number;
-	readonly admission: ResourceAdmissionConfig;
-	/** §18.1 explicit validation errors; non-empty means defaults were applied for the failed area. */
-	readonly errors: readonly string[];
-}
 
 /**
  * Resolve settings + environment into governor mode, probe options, and the

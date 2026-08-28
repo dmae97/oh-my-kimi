@@ -7,12 +7,19 @@ import {
 	type ResourceGovernorSettings,
 	resolveResourceGovernorSettings,
 } from "../core/resource-governor-settings.ts";
+import {
+	collectResourceObservationReport,
+	RESOURCE_REPORT_MIN_ADMISSIONS,
+	type ResourceObservationReport,
+} from "../core/resource-observation-report.ts";
 import { SettingsManager } from "../core/settings-manager.ts";
+
+export { collectResourceObservationReport, RESOURCE_REPORT_MIN_ADMISSIONS, type ResourceObservationReport };
 
 /**
  * Headless resource diagnostic (OMK v0.97.x roadmap §19.2, M1/PR2):
  *
- *   omk doctor resources [--json]
+ *   omk doctor resources [--json] [--report]
  *
  * Observe-only: probes the host, evaluates the admission policy, and prints
  * either aligned human output or the bounded §19.2 JSON schema. This command
@@ -21,7 +28,7 @@ import { SettingsManager } from "../core/settings-manager.ts";
  * when the governor mode is `off` because it only runs on explicit request.
  */
 
-const USAGE = "Usage: omk doctor resources [--json]";
+const USAGE = "Usage: omk doctor resources [--json] [--report]";
 
 export interface ResourceDoctorCliOverrides {
 	readonly cwd?: string;
@@ -36,6 +43,8 @@ export interface ResourceDoctorCliOverrides {
 	readonly capture?: typeof captureHostResourceSnapshot;
 	/** Test seam: monotonic clock for probeDurationMs. */
 	readonly now?: () => number;
+	/** Test seam: replaces local observation aggregation. */
+	readonly collectReport?: (cwd: string) => ResourceObservationReport;
 }
 
 export interface ResourceDoctorCliOutcome {
@@ -57,6 +66,12 @@ export async function runResourceDoctorCli(
 		return { handled: true, exitCode: flags.exit };
 	}
 	const json = flags.json;
+	if (flags.report) {
+		const report = (overrides.collectReport ?? collectResourceObservationReport)(overrides.cwd ?? process.cwd());
+		if (json) writeLine(JSON.stringify(report, null, 2));
+		else renderObservationReport(report, writeLine);
+		return { handled: true, exitCode: 0 };
+	}
 
 	const settings = (overrides.loadSettings ?? (() => loadSettingsFromDisk(overrides.cwd)))();
 	const resolved = resolveResourceGovernorSettings(settings.resourceGovernor, overrides.env ?? process.env);
@@ -89,22 +104,48 @@ export async function runResourceDoctorCli(
 function parseDoctorFlags(
 	args: readonly string[],
 	writeLine: (line: string) => void,
-): { readonly json: boolean; readonly exit: number | null } {
+): { readonly json: boolean; readonly report: boolean; readonly exit: number | null } {
 	let json = false;
+	let report = false;
 	for (const arg of args) {
 		if (arg === "--json") {
 			json = true;
 			continue;
 		}
+		if (arg === "--report") {
+			report = true;
+			continue;
+		}
 		if (arg === "--help" || arg === "-h") {
 			writeLine(USAGE);
-			return { json, exit: 0 };
+			return { json, report, exit: 0 };
 		}
 		writeLine(`Unknown argument: ${arg}`);
 		writeLine(USAGE);
-		return { json, exit: 2 };
+		return { json, report, exit: 2 };
 	}
-	return { json, exit: null };
+	return { json, report, exit: null };
+}
+
+function renderObservationReport(report: ResourceObservationReport, writeLine: (line: string) => void): void {
+	writeLine("Resource observation report");
+	writeLine(`journals scanned: ${report.journalsScanned}${report.truncated ? " (truncated)" : ""}`);
+	writeLine(`admission records: ${report.admissionRecords}`);
+	writeLine(`reason-qualified records: ${report.reasonRecords}`);
+	writeLine(
+		`pressure: normal ${report.pressure.normal}, constrained ${report.pressure.constrained}, critical ${report.pressure.critical}`,
+	);
+	writeLine(
+		`actions: allow ${report.actions.allow}, throttle ${report.actions.throttle}, defer-heavy ${report.actions["defer-heavy"]}`,
+	);
+	writeLine(`would have throttled: ${report.wouldHaveThrottled}`);
+	writeLine(`probe partial/timeout: ${report.probePartial}/${report.probeTimeout}`);
+	writeLine(
+		`minimum sample: ${report.reasonRecords}/${report.minimumSampleSize} (${report.minimumSampleMet ? "met" : "not met"})`,
+	);
+	writeLine(`reason coverage complete: ${report.reasonCoverageComplete ? "yes" : "no"}`);
+	writeLine("human review: required");
+	if (report.diagnostics > 0) writeLine(`diagnostics: ${report.diagnostics}`);
 }
 
 function renderHumanReport(input: {

@@ -1,7 +1,7 @@
 import type { HostResourceSnapshot } from "./host-resource-snapshot.ts";
 import { effectiveAvailableMemoryBytes } from "./host-resource-snapshot.ts";
 import type { ResourceAdmissionDecision, ResourceGovernorMode, ResourceReasonCode } from "./resource-admission.ts";
-import type { ResolvedResourceGovernorSettings } from "./resource-governor-settings.ts";
+import type { ResolvedResourceGovernorSettings } from "./resource-governor-types.ts";
 
 const REASON_LABELS: Record<ResourceReasonCode, string> = {
 	"resource.memory.low": "memory low",

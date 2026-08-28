@@ -54,16 +54,19 @@ export type ResourcePressure = "normal" | "constrained" | "critical";
 
 export type ResourceAdmissionAction = "allow" | "throttle" | "defer-heavy";
 
-export type ResourceReasonCode =
-	| "resource.memory.low"
-	| "resource.memory.critical"
-	| "resource.disk.low"
-	| "resource.disk.critical"
-	| "resource.cpu.busy"
-	| "resource.heap.high"
-	| "resource.heap.critical"
-	| "resource.probe.partial"
-	| "resource.probe.timeout";
+export const RESOURCE_REASON_CODES = [
+	"resource.memory.low",
+	"resource.memory.critical",
+	"resource.disk.low",
+	"resource.disk.critical",
+	"resource.cpu.busy",
+	"resource.heap.high",
+	"resource.heap.critical",
+	"resource.probe.partial",
+	"resource.probe.timeout",
+] as const;
+
+export type ResourceReasonCode = (typeof RESOURCE_REASON_CODES)[number];
 
 export interface ResourceAdmissionDecision {
 	readonly schemaVersion: typeof RESOURCE_ADMISSION_VERSION;
