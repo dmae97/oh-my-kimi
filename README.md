@@ -1,7 +1,7 @@
 <p align="center">
   <img
-    src="readmeasset/omk-girl-control.png"
-    alt="OMK Girl operating the OMK//CONTROL console with a scoped task DAG and verified evidence panel"
+    src="readmeasset/omk-hero.svg"
+    alt="OMK, Open Multi-Agent Kit. Scope the work. Route the right agents. Verify every release. The mark shows a four-stage control loop with three routed lanes."
     width="100%"
   />
 </p>
@@ -206,7 +206,8 @@ security gates below:
   that no declared source path defines (`AgentLoop`, `getModel`, `DeepWall`,
   `loadExtensions`, `createExtensionRuntime`, `main`), 45 references to `@omk/*`
   package names this repository does not publish, and a
-  `Scope -> Route -> Verify -> Replay` control loop with no code behind it.
+  restatement of this README's `Scope -> Route -> Verify -> Replay` loop as a
+  strict engine state machine, which is not what the source implements.
   CI regenerates the corpus; nothing is lost.
 - **`scripts/check-openwiki.mjs`** — worktree checker. An `interrupted` corpus
   now fails unless `openwiki/.manual-review.json` binds a review to the exact
@@ -268,9 +269,17 @@ AdaptOrch; installing OMK does not create an account. `omk-adaptorch-wpl` in
 this repository exposes Work Packet state, client, and adjudication primitives
 rather than wiring AdaptOrch into the default CLI loop.
 
-<sub>The AdaptOrch name, mark, and banner above identify a separate proprietary
-product and are used with permission. They are not covered by this
-repository's MIT license.</sub>
+**These are two different products.** OMK is this MIT-licensed local control
+plane: it scopes, routes, and runs work on your machine. AdaptOrch is a
+separate commercial evidence layer that inspects a change after something
+writes it. They share a visual design language because they are built by the
+same people, not because they are the same product or one is a tier of the
+other. Neither requires the other, and OMK ships nothing that calls AdaptOrch
+by default.
+
+<sub>The AdaptOrch name and marks identify that separate proprietary product
+and appear here with permission. They are excluded from this repository's MIT
+grant — see [LICENSE](LICENSE).</sub>
 
 ## Prior art
 

@@ -68,8 +68,10 @@ against. Run against the 15 untracked pages the hardened gate reported:
   `omk-tui`, `omk-protocol`, `omk-adaptorch-wpl`, `omk-book-to-skill`. Every
   "minimal validation command" in the routing table therefore failed
   (`npm error No workspaces found: --workspace=@omk/coding-agent`).
-- A `Scope -> Route -> Verify -> Replay` control loop presented with a state
-  diagram and four numbered stages, with zero references anywhere in the source.
+- This README's `Scope -> Route -> Verify -> Replay` loop restated as a strict
+  engine state machine, with a state diagram and four numbered stages. The loop
+  is real as the product's documented framing; the corpus promoted it to an
+  implemented execution engine, which the source does not contain.
 
 This reproduces the original diagnosis in Problem 3 and confirms why global
 substring matching was insufficient: those identifiers all occur *somewhere* in
