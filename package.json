@@ -14,9 +14,12 @@
 	"scripts": {
 		"clean": "npm run clean --workspaces",
 		"build": "cd packages/tui && npm run build && cd ../ai && npm run build && cd ../protocol && npm run build && cd ../agent && npm run build && cd ../adaptorch-wpl && npm run build && cd ../coding-agent && npm run build && cd ../book-to-skill && npm run build",
-		"check": "biome check --write --error-on-warnings . && npm run check:pinned-deps && npm run check:vendored-skills && npm run check:ts-imports && npm run check:module-size && npm run check:constitution && npm run check:release-consistency && npm run check:readme-releases && npm run check:doc-links && npm run check:feature-claims && npm run check:private-home && npm run check:release-surface && npm run check:shrinkwrap && tsgo --noEmit && npm run check:browser-smoke",
+		"check": "biome check --write --error-on-warnings . && npm run check:pinned-deps && npm run check:vendored-skills && npm run check:ts-imports && npm run check:dep-tree && npm run check:import-cycles && npm run check:module-size && npm run check:constitution && npm run check:release-consistency && npm run check:readme-releases && npm run check:doc-links && npm run check:openwiki && npm run check:feature-claims && npm run check:private-home && npm run check:release-surface && npm run check:shrinkwrap && tsgo --noEmit && npm run check:browser-smoke",
 		"check:browser-smoke": "node scripts/check-browser-smoke.mjs",
 		"check:doc-links": "node scripts/check-doc-links.mjs",
+		"check:openwiki": "node scripts/check-openwiki.mjs",
+		"check:dep-tree": "node scripts/check-dep-tree.mjs",
+		"check:import-cycles": "node scripts/check-import-cycles.mjs",
 		"check:module-size": "node scripts/check-module-size.mjs",
 		"module-size:update": "node scripts/check-module-size.mjs --update",
 		"check:feature-claims": "node scripts/check-feature-claims.mjs",
