@@ -55,6 +55,24 @@ export async function complete<TApi extends Api>(
 	return s.result();
 }
 
+/**
+ * Brand identifying the built-in stream function.
+ *
+ * Callers decide whether provider credentials are mandatory by asking "is this
+ * still the built-in stream function?", and a bare `fn === streamSimple`
+ * answers that with reference identity. Reference identity is not dependable
+ * here: this package can legitimately load more than once in one process (a
+ * workspace symlink beside an installed copy, or two dependents resolving
+ * different versions), producing two distinct `streamSimple` functions that
+ * behave identically. The comparison then reports "custom stream function" for
+ * what is really the built-in one, and a credential check silently relaxes.
+ *
+ * `Symbol.for` keys into the per-realm global registry, so every copy of this
+ * module brands its own `streamSimple` with the same symbol and the check
+ * survives duplication.
+ */
+const BUILTIN_STREAM_FN = Symbol.for("omk-ai.streamSimple");
+
 export function streamSimple<TApi extends Api>(
 	model: Model<TApi>,
 	context: Context,
@@ -62,6 +80,14 @@ export function streamSimple<TApi extends Api>(
 ): AssistantMessageEventStream {
 	const provider = resolveApiProvider(model.api);
 	return provider.streamSimple(model, context, withEnvApiKey(model, options));
+}
+
+Object.defineProperty(streamSimple, BUILTIN_STREAM_FN, { value: true });
+
+/** True when `fn` is this package's built-in stream function, including a duplicate copy of it. */
+export function isBuiltinStreamFn(fn: unknown): boolean {
+	if (typeof fn !== "function") return false;
+	return Reflect.get(fn, BUILTIN_STREAM_FN) === true;
 }
 
 export async function completeSimple<TApi extends Api>(
