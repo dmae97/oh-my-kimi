@@ -89,8 +89,44 @@ for (const [dir, pkg] of Object.entries(packages)) {
 	}
 }
 
+// Version literals that live in source rather than in package.json. Nothing
+// kept these in step with a bump, so book-to-skill carried a stale
+// PACKAGE_VERSION through a release and failed the publish job's test step
+// after the tag had already been pushed. This list sits beside the dependency
+// sync above because both exist for the same reason: a bump has to reach
+// everything that states a version.
+const sourceVersionConstants = [
+	{
+		packageName: 'omk-book-to-skill',
+		path: join(packagesDir, 'book-to-skill', 'src', 'metadata.ts'),
+		pattern: /(export const PACKAGE_VERSION = ")(\d+\.\d+\.\d+)(";)/,
+	},
+];
+
+let constantUpdates = 0;
+for (const { packageName, path, pattern } of sourceVersionConstants) {
+	const target = versionMap[packageName];
+	if (!target) continue;
+	const source = readFileSync(path, 'utf8');
+	const match = source.match(pattern);
+	if (!match) {
+		console.error(`\n${path}: no version constant matching ${pattern}`);
+		process.exit(1);
+	}
+	if (match[2] !== target) {
+		console.log(`\n${packageName}:`);
+		console.log(`  PACKAGE_VERSION: ${match[2]} → ${target}`);
+		writeFileSync(path, source.replace(pattern, `$1${target}$3`));
+		constantUpdates++;
+	}
+}
+
 if (totalUpdates === 0) {
 	console.log('\nAll inter-package dependencies already in sync.');
 } else {
 	console.log(`\n✅ Updated ${totalUpdates} dependency version(s)`);
+}
+
+if (constantUpdates > 0) {
+	console.log(`✅ Updated ${constantUpdates} source version constant(s)`);
 }
