@@ -166,21 +166,25 @@ function removeDanglingBinLinks(binDir) {
 }
 
 /**
- * Rebuild `node_modules` after a bump.
+ * Rebuild `node_modules` after a bump, then prune what the install leaves behind.
  *
  * The version scripts run `npm install --package-lock-only`, which updates the
- * lockfile but leaves stale physical copies behind. Prune those first, because
- * `npm install` adds and updates but does not remove them, then install so the
- * checks run against what the release actually is.
+ * lockfile but leaves stale physical copies of workspace packages in the tree.
+ * `npm install` does not reliably remove them: against a hidden lockfile that
+ * still describes the pre-bump tree it reports "up to date" and the shadows
+ * survive into `check:dep-tree`. Pruning last is what makes the tree correct at
+ * the moment the checks run, and it is safe because a package resolves its
+ * workspace siblings through the root `node_modules` link once the local copy
+ * is gone.
  */
 function syncWorkspaceTree() {
 	console.log("Rebuilding node_modules for the bumped versions...");
+	run("npm install --ignore-scripts");
 	for (const shadowed of findShadowedWorkspaceCopies(".")) {
 		console.log(`  Pruning shadowed copy: ${shadowed}`);
 		rmSync(shadowed, { recursive: true, force: true });
 		removeDanglingBinLinks(join(shadowed, "..", ".bin"));
 	}
-	run("npm install --ignore-scripts");
 }
 
 function bumpOrSetVersion(target) {
