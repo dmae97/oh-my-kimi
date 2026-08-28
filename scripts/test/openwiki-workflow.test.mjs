@@ -83,3 +83,42 @@ describe("openwiki workflow: privilege separation", () => {
 		assert.match(section("  update:", "  publish:"), /persist-credentials:\s*false/);
 	});
 });
+
+/**
+ * The credential is optional and was never configured, so the nightly schedule
+ * failed every day on it. A red X that appears daily for a known reason stops
+ * being a signal and trains people to ignore the whole workflow list. A
+ * dispatch still fails loudly, because there a person asked for this run and
+ * needs to know why it cannot happen.
+ */
+describe("openwiki workflow: unconfigured credential", () => {
+	const update = section("  update:", "  publish:");
+
+	it("fails a dispatch but not the schedule", () => {
+		assert.match(update, /EVENT_NAME: \$\{\{ github\.event_name \}\}/);
+		assert.match(update, /if \[ "\$EVENT_NAME" = "workflow_dispatch" \]; then\s*\n\s*exit 1/);
+	});
+
+	it("guards every generating step, so a skip cannot half-run the generator", () => {
+		for (const step of [
+			"Check out repository",
+			"Set up Node.js",
+			"Install OpenWiki",
+			"Run OpenWiki",
+			"Validate wiki integrity",
+			"Enforce generator output allowlist and scans",
+			"Upload generated wiki",
+		]) {
+			const index = update.indexOf(`- name: ${step}`);
+			assert.ok(index > -1, `the update job no longer has a "${step}" step`);
+			const body = update.slice(index, index + 400);
+			assert.match(body, /if: steps\.secret\.outputs\.configured == 'true'/, `"${step}" runs unguarded`);
+		}
+	});
+
+	it("does not publish when nothing was generated", () => {
+		const publish = section("  publish:", null);
+		assert.match(publish, /if: needs\.update\.outputs\.configured == 'true'/);
+		assert.match(update, /outputs:\s*\n\s*configured: \$\{\{ steps\.secret\.outputs\.configured \}\}/);
+	});
+});

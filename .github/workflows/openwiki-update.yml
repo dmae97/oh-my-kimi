@@ -17,18 +17,34 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
+    outputs:
+      configured: ${{ steps.secret.outputs.configured }}
     steps:
+      # A dispatch means a person asked for this run, so an unset key is an
+      # error they need to see. A scheduled run asked for nothing; failing it
+      # daily on a credential that was never configured turns this workflow
+      # into noise that trains people to ignore a red X.
       - name: Check required secret
+        id: secret
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        if: ${{ env.GEMINI_API_KEY == '' }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
+          if [ -n "$GEMINI_API_KEY" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "configured=false" >> "$GITHUB_OUTPUT"
           echo "GEMINI_API_KEY is not set on this repository."
           echo "Add it under Settings > Secrets and variables > Actions, or switch"
           echo "OPENWIKI_PROVIDER to anthropic (ANTHROPIC_API_KEY) and rerun."
-          exit 1
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            exit 1
+          fi
+          echo "::notice::Scheduled OpenWiki refresh skipped: GEMINI_API_KEY is not configured."
 
       - name: Check out repository
+        if: steps.secret.outputs.configured == 'true'
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           # Full history so `openwiki code --update` can diff HEAD against the
@@ -39,15 +55,18 @@ jobs:
           persist-credentials: false
 
       - name: Set up Node.js
+        if: steps.secret.outputs.configured == 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
 
       - name: Install OpenWiki
+        if: steps.secret.outputs.configured == 'true'
         # The workflow-local lockfile pins the complete dependency graph.
         run: npm ci --prefix .github/openwiki --ignore-scripts
 
       - name: Run OpenWiki
+        if: steps.secret.outputs.configured == 'true'
         run: .github/openwiki/node_modules/.bin/openwiki code --update --print
         env:
           # Default provider: Google AI Studio key. Alternatives: anthropic
@@ -61,6 +80,7 @@ jobs:
           OPENWIKI_PROVIDER_RETRY_ATTEMPTS: "8"
 
       - name: Validate wiki integrity
+        if: steps.secret.outputs.configured == 'true'
         run: node scripts/check-openwiki.mjs
 
       # Spec 014 blockers 3 and 4, before anything leaves this job. The
@@ -68,9 +88,11 @@ jobs:
       # CLAUDE.md, or this workflow, then content it reads can rewrite the rules
       # agents follow or the job itself. Fail closed here rather than uploading.
       - name: Enforce generator output allowlist and scans
+        if: steps.secret.outputs.configured == 'true'
         run: node scripts/check-openwiki-output.mjs
 
       - name: Upload generated wiki
+        if: steps.secret.outputs.configured == 'true'
         # actions/upload-artifact v4.6.2
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
@@ -84,6 +106,9 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     needs: update
+    # Nothing was generated when the key is unset, so there is no artifact to
+    # download and no corpus to open a pull request for.
+    if: needs.update.outputs.configured == 'true'
     permissions:
       contents: write
       pull-requests: write
