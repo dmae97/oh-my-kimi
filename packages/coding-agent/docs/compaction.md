@@ -102,9 +102,10 @@ Every compaction and branch-summary LLM call flows through one choke point (`com
 
 1. **Find cut point**: Walk backwards from newest message, accumulating token estimates until `keepRecentTokens` (default 20k, configurable in `~/.omk/agent/settings.json` or `<project-dir>/.omk/settings.json`) is reached
 2. **Extract messages**: Collect messages from the previous kept boundary (or session start) up to the cut point
-3. **Generate summary**: Call LLM to summarize with structured format, passing the previous summary as iterative context when present
-4. **Sanitize and append**: Deterministically redact sensitive values, then save the `CompactionEntry` with its summary and `firstKeptEntryId`. Exact `[REDACTED]` assignment placeholders are valid; appended data and unredacted credential-shaped literals remain rejected.
-5. **Reload**: Session reloads, using summary + messages from `firstKeptEntryId` onwards
+3. **Generate summary**: Call LLM to summarize with structured format, passing the previous summary as iterative context when present.
+4. **Apply knowledge triage**: Strip any model-generated managed-rule section, then append only explicit user-authored rules carried by the deterministic triage layer.
+5. **Sanitize and append**: Deterministically redact sensitive values, then save the `CompactionEntry` with its summary, preserved-rule details, and `firstKeptEntryId`. Exact `[REDACTED]` assignment placeholders are valid; appended data and unredacted credential-shaped literals remain rejected.
+6. **Reload**: Session reloads, using summary + messages from `firstKeptEntryId` onwards.
 
 ```
 Before compaction:
@@ -305,6 +306,11 @@ Both compaction and branch summarization use the same structured format:
 ## Critical Context
 - [Data needed to continue]
 
+## Preserved Rules & Invariants (verbatim)
+<!-- Managed by OMK after model generation; not model-authored evidence. -->
+- [Exact redacted explicit user rule]
+  <!-- source-bound metadata -->
+
 <read-files>
 path/to/file1.ts
 path/to/file2.ts
@@ -314,6 +320,21 @@ path/to/file2.ts
 path/to/changed.ts
 </modified-files>
 ```
+
+### Deterministic rule preservation
+
+The default compactor has a conservative Worktree-only knowledge-triage slice:
+
+- It inspects direct user-role text only. Assistant/tool text and user messages containing `<file>` or `<stdin>` attachment data cannot become preserved rules.
+- It admits only lines with explicit English markers (`RULE:`, `INVARIANT:`, `CONSTRAINT:`, `REQUIREMENT:`, `MUST`, `NEVER`, `ALWAYS`) or Korean markers (`규칙:`, `불변식:`, `제약:`, `요구사항:`, `반드시`, `절대`).
+- It strips any managed-rule section emitted by the summarization model, then appends a deterministic block after generation.
+- It redacts credential-shaped content before rendering or persistence, rejects controls/reserved markers, and stores at most 64 unique rules of at most 1,000 characters each.
+- Each record carries a user-entry source ID, source line, and digest; the same source metadata is embedded in the managed block.
+- A later default compaction reads prior rules only from validated non-hook details whose canonical block is present in the previous summary, so the block survives repeated compactions byte-identically.
+
+This slice intentionally favors precision over recall. Ordinary natural-language constraints still rely on the LLM summary unless the user marks them explicitly. Custom hook summaries and branch summaries remain caller-owned and do not gain trusted-rule status. Source files, receipts, and protocol observations remain stronger evidence than any compaction summary.
+
+See `specs/018-type-aware-compaction/spec.md` for scope and prior-art grounding.
 
 ### Message Serialization
 

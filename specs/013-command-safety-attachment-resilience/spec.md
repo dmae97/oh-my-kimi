@@ -6,7 +6,7 @@ description: "Command-safety hardening, prompt attachments, and resilience failo
 
 **Feature Branch**: `013-command-safety-attachment-resilience`
 **Created**: 2026-08-23
-**Status**: Active (implemented in worktree; shipping under `[Unreleased]`, next lockstep release)
+**Status**: Released in `v0.97.0`
 **Constitution**: [specs/constitution.md](../constitution.md) (governs evidence separation, safety floor)
 **Input**: User description: "현재 omk 개선된 버전으로 docs들 최신화, spec-kit들 최신화 — 커맨드 치환 하드닝·프롬프트 첨부·컴팩션 쿼타 페일오버 주기 문서화"
 **OMK Preset**: `omk` (DAG-optimized, parallel-agent ready)
@@ -133,6 +133,6 @@ termination cause whose next-action names `/model`, `compaction.model`, or reset
 
 ## Assumptions
 
-- All seven workspace packages stay on the shared lockstep version; this cycle ships under `[Unreleased]` until the next release cut.
+- The feature shipped in the lockstep `v0.97.0` release; its released changelog section is immutable.
 - Route-family membership starts as data (`MODEL_ROUTE_FAMILIES`) and grows by catalog change, not runtime inference.
 - Attachment stores stay process-local memory; nothing persists to disk between sessions.

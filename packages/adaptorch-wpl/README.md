@@ -1,16 +1,16 @@
 # omk-adaptorch-wpl
 
-> **Status**: Stable (v0.91.0). Wired into `open-multi-agent-kit` as a runtime dependency.
-> This package implements the AdaptOrch-native Work Packet Loop (WPL) design, an original
-> execution loop whose only work-producing action is AdaptOrch's `adaptorch_run` tool. See
-> [AdaptOrch](https://adaptorch.com) for the backend product this integrates with; AdaptOrch is
-> still under active development and this integration currently targets its free **Start** tier.
+> **Status**: Published and installed as an `open-multi-agent-kit` runtime dependency.
+> The package provides Work Packet state, AdaptOrch client, adjudication, and verdict-projection
+> primitives. It does **not** wire an end-to-end dispatch loop into the default OMK CLI:
+> `src/loop.ts` explicitly excludes `adaptorch_run` submission/polling, request assembly, and
+> persistence. A caller or explicitly loaded extension must own those boundaries.
 
 ## Design documents
 
-The full design (state machine, verification layer, integration mapping, and the adversarial
-review that shaped the safety gates below) lives outside this package at
-`.omk/runs/adaptorch-native-loop-algorithm-20260701/`:
+The historical design record lives in the repository-local path
+`.omk/runs/adaptorch-native-loop-algorithm-20260701/`; it is not included in the
+published package. Current source and tests override that record:
 
 - `final-part1-core-algorithm.md` — Work Packet state machine, termination conditions, cancellation policy
 - `final-part2-verification-layer.md` — the Outcome Adjudicator (5-state verification)
@@ -22,7 +22,7 @@ review that shaped the safety gates below) lives outside this package at
 - `src/state-machine.ts` — the packet lifecycle state machine and transition guards
 - `src/adaptorch-client.ts` — thin typed wrapper around AdaptOrch's 10 MCP tools
 - `src/adjudicator.ts` + `src/adjudicator-registry.ts` — the Outcome Adjudicator and its per-`kind` registry
-- `src/loop.ts` — the integration layer wiring the state machine, AdaptOrch client, and adjudicator together
+- `src/loop.ts` — adjudication timeout, verdict projection, and next-transition helpers; not an end-to-end dispatcher
 - `src/b2c-mapper.ts` — B2C (Bridge-to-Code) mapping for patch-apply safety
 - `src/b2c-verdict.ts` — Verdict card schema for correctness wall decisions
 - `src/deep-wall.ts` — Deep verification wall for multi-runner evidence gating
@@ -30,12 +30,12 @@ review that shaped the safety gates below) lives outside this package at
 
 ## Integration
 
-The coding-agent consumes this package via:
+The default coding-agent source has no production importer that turns this package into a WPL execution path. Related surfaces are:
 
-- `packages/coding-agent/src/core/adaptorch-bridge.ts` — advisory-only bridge (default-off,
-  circuit-breaker protected, TTL-cached). Provides `getFreshHint` (sync, cache-read-only) and
-  `requestRefresh` (fire-and-forget) for the reasoning router's turn-start path.
-- `packages/coding-agent/docs/adaptorch-preview.md` — read-first planning pipeline spec.
+- `packages/coding-agent/src/core/adaptorch-bridge.ts` — separate advisory-only bridge,
+  default-off; its current transport returns no hint.
+- `packages/coding-agent/examples/extensions/correctness-wall/` — explicit opt-in extension that imports the package.
+- `packages/coding-agent/docs/adaptorch-preview.md` — planning blueprint and claim boundary.
 
 ## Safety notes (do not remove without updating the design docs)
 

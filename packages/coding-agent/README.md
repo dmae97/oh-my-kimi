@@ -1,6 +1,6 @@
 # OMK
 
-Provider-neutral terminal coding agent with multi-agent orchestration, scoped tools, replayable sessions, and evidence-backed verification.
+Provider-neutral terminal coding agent with optional multi-agent orchestration, scoped tools, replayable sessions, and evidence-backed verification.
 
 OMK supports interactive terminal use, non-interactive output, RPC integration, and an embeddable TypeScript SDK. It works with API-key and subscription providers without making one provider the control plane.
 
@@ -91,11 +91,19 @@ Type `/` in the editor to open command completion.
 | `/resume` | Open a previous session |
 | `/new` | Start a new session |
 | `/session` | Show session path, messages, tokens, and cost |
+| `/resource [probe\|policy]` | Show resource pressure and effective concurrency for this run |
 | `/goal [objective]` | Show or set the durable goal; supports `checkpoint <json>`, `pause`, `resume`, evidence-gated `complete`, and `clear` |
 | `/tree` | Navigate the current session tree |
+| `/fork` | Create a new fork from a previous user message |
+| `/clone` | Duplicate the current session at the current position |
 | `/compact [prompt]` | Compact context, optionally with custom instructions |
 | `/copy` | Copy the last assistant message |
+| `/name <name>` | Set the session display name |
+| `/scoped-models` | Enable/disable models for Ctrl+P cycling |
 | `/export [file]` | Export the session |
+| `/import <path.jsonl>` | Import a JSONL session and continue it |
+| `/share` | Upload the session as a private GitHub gist |
+| `/changelog` | Show version history |
 | `/reload` | Reload project and user resources |
 | `/hotkeys` | Show keyboard shortcuts |
 | `/star` | Open the OMK GitHub repository |
@@ -106,6 +114,18 @@ Type `/` in the editor to open command completion.
 OMK warns from the third repeated identical tool call and blocks the sixth. It also repairs unmatched tool pairs before provider requests and adds guidance for supported Kimi, GLM, and Grok models. `OMK_IDENTICAL_LOOP`, `OMK_TOOL_PAIR_REPAIR`, and `OMK_PROMPT_PRESET` opt out; `OMK_GOAL_CONTROLLER` controls `/goal` and continuation.
 
 See [Usage](https://github.com/dmae97/omk/blob/main/packages/coding-agent/docs/usage.md) and [Keybindings](https://github.com/dmae97/omk/blob/main/packages/coding-agent/docs/keybindings.md) for the complete interactive reference.
+
+### Repository Understanding
+
+`v0.97.0` introduced the OpenWiki workflow and policy, but its release artifact did not include the ignored corpus. The current interrupted corpus and partial checker remain worktree-only and blocked from trusted use pending exact source binding, output allowlisting, and pre-publication secret/private-path scans. `.understand-anything/` remains optional local advisory data. See [Runtime algorithms and direction](https://github.com/dmae97/omk/blob/main/packages/coding-agent/docs/runtime-algorithms.md).
+
+### Resource Governance
+
+A built-in resource governor probes host capacity. Its default `observe` mode reports decisions without changing execution; opt-in `adaptive` and `strict` modes throttle tool and governed heavy-process concurrency. Inspect the current host with `/resource` or `omk doctor resources [--json]`, and aggregate bounded local observations with `omk doctor resources --report [--json]`; see [Settings](https://github.com/dmae97/omk/blob/main/packages/coding-agent/docs/settings.md).
+
+### Terminal Notifications
+
+Interactive TTY sessions notify by sound after final prompt settlement by default. Successful prompts use a 5-second duration floor; failed and aborted/stopped outcomes notify immediately. Intermediate retries and continuations stay silent, and headless modes never play sound. Configure or disable this under `notifications.completionSound` or with `OMK_COMPLETION_SOUND=0`.
 
 ## Sessions
 
@@ -126,7 +146,7 @@ These commands inspect or append to stored transcripts. `send` does not wake or 
 
 ### Context Compaction
 
-Automatic and manual compaction reduce older context while retaining recent conversation state. Cancellation restores queued user input without committing a partial summary.
+Automatic and manual compaction reduce older context while retaining recent conversation state. The current default compactor deterministically carries explicitly marked user rules outside LLM rewriting; custom hooks and unmarked prose remain unchanged. Cancellation restores queued user input without committing a partial summary.
 
 See [Compaction](https://github.com/dmae97/omk/blob/main/packages/coding-agent/docs/compaction.md).
 
@@ -158,7 +178,14 @@ omk                         # interactive TUI
 omk -p "summarize changes"  # print mode
 omk --mode json "task"      # structured event stream
 omk --rpc                    # JSONL RPC mode
+omk doctor resources [--json] # current pressure and admission report
+omk doctor resources --report [--json] # bounded local observation aggregate
+omk stats [--dir <path>] [--json] # aggregate turn metrics for a project
 ```
+
+### Skills Configuration
+
+Skills load on demand from project and user directories. The global-only `defaultActiveSkills` setting keeps selected, user-scoped skills active in every prompt while their full instructions stay read-on-use. See [Skills](https://github.com/dmae97/omk/blob/main/packages/coding-agent/docs/skills.md).
 
 ### Other Options
 

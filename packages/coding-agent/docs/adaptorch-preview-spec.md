@@ -1,7 +1,9 @@
-# Lane F — AdaptTorch Preview Algorithm (structured spec)
+# Lane F — AdaptOrch Preview Algorithm (structured spec)
 
-**Status:** documentation / interface blueprint only.  
-**Evidence roots:** `packages/adaptorch-wpl/`, `.omk/runs/adaptorch-native-loop-algorithm-20260701/final-part1-core-algorithm.md`, `packages/coding-agent/src/core/adaptorch-bridge.ts`, `packages/coding-agent/docs/loadout-domains/README.md`.  
+**Status:** Proposed.
+
+**Evidence roots:** `packages/adaptorch-wpl/`, `.omk/runs/adaptorch-native-loop-algorithm-20260701/final-part1-core-algorithm.md`, `packages/coding-agent/src/core/adaptorch-bridge.ts`, `packages/coding-agent/docs/loadout-domains/README.md`.
+
 **Not a shipped runtime:** this spec describes a **preview** path (planning, routing, and evidence contracts) unless a future implementation lane wires it.
 
 ---
@@ -13,13 +15,13 @@
 | `task_text` | string | user / lane kickoff | Primary routing signal; may be truncated for headroom. |
 | `path_hints` | string[] | cwd, owned paths, globs | Optional; used for domain triggers and write-scope checks. |
 | `upstream_tags` | string[] | goal id, lane role, preset | e.g. `grok-adaptorch-prod`, `omk-planner`. |
-| `payload_shape` | object | planner / DAG artifact | Sanitized shape for topology preview only — **no** raw prompts, secrets, or session ids. |
+| `payload_shape` | object | planner / DAG artifact | Non-empty `subtasks` array plus optional `dependencies`; descriptions are bounded and sanitized, with no secrets or session ids. |
 | `provider_profile` | enum | session | `xai` \| `default` \| other registered provider. |
 | `adaptorch_transport` | optional | MCP grant | If absent, preview runs **local-only** (OMK compose + deterministic fallbacks). |
 | `lane_grants[]` | object[] | root coordinator | Each: scope, authority, skills, MCP, acceptance, evidence path. |
 | `budget_caps` | object | loop / goal | `max_lanes`, `max_dispatch_preview_calls`, wall-clock cap (immutable per preview instance). |
 
-**Hard input exclusions (never pass into AdaptOrch advisory or preview payloads):** prompt text/hash, file paths as bulk lists, model/provider identifiers in advisory bridge shape, session/user ids, tool names from live turns, hook stderr, credentials, `.env` material.
+**Hard input exclusions (never pass into AdaptOrch advisory or preview payloads):** raw full prompts or hashes, bulk file lists, session/user ids, live-turn tool names, hook stderr, credentials, and `.env` material. `subtasks[].description` contains only the bounded, sanitized task summary needed by the topology router.
 
 ---
 
@@ -47,11 +49,11 @@
 **Steps:**
 
 1. Call `adaptorch_capabilities` once per preview session (cache TTL).
-2. Call `adaptorch_route_topology` with `{ payload_shape }`.
-3. Map classification to one of: `singleton`, `pipeline`, `DAG`, `ensemble` (closed enum).
-4. If transport missing: set `classification = unknown_local` and record `skipped_reason = no_verified_transport`.
+2. Call `adaptorch_route_topology` with `payload_shape` as the tool's top-level argument object.
+3. Read `raw.topology` and validate it against `adaptorch_capabilities.topologies`.
+4. If transport is missing or the value is outside that advertised set, set `topology = null` and record a bounded `skipped_reason`.
 
-**Outputs:** `TopologyPreview { classification, raw_redacted_summary }`.
+**Outputs:** `TopologyPreview { topology: string | null, raw_redacted_summary }`.
 
 ---
 
@@ -61,7 +63,7 @@
 
 **Steps:**
 
-1. If `classification` is `DAG` or `ensemble`, decompose into lane candidates along **write-scope boundaries** (one writer per file).
+1. Treat topology as advice only. For any proposed parallel lane set, decompose along **write-scope boundaries** (one writer per file) and validate dependencies independently.
 2. Compose each lane: `scope`, `authority`, `skills[]`, `mcp[]`, relevant hooks, `acceptance`, `evidence_output_path`.
 3. Run read-only authority stripping and always-on security hooks policy.
 4. Reject parallel grants that share the same write path.
@@ -78,7 +80,7 @@
 
 1. Read `observed_cardinality_mode` if configured (`single_call` \| `fanout_n` \| `uncalibrated`).
 2. Under `single_call`: `expected_run_ids = 1` per dispatch record.
-3. Under `fanout_n`: derive N from topology template (ensemble = N parallel; pipeline = stage count) — **labeled as hypothesis** until calibrated.
+3. Under `fanout_n`: derive N only from an explicit caller-owned dispatch template; topology names alone do not determine call count. Label the result as a hypothesis until calibrated.
 4. Flag `cardinality_anomaly` if prior observations disagree with mode.
 
 **Outputs:** `DispatchPreview { cardinality_mode, expected_run_ids, anomaly_flag }`.
@@ -123,7 +125,7 @@ function PreviewOrchestrate(inputs):
   if inputs.adaptorch_transport is granted and inputs.payload_shape is sanitized:
     B <- StageB_TopologyPreview(inputs.adaptorch_transport, inputs.payload_shape)
   else:
-    B <- { classification: unknown_local, skipped_reason: transport_or_shape }
+    B <- { topology: null, skipped_reason: transport_or_shape }
   C <- StageC_ComposeLanes(A, B, inputs.lane_grants, inputs.budget_caps)
   D <- StageD_DispatchCardinalityPreview(B, loop_config.observed_cardinality_mode)
   E <- StageE_VerificationPreview(C.default_kind)
@@ -139,12 +141,12 @@ function PreviewOrchestrate(inputs):
 function TopologyClassifyPreview(transport, payload_shape):
   caps <- transport.call("adaptorch_capabilities", {})
   if caps indicates unsupported connector:
-    return { classification: unknown_local, skipped_reason: capabilities }
-  raw <- transport.call("adaptorch_route_topology", { payload_shape: payload_shape })
-  class <- extract_enum(raw.classification, {singleton, pipeline, DAG, ensemble})
-  if class is missing:
-    return { classification: unknown_local, skipped_reason: unparseable }
-  return { classification: class, raw_redacted_summary: redact(raw) }
+    return { topology: null, skipped_reason: capabilities }
+  raw <- transport.call("adaptorch_route_topology", payload_shape)
+  topology <- extract_enum(raw.topology, caps.topologies)
+  if topology is missing:
+    return { topology: null, skipped_reason: unparseable }
+  return { topology: topology, raw_redacted_summary: redact(raw) }
 ```
 
 ---

@@ -565,12 +565,12 @@ The `edit` tool returns `details.diff` for OMK's TUI display and `details.patch`
 
 The `diagnostics` tool runs the project's own checkers and normalizes the result — `tsc --noEmit` for TypeScript, `pyright`/`ruff` for Python, `go vet` for Go, `cargo check` for Rust. Missing checkers or project markers are reported as `skipped` in the tool result instead of failing. Output is capped at 50 diagnostics and cached for 5 s.
 
-With default OMP seams, truncated `read` output does not create a sidecar. With `OMK_OMP_SEAMS=0`, legacy truncation may write the selected window to `<absolute-source-path>.omk-spill.txt`; `ReadToolDetails.fullOutputPath` reports the path when present. A first line that alone exceeds the byte cap is clipped without a sidecar. The exported `spillTruncatedOutput()` helper provides the preview-plus-path contract for custom tools.
+Truncated `read` output may spill the selected window to a randomly named `omk-spill-*` directory under the OS temporary directory; `ReadToolDetails.fullOutputPath` reports the path when present. The directory is owner-only (`0700`) and the spill file is exclusive and owner-readable (`0600`) on POSIX. A first line that alone exceeds the byte cap is clipped without a spill. The exported `spillTruncatedOutput()` helper provides the same preview-plus-path contract for custom tools.
 
 ```typescript
 import { createAgentSession } from "open-multi-agent-kit";
 
-// Enable inspection tools; legacy read mode may create a spill sidecar
+// Enable inspection tools; a long read may create a private temp spill
 const { session } = await createAgentSession({
   tools: ["read", "grep", "find", "ls"],
 });

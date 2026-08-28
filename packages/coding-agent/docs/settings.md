@@ -138,7 +138,7 @@ All numeric token reserves must be non-negative safe integers. Ratios must be fi
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `contextBudget.enabled` | boolean | `false` | Globally enable prompt resource budgeting and its in-memory, session-scoped plan/representation cache |
+| `contextBudget.enabled` | boolean | `false` | Globally enable prompt resource budgeting; representation entries persist per workspace by default while plan entries stay in session memory |
 
 ```json
 {
@@ -146,7 +146,7 @@ All numeric token reserves must be non-negative safe integers. Ratios must be fi
 }
 ```
 
-This setting is global-only: `.omk/settings.json` cannot enable or disable it. Use `OMK_CONTEXT_GOVERNOR=1` to force it on for one process or `OMK_CONTEXT_GOVERNOR=0` to force it off for a baseline run. The cache is never persisted or shared between sessions.
+This setting is global-only: `.omk/settings.json` cannot enable or disable it. Use `OMK_CONTEXT_GOVERNOR=1` to force it on for one process or `OMK_CONTEXT_GOVERNOR=0` to force it off for a baseline run. When enabled, content-addressed representation and negative-result entries persist under `.omk/cache/context-budget-v2`; plan entries stay in session memory. Set `OMK_CONTEXT_GOVERNOR_CACHE=memory` to keep every entry in session memory or `OMK_CONTEXT_GOVERNOR_CACHE_DIR` to relocate the representation snapshot.
 
 ### Agent Tool Execution
 
@@ -182,7 +182,7 @@ The DAG preserves source-order result artifacts. `bash`, unknown tools, and exte
 
 ### Resource Governor
 
-The governor probes host capacity (memory, workspace disk, V8 heap, system CPU) and evaluates a resource admission decision, surfaced through `/resource [probe|policy]` in the TUI and `omk doctor resources [--json]` headless. In `observe` mode (default) it records decisions without changing behavior; in `adaptive`/`strict` modes each top-level prompt runs a bounded preflight probe and throttles the effective tool concurrency for that run (never above `agent.maxToolConcurrency`), restoring it when the run settles. Heavy-process caps are enforced at the governed bash boundary; the internal subagent-lane launcher is not wired into live child dispatch. Absent settings keep prior behavior unchanged.
+The governor probes host capacity (memory, workspace disk, V8 heap, system CPU) and evaluates a resource admission decision, surfaced through `/resource [probe|policy]` in the TUI and `omk doctor resources [--json]` headless. `omk doctor resources --report [--json]` aggregates bounded, identifier-free admission counts from local run journals without probing the current host. Only reason-qualified records count toward the 30-record floor; legacy/malformed reason coverage remains diagnostic. The floor is only a sample signal, always requires human review, and never promotes the mode. In `observe` mode (default) it records decisions without changing behavior; in `adaptive`/`strict` modes each top-level prompt runs a bounded preflight probe and throttles the effective tool concurrency for that run (never above `agent.maxToolConcurrency`), restoring it when the run settles. Heavy-process caps are enforced at the governed bash boundary; the internal subagent-lane launcher is not wired into live child dispatch. Absent settings keep prior behavior unchanged.
 
 | Setting | Type | Default | Description |
 | --------- | ------ | --------- | ------------- |
@@ -213,20 +213,21 @@ Validation is explicit and fail-closed: invalid values are reported (in `/resour
 
 ### Completion Sound
 
-Plays a short system sound when a long prompt finally settles (all retries and continuations drained), only in the interactive TUI on a real TTY — never in RPC, JSON, print mode, or CI. Default off. Backends use fixed executables with fixed arguments (macOS `afplay`, Windows/WSL PowerShell system sound, Linux `canberra-gtk-play`/`paplay`/`aplay`), falling back to the terminal bell. Sound failures are diagnostics only and never affect the prompt outcome.
+Plays a short system sound only after the top-level prompt settles: retries, continuations, and tools must be drained first. Current subagent work is awaited inside its tool call, so that tool boundary also covers those children. The settlement contract reserves direct child/shard counters for future live wiring; those paths must connect the counters before activation. Sound is enabled by default only in the interactive TUI on a real TTY—never in RPC, JSON, print mode, or CI. Successful prompts honor `minDurationMs`; failed and aborted prompts notify immediately. Backends use fixed absolute executables and arguments (macOS `afplay`, Windows system PowerShell, Linux `canberra-gtk-play`/`paplay`/`aplay`), an allowlisted environment with no inherited `PATH` or credentials, and the OS temporary directory as cwd. WSL uses terminal BEL because Windows executable mounts have no fixed trusted path. Sound failures are diagnostics only and never affect the prompt outcome.
 
 | Setting | Type | Default | Description |
 | --------- | ------ | --------- | ------------- |
-| `notifications.completionSound.enabled` | boolean | `false` | Master switch; env `OMK_COMPLETION_SOUND` set to `0` or `1` overrides per process |
-| `notifications.completionSound.minDurationMs` | number | `5000` | Only chime for prompts that ran at least this long |
-| `notifications.completionSound.onSuccess` | boolean | `true` | Chime on completed prompts |
-| `notifications.completionSound.onFailure` | boolean | `true` | Chime on failed prompts (user aborts never chime) |
-| `notifications.completionSound.terminalBellFallback` | boolean | `true` | Fall back to the terminal BEL when no sound backend works |
+| `notifications.completionSound.enabled` | boolean | `true` | Master switch; `OMK_COMPLETION_SOUND=0` disables and `=1` enables it for one process |
+| `notifications.completionSound.minDurationMs` | number | `5000` | Minimum duration for successful-completion sounds; failed/aborted outcomes bypass it |
+| `notifications.completionSound.onSuccess` | boolean | `true` | Notify after a completed prompt that meets the duration floor |
+| `notifications.completionSound.onFailure` | boolean | `true` | Notify immediately after a failed terminal outcome |
+| `notifications.completionSound.onAbort` | boolean | `true` | Notify immediately after an aborted/stopped terminal outcome |
+| `notifications.completionSound.terminalBellFallback` | boolean | `true` | Fall back to terminal BEL when no sound backend works |
 
 ```json
 {
   "notifications": {
-    "completionSound": { "enabled": true, "minDurationMs": 10000 }
+    "completionSound": { "minDurationMs": 10000, "onAbort": false }
   }
 }
 ```

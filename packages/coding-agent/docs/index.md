@@ -61,6 +61,9 @@ For the full first-run flow, see [Quickstart](quickstart.md).
 
 - [SDK and Session Control](sdk.md) - embed omk, reuse policy helpers, or inspect stored sessions from scripts.
 - [Run Protocol and Durable Goals](run-protocol.md) - canonical run contracts and the durable-goal lifecycle.
+- [Runtime algorithms and direction](runtime-algorithms.md) - released, opt-in, internal, working-tree, and proposed mechanisms.
+- [AdaptOrch Preview](adaptorch-preview.md) - planning blueprint and claim boundary; not a default runtime path.
+- [Correctness Wall](correctness-wall.md) - opt-in patch-apply safety extension and evidence limits.
 - [Turn metrics and harness evaluation](metrics.md) - cost, latency, tool reliability, capability baselines, and comparative-claim rules.
 - [RPC mode](rpc.md) - integrate over stdin/stdout JSONL.
 - [JSON event stream mode](json.md) - print mode with structured events.

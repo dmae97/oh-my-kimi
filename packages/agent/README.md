@@ -107,8 +107,8 @@ Tool execution mode is configurable:
 
 In parallel mode the batch can be scheduled with one of two schedulers:
 
-- `waves-v1` (historical): partitions the batch into ordered waves using `partitionToolBatchWaves`. Calls in the same wave run concurrently, and waves run one after another in source order. A fully safe batch is a single concurrent wave; bash, `clarify`, sequential-policy tools, unknown tools, and file tools with overlapping target paths become their own waves, so one conflicting call no longer serializes the independent rest of the batch.
-- `dag-v2` (opt-in): builds a deterministic resource-claim DAG per call. Tools declare `resourceClaims` and an access mode (`read` or `write`); the scheduler runs independent calls in source-directed levels, keeps `bash`, unknown tools, and unclaimed extension tools exclusive, and still preserves source-order result artifacts. A claim-planning failure closes only that call and does not block other claimable calls in the batch. Set `toolScheduler: "dag-v2"` in `Agent` options to enable it. `OMK_TOOL_SCHEDULER=dag-v2` is also honored in the OMK CLI.
+- `dag-v2` (default): builds a deterministic resource-claim DAG per call. Tools declare `resourceClaims` and an access mode (`read` or `write`); the scheduler runs independent calls in source-directed levels, keeps `bash`, unknown tools, and unclaimed extension tools exclusive, and still preserves source-order result artifacts. A claim-planning failure closes only that call and does not block other claimable calls in the batch.
+- `waves-v1` (rollback): partitions the batch into ordered waves using `partitionToolBatchWaves`. Calls in the same wave run concurrently, and waves run one after another in source order. Set `toolScheduler: "waves-v1"` only when temporarily rolling back DAG scheduling. The OMK CLI also accepts `OMK_TOOL_SCHEDULER=waves-v1`.
 
 Tool completion events follow tool completion order, but persisted toolResult messages still follow assistant source order.
 
@@ -210,8 +210,8 @@ const agent = new Agent({
   // Also "toolExecution: 'sequential'" forces waves/dag schedulers to run serially.
   toolExecution: "parallel",
 
-  // Tool scheduler: "waves-v1" (default) or "dag-v2" (resource-claim DAG)
-  toolScheduler: "waves-v1",
+  // Tool scheduler: "dag-v2" (default) or legacy "waves-v1" rollback
+  toolScheduler: "dag-v2",
 
   // Maximum concurrent tool calls in one DAG level when using "dag-v2".
   // 0 removes the cap. Default in the OMK CLI is 4.

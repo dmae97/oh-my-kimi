@@ -19,7 +19,7 @@ It does **not** prove that code is correct, complete, or safe for production.
 | **PASS** | Fast wall (and optional OA) found no blocking issues. |
 | **ADVISORY** | Proceed with caution; preview limits or weak discrimination may apply. |
 | **INCONCLUSIVE** | Not enough evidence (empty diff, missing fixture, verifier error). |
-| **BLOCKED** | Scope, secret heuristic, or OA contradiction — do not apply by default. |
+| **BLOCKED** | Scope, secret heuristic, or OA contradiction. `hard` blocks it; `soft` blocks unless overridden; `shadow` records it and proceeds. |
 
 Structured next steps on the verdict card: **Apply**, **Deep Check**, **Regenerate** (see `packages/adaptorch-wpl` B2C mapper).
 
@@ -28,13 +28,13 @@ Structured next steps on the verdict card: **Apply**, **Deep Check**, **Regenera
 ## Fast wall vs deep wall
 
 - **Fast wall (default):** Pure policy — diff paths, scope globs, secret-shaped lines, preview-only limits (`BATCH1_NO_DOCKER_RUNNER`). No Docker runner in batch 1.
-- **Deep wall (Pro / future):** Hermetic paired base/patch replay. Today `deepWall: true` returns **unavailable** (evidence-gated: requires a valid execution receipt per ALG-003 strict mode; no Docker runner wired in batch 1).
+- **Proposed deep wall (unavailable):** Hermetic paired base/patch replay. Today `deepWall: true` returns **unavailable** (evidence-gated: requires a valid execution receipt per ALG-003 strict mode; no Docker runner wired in batch 1).
 
-## Relationship to Adaptorch
+## Relationship to AdaptOrch
 
-- Hidden engine: `omk-adaptorch-wpl` (`evaluateCorrectnessWall`, outcome adjudicator, repair hints).
+- Library: published `omk-adaptorch-wpl` (`evaluateCorrectnessWall`, outcome adjudicator, repair hints); the extension remains explicit opt-in.
 - Optional OA path: `runIds` + `previewOnly: false` + in-memory or MCP transport.
-- Adaptorch **preview** planning is separate; see [adaptorch-preview.md](./adaptorch-preview.md).
+- AdaptOrch **preview** planning is separate; see [adaptorch-preview.md](./adaptorch-preview.md).
 
 ## Operator environment
 
@@ -72,7 +72,7 @@ The correctness wall is **not** part of the default `omk-core-verified` preset o
 | **Scope** | `OMK_WALL_SCOPE` — comma-separated path globs that approve write targets in the diff |
 | **Mode** | `OMK_PATCH_SAFETY_WALL_MODE` — `shadow` \| `soft` \| `hard` (see [Operator environment](#operator-environment)) |
 | **Role loadouts** | `code` / `executor` lanes still get `pre-shell-guard`, `protect-secrets`, and `typecheck-after-edit`; the wall **adds** a pre-apply policy gate on `edit` / `write` only when the extension is loaded |
-| **Domain router** | No dedicated domain profile today; patch-safety work may route to [`ai-agent-ops`](./loadout-domains/ai-agent-ops.md) for harness/eval discipline, but that does **not** auto-load this extension |
+| **Domain router** | The PATCH SAFETY profile routes relevant prompts, but it does **not** auto-load this extension |
 
 **Domain router triggers (implemented):** `packages/coding-agent/src/core/domain-loadouts.ts` already contains keyword triggers (`correctness wall`, `patch safety`) and a path trigger (`correctness-wall`) that route to the PATCH SAFETY domain profile. The profile instructs operators to load the correctness-wall extension explicitly (not in default preset) and follow the shadow → soft → hard rollout. Auto-generated docs under `docs/loadout-domains/` should be regenerated via `gen-domain-docs.mjs`, not hand-edited.
 
@@ -88,7 +88,7 @@ Roll out in **three phases** so telemetry and false positives are understood bef
 | **2 — Soft** | `soft` | **BLOCKED** verdicts block apply unless `OMK_WALL_OVERRIDE=1` (or `true` / `yes`). **INCONCLUSIVE** still applies in shadow-like fashion for scope tuning. Use for pilot teams with an explicit override path. |
 | **3 — Hard** | `hard` | **BLOCKED** and **INCONCLUSIVE** both block `edit` / `write`. Reserve for repos with stable scope globs, OA fixtures wired (`OMK_WALL_RUN_IDS` + `OMK_WALL_OA_FIXTURE_PATH`), and acceptable INCONCLUSIVE rate (missing files, empty diff). |
 
-**Checklist between phases**
+### Checklist between phases
 
 1. AC-1 vitest green for `packages/adaptorch-wpl` and regression `018-b2c-correctness-wall`.
 2. Root `npm run check` green after any source touch (includes unrelated **browser-smoke** esbuild gate — wall work does not require loading the extension in that script).
@@ -112,8 +112,8 @@ Goal orchestration v2 artifacts (planner P3) live beside batch-1 plan files:
 - ⬜ Lift `BATCH1_NO_DOCKER_RUNNER` for non-preview deep wall — still stub.
 - ⬜ Preset documentation in `~/.omk/runtime-preset.json` — deferred.
 
-**Wave 3 (productize) — Not started:**
-- ⬜ Publish `omk-adaptorch-wpl` from `dist/` for out-of-monorepo extensions.
+**Wave 3 (productize) — Partial:**
+- ✅ `omk-adaptorch-wpl` is published; out-of-monorepo consumers can install the package.
 - ✅ `domain-loadouts.ts` profile exists; `gen-domain-docs.mjs` regen pending.
 - ⬜ Default **soft** for internal dogfood presets after Wave 2 evidence.
 

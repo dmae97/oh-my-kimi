@@ -119,6 +119,18 @@
           "path": "run-protocol.md"
         },
         {
+          "title": "Runtime Algorithms & Direction",
+          "path": "runtime-algorithms.md"
+        },
+        {
+          "title": "AdaptOrch Preview",
+          "path": "adaptorch-preview.md"
+        },
+        {
+          "title": "Correctness Wall",
+          "path": "correctness-wall.md"
+        },
+        {
           "title": "RPC Mode",
           "path": "rpc.md"
         },

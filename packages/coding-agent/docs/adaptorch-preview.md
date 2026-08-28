@@ -1,8 +1,8 @@
-# AdaptTorch Preview Algorithm
+# AdaptOrch Preview Algorithm
 
-## English — AdaptTorch Preview Algorithm
+## English — AdaptOrch Preview Algorithm
 
-**AdaptTorch Preview** is a **read-first planning pipeline** for OMK sessions that need AdaptOrch-aware routing without prematurely submitting control-plane runs. It composes domain loadout signals, optional local topology classification (`adaptorch_capabilities`, `adaptorch_route_topology`), lane grants with explicit write scopes, dispatch cardinality hypotheses, and adjudicator evidence contracts—then hands a `PreviewResult` to the root coordinator for DAG execution or deterministic fallback.
+**AdaptOrch Preview** is a **documentation blueprint**, not a wired runtime. It describes a read-first planning pipeline that could combine domain signals, optional topology advice (`adaptorch_capabilities`, `adaptorch_route_topology`), scoped lane proposals, dispatch-cardinality hypotheses, and evidence contracts. No default OMK consumer executes a `PreviewResult`.
 
 Use preview when:
 
@@ -14,15 +14,15 @@ Do **not** treat preview output as proof that `adaptorch_run` completed; termina
 
 Related packages:
 
-- WPL loop package: `packages/adaptorch-wpl/` (stable since 0.91.0; ships with the CLI as a runtime dependency).
+- WPL primitives: `packages/adaptorch-wpl/` (published runtime dependency; no default end-to-end CLI dispatch loop).
 - Advisory bridge (default-off): `packages/coding-agent/src/core/adaptorch-bridge.ts`.
 - Grok + AdaptOrch presets: [grok-harness.md](./grok-harness.md).
 
 ---
 
-## 한국어 — AdaptTorch 프리뷰 알고리즘
+## 한국어 — AdaptOrch 프리뷰 알고리즘
 
-**AdaptTorch Preview**는 AdaptOrch 제어 평면에 `adaptorch_run`을 **아직 제출하지 않은 상태**에서, OMK가 도메인 신호·토폴로지 분류·레인 그랜트·디스패치 규모 가설·검증 증거 계약을 한 번에 정리하는 **읽기 우선 계획 파이프라인**입니다. 결과 `PreviewResult`는 루트 코디네이터가 DAG 병렬 실행 또는 로컬 폴백을 선택할 때 사용합니다.
+**AdaptOrch Preview**는 배선된 런타임이 아니라 **문서 설계안**입니다. `adaptorch_run` 제출 전에 도메인 신호·토폴로지 자문·레인 제안·디스패치 규모 가설·검증 증거 계약을 정리하는 읽기 우선 파이프라인을 설명합니다. 기본 OMK 런타임은 `PreviewResult`를 실행하지 않습니다.
 
 프리뷰를 쓰는 경우:
 
@@ -34,7 +34,7 @@ Related packages:
 
 관련 경로:
 
-- WPL 루프: `packages/adaptorch-wpl/` (0.91.0부터 안정화, CLI 런타임 의존성으로 포함).
+- WPL 프리미티브: `packages/adaptorch-wpl/` (공개 런타임 의존성, 기본 CLI end-to-end dispatch 배선 없음).
 - 어드바이저리 브리지(기본 비활성): `packages/coding-agent/src/core/adaptorch-bridge.ts`.
 - Grok 세션: [grok-harness.md](./grok-harness.md).
 
@@ -44,7 +44,7 @@ Related packages:
 
 | Forbidden (do not say without execution evidence) | Allowed (preview / planning) |
 | --- | --- |
-| "AdaptOrch finished the task" / "run succeeded" | "Topology preview classified as DAG" |
+| "AdaptOrch finished the task" / "run succeeded" | "Topology preview returned `hybrid`; no run was submitted" |
 | "Verified in production" / "deployed via AdaptOrch" | "Lane grants composed; evidence path is …" |
 | "AdaptOrch proved correctness" | "Skipped AdaptOrch: no verified transport" |
 | "Automatically executed the loop" | "Preview recommends `adaptorch_route_topology` then local synthesis" |
@@ -67,7 +67,7 @@ Use that file for implementation planning; this page is the operator-facing intr
 
 ## OMK positioning
 
-Models execute; **OMK routes, verifies, measures, and controls**. AdaptTorch Preview sits in the **route + verify** layer: it turns ambiguous goals into explicit lane grants and evidence contracts before any model spends write tokens on shared paths. AdaptOrch MCP tools may inform topology, but lane authority, hooks, and success predicates remain OMK-owned unless the user explicitly delegates a mutating control-plane lane.
+Models execute; **OMK routes, verifies, measures, and controls**. AdaptOrch Preview is a route-and-evidence blueprint. AdaptOrch tools may advise topology, but preview output grants no lane authority and proves no execution; an actual caller must define ownership, hooks, and success predicates.
 
 ---
 

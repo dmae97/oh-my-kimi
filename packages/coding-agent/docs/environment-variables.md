@@ -83,19 +83,26 @@ These variables are read by OMK itself. The four built-in harness flags below ar
 | `OMK_TELEMETRY` | Override install/update telemetry and provider attribution headers: `1`/`true`/`yes` or `0`/`false`/`no` |
 | `OMK_SHARE_VIEWER_URL` | Override the base URL used by `/share` |
 | `OMK_HARDWARE_CURSOR` | Set to `1` to show the hardware cursor; see [Terminal setup](terminal-setup.md) |
-| `OMK_CONTEXT_GOVERNOR` | Configure the context-budget governor; see `context-budget-*` sources |
+| `OMK_CONTEXT_GOVERNOR` | Context Budget V2 process override: `1` forces it on and `0` forces it off; otherwise the global `contextBudget.enabled` setting applies |
+| `OMK_CONTEXT_GOVERNOR_CACHE` | Set to `memory` to keep representations, negative results, and plans in session memory instead of persisting representations per workspace |
+| `OMK_CONTEXT_GOVERNOR_CACHE_DIR` | Relocate the Context Budget V2 representation snapshot from `.omk/cache/context-budget-v2`; plans remain session-memory-only |
 | `OMK_VERIFIED_BASH` | Default-on verified bash adapter for AgentSession/CLI bash. Set to `0` to opt out and use the legacy unverified path (see [SDK — Evidence and Verification](sdk.md#evidence-and-verification)) |
 | `OMK_BASH_SANDBOX` | AgentSession built-in local bash mode. Unset or unknown values select `enforce`: macOS `sandbox-exec` or Linux `bwrap`, workspace/temp writes only, network disabled, and fail closed without a usable backend. Explicit `audit` selects the unwrapped ledger-only path; `0`/`off` disables the preflight. Use `off` only when a verified outer whole-process sandbox owns isolation; it does not isolate OMK by itself |
 | `LIVE_E2E` | Test-only: keep provider credentials so live-API e2e suites run on purpose (default scrubbed for hermetic tests) |
-| `OMK_OMP_SEAMS` | Default-on OMP pure seams for `read`/`grep`. Set to `0` to opt out |
 | `OMK_IDENTICAL_LOOP` | Default-on consecutive-loop guard. Warns from the third identical `tool+args` call and blocks the sixth. Set a disabling value to opt out |
 | `OMK_TOOL_PAIR_REPAIR` | Default-on outbound-context repair. Removes unmatched tool-use and tool-result blocks before provider requests without rewriting the transcript. Set a disabling value to opt out |
 | `OMK_PROMPT_PRESET` | Default-on model-specific guidance for supported Claude/Anthropic, Kimi, GLM/ZAI, and Grok/xAI models. Set a disabling value to opt out |
 | `OMK_CLAUDE_CONTEXT_FILES` | Claude models omit discovered `AGENTS.md` and `CLAUDE.md` files by default to prevent unrelated context from causing provider false positives. Set to `1`, `true`, `on`, or `yes` to restore them |
 | `OMK_GOAL_CONTROLLER` | Default-on working-directory `/goal` command and automatic continuation. Goals created by `/goal` use an eight-round cap. Set a disabling value to opt out |
+| `OMK_COMPLETION_SOUND` | Interactive-TTY terminal notification override: `0` disables it and `1` enables it. Sounds never run in RPC, JSON, print mode, or CI |
+| `OMK_YOLO`, `OMK_COMMAND_SAFETY`, `OMK_DISABLE_COMMAND_SAFETY` | Disable the command-safety gate entirely (YOLO mode). `OMK_YOLO` and `OMK_DISABLE_COMMAND_SAFETY` accept `1`, `true`, `yes`, or `on`; `OMK_COMMAND_SAFETY` accepts `0`, `false`, `off`, `disable`, or `disabled`. Every verdict, including block-tier and privilege commands, is skipped in interactive and headless runs. Use only when a verified outer sandbox owns the boundary |
+| `OMK_COMMAND_SAFETY_ASSUME_YES` | `1` or `true` auto-accepts non-privilege confirm-tier commands in interactive **and headless** runs. Privilege confirmation and block-tier commands remain denied. Use only under a trusted outer sandbox when headless auto-accept is intended |
 | `OMK_GROK_HARNESS` | Default-on native `xai` provider dispatch to the `grok-harness` loadout. `0`, `false`, `off`, or `no` disables it |
 | `OMK_DOMAIN_ROUTING` | Set to `1` to enable general prompt-based domain routing. Native xAI harness dispatch does not require it |
 | `VISUAL`, `EDITOR` | External editor fallback when `externalEditor` is unset |
 | `HTTP_PROXY`, `HTTPS_PROXY` | Proxy outbound HTTP requests |
+| `OMK_RESOURCE_GOVERNOR` | Resource-governor mode: `off`, `observe` (default), `adaptive`, or `strict`. Feeds `/resource [probe\|policy]` and `omk doctor resources [--json]`; see the resource governor section in [Settings](settings.md) |
+| `OMK_TOOL_SCHEDULER` | Tool scheduler override: `dag-v2` or the `waves-v1` rollback path; see also the `agent.toolScheduler` setting |
+| `OMK_TURN_METRICS`, `OMK_TURN_METRICS_DIR` | Turn metrics are written under `.omk/metrics/` as sessions run; set `OMK_TURN_METRICS=0` to disable or `OMK_TURN_METRICS_DIR` to relocate. Aggregate with `omk stats`; see [Metrics](metrics.md) |
 
 Provider credentials such as `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and cloud-provider configuration are listed in [Providers](providers.md).

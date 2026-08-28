@@ -45,6 +45,7 @@ Type `/` in the editor to open command completion. Extensions can register custo
 | `/new` | Start a new session |
 | `/name <name>` | Set session display name |
 | `/session` | Show session file, ID, messages, tokens, and cost |
+| `/resource [probe\|policy]` | Show resource pressure and effective concurrency for this run |
 | `/goal [objective]` | Show or set the durable goal for the current working directory |
 | `/tree` | Jump to any point in the session and continue from there |
 | `/fork` | Create a new session from a previous user message |
@@ -261,6 +262,21 @@ Diagnoses one provider and prints a single sanitized JSON document. Exit codes a
 
 Config sources, highest precedence first: `models.json`, `KIMI_BASE_URL`/`KIMI_MODEL_NAME` env, `~/.kimi/config.toml` root keys, then `[providers.<name>]` TOML tables with `type = "openai_legacy"` — the last are classified `custom-openai-compatible`, so native-only checks (login, native config) are skipped and endpoint reachability is checked instead. Credentials, URL userinfo/query/fragment, request bodies, and response bodies never appear in the output; malformed TOML is reported by line number only.
 
+### Resource Doctor
+
+```bash
+omk doctor resources [--json]
+omk doctor resources --report [--json]
+```
+
+The first form probes current host pressure. `--report` does not probe the host;
+it scans at most 500 bounded local resource-observation journals and emits only
+aggregate pressure/action/probe-health counts. It opens bounded regular files
+without following symlinks and never includes paths, prompt or decision IDs,
+digests, a command field, or raw capacity. Only reason-qualified records count
+toward the 30-record floor; the report always requires human false-positive
+review and never promotes `adaptive`.
+
 ### Modes
 
 | Flag | Description |
@@ -311,7 +327,7 @@ cat README.md | omk -p "Summarize this text"
 
 Built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`.
 
-With default OMP seams, a long text `read` returns a bounded window and continuation marker without creating a sidecar. With `OMK_OMP_SEAMS=0`, legacy truncation may write the selected window to `<absolute-source-path>.omk-spill.txt` and report that path. A first line that alone exceeds the byte cap is clipped without a sidecar. An inspection-only tool allowlist is therefore not a strict no-write filesystem boundary in legacy read mode.
+A long text `read` returns a bounded window and continuation marker. Truncation may spill the selected window to a randomly named owner-only directory under the OS temporary directory and report that path; the directory uses mode `0700` and the file `0600` on POSIX. A first line that alone exceeds the byte cap is clipped without a spill. An inspection-only tool allowlist is therefore not a strict no-write filesystem boundary.
 
 ### Resource Options
 
@@ -380,7 +396,7 @@ omk --model sonnet:high "Solve this complex problem"
 # Limit model cycling
 omk --models "claude-*,gpt-4o"
 
-# Inspection-only tool allowlist; legacy read mode may create a spill sidecar
+# Inspection-only tool allowlist; a long read may create a private temp spill
 omk --tools read,grep,find,ls -p "Review the code"
 
 # Disable one extension or built-in tool while keeping the rest available
