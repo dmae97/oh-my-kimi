@@ -44,6 +44,7 @@
 		"publish:dry": "npm run prepublishOnly && node scripts/publish.mjs --dry-run",
 		"release:local": "node scripts/local-release.mjs",
 		"shrinkwrap:coding-agent": "node scripts/generate-coding-agent-shrinkwrap.mjs",
+		"models:refresh": "npm --prefix packages/ai run generate-models && npm --prefix packages/ai run generate-image-models",
 		"release:patch": "node scripts/release.mjs patch",
 		"release:minor": "node scripts/release.mjs minor",
 		"harness-graph": "bash .omk/harness-graph/run.sh",

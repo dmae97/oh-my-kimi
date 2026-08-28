@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -61,6 +61,42 @@ describe("release.mjs preflight and README sync", () => {
 			assert.doesNotMatch(text, /0\.97\.0/);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+/**
+ * The release used to regenerate the model catalogs from live provider APIs, so
+ * the shipped artifact depended on which endpoints answered the machine cutting
+ * the release. One attempt dropped 26 of 57 Cloudflare models and 32 OpenRouter
+ * models, which then failed typecheck against model ids the tests reference.
+ * Release output must be a function of the committed tree, not network weather.
+ */
+describe("release artifacts do not depend on live provider APIs", () => {
+	const releaseSource = readFileSync(join(root, "scripts", "release.mjs"), "utf8");
+
+	it("does not regenerate the model catalogs during a release", () => {
+		assert.doesNotMatch(releaseSource, /run\(\s*["'`][^"'`]*generate-models/);
+		assert.doesNotMatch(releaseSource, /run\(\s*["'`][^"'`]*generate-image-models/);
+	});
+
+	it("still produces the deterministic shrinkwrap artifact", () => {
+		assert.match(releaseSource, /shrinkwrap:coding-agent/);
+	});
+
+	it("exposes catalog refresh as its own reviewed step", () => {
+		const { scripts } = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+		assert.ok(scripts["models:refresh"], "root package.json must expose models:refresh");
+		assert.match(scripts["models:refresh"], /generate-models/);
+		assert.match(scripts["models:refresh"], /generate-image-models/);
+	});
+
+	it("keeps the generated catalogs committed so a release can read them", () => {
+		for (const artifact of ["src/models.generated.ts", "src/image-models.generated.ts"]) {
+			assert.ok(
+				existsSync(join(root, "packages", "ai", artifact)),
+				`${artifact} must be committed, not produced at release time`,
+			);
 		}
 	});
 });

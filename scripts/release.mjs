@@ -279,10 +279,17 @@ run("node scripts/sync-readme-releases.mjs");
 run("node scripts/check-release-consistency.mjs --release");
 console.log();
 
-// 4. Regenerate release artifacts
+// 4. Regenerate release artifacts.
+//
+// Only deterministic ones. The model catalogs are NOT regenerated here: their
+// generators read live provider APIs, which made the shipped artifact a
+// function of whichever endpoints answered the machine cutting the release.
+// A v0.98.0 attempt dropped 26 of 57 Cloudflare models and 32 OpenRouter
+// models, then failed typecheck against model ids the tests reference.
+// Refresh the catalogs deliberately with `npm run models:refresh`, review the
+// diff, and commit it as its own change. The shrinkwrap stays because it is
+// derived from the lockfile already in the tree.
 console.log("Regenerating release artifacts...");
-run("npm --prefix packages/ai run generate-models");
-run("npm --prefix packages/ai run generate-image-models");
 run("npm run shrinkwrap:coding-agent");
 console.log();
 

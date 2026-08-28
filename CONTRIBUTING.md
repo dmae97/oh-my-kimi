@@ -36,6 +36,8 @@ Do not edit release sections in the root `README.md`; `scripts/sync-readme-relea
 
 If you add a provider under `packages/ai`, follow the provider test requirements in `AGENTS.md`.
 
+The model catalogs (`packages/ai/src/models.generated.ts`, `image-models.generated.ts`) are committed artifacts. Their generators read live provider APIs, so the output depends on which endpoints answer and which credentials are present. Refresh them deliberately with `npm run models:refresh`, review the diff for models that disappeared because a provider was unreachable rather than retired, and commit it as its own change. Releases never regenerate them.
+
 ## AI-assisted contributions
 
 AI assistance is welcome, but you must understand and be able to explain every submitted change. Review generated code, remove irrelevant output, run the full verification suite, and never include credentials or private session data.
