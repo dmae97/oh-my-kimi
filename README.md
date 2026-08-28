@@ -223,9 +223,13 @@ advisory data.
 
 ## OMK + AdaptOrch
 
-OMK writes and runs code.
-**[AdaptOrch](https://adaptorch.com/?utm_source=github&utm_medium=readme&utm_campaign=omk)
-checks what it wrote.**
+<a href="https://adaptorch.com/?utm_source=github&utm_medium=readme&utm_campaign=omk">
+  <img
+    src="readmeasset/omk-adaptorch-banner.svg"
+    alt="OMK writes and runs code. AdaptOrch checks what it wrote. correctness_claim: false — it ran, and this is what happened."
+    width="100%"
+  />
+</a>
 
 Your agent produces 200 lines in ten seconds. You cannot read 200 lines in ten
 seconds, so you skim — and skimming catches typos while missing the function
@@ -263,6 +267,30 @@ OMK remains the local, MIT-licensed control plane and does not require
 AdaptOrch; installing OMK does not create an account. `omk-adaptorch-wpl` in
 this repository exposes Work Packet state, client, and adjudication primitives
 rather than wiring AdaptOrch into the default CLI loop.
+
+<sub>The AdaptOrch name, mark, and banner above identify a separate proprietary
+product and are used with permission. They are not covered by this
+repository's MIT license.</sub>
+
+## Prior art
+
+The design decisions behind OMK's context, routing, memory, and orchestration
+layers are grounded in published work rather than invented in isolation. Each
+row below was retrieved and read directly; claims are at abstract level, which
+is the evidence grade this table asserts and no more.
+
+| Paper | Mechanism it establishes | Where OMK applies it |
+| --- | --- | --- |
+| [arXiv:2608.22752](https://arxiv.org/abs/2608.22752) — *The Compaction Cliff in Long-Running AI Agent Memory* | Uniform summarization erodes rules and episodic logs at the same rate; measured safety-rule retention falls to 53% after one compaction and 10% after five. Type-tagged deterministic operators fix it. | Type-aware compaction triage: rule-typed items survive N rounds byte-identical |
+| [arXiv:2608.23023](https://arxiv.org/abs/2608.23023) — *Most of the LLM Routing Gap Is Task Type* | Most routing gain is reachable with a fixed task-type table; run-to-run flips must not be credited as wins. | Frozen task-class table plus the 2-run stability rule in the promotion gate |
+| [arXiv:2506.16655](https://arxiv.org/abs/2506.16655) — *Arch-Router: Aligning LLM Routing with Human Preferences* | Indirection: a classifier emits a label, a policy table maps label to decision, so models change without retraining. | `classifyTaskV4` plus `TASK_CLASS_THINKING_LEVELS` |
+| [arXiv:2605.09894](https://arxiv.org/abs/2605.09894) — *Deterministic vs. LLM-Controlled Orchestration* | Holding model, prompts, and tools constant and varying only execution control, deterministic orchestration matched accuracy, improved worst-case robustness, and cut tokens up to 3.5x. | Deterministic scheduler and planned lanes; execution control is never delegated to the model |
+| [arXiv:2608.15565](https://arxiv.org/abs/2608.15565) — *Admission Without Answers* | Label-free admission on execution success alone admits substantial contamination; an accept/abstain/escalate decision is required. | Verified-memory admission design (spec 019), abstain is not stored |
+| [arXiv:2608.23471](https://arxiv.org/abs/2608.23471) — *InjecMEM: Memory Injection Attack on LLM Agent Memory Systems* | Single-interaction memory injection is a reproduced attack frame against agent memory. | Retrieved memory is injected only as provenance-tagged data, never fused into instruction position |
+
+The full twenty-paper survey, including the clusters this table draws from and
+the approaches deliberately **not** adopted, is in the
+[v0.98.x roadmap](docs/OMK_v0.98x_PLANE_CONSOLIDATION_AND_LIVE_AUTHORITY_ROADMAP.md).
 
 ## Documentation
 
