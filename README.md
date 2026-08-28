@@ -340,9 +340,9 @@ is the evidence grade this table asserts and no more.
 | [arXiv:2608.15565](https://arxiv.org/abs/2608.15565) — *Admission Without Answers* | Label-free admission on execution success alone admits substantial contamination; an accept/abstain/escalate decision is required. | Verified-memory admission design (spec 019), abstain is not stored |
 | [arXiv:2608.23471](https://arxiv.org/abs/2608.23471) — *InjecMEM: Memory Injection Attack on LLM Agent Memory Systems* | Single-interaction memory injection is a reproduced attack frame against agent memory. | Retrieved memory is injected only as provenance-tagged data, never fused into instruction position |
 
-The full twenty-paper survey, including the clusters this table draws from and
-the approaches deliberately **not** adopted, is in the
-[v0.98.x roadmap](docs/OMK_v0.98x_PLANE_CONSOLIDATION_AND_LIVE_AUTHORITY_ROADMAP.md).
+The table lists what OMK actually applies. The wider survey it was drawn from,
+including the approaches deliberately **not** adopted, is working material that
+is not published with the repository.
 
 ## Documentation
 
