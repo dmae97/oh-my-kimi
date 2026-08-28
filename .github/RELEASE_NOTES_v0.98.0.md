@@ -1,0 +1,39 @@
+# OMK v0.98.0
+
+OMK v0.98.0 is an evidence-integrity release. Gates that previously warned now fail closed, three new repository gates enter `npm run check`, and the first thing the hardened wiki gate did was reject the repository's own generated corpus for carrying fabricated evidence anchors.
+
+## Highlights
+
+- **Fail-closed wiki integrity** — an `interrupted` OpenWiki corpus previously warned and passed whenever `.last-update.json` recorded the current `HEAD`, so a partial corpus was trusted right up until the next commit, and from that commit on the stale-head branch failed instead. It now fails unless `openwiki/.manual-review.json` binds a review to the exact corpus digest. Anchoring the record to content rather than to a commit is what lets an approved corpus survive later commits: code moving on is a staleness warning, while any edit to the corpus invalidates the review outright.
+- **Symbol claims bind to declared sources** — frontmatter `symbols:` entries must now appear as whole identifiers inside that page's own `source_paths:`. The previous check searched one concatenated haystack of the entire repository, which cannot fail for any plausible-looking identifier. Run against the shipped corpus it reported 8 symbols bound to no declared source path — including `AgentLoop`, where the real export is the function `agentLoop` — so that corpus was removed rather than hand-patched, which the next generator run would overwrite. An absent corpus is now a reported warning: it lives in no commit, and one that does not exist cannot mislead a reader.
+- **Three new repository gates** — `check:import-cycles` is a Tarjan-SCC ratchet whose unit is the module rather than the cycle, so "is this module trapped in a cycle" stays answerable across refactors. `check:dep-tree` holds `npm ls` problems against a baseline while never baselining a dangling bin symlink. `check:feature-claims` now rejects placeholder tokens as evidence and requires a production module to actually import the evidence module, so an unwired file containing the word `export` no longer satisfies a README claim.
+- **Router promotion refuses untrustworthy evidence** — every gold row is replayed under both policies and only rows whose repeated observations agree can carry promotion credit. Because the classifier is deterministic the replay doubles as a determinism attestation: if nondeterminism reaches the routing path those rows land in the unstable bucket and the gate blocks rather than banking whichever run scored better. Promotion evidence must also declare it was measured against the frozen reference policy, closing a hole where a candidate could qualify by beating a caller-chosen weak opponent.
+- **Terminal settlement notification** — interactive TTY completion sounds are on by default at final `prompt_settled`. Successful prompts keep the 5-second duration floor; failed and aborted prompts notify immediately. Intermediate `agent_end`, retry, continuation, and tool states stay silent, and RPC, JSON, print mode, and CI never play sounds. Sound backends now use fixed absolute executables and a minimal environment with no inherited `PATH` or credentials.
+- **Resource observation report** — `omk doctor resources --report [--json]` aggregates resource-admission journals locally: pressure and action distribution, would-throttle counts, reason coverage, and probe partial/timeout counts, without exposing paths, run IDs, digests, or raw host capacity. The report never promotes `adaptive`; human false-positive review remains mandatory.
+- **Type-aware compaction** — the default compactor deterministically extracts explicit uppercase user-authored rule and invariant markers, redacts credentials, and binds them to user-entry and line digests. Assistant/tool text, attached files, and forged marker sections are rejected. A five-round property test holds the canonical block byte-identical.
+- **Image paste works in Windows Terminal and WSL** — `Ctrl+V` was the only default binding outside native Windows, but Windows Terminal binds that key to its own paste action and never forwards it, so every session inside it had no working image-paste key at all. `Alt+V` is now bound alongside it on every platform. Separately, each clipboard source now converts its own read, so WSLg's `image/bmp` no longer disqualifies the PowerShell reader behind it when BMP conversion is unavailable.
+- **Scrollback repaint fixes** — clearing redraws no longer push the live frame into scrollback on WSL/Windows Terminal, and repairing a transcript row above the viewport no longer reprints everything below it and evicts the start of the current answer.
+- **Secret redaction and release permissions** — Slack `xoxe-` tokens escaped redaction because the pattern matched only `xox[abprs]`. Release workflows no longer build with `contents: write`; write access is isolated to a separate release job, the build verifies that `SOURCE_REF` resolves to the commit `RELEASE_TAG` names, and every action is pinned to a commit SHA.
+- **Deletion over addition** — ten unreachable internal modules (1,855 pure lines) were removed after symbol-level reference search, public-barrel absence checks, and a full type-check and test run. `agent-session.ts` dropped from 4,287 to 4,113 pure lines by extracting its failure-classification and message-snapshot cores into directly testable modules.
+
+## Compatibility and safety
+
+- No public API, session format, RPC shape, or JSON output changed. The removed internal modules were absent from every public barrel, so no import can break.
+- Completion sounds are opt-out through `notifications.completionSound.enabled: false` or `OMK_COMPLETION_SOUND=0`, with `onSuccess`, `onFailure`, and the new `onAbort` switches per terminal outcome.
+- `omk doctor resources --report` is read-only and never changes the resource governor mode. `resourceGovernor.mode` remains `observe` by default.
+- Type-aware compaction is limited to explicit user-authored markers. Natural-language classification, hook summaries, branch summaries, and cross-session memory remain out of scope.
+- The context-budget relevance change affects an opt-in subsystem (`contextBudget.enabled` or `OMK_CONTEXT_GOVERNOR=1`) that is off by default.
+
+## Known limitations
+
+- OpenWiki generator output is still not allowlisted to `openwiki/**`, and secret, private-path, and authority-file scans do not yet run before artifact upload and PR creation. Until those close, generator output must not reach a PR unreviewed.
+- Resource governor `adaptive` mode is not promoted to default. The report exists to gather the false-positive evidence that promotion requires.
+- Router weight promotion remains offline and human-approved. There is no online learning path and no automatic promotion.
+
+## OMK and AdaptOrch
+
+OMK remains the local, MIT-licensed control plane. Teams evaluating a hosted evidence layer for AI-generated patches can review [AdaptOrch.com](https://adaptorch.com/?utm_source=github&utm_medium=release-notes&utm_campaign=omk#pricing). AdaptOrch's published claim boundary describes this evidence as advisory, not proof of patch correctness.
+
+AdaptOrch is a separate proprietary service and is not bundled with OMK. The open-source `omk-adaptorch-wpl` package in this repository exposes Work Packet state, client, and adjudication primitives; it does not wire AdaptOrch into the default CLI loop.
+
+See the package changelogs for the complete change list.
