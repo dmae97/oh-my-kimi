@@ -1,7 +1,17 @@
 {
   "maxProjectFiles": 5000,
   "ignore": [
+    ".gjc/**",
+    ".omk/evidence/**",
+    ".omk/goals/**",
     ".omk/harness-graph/out/**",
+    ".omk/runs/**",
+    ".omk/worktrees/**",
+    ".omo/evidence/**",
+    ".omo/ulw-loop/**",
+    ".omx/**",
+    ".pi/**",
+    "~/**",
     "vendor/**",
     "packages/coding-agent/CHANGELOG.md"
   ]

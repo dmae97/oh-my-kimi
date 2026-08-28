@@ -1,6 +1,6 @@
 # Public Skills
 
-OMK currently publishes **24 project-local skills** in this repository under [`.omk/skills`](.omk/skills). When OMK runs from a repository checkout, it discovers these skills automatically and loads them on demand.
+OMK currently publishes **29 project-local skills** in this repository under [`.omk/skills`](.omk/skills). When OMK runs from a repository checkout, it discovers these skills automatically and loads them on demand.
 
 These repository skills are **not bundled into the `open-multi-agent-kit` npm package**. The package publishes only the paths declared in [`packages/coding-agent/package.json`](packages/coding-agent/package.json). See the [skills documentation](packages/coding-agent/docs/skills.md) for discovery rules and packaging your own skills.
 
@@ -14,12 +14,22 @@ Invoke any available skill with `!skill:<name>` or `/skill:<name>`. `caveman` is
 | [`clone-website`](.omk/skills/clone-website/SKILL.md) | Reverse-engineer and rebuild websites with bounded parallel builders. |
 | [`omk-computeruse`](.omk/skills/omk-computeruse/SKILL.md) | Route desktop, browser, Stagehand, and WSL-to-Windows computer-use tasks. |
 | [`reverse-skill`](.omk/skills/reverse-skill/SKILL.md) | Route and adapt reverse-engineering and security workflow packs. |
+| [`omk-engine`](.omk/skills/omk-engine/SKILL.md) | Project-local OMK operating profile: repository workflow config and small skill-set selection. |
+| [`omk-harness-loop`](.omk/skills/omk-harness-loop/SKILL.md) | Route harness-loop work through the identical-loop guard, tool-pair repair, prompt presets, and `/goal` continuation. |
 
 ## Output style
 
 | Skill | Purpose |
 | --- | --- |
 | [`caveman`](.omk/skills/caveman/SKILL.md) | Explicit-only compressed response style with six brevity levels. |
+
+## Research
+
+| Skill | Purpose |
+| --- | --- |
+| [`gitreverse`](.omk/skills/gitreverse/SKILL.md) | Turn a public GitHub repository into one conversational rebuild-from-scratch prompt grounded in repo evidence. |
+| [`system-prompts-leaks`](.omk/skills/system-prompts-leaks/SKILL.md) | Searchable archive of leaked and published production AI system prompts for study and reference. |
+| [`omk-godmod`](.omk/skills/omk-godmod/SKILL.md) | Prompt-architecture research over real shipped system prompts — comparative analysis and safety-layer mapping (defensive only). |
 
 ## Ponytail
 
@@ -52,7 +62,7 @@ Invoke any available skill with `!skill:<name>` or `/skill:<name>`. `caveman` is
 
 ## Distribution and provenance
 
-- **Public repository:** all 24 skills above are tracked in Git.
+- **Public repository:** all 29 skills above are tracked in Git.
 - **Repository checkout:** OMK discovers them as project-local skills.
 - **npm package:** none of these root-level `.omk/skills` files are currently included in `open-multi-agent-kit`.
 - **Vendored content:** [`taste-skill`](.omk/skills/taste-skill/SOURCE.md), [`caveman`](.omk/skills/caveman/SOURCE.md), [`ponytail`](.omk/skills/ponytail/SKILL.md), and [`clone-website`](.omk/skills/clone-website/LICENSE-THIRD-PARTY) retain their source and license notices.

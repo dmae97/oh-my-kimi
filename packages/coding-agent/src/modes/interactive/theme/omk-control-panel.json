@@ -1,5 +1,5 @@
 {
-	"$schema": "https://raw.githubusercontent.com/earendil-works/omk/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+	"$schema": "./theme-schema.json",
 	"name": "omk-control-panel",
 	"vars": {
 		"void": "#02030A",

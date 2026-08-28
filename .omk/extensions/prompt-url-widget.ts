@@ -60,17 +60,17 @@ function formatAuthor(author?: GhMetadata["author"]): string | undefined {
 
 export default function promptUrlWidgetExtension(omk: ExtensionAPI) {
 	const setWidget = (ctx: ExtensionContext, match: PromptMatch, title?: string, authorText?: string) => {
-		ctx.ui.setWidget("prompt-url", (_tui, thm) => {
-			const titleText = title ? thm.fg("accent", title) : thm.fg("accent", match.url);
-			const authorLine = authorText ? thm.fg("muted", authorText) : undefined;
-			const urlLine = thm.fg("dim", match.url);
+		ctx.ui.setWidget("prompt-url", (_tui, theme) => {
+			const titleText = title ? theme.fg("accent", title) : theme.fg("accent", match.url);
+			const authorLine = authorText ? theme.fg("muted", authorText) : undefined;
+			const urlLine = theme.fg("dim", match.url);
 
 			const lines = [titleText];
 			if (authorLine) lines.push(authorLine);
 			lines.push(urlLine);
 
 			const container = new Container();
-			container.addChild(new DynamicBorder((s: string) => thm.fg("muted", s)));
+			container.addChild(new DynamicBorder((s: string) => theme.fg("muted", s)));
 			container.addChild(new Text(lines.join("\n"), 1, 0));
 			return container;
 		});
@@ -126,7 +126,7 @@ export default function promptUrlWidgetExtension(omk: ExtensionAPI) {
 		const lastMatch = [...entries].reverse().find((entry) => {
 			if (entry.type !== "message" || entry.message.role !== "user") return false;
 			const text = getUserText(entry.message.content);
-			return !!extractPromptMatch(text);
+			return Boolean(extractPromptMatch(text));
 		});
 
 		const content =

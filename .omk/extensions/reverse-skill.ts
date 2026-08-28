@@ -27,11 +27,10 @@ interface ToolStatus {
 }
 
 function firstLine(result: ExecResult): string | undefined {
-	const text = `${result.stdout ?? ""}\n${result.stderr ?? ""}`
+	return `${result.stdout ?? ""}\n${result.stderr ?? ""}`
 		.split(/\r?\n/)
 		.map((line) => line.trim())
 		.find((line) => line.length > 0);
-	return text;
 }
 
 async function checkTool(omk: ExtensionAPI, tool: string): Promise<ToolStatus> {
@@ -45,7 +44,7 @@ async function checkTool(omk: ExtensionAPI, tool: string): Promise<ToolStatus> {
 			}
 		} catch (error) {
 			const message = error instanceof Error ? error.message : "tool check failed";
-			if (command === commands[commands.length - 1]) return { tool, commands, available: false, error: message };
+			if (command === commands.at(-1)) return { tool, commands, available: false, error: message };
 		}
 	}
 	return { tool, commands, available: false, error: "command not found or did not return version output" };

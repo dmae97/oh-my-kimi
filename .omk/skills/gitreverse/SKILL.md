@@ -1,6 +1,6 @@
 ---
 name: gitreverse
-description: Turn a public GitHub repository into a single synthetic user prompt that someone might paste into Cursor, Claude Code, Codex, etc. to vibe-code the project from scratch. Use when the user references a GitHub URL or `owner/repo` slug together with prompt reconstruction, vibe coding, or rebuild-from-scratch intent. Route source: https://github.com/filiksyos/gitreverse
+description: "Turn a public GitHub repository into a single synthetic user prompt that someone might paste into Cursor, Claude Code, Codex, etc. to vibe-code the project from scratch. Use when the user references a GitHub URL or `owner/repo` slug together with prompt reconstruction, vibe coding, or rebuild-from-scratch intent. Route source: https://github.com/filiksyos/gitreverse"
 argument-hint: "<owner/repo or github url>"
 ---
 
