@@ -146,5 +146,5 @@ collect.sh
 /AGENTS.override.hard.md
 /AGENTS.stub.md
 
-# OpenWiki generation in progress locally; commit generated content when complete
-/openwiki/
+# OpenWiki generated pages ARE versioned (the scheduled workflow opens PRs against them).
+# Local-only scratch inside the wiki can be ignored per-operator in .git/info/exclude.

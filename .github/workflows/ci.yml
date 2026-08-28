@@ -15,6 +15,22 @@ permissions:
   contents: read
 
 jobs:
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout full history
+        # actions/checkout v5.1.0
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Scan committed history and working tree
+        # gitleaks/gitleaks-action v2
+        uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   build-check-test:
     runs-on: ubuntu-latest
     env:
@@ -43,7 +59,7 @@ jobs:
         # actions/setup-go v6.5.0
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.22.x'
+          go-version: "1.22.x"
           cache-dependency-path: packages/initcheck/go.sum
 
       - name: Verify native init checker

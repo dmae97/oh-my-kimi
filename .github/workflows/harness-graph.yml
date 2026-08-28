@@ -39,7 +39,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install networkx
-        run: pip install --user "networkx>=3.0"
+        run: pip install --user --require-hashes -r .github/requirements/harness-graph.txt
 
       - name: Unit tests (synthetic fixture)
         run: python3 .omk/harness-graph/test_harness_graph.py

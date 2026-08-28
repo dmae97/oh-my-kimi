@@ -23,7 +23,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     env:
       COREPACK_HOME: /tmp/omk-corepack
       RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
@@ -36,13 +36,28 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           ref: ${{ env.SOURCE_REF }}
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Verify source matches release tag
+        run: |
+          if ! git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"; then
+            echo "RELEASE_TAG must name an existing git tag (${RELEASE_TAG})." >&2
+            exit 1
+          fi
+          TAG_SHA="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          SOURCE_SHA="$(git rev-parse HEAD)"
+          if [ "${SOURCE_SHA}" != "${TAG_SHA}" ]; then
+            echo "SOURCE_REF must resolve to RELEASE_TAG (${RELEASE_TAG})." >&2
+            exit 1
+          fi
 
       - name: Setup Bun
         # oven-sh/setup-bun v2.2.0
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version: 1.3.10
+          no-cache: true
 
       - name: Setup Node.js
         # actions/setup-node v5.0.0
@@ -50,6 +65,7 @@ jobs:
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
 
       - name: Pin npm
         run: |
@@ -76,6 +92,34 @@ jobs:
             echo "Release ${VERSION}" > /tmp/release-notes.md
           fi
 
+      - name: Stage release bundle
+        run: cp /tmp/release-notes.md packages/coding-agent/binaries/release-notes.md
+
+      - name: Upload release bundle
+        # actions/upload-artifact v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: release-binaries-${{ env.RELEASE_TAG }}
+          path: packages/coding-agent/binaries/
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    runs-on: ubuntu-latest
+    needs: publish-npm
+    permissions:
+      contents: write
+    env:
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - name: Download release bundle
+        # actions/download-artifact v4.3.0
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-binaries-${{ env.RELEASE_TAG }}
+          path: /tmp/omk-release
+
       - name: Create GitHub Release and upload binaries
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -86,11 +130,10 @@ jobs:
             exit 0
           fi
 
-          cd packages/coding-agent/binaries
-
+          cd /tmp/omk-release
           gh release create "${RELEASE_TAG}" \
             --title "${RELEASE_TAG}" \
-            --notes-file /tmp/release-notes.md \
+            --notes-file release-notes.md \
             omk-darwin-arm64.tar.gz \
             omk-darwin-x64.tar.gz \
             omk-linux-x64.tar.gz \
@@ -117,7 +160,21 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           ref: ${{ env.SOURCE_REF }}
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Verify source matches release tag
+        run: |
+          if ! git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"; then
+            echo "RELEASE_TAG must name an existing git tag (${RELEASE_TAG})." >&2
+            exit 1
+          fi
+          TAG_SHA="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          SOURCE_SHA="$(git rev-parse HEAD)"
+          if [ "${SOURCE_SHA}" != "${TAG_SHA}" ]; then
+            echo "SOURCE_REF must resolve to RELEASE_TAG (${RELEASE_TAG})." >&2
+            exit 1
+          fi
 
       - name: Setup Node.js
         # actions/setup-node v5.0.0
@@ -125,7 +182,7 @@ jobs:
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
-          cache: npm
+          package-manager-cache: false
 
       - name: Pin npm
         run: |

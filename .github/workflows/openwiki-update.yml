@@ -5,14 +5,29 @@ on:
   schedule:
     - cron: "0 8 * * *"
 
-permissions:
-  contents: write
-  pull-requests: write
+permissions: {}
+
+concurrency:
+  group: openwiki-update
+  cancel-in-progress: false
 
 jobs:
   update:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
     steps:
+      - name: Check required secret
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        if: ${{ env.GEMINI_API_KEY == '' }}
+        run: |
+          echo "GEMINI_API_KEY is not set on this repository."
+          echo "Add it under Settings > Secrets and variables > Actions, or switch"
+          echo "OPENWIKI_PROVIDER to anthropic (ANTHROPIC_API_KEY) and rerun."
+          exit 1
+
       - name: Check out repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -20,6 +35,8 @@ jobs:
           # commit it last documented; a shallow clone hides that commit and the
           # update runs against an empty change summary.
           fetch-depth: 0
+          # Do not expose repository-write credentials to the generated docs tool.
+          persist-credentials: false
 
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -27,21 +44,62 @@ jobs:
           node-version: "22"
 
       - name: Install OpenWiki
-        # mermaid + jsdom are optional; they add high-fidelity validation of Mermaid diagrams. Remove if your wiki has none.
-        run: npm install --global openwiki@0.3.3 mermaid@11.16.0 jsdom@29.1.1
+        # The workflow-local lockfile pins the complete dependency graph.
+        run: npm ci --prefix .github/openwiki --ignore-scripts
 
       - name: Run OpenWiki
-        run: openwiki code --update --print
+        run: .github/openwiki/node_modules/.bin/openwiki code --update --print
         env:
           # Default provider: Google AI Studio key. Alternatives: anthropic
           # (ANTHROPIC_API_KEY) or openai-chatgpt (OAuth, local runs only).
           OPENWIKI_PROVIDER: gemini
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           OPENWIKI_MODEL_ID: "gemini-3.5-flash-lite"
+          # Free tier allows ~15 requests/minute; the agent loop bursts past that.
+          # Retries plus --update resumability (openwiki/.last-update.json) absorb
+          # quota aborts; rerunning continues where the previous pass stopped.
+          OPENWIKI_PROVIDER_RETRY_ATTEMPTS: "8"
+
+      - name: Validate wiki integrity
+        run: node scripts/check-openwiki.mjs
+
+      - name: Upload generated wiki
+        # actions/upload-artifact v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: openwiki-update-${{ github.run_id }}
+          path: |
+            openwiki
+            AGENTS.md
+            CLAUDE.md
+            .github/workflows/openwiki-update.yml
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: update
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Download generated wiki
+        # actions/download-artifact v4.3.0
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: openwiki-update-${{ github.run_id }}
+          path: .
 
       - name: Create OpenWiki update pull request
         uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
           add-paths: |
             openwiki
             AGENTS.md

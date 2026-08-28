@@ -1,0 +1,10 @@
+{
+  "name": "omk-openwiki-workflow",
+  "version": "0.0.0",
+  "private": true,
+  "dependencies": {
+    "jsdom": "29.1.1",
+    "mermaid": "11.17.2",
+    "openwiki": "0.3.3"
+  }
+}
