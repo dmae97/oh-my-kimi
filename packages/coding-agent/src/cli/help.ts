@@ -33,6 +33,7 @@ ${chalk.bold("Commands:")}
                                  opt-in Level-2 generative probe that may incur provider costs)
   ${APP_NAME} session doctor            Inspect or safely repair one session (--session, --repair, --dry-run)
   ${APP_NAME} doctor resources [--json] [--report] Inspect current pressure or aggregate local observations
+  ${APP_NAME} doctor adaptorch [--json]  Verify ADAPTORCH_API_KEY reaches the AdaptOrch API (0 ok, 1 unset, 2 failed)
   ${APP_NAME} router-feedback compile-bias  Compile this repository's bounded router bias snapshot
   ${APP_NAME} <command> --help          Show help for install/remove/uninstall/update/list
 
@@ -179,6 +180,8 @@ ${chalk.bold("Environment Variables:")}
   OMK_OFFLINE                      - Disable startup network operations when set to 1/true/yes
   OMK_TELEMETRY                    - Override install telemetry when set to 1/true/yes or 0/false/no
   OMK_SHARE_VIEWER_URL             - Base URL for /share command (default: https://omk.dev/session/)
+  ADAPTORCH_API_KEY                - AdaptOrch API key (optional; enables the doctor adaptorch check)
+  ADAPTORCH_API_URL                - AdaptOrch API base URL (default: https://api.adaptorch.com)
 
 ${chalk.bold("Built-in Tool Names:")}
   read   - Read file contents

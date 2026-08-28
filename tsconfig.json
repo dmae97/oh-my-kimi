@@ -11,6 +11,8 @@
 			"omk-agent-core": ["./packages/agent/src/index.ts"],
 			"omk-agent-core/*": ["./packages/agent/src/*"],
 			"omk-protocol": ["./packages/protocol/src/index.ts"],
+			"omk-adaptorch-wpl": ["./packages/adaptorch-wpl/src/index.ts"],
+			"omk-adaptorch-wpl/*": ["./packages/adaptorch-wpl/src/*"],
 			"open-multi-agent-kit": ["./packages/coding-agent/src/index.ts"],
 			"open-multi-agent-kit/hooks": ["./packages/coding-agent/src/core/hooks/index.ts"],
 			"open-multi-agent-kit/*": ["./packages/coding-agent/src/*"],

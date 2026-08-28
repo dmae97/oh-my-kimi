@@ -669,10 +669,14 @@ describe("provider doctor CLI", () => {
 	test("main.ts wires the doctor CLI before regular argument parsing", () => {
 		const mainSource = readFileSync(fileURLToPath(new URL("../src/main.ts", import.meta.url)), "utf-8");
 		expect(mainSource).toContain('from "./commands/doctor-provider-cli.ts"');
-		const callIndex = mainSource.indexOf("runDoctorProviderCli(args)");
+		// The handler is dispatched from the outcome-command table rather than
+		// called inline, so locate its entry there; the invariant is unchanged.
+		const dispatchIndex = mainSource.indexOf("runDoctorProviderCli,");
 		const parseIndex = mainSource.indexOf("parseArgs(args)");
-		expect(callIndex).toBeGreaterThan(-1);
+		expect(dispatchIndex).toBeGreaterThan(-1);
 		expect(parseIndex).toBeGreaterThan(-1);
-		expect(callIndex).toBeLessThan(parseIndex);
+		expect(dispatchIndex).toBeLessThan(parseIndex);
+		// The table itself must still run before parsing, not merely be declared.
+		expect(mainSource.indexOf("for (const runCommand of outcomeCommands)")).toBeLessThan(parseIndex);
 	});
 });

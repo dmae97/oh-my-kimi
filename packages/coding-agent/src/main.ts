@@ -18,6 +18,7 @@ import { listModels } from "./cli/list-models.ts";
 import { isExplicitExtensionDiagnostic, resolveCliPaths } from "./cli/resource-paths.ts";
 import { selectSession } from "./cli/session-picker.ts";
 import { handleCodexBarQuotaCommand } from "./codexbar-cli.ts";
+import { runAdaptOrchDoctorCli } from "./commands/adaptorch-doctor-cli.ts";
 import { runDoctorProviderCli } from "./commands/doctor-provider-cli.ts";
 import { runPackageDoctorCli } from "./commands/package-doctor-cli.ts";
 import { runResourceDoctorCli } from "./commands/resource-doctor-cli.ts";
@@ -592,40 +593,24 @@ export async function main(args: string[], options?: MainOptions) {
 		return;
 	}
 
-	const sessionDoctor = await runSessionDoctorCli(args);
-	if (sessionDoctor.handled) {
-		process.exitCode = sessionDoctor.exitCode;
-		return;
-	}
-
-	const doctorProvider = await runDoctorProviderCli(args);
-	if (doctorProvider.handled) {
-		process.exitCode = doctorProvider.exitCode;
-		return;
-	}
-
-	const resourceDoctor = await runResourceDoctorCli(args);
-	if (resourceDoctor.handled) {
-		process.exitCode = resourceDoctor.exitCode;
-		return;
-	}
-
-	const stats = runStatsCli(args);
-	if (stats.handled) {
-		process.exitCode = stats.exitCode;
-		return;
-	}
-
-	const sdkSession = await runSdkSessionCli(args);
-	if (sdkSession.handled) {
-		process.exitCode = sdkSession.exitCode;
-		return;
-	}
-
-	const routerFeedback = runRouterFeedbackCli(args);
-	if (routerFeedback.handled) {
-		process.exitCode = routerFeedback.exitCode;
-		return;
+	// Subcommands that report their own outcome, tried in order. Each claims a
+	// distinct command prefix, so the first one that reports `handled` wins.
+	type CliOutcome = { readonly handled: boolean; readonly exitCode: number };
+	const outcomeCommands: ReadonlyArray<(argv: string[]) => CliOutcome | Promise<CliOutcome>> = [
+		runSessionDoctorCli,
+		runDoctorProviderCli,
+		runResourceDoctorCli,
+		runAdaptOrchDoctorCli,
+		runStatsCli,
+		runSdkSessionCli,
+		runRouterFeedbackCli,
+	];
+	for (const runCommand of outcomeCommands) {
+		const outcome = await runCommand(args);
+		if (outcome.handled) {
+			process.exitCode = outcome.exitCode;
+			return;
+		}
 	}
 
 	const parsed = parseArgs(args);
