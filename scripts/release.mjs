@@ -108,12 +108,29 @@ function stageChangedFiles() {
 	run(`git add -- ${paths.map(shellQuote).join(" ")}`);
 }
 
+/**
+ * Rebuild `node_modules` after a bump.
+ *
+ * The version scripts run `npm install --package-lock-only`, which updates the
+ * lockfile but leaves the physical copies under each package's `node_modules`
+ * at the old version. Those stale copies shadow the workspace links, so
+ * `check:dep-tree`
+ * fails the release after the bump has already been written to every
+ * package.json. Syncing the tree here keeps the checks running against what the
+ * release actually is.
+ */
+function syncWorkspaceTree() {
+	console.log("Rebuilding node_modules for the bumped versions...");
+	run("npm install --ignore-scripts");
+}
+
 function bumpOrSetVersion(target) {
 	const currentVersion = getVersion();
 
 	if (BUMP_TYPES.has(target)) {
 		console.log(`Bumping version (${target})...`);
 		run(`npm run version:${target}`);
+		syncWorkspaceTree();
 		return getVersion();
 	}
 
@@ -133,6 +150,7 @@ function bumpOrSetVersion(target) {
 	run(
 		`npm version ${target} --workspaces --include-workspace-root --no-git-tag-version && node scripts/sync-versions.js && npm install --package-lock-only --ignore-scripts`,
 	);
+	syncWorkspaceTree();
 	return getVersion();
 }
 
