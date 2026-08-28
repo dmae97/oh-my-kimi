@@ -3,6 +3,7 @@ import {
 	createPromptSettlementState,
 	type PromptSettlementSignal,
 	reducePromptSettlement,
+	resolvePromptSettlementOutcome,
 	settlePromptIfReady,
 	shouldEmitPromptSettled,
 } from "../src/core/prompt-settlement.ts";
@@ -18,6 +19,15 @@ function terminalState(overrides: Partial<Parameters<typeof shouldEmitPromptSett
 }
 
 describe("prompt settlement reducer (§16)", () => {
+	it("maps typed terminal outcomes without letting a stale completion hide failure", () => {
+		expect(resolvePromptSettlementOutcome("completed", "completed")).toBe("completed");
+		expect(resolvePromptSettlementOutcome("completed", "user_abort")).toBe("aborted");
+		expect(resolvePromptSettlementOutcome("completed", "provider_abort")).toBe("aborted");
+		expect(resolvePromptSettlementOutcome("completed", "provider_refusal")).toBe("failed");
+		expect(resolvePromptSettlementOutcome("failed", "completed")).toBe("failed");
+		expect(resolvePromptSettlementOutcome("completed", undefined)).toBe("completed");
+	});
+
 	it("emits only when every §16.4 condition holds", () => {
 		expect(shouldEmitPromptSettled(terminalState())).toBe(true);
 		expect(shouldEmitPromptSettled(terminalState({ activeProviderAttempts: 1 }))).toBe(false);

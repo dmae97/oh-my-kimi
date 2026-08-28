@@ -1,8 +1,10 @@
+import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import {
 	type CompletionSoundCandidate,
 	type CompletionSoundIo,
 	CompletionSoundService,
+	completionSoundProcessOptions,
 	resolveCompletionSoundSettings,
 	selectCompletionSoundCandidates,
 	shouldPlayCompletionSound,
@@ -16,12 +18,13 @@ function settledEvent(overrides: Partial<PromptSettledEvent> = {}): PromptSettle
 const TUI_SURFACE = { isTui: true, isTty: true, isCi: false } as const;
 
 describe("resolveCompletionSoundSettings (§17.1, §18.2)", () => {
-	it("defaults to disabled with the documented values", () => {
+	it("defaults to TUI notifications for completed, failed, and aborted runs", () => {
 		expect(resolveCompletionSoundSettings(undefined, {})).toEqual({
-			enabled: false,
+			enabled: true,
 			minDurationMs: 5000,
 			onSuccess: true,
 			onFailure: true,
+			onAbort: true,
 			terminalBellFallback: true,
 		});
 	});
@@ -61,7 +64,7 @@ describe("shouldPlayCompletionSound (§17.1, §17.4)", () => {
 		).toBe(false);
 	});
 
-	it("honors the duration floor and outcome switches; aborts never chime", () => {
+	it("applies the duration floor to success and honors every terminal outcome switch", () => {
 		expect(
 			shouldPlayCompletionSound({
 				settings: enabled,
@@ -73,6 +76,14 @@ describe("shouldPlayCompletionSound (§17.1, §17.4)", () => {
 		expect(shouldPlayCompletionSound({ settings: noSuccess, event: settledEvent(), surface: TUI_SURFACE })).toBe(
 			false,
 		);
+
+		expect(
+			shouldPlayCompletionSound({
+				settings: enabled,
+				event: settledEvent({ outcome: "failed", durationMs: 1 }),
+				surface: TUI_SURFACE,
+			}),
+		).toBe(true);
 		const noFailure = resolveCompletionSoundSettings({ enabled: true, onFailure: false }, {});
 		expect(
 			shouldPlayCompletionSound({
@@ -81,9 +92,32 @@ describe("shouldPlayCompletionSound (§17.1, §17.4)", () => {
 				surface: TUI_SURFACE,
 			}),
 		).toBe(false);
+
 		expect(
 			shouldPlayCompletionSound({
 				settings: enabled,
+				event: settledEvent({ outcome: "aborted", durationMs: 1 }),
+				surface: TUI_SURFACE,
+			}),
+		).toBe(true);
+		const legacyResolvedSettings = {
+			enabled: true,
+			minDurationMs: 5000,
+			onSuccess: true,
+			onFailure: true,
+			terminalBellFallback: true,
+		};
+		expect(
+			shouldPlayCompletionSound({
+				settings: legacyResolvedSettings,
+				event: settledEvent({ outcome: "aborted", durationMs: 1 }),
+				surface: TUI_SURFACE,
+			}),
+		).toBe(true);
+		const noAbort = resolveCompletionSoundSettings({ enabled: true, onAbort: false }, {});
+		expect(
+			shouldPlayCompletionSound({
+				settings: noAbort,
 				event: settledEvent({ outcome: "aborted" }),
 				surface: TUI_SURFACE,
 			}),
@@ -97,12 +131,12 @@ describe("selectCompletionSoundCandidates (§17.3, §23.2 property 14)", () => {
 			selectCompletionSoundCandidates({ platform, isWsl, terminalBellFallback: true }).map((c) => c.backend);
 		expect(backends("darwin")).toEqual(["macos-afplay", "terminal-bell"]);
 		expect(backends("win32")).toEqual(["windows-system-sound", "terminal-bell"]);
-		expect(backends("linux", true)).toEqual(["windows-system-sound", "terminal-bell"]);
+		expect(backends("linux", true)).toEqual(["terminal-bell"]);
 		expect(backends("linux")).toEqual(["linux-canberra", "linux-paplay", "linux-aplay", "terminal-bell"]);
 		expect(backends("freebsd")).toEqual(["terminal-bell"]);
 	});
 
-	it("uses fixed argv with no interpolation surface (§22.1)", () => {
+	it("uses absolute fixed argv with no interpolation surface (§22.1)", () => {
 		for (const candidate of selectCompletionSoundCandidates({
 			platform: "linux",
 			isWsl: false,
@@ -112,9 +146,22 @@ describe("selectCompletionSoundCandidates (§17.3, §23.2 property 14)", () => {
 				expect(token).not.toContain("$");
 				expect(token).not.toContain("`");
 			}
+			if (candidate.argv.length > 0) expect(candidate.argv[0].startsWith("/")).toBe(true);
 		}
 		const noBell = selectCompletionSoundCandidates({ platform: "linux", isWsl: false, terminalBellFallback: false });
 		expect(noBell.map((c) => c.backend)).not.toContain("terminal-bell");
+	});
+
+	it("spawns from a neutral cwd with an allowlisted environment and no PATH", () => {
+		const options = completionSoundProcessOptions({
+			PATH: "/tmp/attacker-first",
+			HOME: "/tmp/untrusted-home",
+			DISPLAY: ":0",
+			XDG_RUNTIME_DIR: "/run/user/1000",
+			ANTHROPIC_API_KEY: "must-not-propagate",
+		});
+		expect(options).toMatchObject({ cwd: tmpdir(), shell: false, windowsHide: true, stdio: "ignore" });
+		expect(options.env).toEqual({ DISPLAY: ":0", XDG_RUNTIME_DIR: "/run/user/1000" });
 	});
 });
 
@@ -146,7 +193,7 @@ describe("CompletionSoundService", () => {
 			},
 		});
 		const result = await service.handleSettled(settledEvent());
-		expect(attempts).toEqual(["canberra-gtk-play", "paplay", "aplay"]);
+		expect(attempts).toEqual(["/usr/bin/canberra-gtk-play", "/usr/bin/paplay", "/usr/bin/aplay"]);
 		expect(result.backend).toBe("terminal-bell");
 		expect(result.success).toBe(true);
 		expect(result.diagnostic).toContain("linux-canberra: ENOENT");

@@ -1,5 +1,11 @@
-import { spawn } from "node:child_process";
+import { type CompletionSoundIo, defaultCompletionSoundIo } from "./completion-sound-io.ts";
 import type { PromptSettledEvent } from "./prompt-settlement.ts";
+
+export {
+	type CompletionSoundIo,
+	completionSoundProcessOptions,
+	defaultCompletionSoundIo,
+} from "./completion-sound-io.ts";
 
 /**
  * Cross-platform completion sound service (OMK v0.97.x roadmap §17, M4/PR7).
@@ -18,10 +24,11 @@ import type { PromptSettledEvent } from "./prompt-settlement.ts";
  */
 
 export interface CompletionSoundSettings {
-	enabled?: boolean; // default: false (§17.1: backward compat, CI/headless surprise, accessibility)
-	minDurationMs?: number; // default: 5000
+	enabled?: boolean; // default: true; interactive TTY only, with OMK_COMPLETION_SOUND=0 opt-out
+	minDurationMs?: number; // default: 5000; applies to successful completion only
 	onSuccess?: boolean; // default: true
 	onFailure?: boolean; // default: true
+	onAbort?: boolean; // default: true
 	terminalBellFallback?: boolean; // default: true
 }
 
@@ -52,13 +59,12 @@ export interface CompletionSoundResult {
 }
 
 export const COMPLETION_SOUND_ENV = "OMK_COMPLETION_SOUND";
-const SPAWN_KILL_TIMEOUT_MS = 1000;
-
 export interface ResolvedCompletionSoundSettings {
 	readonly enabled: boolean;
 	readonly minDurationMs: number;
 	readonly onSuccess: boolean;
 	readonly onFailure: boolean;
+	readonly onAbort?: boolean;
 	readonly terminalBellFallback: boolean;
 }
 
@@ -67,7 +73,7 @@ export function resolveCompletionSoundSettings(
 	settings?: CompletionSoundSettings,
 	env: NodeJS.ProcessEnv = process.env,
 ): ResolvedCompletionSoundSettings {
-	let enabled = settings?.enabled ?? false;
+	let enabled = settings?.enabled ?? true;
 	const envValue = env[COMPLETION_SOUND_ENV]?.trim();
 	if (envValue === "0") {
 		enabled = false;
@@ -80,6 +86,7 @@ export function resolveCompletionSoundSettings(
 			typeof settings?.minDurationMs === "number" && settings.minDurationMs >= 0 ? settings.minDurationMs : 5000,
 		onSuccess: settings?.onSuccess ?? true,
 		onFailure: settings?.onFailure ?? true,
+		onAbort: settings?.onAbort ?? true,
 		terminalBellFallback: settings?.terminalBellFallback ?? true,
 	};
 }
@@ -101,17 +108,18 @@ export function shouldPlayCompletionSound(input: {
 	if (!settings.enabled || !surface.isTui || !surface.isTty || surface.isCi) {
 		return false;
 	}
-	if (event.durationMs < settings.minDurationMs) {
-		return false;
+	switch (event.outcome) {
+		case "completed":
+			return event.durationMs >= settings.minDurationMs && settings.onSuccess;
+		case "failed":
+			return settings.onFailure;
+		case "aborted":
+			return settings.onAbort ?? true;
+		default: {
+			const exhaustive: never = event.outcome;
+			return exhaustive;
+		}
 	}
-	if (event.outcome === "completed") {
-		return settings.onSuccess;
-	}
-	if (event.outcome === "failed") {
-		return settings.onFailure;
-	}
-	// User-initiated aborts never chime: the user is already at the keyboard.
-	return false;
 }
 
 export interface CompletionSoundCandidate {
@@ -131,20 +139,26 @@ export function selectCompletionSoundCandidates(input: {
 }): readonly CompletionSoundCandidate[] {
 	const bell: CompletionSoundCandidate[] = input.terminalBellFallback ? [{ backend: "terminal-bell", argv: [] }] : [];
 	if (input.platform === "darwin") {
-		return [{ backend: "macos-afplay", argv: ["afplay", "/System/Library/Sounds/Glass.aiff"] }, ...bell];
+		return [{ backend: "macos-afplay", argv: ["/usr/bin/afplay", "/System/Library/Sounds/Glass.aiff"] }, ...bell];
 	}
 	if (input.platform === "win32") {
-		return [{ backend: "windows-system-sound", argv: windowsSystemSoundArgv("powershell.exe") }, ...bell];
+		return [
+			{
+				backend: "windows-system-sound",
+				argv: windowsSystemSoundArgv("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"),
+			},
+			...bell,
+		];
 	}
 	if (input.platform === "linux" && input.isWsl) {
-		// §17.3 WSL: Windows PowerShell first, then the terminal BEL.
-		return [{ backend: "windows-system-sound", argv: windowsSystemSoundArgv("powershell.exe") }, ...bell];
+		// WSL has no trustworthy fixed mount path for Windows PowerShell; use BEL.
+		return [...bell];
 	}
 	if (input.platform === "linux") {
 		return [
-			{ backend: "linux-canberra", argv: ["canberra-gtk-play", "-i", "complete"] },
-			{ backend: "linux-paplay", argv: ["paplay", "/usr/share/sounds/freedesktop/stereo/complete.oga"] },
-			{ backend: "linux-aplay", argv: ["aplay", "-q", "/usr/share/sounds/alsa/Front_Center.wav"] },
+			{ backend: "linux-canberra", argv: ["/usr/bin/canberra-gtk-play", "-i", "complete"] },
+			{ backend: "linux-paplay", argv: ["/usr/bin/paplay", "/usr/share/sounds/freedesktop/stereo/complete.oga"] },
+			{ backend: "linux-aplay", argv: ["/usr/bin/aplay", "-q", "/usr/share/sounds/alsa/Front_Center.wav"] },
 			...bell,
 		];
 	}
@@ -154,51 +168,6 @@ export function selectCompletionSoundCandidates(input: {
 /** Fixed expression only (§17.3 Windows): no user text ever enters the command. */
 function windowsSystemSoundArgv(executable: string): readonly string[] {
 	return [executable, "-NoProfile", "-NonInteractive", "-Command", "[System.Media.SystemSounds]::Asterisk.Play()"];
-}
-
-export interface CompletionSoundIo {
-	/** Spawn a fixed argv; resolve success/failure. Must never throw synchronously into the caller. */
-	readonly spawnBackend: (argv: readonly string[]) => Promise<{ readonly ok: boolean; readonly diagnostic?: string }>;
-	readonly writeBell: () => boolean;
-}
-
-/** Default IO: detached-ish fire-and-forget spawn per §17.4. */
-export function defaultCompletionSoundIo(): CompletionSoundIo {
-	return {
-		spawnBackend: (argv) =>
-			new Promise((resolve) => {
-				try {
-					const [executable, ...args] = argv;
-					const child = spawn(executable, args, { stdio: "ignore", shell: false, windowsHide: true });
-					const killTimer = setTimeout(() => {
-						try {
-							child.kill();
-						} catch {
-							// Best effort only.
-						}
-					}, SPAWN_KILL_TIMEOUT_MS);
-					killTimer.unref();
-					child.once("error", (error: NodeJS.ErrnoException) =>
-						resolve({ ok: false, diagnostic: error.code ?? "spawn_error" }),
-					);
-					// Success means "spawned"; playback is not awaited (§17.4).
-					child.once("spawn", () => {
-						child.unref();
-						resolve({ ok: true });
-					});
-				} catch {
-					resolve({ ok: false, diagnostic: "spawn_error" });
-				}
-			}),
-		writeBell: () => {
-			try {
-				process.stdout.write("\u0007");
-				return true;
-			} catch {
-				return false;
-			}
-		},
-	};
 }
 
 /**

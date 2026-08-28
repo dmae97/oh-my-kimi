@@ -1,3 +1,5 @@
+import type { SessionTerminationKind } from "./session-termination.ts";
+
 /**
  * Prompt settlement coordinator (OMK v0.97.x roadmap §16, M4/PR6).
  *
@@ -8,9 +10,9 @@
  * M4 completion sound, notifications) must treat it as a UX signal, never a
  * correctness signal (§3 non-goals).
  *
- * The reducer is a pure function over an immutable state (§16.5). Shard and
- * child counters are wired by M5/M6; they participate in the contract now so
- * those slices only add signal call sites.
+ * The reducer is a pure function over immutable state (§16.5). Shard and child
+ * counters are reserved in the contract, but no production signal call sites
+ * wire them yet; any future live M5/M6 path must add those calls before use.
  */
 
 export type PromptSettlementOutcome = "completed" | "failed" | "aborted";
@@ -56,6 +58,17 @@ export type PromptSettlementSignal =
 	| { readonly kind: "continuation"; readonly delta: 1 | -1 }
 	| { readonly kind: "terminal"; readonly outcome: PromptSettlementOutcome; readonly terminationKind?: string }
 	| { readonly kind: "emitted" };
+
+/** Map the final typed termination onto the prompt UX outcome. */
+export function resolvePromptSettlementOutcome(
+	fallback: PromptSettlementOutcome,
+	terminationKind: SessionTerminationKind | undefined,
+): PromptSettlementOutcome {
+	if (terminationKind === "user_abort" || terminationKind === "provider_abort") return "aborted";
+	if (fallback !== "completed") return fallback;
+	if (terminationKind === undefined || terminationKind === "completed") return "completed";
+	return "failed";
+}
 
 export function createPromptSettlementState(promptRunId: string, startedAtEpochMs: number): PromptSettlementState {
 	return {
