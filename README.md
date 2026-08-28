@@ -223,21 +223,46 @@ advisory data.
 
 ## OMK + AdaptOrch
 
-OMK is the local, MIT-licensed control plane. AdaptOrch is a separate,
-proprietary evidence and risk layer for changes an AI wrote: it runs a change in
-an isolated copy of the project and reports what it touched, whether it ran, and
-what the tests said before and after. Its free Starter tier is self-hosted and
-runs on your own machine, and a bring-your-own model key is required on every
-tier. Its published claim boundary states that it does **not** prove semantic
-correctness (`correctness_claim=false`); it reports and never rewrites, selects,
-or merges on your behalf.
+OMK writes and runs code.
+**[AdaptOrch](https://adaptorch.com/?utm_source=github&utm_medium=readme&utm_campaign=omk)
+checks what it wrote.**
 
-`omk-adaptorch-wpl` is an open-source package in this repository, but it exposes
-state, client, and adjudication primitives rather than wiring AdaptOrch into the
-default CLI loop. OMK does not require AdaptOrch, and installing OMK does not
-create an account.
+Your agent produces 200 lines in ten seconds. You cannot read 200 lines in ten
+seconds, so you skim — and skimming catches typos while missing the function
+that quietly returns the wrong number. Then you merge, on a feeling, twenty
+times a day.
+
+Code is the one thing an AI produces that a machine can grade, because you can
+simply run it. AdaptOrch does that: it copies your project into an isolated
+sandbox, applies the change, runs the tests before and after, and returns one
+page.
+
+- Every file the change touched, including the ones nobody asked for.
+- The test result before the change and after it — that gap is the evidence.
+  A suite that is merely green proves much less than one that failed first.
+- A verdict in words, with environment failures separated from code failures,
+  so a dead network is never reported as a broken change.
+
+That separation is the part worth having. "All green" means nothing if the test
+was deleted; "I fixed it" means nothing if the test was already passing.
+
+**What it does not claim: semantic correctness.** Shadow reports carry
+`correctness_claim=false`, and hidden tests, gold patches, and oracle labels are
+blocked as selector inputs. AdaptOrch reports — it never rewrites your code,
+picks a different answer, or merges for you. Its published 30-task ledger
+benchmark (synthetic tasks, not a real repository) records 8 broken changes
+caught and 1 the gate itself got wrong; both numbers ship with the raw log.
+
+Starter is free and self-hosted on your own machine. A bring-your-own model key
+is required on every tier, so nothing executes without your key. It works
+alongside any coding agent, OMK included.
 
 **[Review AdaptOrch plans →](https://adaptorch.com/?utm_source=github&utm_medium=readme&utm_campaign=omk#pricing)** · [claim boundary](https://adaptorch.com/claim-boundary)
+
+OMK remains the local, MIT-licensed control plane and does not require
+AdaptOrch; installing OMK does not create an account. `omk-adaptorch-wpl` in
+this repository exposes Work Packet state, client, and adjudication primitives
+rather than wiring AdaptOrch into the default CLI loop.
 
 ## Documentation
 
