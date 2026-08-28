@@ -8,6 +8,10 @@
  * the frozen holdout, runs McNemar's exact test on the held-in discordant
  * pairs, and feeds the result to `evaluateRouterPromotion`.
  *
+ * Every row is replayed under the two-run rule before it can carry credit, and
+ * the evidence declares that the opponent was the frozen reference policy —
+ * without both, the gate refuses to reason about the numbers at all.
+ *
  * Read-only: it never writes weights. It prints a JSON verdict and exits
  * non-zero when promotion is refused, so CI can gate on it.
  *
@@ -25,33 +29,51 @@ import {
 	evaluateRouterPromotion,
 	type RouterPromotionEvidence,
 } from "../../src/core/reasoning-router-promotion.ts";
+import {
+	DEFAULT_REPLAY_MIN,
+	type RouterReplayRow,
+	type RouterReplayStability,
+	summarizeReplayStability,
+} from "../../src/core/reasoning-router-replay-stability.ts";
 import { classifyTaskV4 } from "../../src/core/reasoning-router-v4.ts";
 import { DEFAULT_WEIGHTS_V4, type RouterWeightsV4 } from "../../src/core/reasoning-router-v4-weights.ts";
-import { GOLD_SET } from "../../test/fixtures/reasoning-router-gold-set.ts";
+import { type GoldEntry, GOLD_SET } from "../../test/fixtures/reasoning-router-gold-set.ts";
 import { runMcNemar } from "./mcnemar.ts";
 
-interface PairOutcome {
-	readonly holdout: boolean;
-	readonly baselineCorrect: boolean;
-	readonly candidateCorrect: boolean;
+function observe(weights: RouterWeightsV4, entry: GoldEntry, replays: number): readonly boolean[] {
+	return Array.from(
+		{ length: replays },
+		() => classifyTaskV4({ prompt: entry.prompt }, weights).taskClass === entry.expectedClass,
+	);
 }
 
-/** Classify every gold row under both weight sets, preserving the split flag. */
-export function scoreGoldSet(candidate: RouterWeightsV4): readonly PairOutcome[] {
+/**
+ * Replay every gold row under both weight sets, preserving the split flag.
+ *
+ * The classifier is deterministic, so repeating it is not a sampling strategy —
+ * it is a determinism attestation. If nondeterminism ever leaks into the
+ * routing path, the repeats disagree, those rows lose their credit, and the
+ * gate refuses to promote instead of banking whichever run looked better.
+ */
+export function replayGoldSet(
+	candidate: RouterWeightsV4,
+	replays: number = DEFAULT_REPLAY_MIN,
+): readonly RouterReplayRow[] {
 	return GOLD_SET.map((entry) => ({
-		baselineCorrect: classifyTaskV4({ prompt: entry.prompt }, DEFAULT_WEIGHTS_V4).taskClass === entry.expectedClass,
-		candidateCorrect: classifyTaskV4({ prompt: entry.prompt }, candidate).taskClass === entry.expectedClass,
+		baselineReplays: observe(DEFAULT_WEIGHTS_V4, entry, replays),
+		candidateReplays: observe(candidate, entry, replays),
 		holdout: entry.holdout === true,
+		rowId: entry.id,
 	}));
 }
 
-/** Assemble gate evidence from paired outcomes. */
+/** Assemble gate evidence from replay-stable outcomes only. */
 export function buildEvidence(
-	outcomes: readonly PairOutcome[],
+	stability: RouterReplayStability,
 	options: { readonly goldenChanges: number; readonly humanApproved: boolean },
 ): RouterPromotionEvidence {
-	const heldIn = outcomes.filter((outcome) => !outcome.holdout);
-	const holdoutRows = outcomes.filter((outcome) => outcome.holdout);
+	const heldIn = stability.stable.filter((row) => !row.holdout);
+	const holdoutRows = stability.stable.filter((row) => row.holdout);
 
 	// McNemar counts only discordant pairs, on the held-in split.
 	const candidateWins = heldIn.filter((row) => row.candidateCorrect && !row.baselineCorrect).length;
@@ -59,6 +81,9 @@ export function buildEvidence(
 	const mcnemar = runMcNemar({ b: candidateWins, c: baselineWins });
 
 	return {
+		// The opponent is `DEFAULT_WEIGHTS_V4`: the shipped policy that learning
+		// never updates, which is the frozen reference the gate demands.
+		baselineKind: "frozen_reference",
 		goldenChanges: options.goldenChanges,
 		heldIn: {
 			baselineWins,
@@ -72,6 +97,11 @@ export function buildEvidence(
 			total: holdoutRows.length,
 		},
 		humanApproved: options.humanApproved,
+		stability: {
+			evaluated: stability.evaluated,
+			replays: stability.minReplays,
+			unstable: stability.unstable,
+		},
 	};
 }
 
@@ -119,7 +149,7 @@ function main(argv: readonly string[]): number {
 	const overrides = readCandidateOverrides(weightsPath);
 	if (!overrides) return 2;
 	const candidate: RouterWeightsV4 = { ...DEFAULT_WEIGHTS_V4, ...overrides };
-	const evidence = buildEvidence(scoreGoldSet(candidate), {
+	const evidence = buildEvidence(summarizeReplayStability(replayGoldSet(candidate)), {
 		goldenChanges: readNumberFlag(argv, "--golden-changes", 0),
 		humanApproved: argv.includes("--approved"),
 	});

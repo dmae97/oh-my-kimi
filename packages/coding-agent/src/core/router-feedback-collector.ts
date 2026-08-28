@@ -34,7 +34,10 @@ import {
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { getAgentDir } from "../config.ts";
-import type { ReasoningLaneTypeV4, TaskClassV4 } from "./reasoning-router-v4.ts";
+// Imported from the weights module, where both types are declared. Routing
+// through `reasoning-router-v4.ts` — which only re-exports them — made the
+// classifier and this ledger import each other.
+import type { ReasoningLaneTypeV4, TaskClassV4 } from "./reasoning-router-v4-weights.ts";
 
 /** Router version eligible to tag a feedback record. */
 export type RouterFeedbackVersion = "v4";

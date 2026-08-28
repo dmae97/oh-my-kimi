@@ -7,10 +7,12 @@ import {
 
 function evidence(over: Partial<RouterPromotionEvidence> = {}): RouterPromotionEvidence {
 	return {
+		baselineKind: "frozen_reference",
 		goldenChanges: 0,
 		heldIn: { baselineWins: 4, candidateWins: 18, pValue: 0.004, significant: true },
 		holdout: { baselineCorrect: 80, candidateCorrect: 84, total: 100 },
 		humanApproved: true,
+		stability: { evaluated: 210, replays: 2, unstable: 0 },
 		...over,
 	};
 }
@@ -118,9 +120,78 @@ describe("evaluateRouterPromotion", () => {
 		// A caller may loosen thresholds, but a held-out regression is unconditional.
 		const verdict = evaluateRouterPromotion(
 			evidence({ holdout: { baselineCorrect: 90, candidateCorrect: 89, total: 1000 } }),
-			{ maxGoldenChanges: 1000, minDiscordant: 0, minHoldout: 0, requireHumanApproval: false },
+			{
+				maxGoldenChanges: 1000,
+				maxUnstable: 1000,
+				minDiscordant: 0,
+				minHoldout: 0,
+				minReplays: 0,
+				requireFrozenBaseline: false,
+				requireHumanApproval: false,
+			},
 		);
 		expect(verdict.promote).toBe(false);
 		expect(verdict.blockers).toEqual(["holdout_regression"]);
+	});
+
+	it("refuses promotion when any credited row proved unstable across replays", () => {
+		// Given one row whose repeated observations disagreed
+		const verdict = evaluateRouterPromotion(evidence({ stability: { evaluated: 210, replays: 2, unstable: 1 } }));
+
+		// Then the win is treated as possible noise, not as evidence
+		expect(verdict.promote).toBe(false);
+		expect(verdict.blockers).toContain("unstable_evidence");
+	});
+
+	it("refuses promotion when rows were observed fewer times than the two-run rule", () => {
+		const verdict = evaluateRouterPromotion(evidence({ stability: { evaluated: 210, replays: 1, unstable: 0 } }));
+
+		expect(verdict.promote).toBe(false);
+		expect(verdict.blockers).toContain("insufficient_replays");
+	});
+
+	it("refuses promotion when the comparison baseline was not the frozen reference", () => {
+		// Given evidence produced against a caller-chosen baseline, a candidate
+		// could be promoted for beating a deliberately weak opponent.
+		const verdict = evaluateRouterPromotion(evidence({ baselineKind: "ad_hoc" }));
+
+		expect(verdict.promote).toBe(false);
+		expect(verdict.blockers).toContain("baseline_not_frozen");
+	});
+
+	it("rejects stability counts that contradict themselves", () => {
+		for (const broken of [
+			evidence({ stability: { evaluated: 10, replays: 2, unstable: 11 } }),
+			evidence({ stability: { evaluated: 210, replays: Number.NaN, unstable: 0 } }),
+			evidence({ stability: { evaluated: -1, replays: 2, unstable: 0 } }),
+		]) {
+			const verdict = evaluateRouterPromotion(broken);
+			expect(verdict.promote).toBe(false);
+			expect(verdict.blockers).toContain("malformed_evidence");
+		}
+	});
+
+	it("reports evidence-integrity blockers ahead of statistical ones", () => {
+		// Integrity first: if the numbers cannot be trusted, the statistics
+		// computed from them are not the story worth reading first.
+		const verdict = evaluateRouterPromotion(
+			evidence({
+				baselineKind: "ad_hoc",
+				heldIn: { baselineWins: 9, candidateWins: 2, pValue: 0.9, significant: false },
+				stability: { evaluated: 210, replays: 1, unstable: 3 },
+			}),
+		);
+
+		expect(verdict.blockers.slice(0, 3)).toEqual([
+			"insufficient_replays",
+			"unstable_evidence",
+			"baseline_not_frozen",
+		]);
+	});
+
+	it("keeps the two-run rule and frozen baseline as defaults", () => {
+		expect(DEFAULT_ROUTER_PROMOTION_POLICY.minReplays).toBe(2);
+		expect(DEFAULT_ROUTER_PROMOTION_POLICY.maxUnstable).toBe(0);
+		expect(DEFAULT_ROUTER_PROMOTION_POLICY.requireFrozenBaseline).toBe(true);
 	});
 });

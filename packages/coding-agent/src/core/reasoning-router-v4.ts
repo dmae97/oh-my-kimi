@@ -970,11 +970,10 @@ function computeScoresV4(features: ContextualFeaturesV4, weights: RouterWeightsV
 }
 
 /**
- * Extension signals (history / context-pressure / judge vote). Every
- * coefficient is 0 under DEFAULT_WEIGHTS_V4 (inert until calibrated by a
- * future governance-backed lane); the mechanism exists so
- * `TaskClassifierInputV4`'s optional fields are meaningfully wired rather than
- * silently accepted-and-ignored.
+ * Extension signals (history / context-pressure / judge vote). The released
+ * default coefficients are bounded and nonzero, but apply only after the base
+ * scorer finds prompt evidence. This keeps zero-score fallback decisions under
+ * the fallback cascade rather than an unrelated prior or vote.
  */
 function applyExtensionSignalsV4(
 	scores: Record<TaskClassV4, number>,
@@ -985,7 +984,8 @@ function applyExtensionSignalsV4(
 	// exists. On a zero-score state the fallback cascade (trivial-length,
 	// ko-short, long-prose, lane) owns the verdict — a stray history/judge vote
 	// must not hijack it (measured: any weight >= 1 flips gold-0001 "hi" to the
-	// voted class otherwise). With the gate, inert weights can be nonzero safely.
+	// voted class otherwise). The gate keeps the bounded nonzero defaults from
+	// taking authority over an evidence-free fallback.
 	let topScore = 0;
 	for (const c of TASK_CLASSES_V4) topScore = Math.max(topScore, scores[c]);
 	if (topScore <= 0) return;

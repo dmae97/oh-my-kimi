@@ -76,11 +76,11 @@ export interface RouterWeightsV4 {
 	readonly intentSkeleton: number;
 	/** Bump to "code-gen" for a bare "add" keyword, gated by !localEdit. */
 	readonly addKeyword: number;
-	/** Bump to the class matching `history[0]`, if supplied (v4-new; 0 under DEFAULT_WEIGHTS_V4, inert until calibrated). */
+	/** Bump to the class matching `history[0]`, if supplied (default 2; gated on existing prompt evidence). */
 	readonly multiTurnPrior: number;
-	/** Linear per-bucket bump applied to debug/review/plan under context pressure (v4-new; 0 under DEFAULT_WEIGHTS_V4, inert until calibrated). */
+	/** Linear per-bucket bump applied to debug/review/plan under context pressure (default 1). */
 	readonly pressureBucket: number;
-	/** Bump to the class matching an externally supplied judge vote, if any (v4-new; 0 under DEFAULT_WEIGHTS_V4, inert until calibrated). */
+	/** Bump to an externally supplied judge vote, if any (default 2; gated on existing prompt evidence). */
 	readonly judgeVote: number;
 	/** Bounded look-back window (characters) for negation-cue gating, never crossing a .,;!? boundary. */
 	readonly negationWindowChars: number;
@@ -93,9 +93,9 @@ export interface RouterWeightsV4 {
 /**
  * Calibrated default preset. The named weights below are the production v4
  * scorer configuration covered by
- * test/suite/regressions/013-reasoning-router-v4-accuracy.test.ts. Extension
- * fields (`multiTurnPrior`, `pressureBucket`, `judgeVote`) are wired but inert
- * until a future calibration changes them.
+ * test/suite/regressions/013-reasoning-router-v4-accuracy.test.ts. The bounded
+ * extension fields (`multiTurnPrior`, `pressureBucket`, `judgeVote`) are active
+ * only after the base scorer finds prompt evidence; zero-score fallbacks ignore them.
  */
 export const DEFAULT_WEIGHTS_V4: RouterWeightsV4 = {
 	codeFenceOrDiff: 4,
