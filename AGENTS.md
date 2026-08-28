@@ -96,10 +96,12 @@ fails, remove the material rather than widening the guard.
 
 ## OpenWiki
 
-This repository has a generated `openwiki/` evidence index. It is optional just-in-time context, not required startup reading.
+This repository can carry a generated `openwiki/` evidence index. It is optional just-in-time context, not required startup reading, and it may be absent — a scheduled workflow regenerates it.
 
 - Treat source code and tests as authoritative. A brief's unknowns and review items are verification gaps, not automatic requirements.
 - Prefer the narrowest quiet validation that proves the changed behavior. Preserve complete failure output.
+- Do not treat an `interrupted` corpus as context unless `openwiki/.manual-review.json` binds a review to the current corpus digest; `scripts/check-openwiki.mjs` enforces this.
+- Judge wiki freshness by `openwiki/.last-update.json` `gitHead` against current `HEAD`; claims from an older head need re-verification against source before use.
 
 The scheduled OpenWiki GitHub Actions workflow refreshes the repository wiki. Do not hand-edit generated OpenWiki pages unless explicitly asked; prefer updating source code/docs and letting OpenWiki regenerate.
 

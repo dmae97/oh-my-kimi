@@ -44,8 +44,8 @@ adds a control plane around that work.
 
 | Problem | OMK invariant | Inspectable output |
 | --- | --- | --- |
-| Parallel agents overwrite each other | Owned paths and resource claims bound every lane | DAG and workspace state |
-| A model says “done” too early | Acceptance predicates require fresh evidence | Commands, exits, and receipts |
+| Concurrent work can collide | Tool claims serialize conflicts; optional orchestration workflows must declare path ownership | Tool schedule and workspace state |
+| A model says “done” too early | Explicit verification workflows require fresh evidence; prompt settlement alone is not proof | Commands, exits, and receipts |
 | A provider or model changes | Routing stays separate from the execution contract | Provider-attributed attempts |
 | A session stops midway | Replayable state supports session recovery | Ledger, repair plan, durable goal |
 
@@ -90,12 +90,13 @@ Requirements: Node.js 22.19 or newer. The published CLI package is
   />
 </p>
 
-1. **Scope** — turn a goal into a bounded DAG with owned paths, ordered waves,
-   resource claims, and acceptance predicates.
+1. **Scope** — bound the goal, paths, resources, and acceptance predicates. A
+   selected orchestration workflow may also supply a DAG; an ordinary prompt
+   remains one agent/tool loop.
 2. **Route** — select models, agent skills, MCP tools, and extensions for the
    job without changing the evidence contract.
-3. **Verify** — run the declared build, type, test, audit, and release gates.
-   Required red predicates block completion.
+3. **Verify** — explicit evidence workflows run declared build, type, test,
+   audit, and release gates. Required red predicates block those workflows.
 4. **Replay** — preserve receipts, repair interrupted sessions, and continue
    durable goals from explicit reducer state.
 
@@ -120,18 +121,20 @@ version is the source of truth.
 
 ## What ships
 
-### Multi-agent execution
+### Execution and optional orchestration
 
-- Bounded DAG parallel agents with deterministic ready-lane ordering.
-- Per-lane owned paths and resource claims.
+- One provider/tool loop with the CLI's deterministic `dag-v2` tool-call scheduler.
+- An optional subagent extension plus packaged lane and shard primitives; the
+  internal lane launcher and automatic command sharding are not default CLI paths.
 - Explicit cancellation, timeout, and retry settlement.
 - Durable goals and checkpointed continuation across bounded rounds.
 
 ### Evidence and recovery
 
-- Acceptance predicates backed by fresh command evidence.
-- Versioned observations, evaluation results, and runtime decisions.
-- Replay ledgers, receipts, session repair, and SDK session inspection.
+- Verified-bash receipts, replay ledgers, session repair, and SDK inspection.
+- Versioned `omk-protocol` observations, evaluations, and decisions for callers
+  that explicitly adopt the protocol.
+- Acceptance predicates backed by fresh evidence in those explicit workflows.
 - Advisory judging that cannot replace required deterministic gates.
 
 ### Routing and extensibility
@@ -188,31 +191,43 @@ Native `xai` keeps subscription OAuth and `XAI_API_KEY` billing separate. See
 npm install omk-agent-core
 npm install omk-ai
 npm install omk-protocol
-omk install npm:omk-book-to-skill@0.96.2
+omk install npm:omk-book-to-skill@0.97.0
 npm install omk-tui
 ```
 
-## Repository understanding (local wiki, default)
+## Repository understanding
 
-OMK repositories keep a self-maintaining local wiki so every fresh agent session
-starts with high repo understanding:
+`v0.97.0` shipped the OpenWiki policy and workflow, but no versioned corpus or
+integrity checker. Current Worktree-only hardening remains blocked by the
+security gates below:
 
-- **`openwiki/`** — an agent-readable wiki (OpenWiki) whose factual claims stay
-  pinned to versioned source evidence; when code changes, stale claims are
-  flagged instead of silently trusted. Refreshed by the scheduled
-  [OpenWiki workflow](.github/workflows/openwiki-update.yml); read
-  `openwiki/overview.md` before deep file scans.
-- **`.understand-anything/`** — a structural knowledge graph
-  (Understand-Anything) for symbol-level drill-down via `project_report` /
-  `module_report`.
+- **`openwiki/`** — absent. The previous untracked corpus was removed after the
+  hardened gate proved it carried fabricated evidence: 8 frontmatter symbols
+  that no declared source path defines (`AgentLoop`, `getModel`, `DeepWall`,
+  `loadExtensions`, `createExtensionRuntime`, `main`), 45 references to `@omk/*`
+  package names this repository does not publish, and a
+  `Scope -> Route -> Verify -> Replay` control loop with no code behind it.
+  CI regenerates the corpus; nothing is lost.
+- **`scripts/check-openwiki.mjs`** — worktree checker. An `interrupted` corpus
+  now fails unless `openwiki/.manual-review.json` binds a review to the exact
+  corpus digest, and every frontmatter symbol must bind to one of that page's
+  own `source_paths` as a whole identifier. Release remains blocked until
+  generator outputs are allowlisted and secret/private-path scans run before
+  upload and PR creation.
+- **`.understand-anything/`** — optional local structural graph used by Pi Lens;
+  it is not published or injected into prompts by default.
 
-Source and tests remain authoritative; the wiki is grounded, not gospel.
+Source and tests remain authoritative. Until the blockers above close and the
+corpus ships, treat both generated indexes as untrusted working-tree or local
+advisory data.
 
 ## OMK + AdaptOrch
 
 OMK is the local, MIT-licensed control plane. AdaptOrch is a separate,
-proprietary hosted patch-evidence service. It requires its own account and is
-not part of this repository or the `omk-adaptorch-wpl` package.
+proprietary hosted patch-evidence service that requires its own account.
+`omk-adaptorch-wpl` is an open-source package in this repository, but it exposes
+state, client, and adjudication primitives rather than wiring AdaptOrch into the
+default CLI loop.
 
 **[Review AdaptOrch plans →](https://adaptorch.com/?utm_source=github&utm_medium=readme&utm_campaign=omk#pricing)**
 
@@ -224,6 +239,8 @@ not part of this repository or the `omk-adaptorch-wpl` package.
 - [Providers and models](packages/coding-agent/docs/providers.md)
 - [Automation and SDK](packages/coding-agent/docs/sdk.md)
 - [Run protocol](packages/coding-agent/docs/run-protocol.md)
+- [Runtime algorithms and direction](packages/coding-agent/docs/runtime-algorithms.md)
+- [Specification index](specs/README.md)
 - [Sessions and recovery](packages/coding-agent/docs/sessions.md)
 - [Security](packages/coding-agent/docs/security.md)
 - [Containerization](packages/coding-agent/docs/containerization.md)
@@ -251,8 +268,9 @@ change.
 
 ### Is OMK a coding agent or an orchestrator?
 
-Both. `open-multi-agent-kit` is an interactive coding-agent CLI;
-OMK//CONTROL adds bounded orchestration, routing, evidence gates, and recovery.
+The default is an interactive coding-agent and tool loop. OMK also ships
+optional orchestration extensions and explicit protocol/evidence APIs; internal
+lane and shard primitives are not automatic multi-agent execution.
 
 ### Does OMK require one specific model provider?
 
@@ -261,8 +279,10 @@ stable. Provider-specific capabilities still vary and are documented explicitly.
 
 ### How does OMK decide that work is complete?
 
-Declared acceptance predicates must pass with fresh command evidence. Chat text,
-a reviewer opinion, or stale output cannot replace a required gate.
+An ordinary prompt ends when the agent loop and queued continuations settle;
+`prompt_settled` is not a correctness verdict. In an explicit protocol/evidence
+workflow, required predicates must pass with fresh evidence. Chat text, reviewer
+opinion, or stale output cannot replace that gate.
 
 ### Can OMK recover an interrupted run?
 
@@ -270,6 +290,11 @@ Yes. Replay state, receipts, durable goals, and session repair preserve enough
 structure for bounded recovery instead of silently starting over.
 
 ## Recent releases
+
+> Historical correction: the immutable v0.97.0 notes below announced a
+> versioned OpenWiki corpus, but that release still ignored `/openwiki/` and did
+> not contain the corpus or checker. See the current repository-understanding
+> section above for the working-tree repair.
 
 <!-- releases:start -->
 
