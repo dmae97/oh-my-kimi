@@ -1,5 +1,5 @@
 import { WorkloadPermitError } from "./workload-permit-pool.ts";
-import type { ExecuteWorkloadShardPlanInput } from "./workload-shard-executor.ts";
+import type { ExecuteWorkloadShardPlanInput } from "./workload-shard-execution-types.ts";
 import type {
 	WorkloadShardPlan,
 	WorkloadShardProjection,

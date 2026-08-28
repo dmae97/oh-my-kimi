@@ -1,4 +1,4 @@
-import type { WorkloadClass, WorkloadClassification, WorkloadCommandFamily } from "./workload-classifier.ts";
+import type { WorkloadClass, WorkloadClassification, WorkloadCommandFamily } from "./workload-types.ts";
 
 const LIGHT_EXECUTABLES = new Set([
 	"ls",

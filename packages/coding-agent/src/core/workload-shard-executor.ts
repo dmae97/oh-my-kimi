@@ -1,16 +1,17 @@
-import type { ResourceAdmissionDecision } from "./resource-admission.ts";
-import type { WorkloadPermitPool } from "./workload-permit-pool.ts";
+import type { ExecuteWorkloadShardPlanInput, ShardRunContext, ShardRunner } from "./workload-shard-execution-types.ts";
 import {
 	planShardResume,
 	reduceShardRecords,
 	validateWorkloadShardPlan,
-	type WorkloadShardPlan,
 	type WorkloadShardProjection,
-	type WorkloadShardSpec,
 	type WorkloadShardState,
 } from "./workload-shard-plan.ts";
 import { applyTransition, runOneShard, shardById } from "./workload-shard-runner.ts";
 import { WorkloadShardJournalError, type WorkloadShardStore } from "./workload-shard-store.ts";
+
+// The contract lives in `workload-shard-execution-types.ts` so the runner can
+// name its own parameter type without importing this module back.
+export type { ExecuteWorkloadShardPlanInput, ShardRunContext, ShardRunner };
 
 /**
  * Workload shard executor (OMK v0.97.x roadmap §13, M5 completion slice).
@@ -29,31 +30,6 @@ import { WorkloadShardJournalError, type WorkloadShardStore } from "./workload-s
  * it only runs what the plan's descriptors already describe via the
  * injected runner.
  */
-
-export interface ShardRunContext {
-	readonly shard: WorkloadShardSpec;
-	readonly attempt: number;
-	readonly signal?: AbortSignal;
-}
-
-export type ShardRunner = (
-	context: ShardRunContext,
-) => Promise<{ readonly exitCode: number; readonly evidenceRefs?: readonly string[] }>;
-
-export interface ExecuteWorkloadShardPlanInput {
-	readonly plan: WorkloadShardPlan;
-	readonly store: WorkloadShardStore;
-	readonly runner: ShardRunner;
-	readonly decision: ResourceAdmissionDecision;
-	readonly permitPool?: WorkloadPermitPool;
-	readonly signal?: AbortSignal;
-	/** §13.5 step 4 retry policy: re-arm previously failed shards. Default false. */
-	readonly retryFailed?: boolean;
-	/** §13.4: aborted -> pending needs an explicit resume; this call is that act. Default true. */
-	readonly resumeAborted?: boolean;
-	readonly permitWaitTimeoutMs?: number;
-	readonly now?: () => Date;
-}
 
 export interface ShardResultSummary {
 	readonly shardId: string;

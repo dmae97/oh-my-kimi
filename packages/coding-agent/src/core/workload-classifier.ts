@@ -1,8 +1,14 @@
 import { analyzeShellCommandV2 } from "./command-safety-parser.ts";
 import { matchWorkloadFamily } from "./workload-family-matcher.ts";
 import { scanShellComplexity } from "./workload-shell-scan.ts";
+import type { WorkloadClass, WorkloadClassification } from "./workload-types.ts";
 
 export { scanShellComplexity };
+
+// The vocabulary lives in `workload-types.ts` so the family matcher can share
+// it without importing this module back. Re-exported here because callers
+// already import these names from the classifier.
+export type { WorkloadClass, WorkloadClassification };
 
 /**
  * Pure workload classifier (OMK v0.97.x roadmap §9, M3/PR4).
@@ -21,30 +27,6 @@ export { scanShellComplexity };
  * Classification is advisory for scheduling only — command safety remains
  * the sole authority for whether a command may run at all (§9.4).
  */
-
-export type WorkloadClass = "light" | "io" | "cpu" | "memory" | "heavy" | "unknown";
-
-export type WorkloadCommandFamily =
-	| "node-test"
-	| "node-build"
-	| "typescript"
-	| "go-test"
-	| "rust-build"
-	| "container-build"
-	| "monorepo"
-	| "archive"
-	| "generic-process"
-	| "unknown";
-
-export type WorkloadShellComplexity = "simple-argv" | "complex-shell";
-
-export interface WorkloadClassification {
-	readonly workloadClass: WorkloadClass;
-	readonly commandFamily: WorkloadCommandFamily;
-	readonly complexity: WorkloadShellComplexity;
-	readonly safeToAutoShard: boolean;
-	readonly reasonCodes: readonly string[];
-}
 
 /** Classify one shell command. Pure, deterministic, never throws. */
 export function classifyWorkloadCommand(command: string): WorkloadClassification {
