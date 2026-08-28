@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getModel, getModels } from "../src/models.ts";
+import { getModels } from "../src/models.ts";
 
 /**
  * The generator only admits OpenRouter models that advertise `tools`, because OMK drives
@@ -7,16 +7,18 @@ import { getModel, getModels } from "../src/models.ts";
  * catalog so a stale or over-eager regeneration is caught without a live network call.
  */
 describe("OpenRouter catalog coverage", () => {
-	it("registers the Ox Alpha stealth model", () => {
-		const model = getModel("openrouter", "stealth/ox-alpha");
+	// Deliberately not pinned to a `stealth/*` id. OpenRouter's stealth slots are
+	// temporary previews that rotate, so naming one turns every catalog refresh
+	// into a test failure that says nothing about the generator. `stealth/ox-alpha`
+	// was pinned here and by name below, and both broke when it was withdrawn.
+	it("admits stealth preview models under the same contract as the rest", () => {
+		const stealth = getModels("openrouter").filter((model) => model.id.startsWith("stealth/"));
 
-		expect(model.name).toBe("Ox Alpha");
-		expect(model.api).toBe("openai-completions");
-		expect(model.baseUrl).toBe("https://openrouter.ai/api/v1");
-		expect(model.reasoning).toBe(true);
-		expect(model.input).toEqual(["text", "image"]);
-		expect(model.contextWindow).toBe(1048576);
-		expect(model.maxTokens).toBe(131072);
+		for (const model of stealth) {
+			expect(model.api).toBe("openai-completions");
+			expect(model.baseUrl).toBe("https://openrouter.ai/api/v1");
+			expect(model.name.length).toBeGreaterThan(0);
+		}
 	});
 
 	it("keeps the recent frontier models reachable", () => {
@@ -29,7 +31,6 @@ describe("OpenRouter catalog coverage", () => {
 			"qwen/qwen3.8-max",
 			"x-ai/grok-4.6",
 			"z-ai/glm-5.3",
-			"stealth/ox-alpha",
 		]) {
 			expect(ids).toContain(id);
 		}

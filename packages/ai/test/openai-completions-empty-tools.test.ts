@@ -1,6 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getModel } from "../src/models.ts";
+import { CLOUDFLARE_AI_GATEWAY_COMPAT_BASE_URL } from "../src/providers/cloudflare.ts";
 import { streamSimple } from "../src/stream.ts";
+import type { Model } from "../src/types.ts";
+
+// Cloudflare deprecated the gateway's /compat endpoint and upstream stopped listing
+// workers-ai/* under that provider, so no catalog entry targets this route any more.
+// The client code path still ships, because Cloudflare keeps /compat working for
+// existing integrations, so the model is built here rather than read from the
+// catalog: the coverage is for our request shaping, not for a third party's listing.
+const GATEWAY_COMPAT_MODEL: Model<"openai-completions"> = {
+	id: "workers-ai/@cf/moonshotai/kimi-k2.6",
+	name: "Kimi K2.6",
+	api: "openai-completions",
+	provider: "cloudflare-ai-gateway",
+	baseUrl: CLOUDFLARE_AI_GATEWAY_COMPAT_BASE_URL,
+	compat: { sendSessionAffinityHeaders: true },
+	reasoning: true,
+	input: ["text"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 131072,
+	maxTokens: 8192,
+};
 
 // Empty tools arrays must NOT be serialized as `tools: []` — some OpenAI-compatible
 // backends (e.g. DashScope / Aliyun Qwen via compatible-mode) reject the request with
@@ -130,7 +151,7 @@ describe("openai-completions empty tools handling", () => {
 	it("uses conservative OpenAI-compatible fields for Cloudflare AI Gateway /compat models", async () => {
 		process.env.CLOUDFLARE_ACCOUNT_ID = "account-id";
 		process.env.CLOUDFLARE_GATEWAY_ID = "gateway-id";
-		const model = getModel("cloudflare-ai-gateway", "workers-ai/@cf/moonshotai/kimi-k2.6")!;
+		const model = GATEWAY_COMPAT_MODEL;
 
 		await streamSimple(
 			model,
@@ -184,7 +205,7 @@ describe("openai-completions empty tools handling", () => {
 	it("sends session affinity headers for Workers AI through Cloudflare AI Gateway", async () => {
 		process.env.CLOUDFLARE_ACCOUNT_ID = "account-id";
 		process.env.CLOUDFLARE_GATEWAY_ID = "gateway-id";
-		const workersModel = getModel("cloudflare-ai-gateway", "workers-ai/@cf/moonshotai/kimi-k2.6")!;
+		const workersModel = GATEWAY_COMPAT_MODEL;
 
 		await streamSimple(
 			workersModel,

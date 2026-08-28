@@ -87,12 +87,11 @@ const PROVIDER_MODEL_PAIRS: ProviderModelPair[] = [
 	{ provider: "cerebras", model: "zai-glm-4.7", label: "cerebras-zai-glm-4.7" },
 	// Cloudflare Workers AI
 	{ provider: "cloudflare-workers-ai", model: "@cf/moonshotai/kimi-k2.6", label: "cloudflare-kimi-k2.6" },
-	// Cloudflare AI Gateway
-	{
-		provider: "cloudflare-ai-gateway",
-		model: "workers-ai/@cf/moonshotai/kimi-k2.6",
-		label: "cloudflare-gateway-kimi-k2.6",
-	},
+	// Cloudflare AI Gateway.
+	// No Workers AI entry: Cloudflare deprecated the gateway's /compat endpoint, and
+	// upstream stopped listing workers-ai/* under this provider, so the catalog has
+	// no compat-routed model to hand off to. The direct Workers AI row above still
+	// covers that model.
 	{
 		provider: "cloudflare-ai-gateway",
 		model: "claude-sonnet-4-5",

@@ -3,7 +3,10 @@ import { MODELS } from "../src/models.generated.ts";
 import { clampThinkingLevel, getModel, getModels, getSupportedThinkingLevels } from "../src/models.ts";
 
 const GLM5_EFFORT_MODEL_IDS = [
-	["cloudflare-ai-gateway", "workers-ai/@cf/zai-org/glm-5.2"],
+	// ["cloudflare-ai-gateway", "workers-ai/@cf/zai-org/glm-5.2"] removed: Cloudflare
+	// deprecated the gateway's /compat endpoint and upstream stopped listing
+	// workers-ai/* under that provider, so no catalog model routes through it
+	// (verified 2026-08-28, models.dev cloudflare-ai-gateway has 0 workers-ai entries).
 	["cloudflare-workers-ai", "@cf/zai-org/glm-5.2"],
 	["fireworks", "accounts/fireworks/models/glm-5p2"],
 	["fireworks", "accounts/fireworks/routers/glm-5p2-fast"],

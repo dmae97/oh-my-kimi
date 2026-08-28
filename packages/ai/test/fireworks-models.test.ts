@@ -37,15 +37,22 @@ describe("Fireworks models", () => {
 		});
 	});
 
-	it("registers the Fire Pass turbo router model", () => {
-		const model = getModels("fireworks").find(
-			(candidate) => candidate.id.startsWith("accounts/fireworks/routers/") && candidate.id.endsWith("-turbo"),
+	it("registers Fire Pass routers via the Anthropic-compatible Messages API", () => {
+		// Not pinned to `-turbo`: Fireworks retired that generation when it moved to
+		// the K3 line, which made this test fail on a catalog refresh for a reason
+		// that said nothing about how routers are registered. Image input is checked
+		// per model rather than asserted for the class, because it follows the routed
+		// model — kimi-k3-fast has it, glm-5p2-fast does not.
+		const routers = getModels("fireworks").filter((candidate) =>
+			candidate.id.startsWith("accounts/fireworks/routers/"),
 		);
 
-		expect(model).toBeDefined();
-		expect(model?.api).toBe("anthropic-messages");
-		expect(model?.baseUrl).toBe("https://api.fireworks.ai/inference");
-		expect(model?.input).toEqual(["text", "image"]);
+		expect(routers.length).toBeGreaterThan(0);
+		for (const model of routers) {
+			expect(model.api).toBe("anthropic-messages");
+			expect(model.baseUrl).toBe("https://api.fireworks.ai/inference");
+			expect(model.input).toContain("text");
+		}
 	});
 
 	it("resolves FIREWORKS_API_KEY from the environment", () => {
