@@ -35,6 +35,7 @@ import {
 } from "./tool-execution-boundary.ts";
 import type { ClaimableToolCall } from "./tool-resource-claims.ts";
 import { resolveToolTimeoutMs, runToolCallWithTimeout } from "./tool-timeout.ts";
+import { hasUnsettledTimeout } from "./tool-timeout-settlement.ts";
 import {
 	createSyntheticToolResult,
 	inspectTranscriptIntegrity,
@@ -432,7 +433,7 @@ async function runToolBatchForTurn(
 	if (signal?.aborted) {
 		// Close only unresolved calls, preserving finalized results, then stop
 		// before hooks, queues, or another provider request.
-		const synthesized = await closeAbortedToolBatch(currentContext, toolCalls, toolResults, emit);
+		const synthesized = await closeUnresolvedToolBatch(currentContext, toolCalls, toolResults, emit);
 		toolResults.push(...synthesized);
 		for (const result of toolResults) newMessages.push(result);
 		await emit({ type: "turn_end", message, toolResults });
@@ -794,9 +795,8 @@ async function executeToolCalls(
 	dagScheduleCache: DagScheduleCache,
 ): Promise<ExecutedToolCallBatch> {
 	const toolCalls = assistantMessage.content.filter((c) => c.type === "toolCall");
-	// dag-v2 is opt-in only. An explicit sequential execution mode takes
-	// precedence and continues through the established waves-v1 path below.
-	if (config.toolScheduler === "dag-v2" && config.toolExecution !== "sequential") {
+	// dag-v2 is the safe default; waves-v1 remains an explicit rollback path.
+	if ((config.toolScheduler ?? "dag-v2") === "dag-v2") {
 		return executeToolCallsDagLevels(
 			currentContext,
 			assistantMessage,
@@ -859,7 +859,7 @@ async function executeToolCallsInWaves(
 ): Promise<ExecutedToolCallBatch> {
 	const messages: ToolResultMessage[] = [];
 	let terminated = false;
-	let executedCount = 0;
+	let stopRun = false;
 	for (const wave of waves) {
 		const waveCalls = wave.map((index) => toolCalls[index]);
 		const executedWave =
@@ -867,31 +867,22 @@ async function executeToolCallsInWaves(
 				? await executeToolCallsSequential(currentContext, assistantMessage, waveCalls, config, signal, emit)
 				: await executeToolCallsParallel(currentContext, assistantMessage, waveCalls, config, signal, emit);
 		messages.push(...executedWave.messages);
-		executedCount += wave.length;
-		if (executedWave.terminate) {
+		if (executedWave.terminate || executedWave.stopRun) {
 			terminated = true;
-			for (const toolCall of toolCalls.slice(executedCount)) {
-				const skipped = createImmutableSnapshot(
-					createSyntheticToolResult(
-						toolCall.id,
-						toolCall.name,
-						"Skipped because the preceding tool wave requested termination",
-						Date.now(),
-						"skipped",
-					),
-				);
-				currentContext.messages.push(skipped);
-				messages.push(skipped);
-				await emitToolResultMessage(skipped, emit);
-			}
+			stopRun = executedWave.stopRun ?? false;
+			const reason = stopRun
+				? "Skipped because the preceding tool wave timed out before settling"
+				: "Skipped because the preceding tool wave requested termination";
+			const skipped = await closeUnresolvedToolBatch(currentContext, toolCalls, messages, emit, {
+				reason,
+				disposition: "skipped",
+			});
+			messages.push(...skipped);
 			break;
 		}
 		if (signal?.aborted) break;
 	}
-	return {
-		messages,
-		terminate: terminated,
-	};
+	return { messages, terminate: terminated, stopRun };
 }
 
 /** Bounded per-run memo for DAG schedules; plans are pure functions of the keyed inputs. */
@@ -1041,7 +1032,8 @@ async function executeToolCallsDagLevels(
 	const boundTools = plans.flatMap((plan) => (plan.kind === "planned" ? [plan.tool] : []));
 	const toolPolicies = new Map<string, "sequential" | "parallel">();
 	for (const tool of boundTools) {
-		if (tool.executionMode && !toolPolicies.has(tool.name)) toolPolicies.set(tool.name, tool.executionMode);
+		const mode = config.toolExecution ?? tool.executionMode;
+		if (mode && !toolPolicies.has(tool.name)) toolPolicies.set(tool.name, mode);
 	}
 
 	const levels = await schedulePlannedDagLevels(plans, toolPolicies, boundTools, config, signal, dagScheduleCache);
@@ -1216,12 +1208,7 @@ async function runDagLevelCalls(
 		);
 		outcomes.push(...finalizedLevel);
 		if (signal?.aborted) break;
-		if (
-			finalizedLevel.some(
-				({ finalized }) =>
-					finalized.envelope.disposition === "timeout" && finalized.isRealPromiseSettled?.() === false,
-			)
-		) {
+		if (await hasUnsettledTimeout(finalizedLevel.map(({ finalized }) => finalized))) {
 			return { outcomes, stoppedByUnsettledTimeout: true };
 		}
 	}
@@ -1231,12 +1218,7 @@ async function runDagLevelCalls(
 type ExecutedToolCallBatch = {
 	messages: ToolResultMessage[];
 	terminate: boolean;
-	/**
-	 * End the whole run without another provider request. Only the dag-v2
-	 * scheduler produces this (unsettled-timeout guard); the sequential,
-	 * parallel, and waves paths deliberately continue after an unsettled
-	 * timeout — the divergence is pinned by the tool-timeout loop tests.
-	 */
+	/** End the run without another provider request after an unsettled timeout. */
 	stopRun?: boolean;
 };
 
@@ -1285,9 +1267,15 @@ async function executeToolCallsSequential(
 		finalizedCalls.push(finalized);
 		messages.push(toolResultMessage);
 
-		if (signal?.aborted) {
-			break;
+		if (await hasUnsettledTimeout([finalized])) {
+			const skipped = await closeUnresolvedToolBatch(currentContext, toolCalls, messages, emit, {
+				reason: "Skipped because a preceding tool timed out before settling",
+				disposition: "skipped",
+			});
+			messages.push(...skipped);
+			return { messages, terminate: true, stopRun: true };
 		}
+		if (signal?.aborted) break;
 	}
 
 	return {
@@ -1356,10 +1344,8 @@ async function executeToolCallsParallel(
 		messages.push(toolResultMessage);
 	}
 
-	return {
-		messages,
-		terminate: shouldTerminateToolBatch(orderedFinalizedCalls),
-	};
+	const stopRun = await hasUnsettledTimeout(orderedFinalizedCalls);
+	return { messages, terminate: stopRun || shouldTerminateToolBatch(orderedFinalizedCalls), stopRun };
 }
 
 type PlannedToolCall = {
@@ -1577,21 +1563,26 @@ async function emitToolResultMessage(toolResultMessage: ToolResultMessage, emit:
 	await emit({ type: "message_end", message: toolResultMessage });
 }
 
-/** Commit and notify one aborted terminal for each unresolved, unstarted call. */
-async function closeAbortedToolBatch(
+/** Commit and notify one synthetic terminal for each unresolved, unstarted call. */
+async function closeUnresolvedToolBatch(
 	currentContext: AgentContext,
 	toolCalls: AgentToolCall[],
 	existingResults: ToolResultMessage[],
 	emit: AgentEventSink,
+	closure?: { reason: string; disposition: "aborted" | "skipped" },
 ): Promise<ToolResultMessage[]> {
 	const resolvedIds = new Set(existingResults.map((result) => result.toolCallId));
 	const synthesized: ToolResultMessage[] = [];
 	for (const toolCall of toolCalls) {
-		if (resolvedIds.has(toolCall.id)) {
-			continue;
-		}
+		if (resolvedIds.has(toolCall.id)) continue;
 		const result = createImmutableSnapshot(
-			createSyntheticToolResult(toolCall.id, toolCall.name, "Operation aborted"),
+			createSyntheticToolResult(
+				toolCall.id,
+				toolCall.name,
+				closure?.reason ?? "Operation aborted",
+				Date.now(),
+				closure?.disposition ?? "aborted",
+			),
 		);
 		currentContext.messages.push(result);
 		await emit({ type: "message_start", message: result });

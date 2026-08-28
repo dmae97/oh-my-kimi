@@ -10,6 +10,7 @@ import {
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { agentLoop, agentLoopContinue, planFailureTermination, runAgentLoop } from "../src/agent-loop.ts";
+import { DEFAULT_TOOL_TEARDOWN_GRACE_MS } from "../src/tool-timeout-settlement.ts";
 import type {
 	AgentContext,
 	AgentEvent,
@@ -1939,7 +1940,7 @@ describe("agentLoop tool timeouts", () => {
 		).toHaveLength(1);
 	});
 
-	it("times out one parallel tool while its sibling settles independently in source order", async () => {
+	it("stops after an unsettled parallel timeout while preserving its settled sibling result", async () => {
 		const toolSchema = Type.Object({ value: Type.String() });
 		const tool: AgentTool<typeof toolSchema, { value: string }> = {
 			name: "echo",
@@ -2023,7 +2024,7 @@ describe("agentLoop tool timeouts", () => {
 		});
 		expect(fast.isError).toBe(false);
 		expect(fast.content).toEqual([{ type: "text", text: "ok:fast" }]);
-		expect(callIndex).toBe(2);
+		expect(callIndex).toBe(1);
 	});
 });
 
@@ -3710,6 +3711,10 @@ describe("P0 terminal and final-argument DAG guards", () => {
 			);
 			await firstStarted;
 			await vi.advanceTimersByTimeAsync(20);
+			// The loop lets a timed-out tool finish tearing down before judging it
+			// still-running; this one never settles, so the guard fires once the
+			// window closes.
+			await vi.advanceTimersByTimeAsync(DEFAULT_TOOL_TEARDOWN_GRACE_MS);
 			const messages = await run;
 
 			// Then: the dependent call is skipped in source order and the run returns without retrying the provider.
@@ -3826,6 +3831,8 @@ describe("P0 terminal and final-argument DAG guards", () => {
 			);
 			await finalStarted;
 			await vi.advanceTimersByTimeAsync(20);
+			// See above: the unsettled-timeout guard applies after the teardown grace.
+			await vi.advanceTimersByTimeAsync(DEFAULT_TOOL_TEARDOWN_GRACE_MS);
 			const messages = await run;
 
 			// Then: both started calls retain real outcomes, but no continuation or queue polling occurs.

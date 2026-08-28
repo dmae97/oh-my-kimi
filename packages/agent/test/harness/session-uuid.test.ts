@@ -5,7 +5,7 @@ const UUID_V7_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9
 const TIMESTAMP = 0x0123456789ab;
 
 function parseTimestamp(uuid: string): number {
-	return Number.parseInt(uuid.replaceAll("-", "").slice(0, 12), 16);
+	return Number.parseInt(uuid.replace(/-/g, "").slice(0, 12), 16);
 }
 
 afterEach(() => {

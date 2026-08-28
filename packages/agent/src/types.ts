@@ -38,10 +38,10 @@ export type ToolExecutionMode = "sequential" | "parallel";
 /**
  * Tool-call scheduler selection for a single assistant turn's tool batch.
  *
- * - `"waves-v1"` (default): the original contiguous-wave scheduler
- *   (`partitionToolBatchWaves`). Established behavior and the rollback target.
- * - `"dag-v2"`: the deterministic resource-claim DAG scheduler
- *   (`scheduleDagLevels`). Active only when explicitly selected. It resolves
+ * - `"waves-v1"`: the original contiguous-wave scheduler
+ *   (`partitionToolBatchWaves`) retained as the rollback target.
+ * - `"dag-v2"` (default): the deterministic resource-claim DAG scheduler
+ *   (`scheduleDagLevels`). It resolves
  *   per-call resource claims and groups conflict-free calls into source-index
  *   DAG levels so a conflicting call no longer head-of-line-blocks independent
  *   later calls (e.g. `write x, write x, write y` schedules as `[[0, 2], [1]]`).
@@ -299,10 +299,9 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	toolTimeouts?: Record<string, number>;
 
 	/**
-	 * Tool-call scheduler. Defaults to `"waves-v1"` (the established
-	 * contiguous-wave scheduler). Set to `"dag-v2"` to opt into the
-	 * deterministic resource-claim DAG scheduler. The v1 path and its exports
-	 * are unchanged when this is unset or `"waves-v1"`.
+	 * Tool-call scheduler. Unset and `"dag-v2"` use the deterministic
+	 * resource-claim DAG scheduler. Set `"waves-v1"` only as a rollback to the
+	 * legacy contiguous-wave scheduler.
 	 */
 	toolScheduler?: ToolSchedulerKind;
 
@@ -311,7 +310,7 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * split into deterministic contiguous chunks of at most this many calls
 	 * (preserving source order) so a wide conflict-free level does not fan out
 	 * unbounded. Absent, non-finite, or non-positive values leave each level
-	 * whole. No effect on the default `"waves-v1"` scheduler.
+	 * whole. No effect when the legacy `"waves-v1"` scheduler is selected.
 	 */
 	maxToolConcurrency?: number;
 
@@ -320,7 +319,7 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * `executionMode: "parallel"` and no resource claims is treated as freely
 	 * parallel (compatibility). When `true`, such tools are treated as
 	 * exclusive (run alone). Unknown tools and bash are always exclusive
-	 * regardless of this flag. No effect on the default `"waves-v1"` scheduler.
+	 * regardless of this flag. No effect when `"waves-v1"` is selected.
 	 */
 	strictExtensionClaims?: boolean;
 

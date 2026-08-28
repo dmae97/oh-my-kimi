@@ -52,6 +52,30 @@ describe("AgentSession retry and event characterization", () => {
 		expect(harness.session.isRetrying).toBe(false);
 	});
 
+	it("rejects a second top-level prompt while retry backoff owns the session", async () => {
+		const harness = await createHarness({ settings: { retry: { enabled: true, maxRetries: 1, baseDelayMs: 100 } } });
+		harnesses.push(harness);
+		const retryStarted = new Promise<void>((resolve) => {
+			const unsubscribe = harness.session.subscribe((event) => {
+				if (event.type !== "auto_retry_start") return;
+				unsubscribe();
+				resolve();
+			});
+		});
+		harness.setResponses([
+			fauxAssistantMessage("", { stopReason: "error", errorMessage: "overloaded_error" }),
+			fauxAssistantMessage("recovered"),
+		]);
+
+		const firstPrompt = harness.session.prompt("first");
+		await retryStarted;
+
+		expect(harness.session.isRetrying).toBe(true);
+		await expect(harness.session.prompt("second")).rejects.toThrow(/already processing/i);
+		await firstPrompt;
+		expect(harness.faux.state.callCount).toBe(2);
+	});
+
 	it("retries multiple transient failures and succeeds on the final attempt", async () => {
 		const harness = await createHarness({ settings: { retry: { enabled: true, maxRetries: 3, baseDelayMs: 1 } } });
 		harnesses.push(harness);
@@ -91,7 +115,6 @@ describe("AgentSession retry and event characterization", () => {
 
 		expect(retryEvents).toEqual(["start:1", "end:false"]);
 		expect(harness.eventsOfType("agent_end").map((event) => event.willRetry)).toEqual([true, false]);
-		expect(harness.faux.state.callCount).toBe(2);
 		expect(harness.session.isRetrying).toBe(false);
 	});
 
@@ -379,6 +402,7 @@ describe("AgentSession retry and event characterization", () => {
 		// §16 (M4): prompt_settled trails agent_end as the final event.
 		expect(harness.events[harness.events.length - 1]?.type).toBe("prompt_settled");
 		expect(harness.events[harness.events.length - 2]?.type).toBe("agent_end");
+		expect(harness.eventsOfType("prompt_settled").at(-1)?.outcome).toBe("failed");
 	});
 
 	it("emits agent_end for aborted runs and persists the aborted assistant message", async () => {
@@ -402,6 +426,7 @@ describe("AgentSession retry and event characterization", () => {
 
 		expect(harness.events[harness.events.length - 1]?.type).toBe("prompt_settled");
 		expect(harness.events[harness.events.length - 2]?.type).toBe("agent_end");
+		expect(harness.eventsOfType("prompt_settled").at(-1)?.outcome).toBe("aborted");
 		const lastMessage = harness.session.messages[harness.session.messages.length - 1];
 		expect(lastMessage?.role).toBe("assistant");
 		if (lastMessage?.role === "assistant") {

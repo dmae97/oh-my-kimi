@@ -15,6 +15,7 @@ import {
 	trackDetachedChildPid,
 	untrackDetachedChildPid,
 } from "../../utils/shell.ts";
+import { DEFAULT_BUILTIN_TOOL_TIMEOUTS } from "../agent-tool-settings.ts";
 import { classifyShellCommand } from "../command-safety.ts";
 import { isCommandSafetyDisabled } from "../extensions/builtin/command-safety-gate.ts";
 import type { ExtensionContext, ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
@@ -27,9 +28,12 @@ import { getTextOutput, invalidArgText, str } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult } from "./truncate.ts";
 
+const BASH_TIMEOUT_DESCRIPTION = `Timeout in seconds. Defaults to ${DEFAULT_BUILTIN_TOOL_TIMEOUTS.bash / 1000}s and the command is terminated at that bound, so raise it for long work such as large downloads, builds, or training runs.`;
+
 const bashSchema = Type.Object({
 	command: Type.String({ description: "Bash command to execute" }),
-	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional, no default timeout)" })),
+	// The stated default must track the runtime one; see bash-timeout-disclosure.test.ts.
+	timeout: Type.Optional(Type.Number({ description: BASH_TIMEOUT_DESCRIPTION })),
 });
 
 export type BashToolInput = Static<typeof bashSchema>;
@@ -268,10 +272,6 @@ class BashResultRenderComponent extends Container {
 	};
 }
 
-function formatDuration(ms: number): string {
-	return `${(ms / 1000).toFixed(1)}s`;
-}
-
 function formatBashCall(args: { command?: string; timeout?: number } | undefined): string {
 	const command = str(args?.command);
 	const timeout = args?.timeout as number | undefined;
@@ -294,7 +294,7 @@ function rebuildBashResultRenderComponent(
 	const state = component.state;
 	component.clear();
 
-	let output = getTextOutput(result as any, showImages).trim();
+	let output = getTextOutput(result, showImages).trim();
 	const truncation = result.details?.truncation;
 	const fullOutputPath = result.details?.fullOutputPath;
 	if (!options.isPartial && truncation?.truncated && fullOutputPath && output.endsWith("]")) {
@@ -356,9 +356,9 @@ function rebuildBashResultRenderComponent(
 	}
 
 	if (startedAt !== undefined) {
-		const label = options.isPartial ? "Elapsed" : "Took";
 		const endTime = endedAt ?? Date.now();
-		component.addChild(new Text(`\n${theme.fg("muted", `${label} ${formatDuration(endTime - startedAt)}`)}`, 0, 0));
+		const timing = `${options.isPartial ? "Elapsed" : "Took"} ${((endTime - startedAt) / 1000).toFixed(1)}s`;
+		component.addChild(new Text(`\n${theme.fg("muted", timing)}`, 0, 0));
 	}
 }
 
@@ -503,7 +503,7 @@ export function createBashToolDefinition(
 						throw new Error(appendStatus(text, "Command aborted"));
 					}
 					if (err instanceof Error && err.message.startsWith("timeout:")) {
-						const timeoutSecs = err.message.split(":")[1];
+						const [, timeoutSecs] = err.message.split(":");
 						throw new Error(appendStatus(text, `Command timed out after ${timeoutSecs} seconds`));
 					}
 					throw err;
@@ -545,7 +545,7 @@ export function createBashToolDefinition(
 				(context.lastComponent as BashResultRenderComponent | undefined) ?? new BashResultRenderComponent();
 			rebuildBashResultRenderComponent(
 				component,
-				result as any,
+				result as Parameters<typeof rebuildBashResultRenderComponent>[1],
 				options,
 				context.showImages,
 				state.startedAt,

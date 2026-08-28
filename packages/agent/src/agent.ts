@@ -240,7 +240,7 @@ export class Agent {
 		this.toolExecution = options.toolExecution ?? "parallel";
 		this.toolTimeoutMs = options.toolTimeoutMs;
 		this.toolTimeouts = options.toolTimeouts;
-		this.toolScheduler = options.toolScheduler ?? "waves-v1";
+		this.toolScheduler = options.toolScheduler ?? "dag-v2";
 		this.maxToolConcurrency = options.maxToolConcurrency;
 		this.strictExtensionClaims = options.strictExtensionClaims ?? false;
 		this.cwd = options.cwd;

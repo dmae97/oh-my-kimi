@@ -1,4 +1,4 @@
-/** Browser-safe resource claims for the opt-in dag-v2 scheduler. */
+/** Browser-safe resource claims for the default dag-v2 scheduler. */
 
 import {
 	findRegisteredToolClaimDefinition,
