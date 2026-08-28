@@ -83,6 +83,7 @@ beforeEach(() => {
 
 afterEach(() => {
 	process.stdout.write = originalWrite;
+	vi.useRealTimers();
 	vi.unstubAllEnvs();
 });
 
@@ -134,6 +135,28 @@ describe("copyToClipboard", () => {
 		await copyToClipboard("hello");
 
 		expect(osc52Writes()).toHaveLength(1);
+	});
+
+	test("kills a stuck wl-copy process at the clipboard timeout", async () => {
+		vi.useFakeTimers();
+		mockedPlatform.mockReturnValue("linux");
+		vi.stubEnv("WAYLAND_DISPLAY", "wayland-0");
+		mocks.isWaylandSession.mockReturnValue(true);
+		mockedExecSync.mockReturnValue(Buffer.alloc(0));
+
+		const kill = vi.fn(() => true);
+		const proc = {
+			on: vi.fn(() => proc),
+			stdin: { on: vi.fn(), write: vi.fn(), end: vi.fn() },
+			kill,
+		} as unknown as ReturnType<typeof spawn>;
+		mockedSpawn.mockReturnValue(proc);
+
+		const copying = copyToClipboard("hello");
+		await vi.advanceTimersByTimeAsync(5000);
+		await copying;
+
+		expect(kill).toHaveBeenCalledWith("SIGKILL");
 	});
 
 	test("does not emit oversized OSC 52 payloads", async () => {

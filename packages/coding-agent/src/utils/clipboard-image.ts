@@ -1,8 +1,8 @@
-import { spawnSync } from "child_process";
-import { randomUUID } from "crypto";
-import { readFileSync, unlinkSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
+import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { readFileSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { clipboard } from "./clipboard-native.ts";
 import { loadPhoton } from "./photon.ts";
@@ -108,11 +108,12 @@ function runCommand(
 		return { ok: false, stdout: Buffer.alloc(0) };
 	}
 
-	const stdout = Buffer.isBuffer(result.stdout)
-		? result.stdout
-		: Buffer.from(result.stdout ?? "", typeof result.stdout === "string" ? "utf-8" : undefined);
+	if (Buffer.isBuffer(result.stdout)) {
+		return { ok: true, stdout: result.stdout };
+	}
 
-	return { ok: true, stdout };
+	const encoding = typeof result.stdout === "string" ? "utf-8" : undefined;
+	return { ok: true, stdout: Buffer.from(result.stdout ?? "", encoding) };
 }
 
 function readClipboardImageViaWlPaste(): ClipboardImage | null {
@@ -255,6 +256,27 @@ async function readClipboardImageViaNativeClipboard(): Promise<ClipboardImage | 
 	return { bytes, mimeType: "image/png" };
 }
 
+/**
+ * Normalize one source's read into a supported format, or reject that read.
+ *
+ * Applied per source rather than once after the chain, because a source can
+ * succeed at reading bytes yet still be unusable: WSLg publishes a Windows
+ * screenshot as `image/bmp`, which needs conversion. Folding the conversion
+ * into the source attempt keeps an unconvertible read from disqualifying the
+ * sources behind it — notably the PowerShell reader, which returns PNG
+ * directly and needs no converter at all.
+ */
+async function toSupportedImage(image: ClipboardImage | null): Promise<ClipboardImage | null> {
+	if (!image) {
+		return null;
+	}
+	if (isSupportedImageMimeType(image.mimeType)) {
+		return image;
+	}
+	const pngBytes = await convertToPng(image.bytes);
+	return pngBytes ? { bytes: pngBytes, mimeType: "image/png" } : null;
+}
+
 export async function readClipboardImage(options?: {
 	env?: NodeJS.ProcessEnv;
 	platform?: NodeJS.Platform;
@@ -267,38 +289,25 @@ export async function readClipboardImage(options?: {
 		return null;
 	}
 
+	if (platform !== "linux") {
+		return toSupportedImage(await readClipboardImageViaNativeClipboard());
+	}
+
+	const wsl = isWSL(env, !hasExplicitEnv);
+	const wayland = isWaylandSession(env);
 	let image: ClipboardImage | null = null;
 
-	if (platform === "linux") {
-		const wsl = isWSL(env, !hasExplicitEnv);
-		const wayland = isWaylandSession(env);
-
-		if (wayland || wsl) {
-			image = readClipboardImageViaWlPaste() ?? readClipboardImageViaXclip();
-		}
-
-		if (!image && wsl) {
-			image = readClipboardImageViaPowerShell();
-		}
-
-		if (!image && !wayland) {
-			image = await readClipboardImageViaNativeClipboard();
-		}
-	} else {
-		image = await readClipboardImageViaNativeClipboard();
+	if (wayland || wsl) {
+		image = await toSupportedImage(readClipboardImageViaWlPaste());
+		image ??= await toSupportedImage(readClipboardImageViaXclip());
 	}
 
-	if (!image) {
-		return null;
+	if (!image && wsl) {
+		image = await toSupportedImage(readClipboardImageViaPowerShell());
 	}
 
-	// Convert unsupported formats (e.g., BMP from WSLg) to PNG
-	if (!isSupportedImageMimeType(image.mimeType)) {
-		const pngBytes = await convertToPng(image.bytes);
-		if (!pngBytes) {
-			return null;
-		}
-		return { bytes: pngBytes, mimeType: "image/png" };
+	if (!image && !wayland) {
+		image = await toSupportedImage(await readClipboardImageViaNativeClipboard());
 	}
 
 	return image;

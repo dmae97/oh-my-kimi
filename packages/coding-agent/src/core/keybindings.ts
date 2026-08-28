@@ -109,7 +109,12 @@ export const KEYBINDINGS = {
 		description: "Restore queued messages",
 	},
 	"app.clipboard.pasteImage": {
-		defaultKeys: process.platform === "win32" ? "alt+v" : "ctrl+v",
+		// Two keys because reachability depends on the host terminal, not the
+		// platform: Windows Terminal binds ctrl+v to its own paste action and
+		// never forwards the key, which silently disables image paste for every
+		// session running inside it — WSL included. alt+v is unreserved there,
+		// and ctrl+v still serves terminals that do deliver it.
+		defaultKeys: ["ctrl+v", "alt+v"],
 		description: "Paste image from clipboard",
 	},
 	"app.session.new": { defaultKeys: [], description: "Start a new session" },
