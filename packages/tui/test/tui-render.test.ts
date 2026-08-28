@@ -136,10 +136,11 @@ describe("TUI Kitty image cleanup", () => {
 
 		const writes = terminal.getWrites();
 		const deleteIndex = writes.indexOf(deleteKittyImage(77));
-		const clearIndex = writes.indexOf("\x1b[2J");
+		const homeIndex = writes.indexOf("\x1b[H");
 		assert.ok(deleteIndex >= 0, "previous image should be deleted during full redraw");
-		assert.ok(clearIndex >= 0, "full redraw should clear the screen");
-		assert.ok(deleteIndex < clearIndex, "old image should be deleted before the screen is cleared");
+		assert.ok(homeIndex >= 0, "full redraw should home the cursor before repainting");
+		assert.ok(deleteIndex < homeIndex, "old image should be deleted before the screen is repainted");
+		assert.ok(!writes.includes("\x1b[2J"), "full redraw must not dump the viewport into scrollback");
 
 		tui.stop();
 	});

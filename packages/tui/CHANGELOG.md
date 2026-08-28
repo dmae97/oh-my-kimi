@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Clearing redraws repaint the visible screen in place instead of emitting `\x1b[2J`. conpty/Windows Terminal implement Erase All by shifting the whole viewport into scrollback ([microsoft/terminal#5683](https://github.com/microsoft/terminal/pull/5683)), so on WSL every resize, viewport jump, or repair redraw buried a copy of the live frame — prompt box, footer, loader — in the user's history; scrolling back through a finished answer kept hitting stale prompt boxes that chopped it apart. The repaint now homes the cursor, erases each row as it rewrites it, and erases what a taller previous frame left behind.
+- Bounded the repair repaint for content that changes above the viewport. One changed row re-emitted every row from there to the end of the transcript, and because each re-emitted row evicts an older row from the terminal's finite scrollback, a late tool result or a re-rendered earlier prompt box pushed the beginning of a long report out of scrollback — the report looked truncated when scrolling back. The repaint now reaches at most four viewport screens above the tail; rows older than that keep their existing copy instead of costing the transcript.
+
 ## [0.97.0] - 2026-08-24
 
 ### Fixed

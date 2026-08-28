@@ -281,6 +281,12 @@ export class TUI extends Container {
 	private renderTimer: NodeJS.Timeout | undefined;
 	private lastRenderAt = 0;
 	private static readonly MIN_RENDER_INTERVAL_MS = 16;
+	/**
+	 * How far back a clearing repair repaint may reach, in viewport screens.
+	 * Bounds the scrollback churn of fixing rows that already scrolled off
+	 * (see the repaint budget note in doRender's fullRender helper).
+	 */
+	private static readonly REPAINT_BUDGET_SCREENS = 4;
 	private cursorRow = 0; // Logical cursor row (end of rendered content)
 	private hardwareCursorRow = 0; // Actual terminal cursor row (may differ due to IME positioning)
 	private showHardwareCursor = process.env.OMK_HARDWARE_CURSOR === "1";
@@ -1217,13 +1223,17 @@ export class TUI extends Container {
 			let buffer = "\x1b[?2026h"; // Begin synchronized output
 			if (clear) {
 				buffer += this.deleteKittyImages(this.previousKittyImageIds);
-				// Clear the visible screen and move to home, but PRESERVE scrollback.
-				// \x1b[3J (clear scrollback) used to be emitted here — on WSL/Windows
-				// Terminal every width/height change or viewport reset wiped the
-				// user's scrollback and snapped the viewport to the top. Scrollback
-				// clearing belongs to an explicit user action (e.g. clear), not to
-				// routine re-renders.
-				buffer += "\x1b[2J\x1b[H";
+				// Repaint the visible screen IN PLACE: home the cursor, erase every row
+				// as it is rewritten below, then erase whatever is left over.
+				// \x1b[2J (erase all) is deliberately not used: conpty/Windows Terminal
+				// implement it by shifting the entire viewport into scrollback
+				// (microsoft/terminal#5683), so on WSL every clearing redraw buried a
+				// copy of the live frame — prompt box, footer, loader — in the user's
+				// history, and reading a finished report meant scrolling through stale
+				// prompt boxes chopping it apart. \x1b[3J (erase scrollback) stays out
+				// for the same reason: scrollback belongs to explicit user actions
+				// (e.g. clear), not to routine re-renders.
+				buffer += "\x1b[H";
 			}
 			// Clearing redraws (resize, viewport jumps) repaint only the visible
 			// tail: finalized history already lives in the terminal's scrollback,
@@ -1240,15 +1250,22 @@ export class TUI extends Container {
 			// fromRow duplicates only the changed region and lands the newest copy
 			// adjacent to the live viewport. Resize/viewport jumps omit fromRow and
 			// keep the tail-only behavior that prevents TV-wall stacking.
-			let firstPrinted = 0;
-			if (clear) {
-				firstPrinted = fromRow === undefined ? tailStart : Math.min(fromRow, tailStart);
-			}
+			//
+			// That repair is bounded by REPAINT_BUDGET_SCREENS: re-emitting rows is
+			// the only way to correct scrollback, but every re-emitted row also
+			// evicts an older row from the terminal's finite scrollback. Repainting
+			// a whole session transcript to fix one row far above the viewport
+			// destroys more history than it repairs (a long report loses its
+			// beginning). Rows older than the budget keep their existing copy.
+			// Without fromRow the clamp collapses to tailStart, i.e. tail-only.
+			const repairStart = newLines.length - height * TUI.REPAINT_BUDGET_SCREENS;
+			const firstPrinted = clear ? Math.min(Math.max(fromRow ?? tailStart, repairStart), tailStart) : 0;
 			for (let i = firstPrinted; i < newLines.length; i++) {
 				if (i > firstPrinted) buffer += "\r\n";
-				buffer += newLines[i];
+				buffer += clear ? `\x1b[2K${newLines[i]}` : newLines[i];
 			}
-			buffer += "\x1b[?2026l"; // End synchronized output
+			// \x1b[J drops rows a taller previous frame left below the new content.
+			buffer += clear ? "\x1b[J\x1b[?2026l" : "\x1b[?2026l"; // End synchronized output
 			this.terminal.write(buffer);
 			this.cursorRow = Math.max(0, newLines.length - 1);
 			this.hardwareCursorRow = this.cursorRow;

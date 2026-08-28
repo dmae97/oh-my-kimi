@@ -1,4 +1,5 @@
 import { eastAsianWidth } from "get-east-asian-width";
+import { leadingNonPrintingRegex, rgiEmojiRegex, zeroWidthRegex } from "./unicode-regex.ts";
 
 // segmenters (shared instance)
 const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
@@ -35,11 +36,6 @@ function couldBeEmoji(segment: string): boolean {
 		segment.length > 2 // Multi-codepoint sequences (ZWJ, skin tones, etc.)
 	);
 }
-
-// Regexes for character classification (same as string-width library)
-const zeroWidthRegex = /^(?:\p{Default_Ignorable_Code_Point}|\p{Control}|\p{Mark}|\p{Surrogate})+$/v;
-const leadingNonPrintingRegex = /^[\p{Default_Ignorable_Code_Point}\p{Control}\p{Format}\p{Mark}\p{Surrogate}]+/v;
-const rgiEmojiRegex = /^\p{RGI_Emoji}$/v;
 
 // Cache for non-ASCII strings
 const WIDTH_CACHE_SIZE = 512;
