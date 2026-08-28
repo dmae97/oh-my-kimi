@@ -436,4 +436,58 @@ describe("parseArgs", () => {
 			expect(result.messages).toEqual(["Do the task"]);
 		});
 	});
+	describe("end-of-options terminator", () => {
+		// A prompt is ordinary text, and ordinary text can begin with a dash — a
+		// bullet list, a diff line, a task description quoting a CLI flag. Without
+		// a way to say "stop parsing options", such a prompt is unreachable: it
+		// either lands in unknownFlags or aborts the run with `Unknown option`.
+		// A real Terminal-Bench task was lost this way, its instruction starting
+		// with "  - Reconstruct the original model architecture ...".
+		test("treats a dash-leading argument after -- as a message", () => {
+			const result = parseArgs(["--print", "--", "- Reconstruct the model architecture"]);
+			expect(result.messages).toEqual(["- Reconstruct the model architecture"]);
+			expect(result.diagnostics).toEqual([]);
+		});
+
+		test("keeps parsing flags before the terminator", () => {
+			const result = parseArgs(["--provider", "anthropic", "--", "-p is a flag, here it is text"]);
+			expect(result.provider).toBe("anthropic");
+			expect(result.messages).toEqual(["-p is a flag, here it is text"]);
+		});
+
+		test("stops interpreting known flags after the terminator", () => {
+			const result = parseArgs(["--", "--verbose"]);
+			expect(result.verbose).toBeUndefined();
+			expect(result.messages).toEqual(["--verbose"]);
+		});
+
+		test("collects every remaining argument, terminator included", () => {
+			const result = parseArgs(["--", "first", "--second", "--"]);
+			expect(result.messages).toEqual(["first", "--second", "--"]);
+		});
+
+		test("records no diagnostics for text that would otherwise be an unknown option", () => {
+			const result = parseArgs(["--", "-x"]);
+			expect(result.diagnostics).toEqual([]);
+			expect(result.unknownFlags.size).toBe(0);
+		});
+
+		test("still reports an unknown option before the terminator", () => {
+			const result = parseArgs(["-x", "--", "text"]);
+			expect(result.diagnostics.some((d) => d.type === "error")).toBe(true);
+			expect(result.messages).toEqual(["text"]);
+		});
+
+		test("treats a bare -- with nothing after it as no message", () => {
+			const result = parseArgs(["--print", "--"]);
+			expect(result.print).toBe(true);
+			expect(result.messages).toEqual([]);
+		});
+
+		test("does not consume the terminator as the --print inline message", () => {
+			const result = parseArgs(["--print", "--", "the prompt"]);
+			expect(result.print).toBe(true);
+			expect(result.messages).toEqual(["the prompt"]);
+		});
+	});
 });

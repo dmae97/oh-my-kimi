@@ -15,6 +15,7 @@ import { type Args, type Mode, parseArgs, printHelp } from "./cli/args.ts";
 import { processFileArguments } from "./cli/file-processor.ts";
 import { buildInitialMessage } from "./cli/initial-message.ts";
 import { listModels } from "./cli/list-models.ts";
+import { isExplicitExtensionDiagnostic, resolveCliPaths } from "./cli/resource-paths.ts";
 import { selectSession } from "./cli/session-picker.ts";
 import { handleCodexBarQuotaCommand } from "./codexbar-cli.ts";
 import { runDoctorProviderCli } from "./commands/doctor-provider-cli.ts";
@@ -55,8 +56,10 @@ import { InteractiveMode, runPrintMode, runRpcMode } from "./modes/index.ts";
 import { ExtensionSelectorComponent } from "./modes/interactive/components/extension-selector.ts";
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
 import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
-import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
+import { normalizePath, resolvePath } from "./utils/paths.ts";
 import { cleanupWindowsSelfUpdateQuarantine } from "./utils/windows-self-update.ts";
+
+export { isExplicitExtensionDiagnostic, resolveCliPaths };
 
 /**
  * Read all content from piped stdin.
@@ -139,18 +142,6 @@ function hasPromptIntent(parsed: Args): boolean {
 		parsed.mode === "json" ||
 		parsed.mode === "rpc"
 	);
-}
-
-/** True when a controlling terminal is available (stdin/out/err or /dev/tty). */
-function _hasControllingTerminal(): boolean {
-	if (process.stdin.isTTY || process.stdout.isTTY || process.stderr.isTTY) return true;
-	try {
-		const fd = fs.openSync("/dev/tty", "r+");
-		fs.closeSync(fd);
-		return true;
-	} catch {
-		return false;
-	}
 }
 
 /**
@@ -533,10 +524,6 @@ function buildSessionOptions(
 	return { options, cliThinkingFromModel, diagnostics };
 }
 
-function resolveCliPaths(cwd: string, paths: string[] | undefined): string[] | undefined {
-	return paths?.map((value) => (isLocalPath(value) ? resolvePath(value, cwd) : value));
-}
-
 async function promptForMissingSessionCwd(
 	issue: SessionCwdIssue,
 	settingsManager: SettingsManager,
@@ -769,11 +756,18 @@ export async function main(args: string[], options?: MainOptions) {
 			},
 		});
 		const { settingsManager, modelRegistry, resourceLoader } = services;
+		// A discovered package extension that fails to load must not kill the process.
+		// Any "error" diagnostic exits 1 below, and headless runs (subagents, review and
+		// QA lanes) go through this same path — so one stale third-party package takes
+		// down every spawned agent while the interactive session looks healthy. Only an
+		// extension the user asked for by hand (-e/--extension) stays fatal.
 		const diagnostics: AgentSessionRuntimeDiagnostic[] = [
 			...services.diagnostics,
 			...collectSettingsDiagnostics(settingsManager, "runtime creation"),
 			...resourceLoader.getExtensions().errors.map(({ path, error }) => ({
-				type: "error" as const,
+				type: isExplicitExtensionDiagnostic(path, resolvedExtensionPaths)
+					? ("error" as const)
+					: ("warning" as const),
 				message: `Failed to load extension "${path}": ${error}`,
 			})),
 		];

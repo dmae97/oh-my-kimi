@@ -25,7 +25,8 @@ export function buildInitialMessage({
 }: InitialMessageInput): InitialMessageResult {
 	const parts: string[] = [];
 	if (stdinContent !== undefined) {
-		parts.push(stdinContent);
+		const trailingNewline = stdinContent.endsWith("\n") ? "" : "\n";
+		parts.push(`<stdin>\n${stdinContent}${trailingNewline}</stdin>\n`);
 	}
 	if (fileText) {
 		parts.push(fileText);
