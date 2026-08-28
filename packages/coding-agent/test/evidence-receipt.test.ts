@@ -332,7 +332,7 @@ describe("evidence receipt v3", () => {
 
 		const exactPlaceholderArgv = [["-H", "Cookie: $COOKIE"], ["--header=Set-Cookie: <masked>"]];
 		for (const argv of exactPlaceholderArgv) {
-			expect(() => receipt({ command: { kind: "argv", executable: "curl", argv } })).not.toThrow();
+			expect(() => receipt({ command: { kind: "argv", executable: "curl", argv } })).not.toThrow(); // gitleaks:allow -- intentional fake credential fixture
 		}
 	});
 

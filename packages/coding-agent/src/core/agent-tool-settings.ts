@@ -6,7 +6,16 @@ const DEFAULT_MAX_TOOL_CONCURRENCY = 4;
 const DEFAULT_TOOL_TIMEOUT_MS = 0;
 const MAX_TOOL_TIMEOUT_MS = 2_147_483_647;
 
-const DEFAULT_BUILTIN_TOOL_TIMEOUTS: Readonly<Record<string, number>> = {
+/**
+ * Built-in per-tool timeouts.
+ *
+ * Exported so a tool's own schema can state its real limit. The bash tool used
+ * to advertise "no default timeout" while this table bounded it at five
+ * minutes, so a model had no reason to ask for more on a dataset download or a
+ * training run and simply lost the work when the cap hit. A tool description
+ * that disagrees with the runtime is worse than none.
+ */
+export const DEFAULT_BUILTIN_TOOL_TIMEOUTS: Readonly<Record<string, number>> = {
 	bash: 300_000,
 	edit: 60_000,
 	find: 30_000,

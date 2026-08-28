@@ -11,7 +11,7 @@ import type { OAuthCredentials, OAuthLoginCallbacks, OAuthProviderInterface } fr
 const XAI_OAUTH_ISSUER = "https://auth.x.ai";
 const XAI_OAUTH_DISCOVERY_URL = `${XAI_OAUTH_ISSUER}/.well-known/openid-configuration`;
 const XAI_OAUTH_DEVICE_CODE_URL = `${XAI_OAUTH_ISSUER}/oauth2/device/code`;
-const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
+const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828"; // gitleaks:allow -- public native-app OAuth client id
 const XAI_OAUTH_SCOPE =
 	"openid profile email offline_access grok-cli:access api:access conversations:read conversations:write workspaces:read workspaces:write";
 const XAI_OAUTH_REFERRER = "grok-build";

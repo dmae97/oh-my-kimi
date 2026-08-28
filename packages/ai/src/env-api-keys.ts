@@ -33,8 +33,7 @@ let _procEnvCache: Map<string, string> | null = null;
  * environments on Linux. We can recover the env from `/proc/self/environ`.
  */
 function getProcEnv(key: string): string | undefined {
-	if (!process.versions?.bun) return undefined;
-	if (typeof process === "undefined") return undefined;
+	if (typeof process === "undefined" || !process.versions?.bun) return undefined;
 
 	// If process.env already has entries, the bug is not triggered.
 	if (Object.keys(process.env).length > 0) return undefined;
@@ -150,7 +149,7 @@ export function findEnvKeys(provider: string): string[] | undefined {
 	const envVars = getApiKeyEnvVars(provider);
 	if (!envVars) return undefined;
 
-	const found = envVars.filter((envVar) => !!process.env[envVar] || !!getProcEnv(envVar));
+	const found = envVars.filter((envVar) => Boolean(process.env[envVar] || getProcEnv(envVar)));
 	return found.length > 0 ? found : undefined;
 }
 
@@ -171,13 +170,13 @@ export function getEnvApiKey(provider: string): string | undefined {
 	// Auth is configured via `gcloud auth application-default login`.
 	if (provider === "google-vertex") {
 		const hasCredentials = hasVertexAdcCredentials();
-		const hasProject = !!(
+		const hasProject = Boolean(
 			process.env.GOOGLE_CLOUD_PROJECT ||
-			process.env.GCLOUD_PROJECT ||
-			getProcEnv("GOOGLE_CLOUD_PROJECT") ||
-			getProcEnv("GCLOUD_PROJECT")
+				process.env.GCLOUD_PROJECT ||
+				getProcEnv("GOOGLE_CLOUD_PROJECT") ||
+				getProcEnv("GCLOUD_PROJECT"),
 		);
-		const hasLocation = !!(process.env.GOOGLE_CLOUD_LOCATION || getProcEnv("GOOGLE_CLOUD_LOCATION"));
+		const hasLocation = Boolean(process.env.GOOGLE_CLOUD_LOCATION || getProcEnv("GOOGLE_CLOUD_LOCATION"));
 
 		if (hasCredentials && hasProject && hasLocation) {
 			return "<authenticated>";

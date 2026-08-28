@@ -182,7 +182,7 @@ describe("executeVerifiedBash", () => {
 	it("executes the original secret-bearing script and persists only the redacted representation", async () => {
 		// Given: a script containing an inline credential and an observing runner.
 		const secretScript =
-			"curl -H 'Authorization: Bearer synthetic-adapter-secret-token' https://example.invalid && mkdir -p dist";
+			"curl -H 'Authorization: Bearer synthetic-adapter-secret-token' https://example.invalid && mkdir -p dist"; // gitleaks:allow -- intentional fake credential fixture
 		let observedScript = "";
 		const operations: BashOperations = {
 			exec: async (script) => {

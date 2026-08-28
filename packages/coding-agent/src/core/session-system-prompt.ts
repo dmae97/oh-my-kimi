@@ -1,4 +1,4 @@
-import type { ContextFile } from "./resource-loader.ts";
+import type { ContextFile } from "./context-file.ts";
 import type { Skill } from "./skills.ts";
 import { type BuildSystemPromptOptions, type BuiltSystemPrompt, buildSystemPromptPlan } from "./system-prompt.ts";
 

@@ -18,7 +18,7 @@ describe("redactSecrets", () => {
 				"Authorization: Bearer SYNTHETIC_BEARER_TOKEN_123456",
 				"redirect=https://example.test/callback?token=SYNTHETIC_TOKEN_123456&ok=1",
 				"access_token=SYNTHETIC_ACCESS_TOKEN_123456",
-				"api_key=SYNTHETIC_API_KEY_123456",
+				"api_key=SYNTHETIC_API_KEY_123456", // gitleaks:allow -- intentional fake credential fixture
 				"password=synthetic-password-value",
 				"card=4242 4242 4242 4242",
 				"cvv=123",

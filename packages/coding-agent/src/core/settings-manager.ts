@@ -172,7 +172,7 @@ export interface Settings {
 	agent?: AgentRuntimeSettings;
 	/** Resource-aware runtime governor: observe records, adaptive/strict throttle per-run tool concurrency (docs/settings.md). */
 	resourceGovernor?: ResourceGovernorSettings;
-	/** Completion notifications; `notifications.completionSound` is default-off (docs/settings.md). */
+	/** Completion notifications; sound defaults on for interactive TTY settlement (docs/settings.md). */
 	notifications?: NotificationSettings;
 	branchSummary?: BranchSummarySettings;
 	retry?: RetrySettings;

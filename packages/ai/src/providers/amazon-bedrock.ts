@@ -145,7 +145,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
 		if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
 			// Region resolution: explicit option > env vars > SDK default chain.
 			// When AWS_PROFILE is set, we leave region undefined so the SDK can
-			// resovle it from aws profile configs. Otherwise fall back to us-east-1.
+			// resolve it from AWS profile configs. Otherwise fall back to us-east-1.
 			if (configuredRegion) {
 				config.region = configuredRegion;
 			} else if (endpointRegion && useExplicitEndpoint) {

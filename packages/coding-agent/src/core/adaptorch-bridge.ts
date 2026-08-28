@@ -1,13 +1,12 @@
 /**
  * Reasoning-router AdaptOrch advisory bridge (Goal 009 Lane B).
  *
- * A default-off, advisory-only primitive for a future reasoning-router hint
- * source. This module is intentionally NOT wired into agent-session.ts; it only
- * implements the bridge's payload/result schema, sanitize/validate helpers, TTL
- * cache, budget counter, circuit breaker, and timeout wrapper around a
- * caller-injected advisory function. A future lane decides how (or whether) to
- * fuse a returned hint into a resolved ThinkingLevel and to actually call this
- * module from agent-session.ts.
+ * A default-off, advisory-only primitive wired into AgentSession's v4 resolver.
+ * AgentSession reads only the bridge's bounded cache and uses a caller-injected
+ * advisory function for refresh; the current production transport is a no-op,
+ * so it returns no hint. This module owns payload/result validation, TTL cache,
+ * budget counter, circuit breaker, and timeout handling. It never calls an MCP
+ * transport directly or receives execution authority.
  *
  * Grounded in the read-first plan at
  * .omk/goals/008-reasoning-router-advanced-accuracy-plan/laneC-privacy-adaptorch.md
@@ -18,18 +17,17 @@
  *  - The router's turn-start path is synchronous and I/O-free today (plan
  *    4.4). This module never calls an MCP transport directly and exposes a
  *    synchronous, cache-read-only accessor (`getFreshHint`) plus a
- *    fire-and-forget refresh (`requestRefresh`) so a future integration can
- *    never block or await this module inline on the turn-start path.
+ *    fire-and-forget refresh (`requestRefresh`) so the AgentSession integration
+ *    never blocks or awaits advisory I/O on the turn-start path.
  *  - The real, documented AdaptOrch tool surface has no confidence or
  *    reasoning-level field (plan 4.3); this module's inbound result type
  *    (`AdaptorchAdvisoryResult`) therefore only carries a locally-relevant
  *    `taskClass` and a `confidenceBand` - both closed enums - never a raw
- *    numeric confidence or a `ThinkingLevel` value. Fusing a hint into a
- *    resolved level is out of scope for this module.
+ *    numeric confidence or a `ThinkingLevel` value. AgentSession owns the
+ *    bounded fusion from this advisory shape into the v4 resolver.
  *  - No product source is imported here. `AdaptorchTaskClass` /
  *    `AdaptorchLaneType` intentionally mirror the v4 task/lane unions by
- *    value, not by import, so this bridge remains isolated until a future
- *    wiring lane deliberately connects it to the router.
+ *    value, while AgentSession adapts them at the integration boundary.
  *  - Every outbound/inbound field is a closed enum, a boolean, or a bounded
  *    integer, derived from local features only. There is structurally no
  *    field shaped to carry prompt text, a prompt hash, a file/working-

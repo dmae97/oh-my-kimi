@@ -3,22 +3,8 @@ import { getModel } from "../src/models.ts";
 import { streamOpenAIResponses } from "../src/providers/openai-responses.ts";
 import type { Model } from "../src/types.ts";
 
-type CapturedHeaders = Headers | string[][] | Record<string, string | readonly string[]> | undefined;
-
-function getHeader(headers: CapturedHeaders, name: string): string | null {
-	if (!headers) return null;
-	if (headers instanceof Headers) return headers.get(name);
-
-	const lowerName = name.toLowerCase();
-	if (Array.isArray(headers)) {
-		const match = headers.find(([key]) => key?.toLowerCase() === lowerName);
-		return match?.[1] ?? null;
-	}
-
-	for (const [key, value] of Object.entries(headers)) {
-		if (key.toLowerCase() === lowerName) return typeof value === "string" ? value : value.join(", ");
-	}
-	return null;
+function getHeader(headers: RequestInit["headers"], name: string): string | null {
+	return new Headers(headers).get(name);
 }
 
 async function captureOpenAIResponseHeaders(

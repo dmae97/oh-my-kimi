@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-import { writeFileSync } from "fs";
-import { dirname, join } from "path";
-import { fileURLToPath } from "url";
+import { writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ImagesModel } from "../src/types.ts";
 
 const __filename = fileURLToPath(import.meta.url);

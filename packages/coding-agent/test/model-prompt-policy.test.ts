@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
+import type { ContextFile } from "../src/core/context-file.ts";
 import { selectContextFilesForModel } from "../src/core/model-prompt-policy.ts";
-import type { ContextFile } from "../src/core/resource-loader.ts";
 
 const originalClaudeContextFiles = process.env.OMK_CLAUDE_CONTEXT_FILES;
 

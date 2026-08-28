@@ -1,4 +1,4 @@
-import type { ContextFile } from "./resource-loader.ts";
+import type { ContextFile } from "./context-file.ts";
 
 export interface PromptModelReference {
 	readonly provider: string;

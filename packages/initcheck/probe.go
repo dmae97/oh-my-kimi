@@ -50,11 +50,10 @@ func ProbeModels(
 	var wait sync.WaitGroup
 	wait.Add(len(specs))
 	for index, spec := range specs {
-		index, spec := index, spec
-		go func() {
+		go func(index int, spec ModelSpec) {
 			defer wait.Done()
 			results[index] = probeModel(ctx, client, config, spec)
-		}()
+		}(index, spec)
 	}
 	wait.Wait()
 	client.CloseIdleConnections()

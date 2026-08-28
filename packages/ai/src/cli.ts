@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+// Console output is this CLI's public interface, not application debug logging.
 import { createInterface } from "node:readline";
-import { existsSync, readFileSync, writeFileSync } from "fs";
 import { getOAuthProvider, getOAuthProviders } from "./utils/oauth/index.ts";
 import type { OAuthCredentials, OAuthProviderId } from "./utils/oauth/types.ts";
 

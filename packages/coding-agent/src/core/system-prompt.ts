@@ -8,7 +8,7 @@ import {
 	type SystemPromptContextBudgetOptions,
 } from "./context-budget-system-prompt.ts";
 import { escapeXml, escapeXmlText } from "./context-budget-system-prompt-items.ts";
-import type { ContextFile } from "./resource-loader.ts";
+import type { ContextFile } from "./context-file.ts";
 import { formatSkillsForPrompt, type Skill } from "./skills.ts";
 
 const RUNTIME_TRUST_BOUNDARY = `
