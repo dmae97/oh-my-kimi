@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Refreshed the model catalogs. GLM-5.3 Flash is now registered on five routes (`glm-5.3-flash` on Z.AI and Z.AI Coding, `zai/glm-5.3-flash` on Vercel AI Gateway, `z-ai/glm-5.3-flash` on OpenRouter, `@cf/zai-org/glm-5.3-flash` on Cloudflare Workers AI), alongside `glm-5.3-highspeed`, Qwen3.8 Flash, MiniMax M3, DeepSeek V4 Pro 0813, Tencent HY4 preview, GPT-OSS Safeguard 120B, and Ling 3.0 Flash Fin — 21 models added, 72 retired, 1,279 to 1,217 overall. Every upstream source answered during the refresh, so the removals are upstream retirements rather than a short read.
+
+### Changed
+
+- Tests no longer pin volatile model ids, which is what turned each catalog refresh into unrelated failures. `stealth/ox-alpha` was pinned by name and by property, but OpenRouter's stealth slots are temporary previews that rotate, so the assertions now cover whatever `stealth/*` entries exist under the same contract. The Fireworks router test pinned the `-turbo` generation that was retired with the move to the K3 line, and now asserts what actually makes a router a router; image input is checked per model because it follows the routed model rather than the class. Cloudflare deprecated the AI Gateway `/compat` endpoint and upstream stopped listing `workers-ai/*` under that provider, so the gateway integration blocks that targeted it were retargeted to a surviving gateway model or removed where direct Workers AI coverage already existed. The two unit tests that cover our `/compat` request shaping now build the model explicitly, since the client path still ships for existing integrations while no catalog entry targets it.
+
 ### Fixed
 
 - The model catalog generators no longer overwrite the committed catalog after a short read. Each provider pass caught its own fetch error and returned an empty result, so a timeout, rate limit, or transient 5xx deleted that provider from the catalog while the script still exited 0 — and the resulting diff is indistinguishable from upstream retiring models, which makes the regeneration unreviewable. `generate-models` now records every failed source and refuses to write, listing what failed and offering `--allow-partial` for a loss that is real; `generate-image-models` throws instead of writing an empty catalog. Verified in a network namespace with no connectivity: both exit 1 and leave the committed files byte-identical. Zyloo keeps its own fallback because it degrades to a curated six-model constant that matches the live list rather than to nothing.
