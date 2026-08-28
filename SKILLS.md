@@ -12,6 +12,7 @@ Invoke any available skill with `!skill:<name>` or `/skill:<name>`. `caveman` is
 | --- | --- |
 | [`add-llm-provider`](.omk/skills/add-llm-provider.md) | Checklist for adding and wiring a new LLM provider. |
 | [`clone-website`](.omk/skills/clone-website/SKILL.md) | Reverse-engineer and rebuild websites with bounded parallel builders. |
+| [`cli-anything`](.omk/skills/cli-anything/SKILL.md) | Build a CLI harness that lets an agent drive GUI-only software. Paired with the [`cli-anything`](.omk/extensions/cli-anything/README.md) extension. |
 | [`omk-computeruse`](.omk/skills/omk-computeruse/SKILL.md) | Route desktop, browser, Stagehand, and WSL-to-Windows computer-use tasks. |
 | [`reverse-skill`](.omk/skills/reverse-skill/SKILL.md) | Route and adapt reverse-engineering and security workflow packs. |
 | [`omk-engine`](.omk/skills/omk-engine/SKILL.md) | Project-local OMK operating profile: repository workflow config and small skill-set selection. |
