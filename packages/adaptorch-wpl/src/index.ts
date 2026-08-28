@@ -6,8 +6,38 @@
  * `open-multi-agent-kit` CLI.
  */
 
+export type {
+	AdaptOrchApiConfig,
+	AdaptOrchFetch,
+	AdaptOrchHttpResponse,
+	AdaptOrchRequestInit,
+	Artifact,
+	ArtifactListResponse,
+	CapabilitySet,
+	EvidenceCheck,
+	EvidenceReport,
+	ListRunsQuery,
+	Principal,
+	Run,
+	RunListResponse,
+	RunStatus,
+	RunSubmission,
+} from "./adaptorch-api.ts";
+export {
+	ADAPTORCH_DEFAULT_API_URL,
+	AdaptOrchApiClient,
+	AdaptOrchApiError,
+	assertSafeApiUrl,
+	createAdaptOrchApiClientFromEnv,
+	resolveAuthHeaders,
+} from "./adaptorch-api.ts";
 export type { AdaptOrchTransport } from "./adaptorch-client.ts";
-export { AdaptOrchClient } from "./adaptorch-client.ts";
+export {
+	ADAPTORCH_FULL_ONLY_TOOLS,
+	ADAPTORCH_REMOTE_TOOLS,
+	ADAPTORCH_TOOLS,
+	AdaptOrchClient,
+} from "./adaptorch-client.ts";
 export type { AdjudicationRequest, AdjudicationResult, PerRunVerdict } from "./adjudicator.ts";
 export { adjudicate } from "./adjudicator.ts";
 export type {

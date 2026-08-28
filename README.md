@@ -262,12 +262,33 @@ Starter is free and self-hosted on your own machine. A bring-your-own model key
 is required on every tier, so nothing executes without your key. It works
 alongside any coding agent, OMK included.
 
-### Connecting it as an MCP server
+### Two ways to reach it
 
-AdaptOrch ships an MCP server (`adaptorch-mcp`), so OMK attaches it the same way
-as any other MCP server — see [MCP](packages/coding-agent/docs/mcp.md). The tool
-surface is tiered, and the tier matters: nine core tools reach a remote tenant,
-while trace and topology reads exist only in a full or local deployment.
+**Hosted API (start here).** `omk-adaptorch-wpl` ships `AdaptOrchApiClient`, a
+typed client for the AdaptOrch User API v1. It needs an API key and nothing
+else — no engine install, no server process. The package still opens no network
+I/O of its own, so you pass in `fetch` and keep ownership of the HTTP stack:
+
+```ts
+import { createAdaptOrchApiClientFromEnv } from "omk-adaptorch-wpl";
+
+// undefined unless ADAPTORCH_API_KEY is set, so AdaptOrch stays opt-in
+const adaptorch = createAdaptOrchApiClientFromEnv(fetch);
+const run = await adaptorch?.submitRun({ subtasks: [{ prompt: "check this patch" }] });
+const evidence = run && (await adaptorch?.getEvidence(run.run_id));
+```
+
+A tenant key (`ado_` prefix) is sent only as `X-API-Key`, never also in
+`Authorization`; any other credential is sent as a bearer token. Plaintext HTTP
+is refused except for an exact loopback host, and a credential is scrubbed from
+any error message before it is raised.
+
+**MCP server (local engine).** AdaptOrch also ships an MCP server
+(`adaptorch-mcp`), which OMK attaches like any other MCP server — see
+[MCP](packages/coding-agent/docs/mcp.md). This path wraps a *local* parent
+engine, so it requires that engine installed. The tool surface is tiered, and
+the tier matters: nine core tools reach a remote tenant, while trace and
+topology reads exist only in a full or local deployment.
 
 | Tier | Tools |
 | --- | --- |
