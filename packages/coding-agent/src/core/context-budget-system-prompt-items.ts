@@ -1,7 +1,7 @@
 import { pathToFileURL } from "node:url";
 import { type ContextBudgetItemV2, fnv1aHex } from "./context-budget-governor-v2.ts";
 import { scoreContextFileRelevance, scoreSkillRelevance } from "./context-budget-relevance.ts";
-import type { ContextFile } from "./resource-loader.ts";
+import type { ContextFile } from "./context-file.ts";
 import type { Skill } from "./skills.ts";
 
 interface SystemPromptBudgetItemInput {

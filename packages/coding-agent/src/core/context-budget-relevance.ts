@@ -317,16 +317,28 @@ export function scoreSkillRelevance(
 const CONTEXT_NEUTRAL_GLOBAL = 0.9;
 const CONTEXT_NEUTRAL_LOCAL = 0.6;
 const PATH_TOKEN_WEIGHT = 2;
-const GLOBAL_BONUS = 0.1;
 const CONTENT_SAMPLE_CHARS = 2000;
 
 /**
  * Score context file relevance against a query context.
  *
- * - queryContext undefined -> isGlobal ? 0.9 : 0.6
+ * - Baseline (no query evidence) -> isGlobal ? 0.9 : 0.6
  * - Coverage of query tokens against path segments + content sample
  * - Path tokens weighted 2x
- * - isGlobal bonus: +0.1
+ * - Coverage allocates the headroom ABOVE the baseline; it never cuts into it
+ *
+ * A context file is not retrieved reference material — it is the standing
+ * instruction set the agent is required to follow, and it applies whether or
+ * not the user's current sentence reuses its vocabulary. Scoring it purely by
+ * lexical overlap made the rules rank LOWEST exactly when the agent was doing
+ * work: this repository's own AGENTS.md scored 0.9 idle but 0.1 under queries
+ * like "rename this variable". Coverage therefore raises the score from the
+ * baseline toward 1 instead of replacing it, which also reconciles the two
+ * readings the function used to have — an absent query and a present-but-
+ * non-overlapping query now agree that there is simply no evidence to add.
+ *
+ * Lexical scoring stays the right metric for skills, which really are
+ * topic-scoped; see scoreSkillRelevance.
  */
 export function scoreContextFileRelevance(
 	contextFile: { readonly path: string; readonly content: string; readonly isGlobal: boolean },
@@ -357,14 +369,13 @@ export function scoreContextFileRelevance(
 		PATH_TOKEN_WEIGHT,
 	);
 
-	let score = computeCoverage(queryTokens, fileTokenSet, fileWeights);
+	const coverage = computeCoverage(queryTokens, fileTokenSet, fileWeights);
 
-	// Global file bonus
-	if (contextFile.isGlobal) {
-		score = Math.min(1, score + GLOBAL_BONUS);
-	}
-
-	return clamp01(score);
+	// The baseline is a floor, not a starting guess: query evidence distributes
+	// the remaining headroom above it. Zero coverage returns the baseline exactly,
+	// matching the no-query branch above.
+	const baseline = contextFile.isGlobal ? CONTEXT_NEUTRAL_GLOBAL : CONTEXT_NEUTRAL_LOCAL;
+	return clamp01(baseline + (1 - baseline) * clamp01(coverage));
 }
 
 // ---------------------------------------------------------------------------

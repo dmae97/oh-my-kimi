@@ -11,7 +11,7 @@ import {
 	createTokenCounterForMode,
 	type TokenCounterAdapter,
 } from "./context-budget-token-counter.ts";
-import type { ContextFile } from "./resource-loader.ts";
+import type { ContextFile } from "./context-file.ts";
 import type { Skill } from "./skills.ts";
 
 export interface SystemPromptContextBudgetOptions {

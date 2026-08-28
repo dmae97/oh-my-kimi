@@ -676,7 +676,7 @@ describe("context-cache invalidation result wrapper freeze", () => {
 describe("context-cache invalidation credential rejection", () => {
 	const credentialSamples: ReadonlyArray<{ label: string; value: string }> = [
 		{ label: "openai sk-", value: "sk-1234567890abcdef" },
-		{ label: "github classic", value: "ghp_1234567890abcdef1234567890abcdef123456" },
+		{ label: "github classic", value: "ghp_1234567890abcdef1234567890abcdef123456" }, // gitleaks:allow -- intentional fake credential fixture
 		{ label: "github fine-grained", value: "github_pat_11ABCDEFG0123456789abcdefghij" },
 		{ label: "slack", value: "xoxb-1234567890-abcdefghij" },
 		{ label: "aws", value: "AKIA1234567890ABCDEF" },

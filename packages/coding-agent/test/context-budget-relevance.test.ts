@@ -291,3 +291,65 @@ describe("edge cases", () => {
 		expect(score).toBeCloseTo(0.6, 5);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Standing-authority floor (WS5-pre)
+//
+// Context files are not retrieved reference material — they are the standing
+// instructions the agent is required to follow. Their worth does not depend on
+// whether the user's current sentence happens to reuse their vocabulary.
+//
+// Before this floor existed the function held two contradictory opinions about
+// a context file with no query evidence: 0.9 when the query was absent, but
+// 0.1 when a query was present and simply did not overlap. That made the rules
+// score LOWEST exactly when the agent was doing work.
+// ---------------------------------------------------------------------------
+
+describe("scoreContextFileRelevance standing-authority floor", () => {
+	const globalRules = {
+		path: "/home/user/AGENTS.md",
+		content: [
+			"Never commit secrets or credentials.",
+			"Always run the test suite before declaring work complete.",
+			"Prefer the smallest change that solves the stated problem.",
+		].join("\n"),
+		isGlobal: true,
+	};
+	const localRules = { ...globalRules, path: "/project/AGENTS.md", isGlobal: false };
+
+	// Ordinary work queries that share no vocabulary with the rules above.
+	const unrelatedQueries = [
+		"fix the WSL clipboard paste bug",
+		"why is the import cycle gate failing",
+		"add a retry to the HTTP client",
+		"rename this variable",
+	];
+
+	for (const query of unrelatedQueries) {
+		it(`keeps a global rules file at its baseline for: "${query}"`, () => {
+			expect(scoreContextFileRelevance(globalRules, query)).toBeGreaterThanOrEqual(0.9);
+		});
+	}
+
+	it("keeps a local rules file at its baseline under an unrelated query", () => {
+		for (const query of unrelatedQueries) {
+			expect(scoreContextFileRelevance(localRules, query)).toBeGreaterThanOrEqual(0.6);
+		}
+	});
+
+	it("never scores a context file lower than its own no-query baseline", () => {
+		for (const file of [globalRules, localRules]) {
+			const baseline = scoreContextFileRelevance(file, undefined);
+			for (const query of unrelatedQueries) {
+				expect(scoreContextFileRelevance(file, query)).toBeGreaterThanOrEqual(baseline);
+			}
+		}
+	});
+
+	it("still lets query evidence raise a file above its baseline", () => {
+		const onTopic = scoreContextFileRelevance(localRules, "run the test suite before declaring complete");
+		const offTopic = scoreContextFileRelevance(localRules, "rename this variable");
+		expect(onTopic).toBeGreaterThan(offTopic);
+		expect(onTopic).toBeGreaterThan(0.6);
+	});
+});

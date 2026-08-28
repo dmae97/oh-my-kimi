@@ -3,6 +3,7 @@ import { join, resolve, sep } from "node:path";
 import chalk from "chalk";
 import { CONFIG_DIR_NAME } from "../config.ts";
 import { loadThemeFromPath, type Theme } from "../modes/interactive/theme/theme.ts";
+import type { ContextFile } from "./context-file.ts";
 import type { ResourceDiagnostic } from "./diagnostics.ts";
 
 export type { ResourceCollision, ResourceDiagnostic } from "./diagnostics.ts";
@@ -31,14 +32,6 @@ const DISABLED_ENV_VALUES = new Set(["0", "false", "off", "disable", "disabled"]
 /** `true` when an env var is explicitly set to a disabling value. Unset means enabled. */
 function isDisabledByEnv(value: string | undefined): boolean {
 	return value !== undefined && DISABLED_ENV_VALUES.has(value.trim().toLowerCase());
-}
-
-export interface ContextFile {
-	path: string;
-	content: string;
-	isGlobal?: boolean;
-	containsJailbreak?: boolean;
-	sanitized?: boolean;
 }
 
 export interface ResourceExtensionPaths {
