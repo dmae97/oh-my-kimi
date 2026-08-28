@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -89,6 +89,47 @@ describe("release artifacts do not depend on live provider APIs", () => {
 		assert.ok(scripts["models:refresh"], "root package.json must expose models:refresh");
 		assert.match(scripts["models:refresh"], /generate-models/);
 		assert.match(scripts["models:refresh"], /generate-image-models/);
+	});
+
+	it("prunes workspace copies that shadow the workspace links before checking", async () => {
+		// `npm version --workspaces` plus `npm install --package-lock-only` leaves a
+		// nested packages/<pkg>/node_modules/<workspace-pkg> directory pinned at the
+		// pre-bump version, and `npm install` does not prune it. The stale copy
+		// shadows the workspace link, so check:dep-tree failed the release after the
+		// bump had already been written to every package.json.
+		const { findShadowedWorkspaceCopies } = await import(join(root, "scripts", "release.mjs"));
+		assert.equal(typeof findShadowedWorkspaceCopies, "function");
+
+		const dir = mkdtempSync(join(tmpdir(), "omk-shadow-"));
+		try {
+			const pkgDir = join(dir, "packages", "agent");
+			mkdirSync(join(pkgDir, "node_modules", "omk-ai"), { recursive: true });
+			mkdirSync(join(dir, "packages", "ai"), { recursive: true });
+			writeFileSync(join(dir, "packages", "ai", "package.json"), JSON.stringify({ name: "omk-ai" }));
+			writeFileSync(join(pkgDir, "package.json"), JSON.stringify({ name: "omk-agent-core" }));
+
+			const found = findShadowedWorkspaceCopies(dir);
+			assert.deepEqual(found, [join(pkgDir, "node_modules", "omk-ai")]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("leaves a workspace symlink alone, since that is the correct link", async () => {
+		const { findShadowedWorkspaceCopies } = await import(join(root, "scripts", "release.mjs"));
+		const dir = mkdtempSync(join(tmpdir(), "omk-shadow-link-"));
+		try {
+			mkdirSync(join(dir, "packages", "ai"), { recursive: true });
+			writeFileSync(join(dir, "packages", "ai", "package.json"), JSON.stringify({ name: "omk-ai" }));
+			const nodeModules = join(dir, "packages", "agent", "node_modules");
+			mkdirSync(nodeModules, { recursive: true });
+			writeFileSync(join(dir, "packages", "agent", "package.json"), JSON.stringify({ name: "omk-agent-core" }));
+			symlinkSync(join(dir, "packages", "ai"), join(nodeModules, "omk-ai"), "dir");
+
+			assert.deepEqual(findShadowedWorkspaceCopies(dir), []);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	it("keeps the generated catalogs committed so a release can read them", () => {

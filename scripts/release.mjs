@@ -21,7 +21,7 @@
  */
 
 import { execSync } from "child_process";
-import { readFileSync, writeFileSync, readdirSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, readdirSync, existsSync, lstatSync, readlinkSync, rmSync } from "fs";
 import { join } from "path";
 import { pathToFileURL } from "url";
 
@@ -109,18 +109,77 @@ function stageChangedFiles() {
 }
 
 /**
+ * Physical copies of workspace packages that shadow the workspace links.
+ *
+ * `npm version --workspaces` followed by `npm install --package-lock-only`
+ * leaves a nested `packages/<pkg>/node_modules/<workspace-pkg>` directory
+ * pinned at the pre-bump version. A plain `npm install` does not prune it, so
+ * the stale copy survives and breaks reference identity between the two copies
+ * of the same package — failing `check:dep-tree` after the bump has already
+ * been written to every package.json. A symlink here is the correct workspace
+ * link and is left alone; only a real directory is a shadow.
+ */
+export function findShadowedWorkspaceCopies(repoRoot = ".") {
+	const packagesDir = join(repoRoot, "packages");
+	if (!existsSync(packagesDir)) return [];
+
+	const packageDirs = readdirSync(packagesDir).filter((dir) =>
+		existsSync(join(packagesDir, dir, "package.json")),
+	);
+	const workspaceNames = new Set();
+	for (const dir of packageDirs) {
+		const { name } = JSON.parse(readFileSync(join(packagesDir, dir, "package.json"), "utf8"));
+		if (name) workspaceNames.add(name);
+	}
+
+	const shadowed = [];
+	for (const dir of packageDirs) {
+		const nodeModules = join(packagesDir, dir, "node_modules");
+		if (!existsSync(nodeModules)) continue;
+		for (const name of workspaceNames) {
+			const candidate = join(nodeModules, name);
+			if (!existsSync(candidate) && !isSymlink(candidate)) continue;
+			if (isSymlink(candidate)) continue;
+			shadowed.push(candidate);
+		}
+	}
+	return shadowed.sort();
+}
+
+function isSymlink(path) {
+	try {
+		return lstatSync(path).isSymbolicLink();
+	} catch {
+		return false;
+	}
+}
+
+/** Drop `.bin` entries left dangling by a pruned copy; a dangling link fails the same gate. */
+function removeDanglingBinLinks(binDir) {
+	if (!existsSync(binDir)) return;
+	for (const entry of readdirSync(binDir)) {
+		const link = join(binDir, entry);
+		if (!isSymlink(link)) continue;
+		if (existsSync(join(binDir, readlinkSync(link)))) continue;
+		rmSync(link, { force: true });
+	}
+}
+
+/**
  * Rebuild `node_modules` after a bump.
  *
  * The version scripts run `npm install --package-lock-only`, which updates the
- * lockfile but leaves the physical copies under each package's `node_modules`
- * at the old version. Those stale copies shadow the workspace links, so
- * `check:dep-tree`
- * fails the release after the bump has already been written to every
- * package.json. Syncing the tree here keeps the checks running against what the
- * release actually is.
+ * lockfile but leaves stale physical copies behind. Prune those first, because
+ * `npm install` adds and updates but does not remove them, then install so the
+ * checks run against what the release actually is.
  */
 function syncWorkspaceTree() {
 	console.log("Rebuilding node_modules for the bumped versions...");
+	for (const shadowed of findShadowedWorkspaceCopies(".")) {
+		console.log(`  Pruning shadowed copy: ${shadowed}`);
+		rmSync(shadowed, { recursive: true, force: true });
+		removeDanglingBinLinks(join(shadowed, "..", ".bin"));
+	}
 	run("npm install --ignore-scripts");
 }
 
