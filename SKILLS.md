@@ -1,6 +1,6 @@
 # Public Skills
 
-OMK currently publishes **31 project-local skills** in this repository under [`.omk/skills`](.omk/skills). When OMK runs from a repository checkout, it discovers these skills automatically and loads them on demand.
+OMK currently publishes **29 project-local skills** in this repository under [`.omk/skills`](.omk/skills). When OMK runs from a repository checkout, it discovers these skills automatically and loads them on demand.
 
 These repository skills are **not bundled into the `open-multi-agent-kit` npm package**. The package publishes only the paths declared in [`packages/coding-agent/package.json`](packages/coding-agent/package.json). See the [skills documentation](packages/coding-agent/docs/skills.md) for discovery rules and packaging your own skills.
 
@@ -30,8 +30,6 @@ Invoke any available skill with `!skill:<name>` or `/skill:<name>`. `caveman` is
 | Skill | Purpose |
 | --- | --- |
 | [`gitreverse`](.omk/skills/gitreverse/SKILL.md) | Turn a public GitHub repository into one conversational rebuild-from-scratch prompt grounded in repo evidence. |
-| [`system-prompts-leaks`](.omk/skills/system-prompts-leaks/SKILL.md) | Searchable archive of leaked and published production AI system prompts for study and reference. |
-| [`omk-godmod`](.omk/skills/omk-godmod/SKILL.md) | Prompt-architecture research over real shipped system prompts — comparative analysis and safety-layer mapping (defensive only). |
 
 ## Ponytail
 
@@ -64,7 +62,8 @@ Invoke any available skill with `!skill:<name>` or `/skill:<name>`. `caveman` is
 
 ## Distribution and provenance
 
-- **Public repository:** all 31 skills above are tracked in Git.
+- **Public repository:** all 29 skills above are tracked in Git.
+- **Not listed:** `system-prompts-leaks` and `omk-godmod` are machine-local research corpora that `.gitignore` marks "never version or publish". They were advertised here while shipping in no commit, so every link was a 404 for anyone but their author.
 - **Repository checkout:** OMK discovers them as project-local skills.
 - **npm package:** none of these root-level `.omk/skills` files are currently included in `open-multi-agent-kit`.
 - **Vendored content:** [`taste-skill`](.omk/skills/taste-skill/SOURCE.md), [`caveman`](.omk/skills/caveman/SOURCE.md), [`ponytail`](.omk/skills/ponytail/SKILL.md), and [`clone-website`](.omk/skills/clone-website/LICENSE-THIRD-PARTY) retain their source and license notices.

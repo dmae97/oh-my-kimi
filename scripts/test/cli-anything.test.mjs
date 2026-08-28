@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
@@ -119,9 +120,19 @@ describe("skill catalog self-consistency", () => {
 		}
 	});
 
-	it("points every catalog row at a file that exists", () => {
+	it("points every catalog row at a file that ships", () => {
+		// Tracked, not merely present: `.gitignore` marks two skill directories
+		// "never version or publish", and the catalog advertised both. Checking the
+		// filesystem passes on the author's machine and fails in CI, which is the
+		// worst place to learn that a public catalog links to nothing.
+		const tracked = new Set(
+			execFileSync("git", ["ls-files", "-z"], { cwd: repoRoot, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })
+				.split("\0")
+				.filter(Boolean),
+		);
 		for (const [, target] of catalog.matchAll(/^\| \[`[^`]+`\]\(([^)]+)\)/gm)) {
 			assert.ok(existsSync(join(repoRoot, target)), `catalog row points at missing ${target}`);
+			assert.ok(tracked.has(target), `catalog row points at untracked ${target}; a fresh checkout will 404`);
 		}
 	});
 });
