@@ -210,13 +210,18 @@ The TypeScript SDK exposes session creation, provider configuration, tools, even
 
 ## OMK + AdaptOrch
 
-OMK is a local, MIT-licensed coding agent. AdaptOrch is an optional hosted
-evidence service for reviewing AI-generated patches.
+OMK is a local, MIT-licensed coding agent. AdaptOrch is an optional, separate
+evidence and risk layer for changes an AI wrote: it runs a change in an isolated
+copy of the project and reports what it touched, whether it ran, and what the
+tests said before and after. Its free Starter tier is self-hosted and runs on
+your own machine; a bring-your-own model key is required on every tier.
 
-**[Review AdaptOrch plans →](https://adaptorch.com/?utm_source=npm&utm_medium=readme&utm_campaign=omk#pricing)**
+**[Review AdaptOrch plans →](https://adaptorch.com/?utm_source=npm&utm_medium=readme&utm_campaign=omk#pricing)** · [claim boundary](https://adaptorch.com/claim-boundary)
 
-AdaptOrch is a separate proprietary service. It is not bundled with OMK and
-requires its own account.
+AdaptOrch is a separate proprietary product and is not bundled with OMK. Its
+published claim boundary states that it does **not** prove semantic correctness
+(`correctness_claim=false`); it reports and never rewrites, selects, or merges
+on your behalf. OMK does not require it.
 
 ## Security and Privacy
 

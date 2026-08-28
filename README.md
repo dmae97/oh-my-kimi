@@ -224,12 +224,20 @@ advisory data.
 ## OMK + AdaptOrch
 
 OMK is the local, MIT-licensed control plane. AdaptOrch is a separate,
-proprietary hosted patch-evidence service that requires its own account.
+proprietary evidence and risk layer for changes an AI wrote: it runs a change in
+an isolated copy of the project and reports what it touched, whether it ran, and
+what the tests said before and after. Its free Starter tier is self-hosted and
+runs on your own machine, and a bring-your-own model key is required on every
+tier. Its published claim boundary states that it does **not** prove semantic
+correctness (`correctness_claim=false`); it reports and never rewrites, selects,
+or merges on your behalf.
+
 `omk-adaptorch-wpl` is an open-source package in this repository, but it exposes
 state, client, and adjudication primitives rather than wiring AdaptOrch into the
-default CLI loop.
+default CLI loop. OMK does not require AdaptOrch, and installing OMK does not
+create an account.
 
-**[Review AdaptOrch plans →](https://adaptorch.com/?utm_source=github&utm_medium=readme&utm_campaign=omk#pricing)**
+**[Review AdaptOrch plans →](https://adaptorch.com/?utm_source=github&utm_medium=readme&utm_campaign=omk#pricing)** · [claim boundary](https://adaptorch.com/claim-boundary)
 
 ## Documentation
 

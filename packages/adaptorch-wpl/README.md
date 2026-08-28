@@ -46,31 +46,40 @@ The default coding-agent source has no production importer that turns this packa
 - Loop-level budgets (`max_dispatch_attempts`, `max_loop_duration`, dispatch-call budget) are
   immutable for a loop instance's lifetime; raising them requires a new instance under the same review.
 
-## AdaptOrch, the hosted service
+## AdaptOrch, the service
 
-This package is open source and MIT-licensed, like the rest of OMK. **AdaptOrch
-itself is a separate, proprietary hosted patch-evidence service that requires
-its own account.** Nothing here calls it by default: `adaptorch-client.ts` is a
-typed wrapper that a caller must configure and drive, and the coding agent's
-`adaptorch-bridge.ts` is advisory-only, default-off, and its current transport
-returns no hint.
+This package is open source and MIT-licensed, like the rest of OMK. AdaptOrch
+itself is a separate, proprietary product: an evidence and risk layer that takes
+a change an AI wrote, runs it inside an isolated copy of the project, and
+returns one report of what the change touched, whether it ran, what the tests
+said before and after, and what looked suspicious.
 
-The division is deliberate. OMK stays the local control plane that decides and
-executes; AdaptOrch is a place to aggregate patch evidence across workspaces.
-An advisory path must not acquire execution authority, because that is what
-keeps a remote suggestion from becoming a local action.
+Nothing here calls it by default. `adaptorch-client.ts` is a typed wrapper a
+caller must configure and drive, and the coding agent's `adaptorch-bridge.ts`
+is advisory-only, default-off, and its current transport returns no hint.
 
-What the service is for, in the terms this package already uses: the Outcome
-Adjudicator, deep wall, and signed receipts here produce verification evidence
-locally, and AdaptOrch is the hosted counterpart for teams that want that
-evidence collected outside a single machine.
+The division is deliberate and matches how the vendor describes its own
+boundary: AdaptOrch watches and reports, and does not rewrite code, choose a
+different answer, or merge anything. An advisory path must not acquire
+execution authority, because that is what keeps a remote suggestion from
+becoming a local action.
 
-**[Review AdaptOrch plans →](https://adaptorch.com/?utm_source=github&utm_medium=package-readme&utm_campaign=omk-adaptorch-wpl#pricing)**
+Its published claim boundary (`DOC-CLM-001`) states what it does and does not
+claim. It verifies patch applicability through Docker-faithful apply gates,
+canonicalizes tool-generated patches into realized git diffs, separates runner
+health from candidate-caused failures, and records replayable evidence DAGs.
+It explicitly **does not prove semantic correctness** — shadow reports carry
+`correctness_claim=false` — and it blocks hidden tests, gold patches, and
+oracle labels as selector inputs. A verification pass, a manifest hash, or a
+signed receipt is evidence about a run, not authorization to ship it.
 
-Claim boundary, unchanged from the rest of this repository: AdaptOrch's
-published claim boundary describes its evidence as **advisory, not proof of
-patch correctness**. A verification pass, a manifest hash, or a signed receipt
-is evidence about a run, not authorization to ship it. Use of this package does
-not require an AdaptOrch account, and installing OMK does not create one.
+The free Starter tier is self-hosted and runs on your own machine; bring-your-own
+model key is required on every tier, so no key means no run. Paid tiers add a
+hosted dashboard, shared projects, and exports.
+
+**[Review AdaptOrch plans →](https://adaptorch.com/?utm_source=github&utm_medium=package-readme&utm_campaign=omk-adaptorch-wpl#pricing)** · [claim boundary](https://adaptorch.com/claim-boundary)
+
+Using this package does not require AdaptOrch, and installing OMK does not
+create an account.
 
 Preview spec: [`../coding-agent/docs/adaptorch-preview.md`](../coding-agent/docs/adaptorch-preview.md)
