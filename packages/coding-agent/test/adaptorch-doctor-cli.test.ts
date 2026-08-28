@@ -64,6 +64,12 @@ describe("omk doctor adaptorch: not configured", () => {
 		expect(output).toMatch(/not configured/i);
 	});
 
+	it("tells the reader where to get a key, since they just asked for one", async () => {
+		const { lines, writeLine } = capture();
+		await runAdaptOrchDoctorCli(["doctor", "adaptorch"], { env: {}, writeLine });
+		expect(lines.join("\n")).toContain("https://adaptorch.com");
+	});
+
 	it("reports not-configured in JSON too", async () => {
 		const { lines, writeLine } = capture();
 		await runAdaptOrchDoctorCli(["doctor", "adaptorch", "--json"], { env: {}, writeLine });

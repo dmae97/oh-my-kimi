@@ -26,6 +26,14 @@ import {
 
 const USAGE = "Usage: omk doctor adaptorch [--json]";
 
+/**
+ * Where to obtain a key. This is the one moment in the CLI where the reader has
+ * explicitly asked about AdaptOrch, so answering "which key, from where" here
+ * is help rather than promotion. It carries its own attribution so this
+ * touchpoint stays distinguishable from the README links.
+ */
+const ADAPTORCH_SIGNUP_URL = "https://adaptorch.com/?utm_source=omk-cli&utm_medium=doctor&utm_campaign=omk#pricing";
+
 export interface AdaptOrchDoctorCliOverrides {
 	readonly env?: NodeJS.ProcessEnv;
 	readonly writeLine?: (line: string) => void;
@@ -54,6 +62,7 @@ function describe(report: AdaptOrchDoctorReport): string[] {
 		return [
 			"AdaptOrch: not configured",
 			"  Set ADAPTORCH_API_KEY to enable it. Optionally set ADAPTORCH_API_URL.",
+			`  Get a key: ${ADAPTORCH_SIGNUP_URL}`,
 			"  AdaptOrch is a separate product; OMK does not require it.",
 		];
 	}

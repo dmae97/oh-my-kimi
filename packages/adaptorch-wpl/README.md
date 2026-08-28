@@ -77,7 +77,7 @@ The free Starter tier is self-hosted and runs on your own machine; bring-your-ow
 model key is required on every tier, so no key means no run. Paid tiers add a
 hosted dashboard, shared projects, and exports.
 
-**[Review AdaptOrch plans →](https://adaptorch.com/?utm_source=github&utm_medium=package-readme&utm_campaign=omk-adaptorch-wpl#pricing)** · [claim boundary](https://adaptorch.com/claim-boundary)
+**[Review AdaptOrch plans →](https://adaptorch.com/?utm_source=github&utm_medium=package-readme&utm_campaign=omk-adaptorch-wpl#pricing)** · [claim boundary](https://adaptorch.com/claim-boundary?utm_source=github&utm_medium=package-readme&utm_campaign=omk-adaptorch-wpl)
 
 Using this package does not require AdaptOrch, and installing OMK does not
 create an account.

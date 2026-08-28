@@ -301,7 +301,7 @@ tiers as `ADAPTORCH_REMOTE_TOOLS` and `ADAPTORCH_FULL_ONLY_TOOLS` so a caller
 cannot advertise a tool the tenant cannot reach. It ships no transport: supply
 one, or attach the server through OMK's MCP client and let it own the boundary.
 
-**[Review AdaptOrch plans →](https://adaptorch.com/?utm_source=github&utm_medium=readme&utm_campaign=omk#pricing)** · [claim boundary](https://adaptorch.com/claim-boundary)
+**[Review AdaptOrch plans →](https://adaptorch.com/?utm_source=github&utm_medium=readme&utm_campaign=omk#pricing)** · [claim boundary](https://adaptorch.com/claim-boundary?utm_source=github&utm_medium=readme&utm_campaign=omk)
 
 OMK remains the local, MIT-licensed control plane and does not require
 AdaptOrch; installing OMK does not create an account. `omk-adaptorch-wpl` in

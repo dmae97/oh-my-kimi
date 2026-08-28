@@ -216,7 +216,7 @@ copy of the project and reports what it touched, whether it ran, and what the
 tests said before and after. Its free Starter tier is self-hosted and runs on
 your own machine; a bring-your-own model key is required on every tier.
 
-**[Review AdaptOrch plans →](https://adaptorch.com/?utm_source=npm&utm_medium=readme&utm_campaign=omk#pricing)** · [claim boundary](https://adaptorch.com/claim-boundary)
+**[Review AdaptOrch plans →](https://adaptorch.com/?utm_source=npm&utm_medium=readme&utm_campaign=omk#pricing)** · [claim boundary](https://adaptorch.com/claim-boundary?utm_source=npm&utm_medium=readme&utm_campaign=omk)
 
 AdaptOrch is a separate proprietary product and is not bundled with OMK. Its
 published claim boundary states that it does **not** prove semantic correctness
