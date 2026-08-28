@@ -262,6 +262,24 @@ Starter is free and self-hosted on your own machine. A bring-your-own model key
 is required on every tier, so nothing executes without your key. It works
 alongside any coding agent, OMK included.
 
+### Connecting it as an MCP server
+
+AdaptOrch ships an MCP server (`adaptorch-mcp`), so OMK attaches it the same way
+as any other MCP server — see [MCP](packages/coding-agent/docs/mcp.md). The tool
+surface is tiered, and the tier matters: nine core tools reach a remote tenant,
+while trace and topology reads exist only in a full or local deployment.
+
+| Tier | Tools |
+| --- | --- |
+| Core (every deployment) | `adaptorch_run`, `adaptorch_get_run`, `adaptorch_get_artifacts`, `adaptorch_list_runs`, `adaptorch_cancel_run`, `adaptorch_server_metrics`, `adaptorch_capabilities`, `adaptorch_usage`, `adaptorch_plan_catalog` |
+| Full or local only | `adaptorch_get_traces`, `adaptorch_route_topology` |
+
+There are no benchmark or verification tools in that surface. `AdaptOrchClient`
+in `omk-adaptorch-wpl` is a typed wrapper over these names, and exports the two
+tiers as `ADAPTORCH_REMOTE_TOOLS` and `ADAPTORCH_FULL_ONLY_TOOLS` so a caller
+cannot advertise a tool the tenant cannot reach. It ships no transport: supply
+one, or attach the server through OMK's MCP client and let it own the boundary.
+
 **[Review AdaptOrch plans →](https://adaptorch.com/?utm_source=github&utm_medium=readme&utm_campaign=omk#pricing)** · [claim boundary](https://adaptorch.com/claim-boundary)
 
 OMK remains the local, MIT-licensed control plane and does not require

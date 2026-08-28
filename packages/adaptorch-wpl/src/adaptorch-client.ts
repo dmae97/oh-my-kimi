@@ -6,18 +6,54 @@
  * their own transport (e.g. an adapter around an MCP SDK client) until one
  * ships in this package.
  *
- * Tool surface, names, and read/write classification are grounded in
- * `.omk/runs/lazycodex-adaptorch-loop-plan-20260701/lane2-adaptorch-tool-surface.md`,
- * which cross-checks the real AdaptOrch MCP server against
- * `docs/tools.md`, `README.md`, `mcp_server.py` dispatch, and
- * `diagnostics.py::EXPECTED_CORE_TOOLS`. There are exactly 10 real tools;
- * no "benchmark" or "verification" tools exist in the shipped surface.
+ * Tool surface, names, and read/write classification are derived from the
+ * server's own inventory: `diagnostics.py::EXPECTED_CORE_TOOLS` and
+ * `_FULL_ONLY_TOOLS`, cross-checked against `hardening.py::REMOTE_TOOL_NAMES`
+ * and the `output_schema.py` projector table. The surface is tiered: nine core
+ * tools every deployment exposes, plus two that exist only in a full or local
+ * deployment. No "benchmark" or "verification" tools exist in it.
  */
 
 import { isTopologyClassification, type TopologyClassification } from "./types.ts";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Tools every AdaptOrch deployment exposes, including a remote tenant.
+ * Mirrors `diagnostics.py::EXPECTED_CORE_TOOLS` in server order.
+ */
+export const ADAPTORCH_REMOTE_TOOLS = [
+	"adaptorch_run",
+	"adaptorch_get_run",
+	"adaptorch_get_artifacts",
+	"adaptorch_list_runs",
+	"adaptorch_cancel_run",
+	"adaptorch_server_metrics",
+	"adaptorch_capabilities",
+	"adaptorch_usage",
+	"adaptorch_plan_catalog",
+] as const;
+
+/**
+ * Tools a remote tenant cannot reach. Trace and topology reads need a full or
+ * local deployment, so a caller must not advertise them unconditionally.
+ */
+export const ADAPTORCH_FULL_ONLY_TOOLS = ["adaptorch_get_traces", "adaptorch_route_topology"] as const;
+
+/** The complete tool surface, core tier first. */
+export const ADAPTORCH_TOOLS = [...ADAPTORCH_REMOTE_TOOLS, ...ADAPTORCH_FULL_ONLY_TOOLS] as const;
+
+/** One tenant's own usage window, as projected by `output_schema.py::_project_usage`. */
+export interface AdaptOrchUsage {
+	readonly used: number;
+	readonly limit: number;
+	readonly tenant_id?: string;
+	readonly plan_level?: string;
+	readonly period?: string;
+	readonly remaining?: number;
+	readonly usage_percentage?: number;
 }
 
 /**
@@ -223,8 +259,17 @@ export class AdaptOrchClient {
 	}
 
 	/**
-	 * `adaptorch_plan_catalog` (read/local). Read the hosted plan catalog
-	 * (Starter $0 / Pro $39 / Team $149).
+	 * `adaptorch_usage` (read). Read this tenant's own usage window. The
+	 * control plane scopes the response by key, so a caller never sees another
+	 * tenant's counters.
+	 */
+	async usage(): Promise<AdaptOrchUsage> {
+		return (await this.transport.callTool("adaptorch_usage", {})) as AdaptOrchUsage;
+	}
+
+	/**
+	 * `adaptorch_plan_catalog` (read/local). Read the hosted plan catalog.
+	 * Tier names and prices come from the server, never from this client.
 	 */
 	async planCatalog(): Promise<Record<string, unknown>> {
 		return (await this.transport.callTool("adaptorch_plan_catalog", {})) as Record<string, unknown>;
