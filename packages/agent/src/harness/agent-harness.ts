@@ -26,6 +26,7 @@ import {
 	prepareCompaction,
 	shouldCompact,
 } from "./compaction/compaction.ts";
+import type { HarnessCompactionRunOptions } from "./compaction/operation.ts";
 import { HarnessSessionFacade } from "./harness-session.ts";
 import { convertToLlm, createFailureMessage, createUserMessage } from "./messages.ts";
 import { findDuplicateNames } from "./name-validation.ts";
@@ -65,16 +66,6 @@ function normalizeHarnessError(error: unknown, fallbackCode: AgentHarnessError["
 	if (cause instanceof CompactionError) return new AgentHarnessError("compaction", cause.message, cause);
 	if (cause instanceof BranchSummaryError) return new AgentHarnessError("branch_summary", cause.message, cause);
 	return new AgentHarnessError(fallbackCode, cause.message, cause);
-}
-
-function normalizeHookError(error: unknown): AgentHarnessError {
-	return normalizeHarnessError(error, "hook");
-}
-
-interface RunCompactionOptions {
-	readonly automatic: boolean;
-	readonly customInstructions?: string;
-	readonly signal?: AbortSignal;
 }
 
 interface AgentHarnessTurnState<
@@ -148,26 +139,22 @@ export class AgentHarness<
 		this.followUpQueueMode = options.followUpMode ?? "one-at-a-time";
 	}
 
-	private getHandlers(type: string): Set<AgentHarnessHandler> | undefined {
-		return this.handlers.get(type);
-	}
-
 	private async emitOwn(event: AgentHarnessOwnEvent<TSkill, TPromptTemplate>, signal?: AbortSignal): Promise<void> {
-		for (const listener of this.getHandlers(SUBSCRIBER_EVENT_TYPE) ?? []) {
+		for (const listener of this.handlers.get(SUBSCRIBER_EVENT_TYPE) ?? []) {
 			try {
 				await listener(event, signal);
 			} catch (error) {
-				throw normalizeHookError(error);
+				throw normalizeHarnessError(error, "hook");
 			}
 		}
 	}
 
 	private async emitAny(event: AgentHarnessEvent<TSkill, TPromptTemplate>, signal?: AbortSignal): Promise<void> {
-		for (const listener of this.getHandlers(SUBSCRIBER_EVENT_TYPE) ?? []) {
+		for (const listener of this.handlers.get(SUBSCRIBER_EVENT_TYPE) ?? []) {
 			try {
 				await listener(event, signal);
 			} catch (error) {
-				throw normalizeHookError(error);
+				throw normalizeHarnessError(error, "hook");
 			}
 		}
 	}
@@ -175,7 +162,7 @@ export class AgentHarness<
 	private async emitHook<TType extends keyof AgentHarnessEventResultMap>(
 		event: Extract<AgentHarnessOwnEvent, { type: TType }>,
 	): Promise<AgentHarnessEventResultMap[TType] | undefined> {
-		const handlers = this.getHandlers(event.type as TType);
+		const handlers = this.handlers.get(event.type as TType);
 		if (!handlers || handlers.size === 0) return undefined;
 		let lastResult: AgentHarnessEventResultMap[TType] | undefined;
 		for (const handler of handlers) {
@@ -185,7 +172,7 @@ export class AgentHarness<
 					lastResult = result;
 				}
 			} catch (error) {
-				throw normalizeHookError(error);
+				throw normalizeHarnessError(error, "hook");
 			}
 		}
 		return lastResult;
@@ -196,7 +183,7 @@ export class AgentHarness<
 		sessionId: string,
 		streamOptions: AgentHarnessStreamOptions,
 	): Promise<AgentHarnessStreamOptions> {
-		const handlers = this.getHandlers("before_provider_request");
+		const handlers = this.handlers.get("before_provider_request");
 		let current = cloneStreamOptions(streamOptions);
 		if (!handlers || handlers.size === 0) return current;
 		for (const handler of handlers) {
@@ -211,14 +198,14 @@ export class AgentHarness<
 					current = applyStreamOptionsPatch(current, result.streamOptions);
 				}
 			} catch (error) {
-				throw normalizeHookError(error);
+				throw normalizeHarnessError(error, "hook");
 			}
 		}
 		return current;
 	}
 
 	private async emitBeforeProviderPayload(model: Model<any>, payload: unknown): Promise<unknown> {
-		const handlers = this.getHandlers("before_provider_payload");
+		const handlers = this.handlers.get("before_provider_payload");
 		let current = payload;
 		if (!handlers || handlers.size === 0) return current;
 		for (const handler of handlers) {
@@ -228,7 +215,7 @@ export class AgentHarness<
 					current = result.payload;
 				}
 			} catch (error) {
-				throw normalizeHookError(error);
+				throw normalizeHarnessError(error, "hook");
 			}
 		}
 		return current;
@@ -349,7 +336,7 @@ export class AgentHarness<
 			return messages;
 		} catch (error) {
 			queue.unshift(...messages);
-			throw normalizeHookError(error);
+			throw normalizeHarnessError(error, "hook");
 		}
 	}
 
@@ -498,6 +485,7 @@ export class AgentHarness<
 		text: string,
 		options?: { images?: ImageContent[] },
 	): Promise<AssistantMessage> {
+		const runOwner = this.runPromise;
 		let messages: AgentMessage[] = [createUserMessage(text, options?.images)];
 		if (this.nextTurnQueue.length > 0) {
 			const queuedMessages = this.nextTurnQueue.splice(0);
@@ -505,7 +493,7 @@ export class AgentHarness<
 				await this.emitQueueUpdate();
 			} catch (error) {
 				this.nextTurnQueue.unshift(...queuedMessages);
-				throw normalizeHookError(error);
+				throw normalizeHarnessError(error, "hook");
 			}
 			messages = [...queuedMessages, messages[0]!];
 		}
@@ -523,7 +511,7 @@ export class AgentHarness<
 			this.createContext(turnState, beforeResult?.systemPrompt),
 			messages,
 		);
-		return await this.recoverContextOverflow(result);
+		return await this.recoverContextOverflow(result, runOwner);
 	}
 
 	private async executeAgentRun(
@@ -584,8 +572,18 @@ export class AgentHarness<
 		}
 	}
 
-	private async recoverContextOverflow(message: AssistantMessage): Promise<AssistantMessage> {
-		if (!this.compactionSettings.enabled || !isContextOverflow(message, this.model.contextWindow)) return message;
+	private async recoverContextOverflow(
+		message: AssistantMessage,
+		runOwner: Promise<void> | undefined,
+	): Promise<AssistantMessage> {
+		if (
+			this.runPromise !== runOwner ||
+			this.phase !== "idle" ||
+			!this.compactionSettings.enabled ||
+			!isContextOverflow(message, this.model.contextWindow)
+		) {
+			return message;
+		}
 		if (!this.getApiKeyAndHeaders) return message;
 		const leafId = await this.session.getLeafId();
 		if (!leafId) return message;
@@ -692,7 +690,7 @@ export class AgentHarness<
 		await this.sessionFacade.appendMessage(message);
 	}
 
-	private async runCompaction(options: RunCompactionOptions): Promise<CompactResult | undefined> {
+	private async runCompaction(options: HarnessCompactionRunOptions): Promise<CompactResult | undefined> {
 		const model = this.model;
 		const auth = await this.getApiKeyAndHeaders?.(model);
 		if (!auth) {

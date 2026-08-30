@@ -1,4 +1,10 @@
-import { type FauxProviderRegistration, fauxAssistantMessage, type Message, registerFauxProvider } from "omk-ai";
+import {
+	type AssistantMessage,
+	type FauxProviderRegistration,
+	fauxAssistantMessage,
+	type Message,
+	registerFauxProvider,
+} from "omk-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentHarness } from "../../src/harness/agent-harness.ts";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
@@ -114,6 +120,47 @@ describe("AgentHarness context-overflow recovery", () => {
 		expect(
 			leaf?.type === "message" && leaf.message.role === "assistant" ? leaf.message.errorMessage : undefined,
 		).toBe(OVERFLOW);
+	});
+
+	it("does not recover an old overflow after a settled listener starts a new run", async () => {
+		const registration = registerFauxProvider({
+			models: [{ id: "large-context", reasoning: false, contextWindow: 100_000, maxTokens: 2_000 }],
+		});
+		registrations.push(registration);
+		const model = registration.getModel();
+		if (!model) throw new Error("Faux model missing");
+		let calls = 0;
+		registration.setResponses([
+			() => {
+				calls++;
+				return fauxAssistantMessage("", { stopReason: "error", errorMessage: OVERFLOW });
+			},
+			() => {
+				calls++;
+				return fauxAssistantMessage("second answer");
+			},
+		]);
+		const session = await seededSession();
+		const harness = new AgentHarness({
+			env: new NodeExecutionEnv({ cwd: process.cwd() }),
+			session,
+			model,
+			getApiKeyAndHeaders: async () => ({ apiKey: "test-key" }),
+			compaction: { enabled: true, reserveTokens: 500, keepRecentTokens: 100, maxUsageRatio: 0.99 },
+		});
+		let secondRun: Promise<AssistantMessage> | undefined;
+		harness.subscribe((event) => {
+			if (event.type === "settled" && !secondRun) secondRun = harness.prompt("second request");
+		});
+
+		const first = await harness.prompt("first request");
+		if (!secondRun) throw new Error("Settled listener did not start the second run");
+		const second = await secondRun;
+
+		expect(first.errorMessage).toBe(OVERFLOW);
+		expect(second.content).toContainEqual({ type: "text", text: "second answer" });
+		expect(calls).toBe(2);
+		expect((await session.getEntries()).some((entry) => entry.type === "compaction")).toBe(false);
 	});
 
 	it("stops after one compact-and-retry recovery when the retry also overflows", async () => {
