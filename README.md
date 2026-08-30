@@ -359,7 +359,7 @@ is not published with the repository.
 - [Containerization](packages/coding-agent/docs/containerization.md)
 - [Public skill catalog](SKILLS.md)
 - [Changelog](packages/coding-agent/CHANGELOG.md)
-- [Release notes for v0.98.0](.github/RELEASE_NOTES_v0.98.0.md)
+- [Release notes for v0.98.1](.github/RELEASE_NOTES_v0.98.1.md)
 
 ## Development
 
@@ -410,6 +410,12 @@ structure for bounded recovery instead of silently starting over.
 > section above for the working-tree repair.
 
 <!-- releases:start -->
+
+## Release v0.98.1
+
+
+
+Release notes live in [RELEASE_NOTES_v0.98.1.md](.github/RELEASE_NOTES_v0.98.1.md).
 
 ## Release v0.98.0
 
@@ -473,41 +479,6 @@ Release notes live in [RELEASE_NOTES_v0.98.0.md](.github/RELEASE_NOTES_v0.98.0.m
 - Empty streamed completions (`stop` with no text, thinking, or tool call) are now treated as dead streams and retried within the existing retry budget instead of being accepted as a successful turn.
 
 Release notes live in [RELEASE_NOTES_v0.97.0.md](.github/RELEASE_NOTES_v0.97.0.md).
-
-## Release v0.96.2
-
-### Added
-
-- Added resource-aware host snapshots, admission decisions, generation-safe per-run tool-cap leases, workload classification, weighted FIFO permits, and `omk doctor resources` / `/resource` operator surfaces.
-- Added internal Vitest, Jest, workspace, and Go shard planners plus a journaled executor with corruption quarantine, completed-shard resume, admission-aware execution, and aggregate `workload_shard_result.v1` evidence. Automatic session-command sharding is not enabled.
-- Added an internal subagent lane launcher that enforces parent admission width and shares its permit pool; live child-launch wiring is not enabled.
-- Added exactly-once `prompt_settled` and an opt-in completion sound.
-- Added a local-only resource observation journal at `.omk/runs/<promptRunId>/resource-observations.jsonl`, recording bounded probe health, admission caps, classification, permit waits, settlement, and sound outcomes without raw host measurements.
-- The `QWEN TOKEN PLAN` status entry now uses the official QwenCloud management CLI to show the seven-day usage window and reset time.
-
-### Changed
-
-- The session-termination classifier now accepts `resource.*` causes for memory, disk, CPU, heap, unavailable probes, and permit queue overflow. Only CPU pressure can qualify for automatic retry; live resource gates currently return bounded block results.
-- `resourceGovernor.mode: "observe"` is the default and records decisions without enforcing caps. Both `"observe"` and `"off"` preserve v0.96.1 scheduling behavior.
-
-### Fixed
-
-- Top-level `omk --help` now lists `omk doctor resources [--json]`.
-- Removed development-only `prepare` and `postinstall` hooks from the published CLI manifest; default npm installs no longer call an unshipped workspace-linking script.
-- Bound resource observations and completion-sound results to their originating prompt journals, including consecutive fast observe-mode runs.
-- Capped workspace shard plans at 16 while preserving every workspace through deterministic chunks.
-- Ensured `prompt_settled` consistently follows `agent_end` as the final run event.
-
-### Security
-
-- Qwen quota discovery never sends an inference API key to a management endpoint, never reads browser cookies, and passes only non-secret process context to the QwenCloud child CLI.
-- Removed the shipped subagent example's `offensive-jailbreak` skill route.
-
-### Docs
-
-- Documented an attributable AdaptOrch.com link for evaluating a separate hosted patch-evidence service; AdaptOrch remains distinct from the MIT-licensed OMK packages.
-
-Release notes live in [RELEASE_NOTES_v0.96.2.md](.github/RELEASE_NOTES_v0.96.2.md).
 
 <!-- releases:end -->
 
