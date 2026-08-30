@@ -1,5 +1,14 @@
 import type { ImageContent, Model, SimpleStreamOptions, TextContent, Transport } from "omk-ai";
 import type { AgentEvent, AgentMessage, AgentTool, QueueMode, ThinkingLevel } from "../index.ts";
+
+export {
+	AgentHarnessError,
+	type AgentHarnessErrorCode,
+	SessionError,
+	type SessionErrorCode,
+	toError,
+} from "./errors.ts";
+
 import type { Session } from "./session/session.ts";
 
 /** Result of a fallible operation. Expected failures are returned as `ok: false` instead of thrown. */
@@ -24,17 +33,6 @@ export function getOrThrow<TValue, TError>(result: Result<TValue, TError>): TVal
 /** Return the success value or `undefined`. Only object values are allowed to avoid truthiness bugs with primitives. */
 export function getOrUndefined<TValue extends object, TError>(result: Result<TValue, TError>): TValue | undefined {
 	return result.ok ? result.value : undefined;
-}
-
-/** Normalize unknown thrown values into Error instances before using them as typed error causes. */
-export function toError(error: unknown): Error {
-	if (error instanceof Error) return error;
-	if (typeof error === "string") return new Error(error);
-	try {
-		return new Error(JSON.stringify(error));
-	} catch {
-		return new Error(String(error));
-	}
 }
 
 /**
@@ -180,48 +178,6 @@ export class BranchSummaryError extends Error {
 	constructor(code: BranchSummaryErrorCode, message: string, cause?: Error) {
 		super(message, cause === undefined ? undefined : { cause });
 		this.name = "BranchSummaryError";
-		this.code = code;
-	}
-}
-
-export type SessionErrorCode =
-	| "not_found"
-	| "invalid_session"
-	| "invalid_entry"
-	| "invalid_fork_target"
-	| "storage"
-	| "unknown";
-
-/** Error thrown by session storage, repositories, and session tree operations. */
-export class SessionError extends Error {
-	/** Session subsystem error code. */
-	public code: SessionErrorCode;
-
-	constructor(code: SessionErrorCode, message: string, cause?: Error) {
-		super(message, cause === undefined ? undefined : { cause });
-		this.name = "SessionError";
-		this.code = code;
-	}
-}
-
-export type AgentHarnessErrorCode =
-	| "busy"
-	| "invalid_state"
-	| "invalid_argument"
-	| "session"
-	| "hook"
-	| "auth"
-	| "compaction"
-	| "branch_summary"
-	| "unknown";
-
-/** Public AgentHarness failure with a stable top-level classification. */
-export class AgentHarnessError extends Error {
-	public code: AgentHarnessErrorCode;
-
-	constructor(code: AgentHarnessErrorCode, message: string, cause?: Error) {
-		super(message, cause === undefined ? undefined : { cause });
-		this.name = "AgentHarnessError";
 		this.code = code;
 	}
 }
@@ -496,6 +452,32 @@ export type PendingSessionWrite = SessionTreeEntry extends infer TEntry
 		? Omit<TEntry, "id" | "parentId" | "timestamp">
 		: never
 	: never;
+
+export interface HarnessCustomMessageInput<T = unknown> {
+	readonly customType: string;
+	readonly content: string | readonly (TextContent | ImageContent)[];
+	readonly display: boolean;
+	readonly details?: T;
+}
+
+/** Public storage-free view over persisted session state and ordered extension writes. */
+export interface HarnessSession {
+	getMetadata(): Promise<Readonly<SessionMetadata>>;
+	getLeafId(): Promise<string | null>;
+	getEntry(id: string): Promise<Readonly<SessionTreeEntry> | undefined>;
+	getEntries(): Promise<readonly Readonly<SessionTreeEntry>[]>;
+	getBranch(fromId?: string): Promise<readonly Readonly<SessionTreeEntry>[]>;
+	buildContext(): Promise<Readonly<SessionContext>>;
+	getLabel(id: string): Promise<string | undefined>;
+	getSessionName(): Promise<string | undefined>;
+	getPendingWrites(): readonly PendingSessionWrite[];
+	appendMessage(message: AgentMessage): Promise<void>;
+	appendCustomEntry(customType: string, data?: unknown): Promise<void>;
+	appendCustomMessage<T = unknown>(input: HarnessCustomMessageInput<T>): Promise<void>;
+	appendLabel(targetId: string, label: string | undefined): Promise<void>;
+	appendSessionName(name: string): Promise<void>;
+	setLeafId(targetId: string | null): Promise<void>;
+}
 
 export interface QueueUpdateEvent {
 	type: "queue_update";

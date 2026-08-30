@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `AgentHarness.getSession()`, returning a storage-free `HarnessSession` facade. Persisted reads are detached snapshots; idle writes persist immediately; turn writes enter the ordered pending queue; structural-phase writes fail closed instead of lingering past settlement.
+
 ### Fixed
 
 - `AgentHarness.abort()` now rejects during compaction, branch navigation, and retry phases instead of reporting success while an untracked structural operation remains active. Turn cancellation and idle queue clearing keep their existing behavior.

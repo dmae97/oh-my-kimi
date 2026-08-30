@@ -12,6 +12,7 @@ import type {
 } from "../types.ts";
 import { collectEntriesForBranchSummary, generateBranchSummary } from "./compaction/branch-summarization.ts";
 import { compact, DEFAULT_COMPACTION_SETTINGS, prepareCompaction } from "./compaction/compaction.ts";
+import { HarnessSessionFacade } from "./harness-session.ts";
 import { convertToLlm } from "./messages.ts";
 import { formatPromptTemplateInvocation } from "./prompt-templates.ts";
 import { formatSkillInvocation } from "./skills.ts";
@@ -26,6 +27,7 @@ import type {
 	AgentHarnessStreamOptions,
 	AgentHarnessStreamOptionsPatch,
 	ExecutionEnv,
+	HarnessSession,
 	NavigateTreeResult,
 	PendingSessionWrite,
 	PromptTemplate,
@@ -172,6 +174,7 @@ export class AgentHarness<
 > {
 	readonly env: ExecutionEnv;
 	private session: Session;
+	private readonly sessionFacade: HarnessSession;
 	private phase: AgentHarnessPhase = "idle";
 	private runAbortController?: AbortController;
 	private runPromise?: Promise<void>;
@@ -194,6 +197,7 @@ export class AgentHarness<
 	constructor(options: AgentHarnessOptions<TSkill, TPromptTemplate, TTool>) {
 		this.env = options.env;
 		this.session = options.session;
+		this.sessionFacade = new HarnessSessionFacade(this.session, () => this.phase, this.pendingSessionWrites);
 		this.resources = options.resources ?? {};
 		this.streamOptions = cloneStreamOptions(options.streamOptions);
 		this.systemPrompt = options.systemPrompt;
@@ -714,16 +718,12 @@ export class AgentHarness<
 		await this.emitQueueUpdate();
 	}
 
+	getSession(): HarnessSession {
+		return this.sessionFacade;
+	}
+
 	async appendMessage(message: AgentMessage): Promise<void> {
-		try {
-			if (this.phase === "idle") {
-				await this.session.appendMessage(message);
-			} else {
-				this.pendingSessionWrites.push({ type: "message", message });
-			}
-		} catch (error) {
-			throw normalizeHarnessError(error, "session");
-		}
+		await this.sessionFacade.appendMessage(message);
 	}
 
 	async compact(

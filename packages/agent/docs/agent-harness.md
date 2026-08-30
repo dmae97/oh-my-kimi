@@ -2,7 +2,7 @@
 
 `AgentHarness` is the orchestration layer above the low-level agent loop. It owns session persistence, runtime configuration, resource resolution, operation locking, and extension-facing mutation semantics.
 
-This document describes the current direction and implemented behavior. Some extension/session-facade details are planned and called out explicitly.
+This document describes the current direction and implemented behavior. The generic hook implementation and operation-specific facades remain planned and are called out explicitly.
 
 ## Ultimate lifecycle goal
 
@@ -13,9 +13,9 @@ The intended rule is:
 - structural operations remain rejected while busy
 - queue operations are accepted at documented turn-safe points
 - runtime config setters update future snapshots without mutating the current provider request
-- session writes made while busy are durably queued and flushed in deterministic order
+- session writes made during a turn are durably queued and flushed in deterministic order; structural phases reject them
 - getters return latest harness config, not in-flight snapshots
-- listeners/hooks currently receive no facade; if they close over the raw harness and call settlement APIs such as `waitForIdle()` during the active run, they can deadlock. A future facade should expose `runWhenIdle()` instead.
+- listeners/hooks can close over the harness and call `getSession()`; hook payloads do not yet carry a context facade. Calling settlement APIs such as `waitForIdle()` from the active run can deadlock, so a future hook context should expose `runWhenIdle()` instead.
 
 `AssistantMessageStream` already decouples provider transport streaming, such as SSE or websocket reads, from downstream event consumption. The harness can therefore await listeners, extension hooks, persistence, and save-point work without blocking the provider transport reader or reintroducing ad hoc event queues. Lifecycle code should prefer explicit awaited sequencing at harness boundaries over fire-and-forget hook/event settlement.
 
@@ -87,7 +87,7 @@ Session writes requested while an operation is active are queued as pending sess
 
 Pending session writes are always persisted. They are flushed at save points, at operation settlement, and in failure cleanup.
 
-A public pending-writes/session-facade API is planned but not implemented yet.
+`AgentHarness.getSession()` returns a `HarnessSession` facade. It exposes persisted reads and ordered extension writes without exposing raw storage.
 
 ## Operation phases
 
@@ -173,27 +173,23 @@ Summary:
 
 Event payloads describe what is happening. Harness getters describe latest config for future snapshots. Hook and listener settlement should be awaited in lifecycle order where possible; transport backpressure is handled below the harness by `AssistantMessageStream`, so the harness does not need a separate async event queue merely to keep SSE or websocket reads flowing.
 
-## Planned session facade
+## Session facade
 
-Extensions should eventually interact with a harness-scoped `HarnessSession` facade rather than the raw session. The facade should wrap the internal session and enforce harness pending-write ordering semantics. Once this exists, hooks and event listeners can receive a context that exposes the full `AgentHarness` plus the session facade without giving direct access to unordered raw session writes.
+Extensions interact with the harness-scoped `HarnessSession` returned by `getSession()`, not the raw `Session`. The facade deliberately has no `getStorage()`: bypassing it would let an extension append around the pending-write queue and reorder transcript entries.
 
-Planned read semantics:
+Read methods (`getMetadata`, `getLeafId`, `getEntry`, `getEntries`, `getBranch`, `buildContext`, `getLabel`, `getSessionName`) return detached, recursively frozen snapshots of persisted state. They do not include queued writes.
 
-- reads delegate to persisted session state
-- reads do not include queued pending writes
+Write methods cover messages, custom entries, custom messages, labels, the session name, and leaf selection:
 
-Planned write semantics:
+- `idle`: persist immediately
+- `turn`: enqueue an immutable pending write; save points flush it after agent-emitted messages
+- `compaction`, `branch_summary`, `retry`: reject with `AgentHarnessError` code `"invalid_state"`
 
-- idle: persist immediately
-- busy: enqueue as pending session writes
+The structural-operation rejection is intentional. Those operations currently restore `idle` without a pending-write save point, so accepting a write would leave it pending until an unrelated future turn. A future operation-specific write barrier may widen this contract; the initial facade does not pretend the write settled.
 
-A planned diagnostics API may expose pending writes explicitly:
+`getPendingWrites()` returns a detached, frozen diagnostic snapshot. Mutating it cannot alter the internal queue. Every write parses plain data before persistence or enqueue, and non-plain/cyclic/accessor-bearing values reject with `"invalid_argument"`.
 
-```ts
-getPendingWrites(): readonly PendingSessionWrite[]
-```
-
-Agent-emitted messages are persisted on `message_end` to preserve transcript ordering. Pending extension/session writes flush after those messages at save points.
+Agent-emitted messages are persisted on `message_end` to preserve transcript ordering. Pending extension writes flush after those messages at turn save points.
 
 ## Abort
 
@@ -404,7 +400,7 @@ Remaining:
 
 - Map coding-agent resources to sourced loaders.
 - Keep app-level resource dedupe/provenance outside the harness.
-- Adapt extension loading to the future hook/session facade.
+- Adapt extension loading to the current `HarnessSession` facade and future typed hook context.
 - Preserve UI/session behavior outside core.
 - Move coding-agent stream/auth/retry/header behavior onto harness stream configuration and provider hooks.
 
