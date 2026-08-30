@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added projected-token auto-compaction before provider requests through `AgentHarnessOptions.compaction`. Successful runs rebuild the request from persisted compacted context; disabled, unauthenticated, cancelled, and true no-op decisions leave the request unchanged.
 - Added bounded transient retry for generated compaction and branch-summary calls through `streamOptions.summarizationRetry`, with awaited `retry_scheduled`, `retry_attempt_start`, and `retry_finished` events. Quota/billing failures and aborts still fail fast.
 - Added `AgentHarness.getSession()`, returning a storage-free `HarnessSession` facade. Persisted reads are detached snapshots; idle writes persist immediately; turn writes enter the ordered pending queue; structural-phase writes fail closed instead of lingering past settlement.
 

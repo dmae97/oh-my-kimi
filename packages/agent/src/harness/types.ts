@@ -794,6 +794,8 @@ export interface AgentHarnessOptions<
 	) => Promise<{ apiKey: string; headers?: Record<string, string> } | undefined>;
 	/** Curated stream/provider request options. Snapshotted at turn start. */
 	streamOptions?: AgentHarnessStreamOptions;
+	/** Automatic compaction thresholds. Defaults to {@link DEFAULT_COMPACTION_SETTINGS}. */
+	compaction?: CompactionSettings;
 	model: Model<any>;
 	thinkingLevel?: ThinkingLevel;
 	activeToolNames?: string[];

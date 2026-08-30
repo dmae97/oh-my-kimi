@@ -1,4 +1,11 @@
-import { type AssistantMessage, type ImageContent, type Model, streamSimple, type UserMessage } from "omk-ai";
+import {
+	type AssistantMessage,
+	type Context,
+	type ImageContent,
+	type Model,
+	streamSimple,
+	type UserMessage,
+} from "omk-ai";
 import { runAgentLoop } from "../agent-loop.ts";
 import type {
 	AgentContext,
@@ -11,7 +18,13 @@ import type {
 	ThinkingLevel,
 } from "../types.ts";
 import { collectEntriesForBranchSummary, generateBranchSummary } from "./compaction/branch-summarization.ts";
-import { compact, DEFAULT_COMPACTION_SETTINGS, prepareCompaction } from "./compaction/compaction.ts";
+import {
+	compact,
+	DEFAULT_COMPACTION_SETTINGS,
+	estimateContextTokens,
+	prepareCompaction,
+	shouldCompact,
+} from "./compaction/compaction.ts";
 import { HarnessSessionFacade } from "./harness-session.ts";
 import { convertToLlm } from "./messages.ts";
 import { formatPromptTemplateInvocation } from "./prompt-templates.ts";
@@ -27,6 +40,8 @@ import type {
 	AgentHarnessPhase,
 	AgentHarnessResources,
 	AgentHarnessStreamOptions,
+	CompactionSettings,
+	CompactResult,
 	ExecutionEnv,
 	HarnessSession,
 	NavigateTreeResult,
@@ -91,6 +106,12 @@ function normalizeHookError(error: unknown): AgentHarnessError {
 	return normalizeHarnessError(error, "hook");
 }
 
+interface RunCompactionOptions {
+	readonly automatic: boolean;
+	readonly customInstructions?: string;
+	readonly signal?: AbortSignal;
+}
+
 interface AgentHarnessTurnState<
 	TSkill extends Skill = Skill,
 	TPromptTemplate extends PromptTemplate = PromptTemplate,
@@ -123,6 +144,7 @@ export class AgentHarness<
 	private thinkingLevel: ThinkingLevel;
 	private systemPrompt: AgentHarnessOptions<TSkill, TPromptTemplate, TTool>["systemPrompt"];
 	private streamOptions: AgentHarnessStreamOptions;
+	private compactionSettings: CompactionSettings;
 	private getApiKeyAndHeaders?: AgentHarnessOptions["getApiKeyAndHeaders"];
 	private resources: AgentHarnessResources<TSkill, TPromptTemplate>;
 	private tools = new Map<string, TTool>();
@@ -140,6 +162,7 @@ export class AgentHarness<
 		this.sessionFacade = new HarnessSessionFacade(this.session, () => this.phase, this.pendingSessionWrites);
 		this.resources = options.resources ?? {};
 		this.streamOptions = cloneStreamOptions(options.streamOptions);
+		this.compactionSettings = { ...DEFAULT_COMPACTION_SETTINGS, ...options.compaction };
 		this.systemPrompt = options.systemPrompt;
 		this.getApiKeyAndHeaders = options.getApiKeyAndHeaders;
 		this.validateUniqueNames(
@@ -322,13 +345,14 @@ export class AgentHarness<
 	private createStreamFn(getTurnState: () => AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>): StreamFn {
 		return async (model, context, streamOptions) => {
 			const turnState = getTurnState();
+			const requestContext = await this.maybeAutoCompact(model, context, streamOptions?.signal);
 			const auth = await this.getApiKeyAndHeaders?.(model);
 			const snapshotOptions: AgentHarnessStreamOptions = {
 				...turnState.streamOptions,
 				headers: mergeHeaders(turnState.streamOptions.headers, auth?.headers),
 			};
 			const requestOptions = await this.emitBeforeProviderRequest(model, turnState.sessionId, snapshotOptions);
-			return streamSimple(model, context, {
+			return streamSimple(model, requestContext, {
 				cacheRetention: requestOptions.cacheRetention,
 				headers: requestOptions.headers,
 				maxRetries: requestOptions.maxRetries,
@@ -666,57 +690,79 @@ export class AgentHarness<
 		await this.sessionFacade.appendMessage(message);
 	}
 
-	async compact(
-		customInstructions?: string,
-	): Promise<{ summary: string; firstKeptEntryId: string; tokensBefore: number; details?: unknown }> {
+	private async runCompaction(options: RunCompactionOptions): Promise<CompactResult | undefined> {
+		const model = this.model;
+		const auth = await this.getApiKeyAndHeaders?.(model);
+		if (!auth) {
+			if (options.automatic) return undefined;
+			throw new AgentHarnessError("auth", "No auth available for compaction");
+		}
+		const branchEntries = await this.session.getBranch();
+		const preparationResult = prepareCompaction(branchEntries, this.compactionSettings);
+		if (!preparationResult.ok) throw preparationResult.error;
+		const preparation = preparationResult.value;
+		if (!preparation) {
+			if (options.automatic) return undefined;
+			throw new AgentHarnessError("compaction", "Nothing to compact");
+		}
+		const signal = options.signal ?? new AbortController().signal;
+		const hookResult = await this.emitHook({
+			type: "session_before_compact",
+			preparation,
+			branchEntries,
+			customInstructions: options.customInstructions,
+			signal,
+		});
+		if (hookResult?.cancel) {
+			if (options.automatic) return undefined;
+			throw new AgentHarnessError("compaction", "Compaction cancelled");
+		}
+		const provided = hookResult?.compaction;
+		const compactResult = provided
+			? { ok: true as const, value: provided }
+			: await compact(
+					preparation,
+					model,
+					auth.apiKey,
+					auth.headers,
+					options.customInstructions,
+					signal,
+					this.thinkingLevel,
+					createSummarizationRetry("compaction", this.streamOptions.summarizationRetry, (event) =>
+						this.emitOwn(event),
+					),
+				);
+		if (!compactResult.ok) throw compactResult.error;
+		const result = compactResult.value;
+		const entryId = await this.session.appendCompaction(
+			result.summary,
+			result.firstKeptEntryId,
+			result.tokensBefore,
+			result.details,
+			provided !== undefined,
+		);
+		const entry = await this.session.getEntry(entryId);
+		if (entry?.type === "compaction") {
+			await this.emitOwn({ type: "session_compact", compactionEntry: entry, fromHook: provided !== undefined });
+		}
+		return result;
+	}
+
+	private async maybeAutoCompact(model: Model<any>, context: Context, signal?: AbortSignal): Promise<Context> {
+		const projected = estimateContextTokens(context.messages).tokens;
+		if (!shouldCompact(projected, model.contextWindow ?? 0, this.compactionSettings)) return context;
+		const result = await this.runCompaction({ automatic: true, signal });
+		if (!result) return context;
+		const persisted = await this.session.buildContext();
+		return { ...context, messages: convertToLlm(persisted.messages) };
+	}
+
+	async compact(customInstructions?: string): Promise<CompactResult> {
 		if (this.phase !== "idle") throw new AgentHarnessError("busy", "compact() requires idle harness");
 		this.phase = "compaction";
 		try {
-			const model = this.model;
-			if (!model) throw new AgentHarnessError("invalid_state", "No model set for compaction");
-			const auth = await this.getApiKeyAndHeaders?.(model);
-			if (!auth) throw new AgentHarnessError("auth", "No auth available for compaction");
-			const branchEntries = await this.session.getBranch();
-			const preparationResult = prepareCompaction(branchEntries, DEFAULT_COMPACTION_SETTINGS);
-			if (!preparationResult.ok) throw preparationResult.error;
-			const preparation = preparationResult.value;
-			if (!preparation) throw new AgentHarnessError("compaction", "Nothing to compact");
-			const hookResult = await this.emitHook({
-				type: "session_before_compact",
-				preparation,
-				branchEntries,
-				customInstructions,
-				signal: new AbortController().signal,
-			});
-			if (hookResult?.cancel) throw new AgentHarnessError("compaction", "Compaction cancelled");
-			const provided = hookResult?.compaction;
-			const compactResult = provided
-				? { ok: true as const, value: provided }
-				: await compact(
-						preparation,
-						model,
-						auth.apiKey,
-						auth.headers,
-						customInstructions,
-						undefined,
-						this.thinkingLevel,
-						createSummarizationRetry("compaction", this.streamOptions.summarizationRetry, (event) =>
-							this.emitOwn(event),
-						),
-					);
-			if (!compactResult.ok) throw compactResult.error;
-			const result = compactResult.value;
-			const entryId = await this.session.appendCompaction(
-				result.summary,
-				result.firstKeptEntryId,
-				result.tokensBefore,
-				result.details,
-				provided !== undefined,
-			);
-			const entry = await this.session.getEntry(entryId);
-			if (entry?.type === "compaction") {
-				await this.emitOwn({ type: "session_compact", compactionEntry: entry, fromHook: provided !== undefined });
-			}
+			const result = await this.runCompaction({ automatic: false, customInstructions });
+			if (!result) throw new AgentHarnessError("compaction", "Nothing to compact");
 			return result;
 		} catch (error) {
 			throw normalizeHarnessError(error, "compaction");

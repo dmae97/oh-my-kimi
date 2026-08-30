@@ -209,7 +209,15 @@ They are allowed only while idle and are not queued. They operate on persisted s
 
 Branch summary generation is part of the tree navigation operation.
 
-Automatic threshold/overflow compaction and turn replay are not implemented in `AgentHarness` yet. Manual compaction and branch-summary model calls do apply the configured `streamOptions.summarizationRetry` policy to transient failures.
+Threshold auto-compaction is implemented at the provider-request boundary. Context-overflow compaction and turn replay are not implemented in `AgentHarness` yet. Manual and automatic compaction plus branch-summary model calls apply the configured `streamOptions.summarizationRetry` policy to transient failures.
+
+### Threshold auto-compaction
+
+Configure thresholds through `AgentHarnessOptions.compaction`; omitted fields use `DEFAULT_COMPACTION_SETTINGS`. Before each provider request the harness evaluates the actual projected request messages with `estimateContextTokens()` and `shouldCompact()`. When the threshold is crossed, it compacts persisted history, rebuilds the persisted context, and sends that compacted message list in the same provider request.
+
+Automatic compaction is conservative at unavailable boundaries. It leaves the request unchanged when disabled, when no explicit summarization auth callback is available, when preparation finds a true no-op, or when `session_before_compact` cancels. It never loops on an unchanged context. The ordinary `session_before_compact` and `session_compact` events cover both manual and automatic runs.
+
+This path prevents projected headroom overflow. Provider-reported context overflow after a request is a separate recovery contract and remains unimplemented.
 
 ### Summarization retries
 
@@ -311,6 +319,7 @@ Done:
 - `abort()` rejects during `compaction`, `branch_summary`, and `retry` instead of returning before an untracked structural operation settles.
 - Idle model/thinking/tool updates validate and persist before committing in-memory state.
 - `setLeafId()` persists durable `leaf` entries so tree navigation survives storage reopen.
+- Projected context is checked before each provider request; successful automatic compaction replaces the request messages with the persisted compacted context.
 
 Remaining:
 
@@ -318,8 +327,7 @@ Remaining:
 - Audit whether `settled` can fire too early.
 - Make session writes inside `settled` callbacks deterministic.
 - Audit follow-up behavior around `agent_end`.
-- Implement auto-compaction decision point.
-- Implement context-overflow turn replay; compaction and branch-summary transient retries are implemented.
+- Implement context-overflow turn replay; threshold auto-compaction and summarization retries are implemented.
 - Verify `before_agent_start` hook semantics against coding-agent.
 - Decide whether `before_agent_start` needs more turn info such as tools/tool snippets.
 - Document or change runtime config event timing while busy.

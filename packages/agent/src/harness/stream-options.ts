@@ -22,7 +22,7 @@ export interface AgentHarnessStreamOptions {
 
 /** Per-request stream option patch returned by provider hooks. */
 export interface AgentHarnessStreamOptionsPatch
-	extends Omit<Partial<AgentHarnessStreamOptions>, "headers" | "metadata"> {
+	extends Omit<Partial<AgentHarnessStreamOptions>, "headers" | "metadata" | "summarizationRetry"> {
 	/** Header patch. `undefined` values delete keys; explicit `headers: undefined` clears all headers. */
 	headers?: Record<string, string | undefined>;
 	/** Metadata patch. `undefined` values delete keys; explicit `metadata: undefined` clears all metadata. */
@@ -63,9 +63,6 @@ export function applyStreamOptionsPatch(
 	if (Object.hasOwn(patch, "maxRetries")) result.maxRetries = patch.maxRetries;
 	if (Object.hasOwn(patch, "maxRetryDelayMs")) result.maxRetryDelayMs = patch.maxRetryDelayMs;
 	if (Object.hasOwn(patch, "cacheRetention")) result.cacheRetention = patch.cacheRetention;
-	if (Object.hasOwn(patch, "summarizationRetry")) {
-		result.summarizationRetry = patch.summarizationRetry ? { ...patch.summarizationRetry } : undefined;
-	}
 
 	if (Object.hasOwn(patch, "headers")) {
 		if (patch.headers === undefined) {
