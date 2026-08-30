@@ -223,7 +223,8 @@ jobs:
             ':(exclude)packages/ai/src/models.generated.ts'
 
       - name: Publish npm packages
-        # npm trusted publishing uses the job's id-token permission. Do not set a
-        # legacy NODE_AUTH_TOKEN here: npm prefers it over OIDC, so an expired or
-        # restricted token masks a valid trusted-publisher exchange as a 404.
+        env:
+          # Token fallback: npm falls back to NODE_AUTH_TOKEN when the OIDC
+          # trusted-publisher exchange does not match this repository.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: node scripts/publish.mjs
