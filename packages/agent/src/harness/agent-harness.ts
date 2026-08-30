@@ -1024,10 +1024,10 @@ export class AgentHarness<
 	}
 
 	async abort(): Promise<AbortResult> {
-		const clearedSteer = [...this.steerQueue];
-		const clearedFollowUp = [...this.followUpQueue];
-		this.steerQueue = [];
-		this.followUpQueue = [];
+		if (this.phase !== "idle" && this.phase !== "turn")
+			throw new AgentHarnessError("invalid_state", `Cannot abort during ${this.phase}`);
+		const clearedSteer = this.steerQueue.splice(0);
+		const clearedFollowUp = this.followUpQueue.splice(0);
 		this.runAbortController?.abort();
 		const errors: Error[] = [];
 		try {

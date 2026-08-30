@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `AgentHarness.abort()` now rejects during compaction, branch navigation, and retry phases instead of reporting success while an untracked structural operation remains active. Turn cancellation and idle queue clearing keep their existing behavior.
+
 ## [0.98.0] - 2026-08-28
 
 ## [0.97.0] - 2026-08-24

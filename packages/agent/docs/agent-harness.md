@@ -203,7 +203,7 @@ Abort does not clear `nextTurn` messages. Messages queued with `nextTurn()` surv
 
 Abort does not discard pending session writes. Pending writes flush at the next save point if reached, at `agent_end`, or in operation failure cleanup.
 
-Abort barrier semantics still need an audit.
+`abort()` is fail-closed outside `idle` and `turn`. During `compaction`, `branch_summary`, or a future `retry` phase it rejects with `AgentHarnessError` code `"invalid_state"`: those structural operations do not own the turn's abort controller, so reporting abort completion would be false while the operation remained live. Actual structural-operation cancellation requires its own controller and settlement barrier rather than reusing turn abort.
 
 ## Compaction and tree navigation
 
@@ -306,6 +306,7 @@ Done:
 - Queue drains roll back if queue-update notification fails.
 - `message_end` persistence happens before subscriber notification.
 - `abort()` signals cancellation before notifications and still waits for idle through notification errors.
+- `abort()` rejects during `compaction`, `branch_summary`, and `retry` instead of returning before an untracked structural operation settles.
 - Idle model/thinking/tool updates validate and persist before committing in-memory state.
 - `setLeafId()` persists durable `leaf` entries so tree navigation survives storage reopen.
 
@@ -320,7 +321,6 @@ Remaining:
 - Verify `before_agent_start` hook semantics against coding-agent.
 - Decide whether `before_agent_start` needs more turn info such as tools/tool snippets.
 - Document or change runtime config event timing while busy.
-- Audit `abort()` barrier semantics.
 
 ### 4. Implement generic hook/event extension mechanism
 
