@@ -2,11 +2,12 @@ import {
 	type AssistantMessage,
 	type Context,
 	type ImageContent,
+	isContextOverflow,
 	type Model,
 	streamSimple,
 	type UserMessage,
 } from "omk-ai";
-import { runAgentLoop } from "../agent-loop.ts";
+import { runAgentLoop, runAgentLoopContinue } from "../agent-loop.ts";
 import type {
 	AgentContext,
 	AgentEvent,
@@ -26,7 +27,8 @@ import {
 	shouldCompact,
 } from "./compaction/compaction.ts";
 import { HarnessSessionFacade } from "./harness-session.ts";
-import { convertToLlm } from "./messages.ts";
+import { convertToLlm, createFailureMessage, createUserMessage } from "./messages.ts";
+import { findDuplicateNames } from "./name-validation.ts";
 import { formatPromptTemplateInvocation } from "./prompt-templates.ts";
 import { formatSkillInvocation } from "./skills.ts";
 import { applyStreamOptionsPatch, cloneStreamOptions, mergeHeaders } from "./stream-options.ts";
@@ -51,43 +53,6 @@ import type {
 	Skill,
 } from "./types.ts";
 import { AgentHarnessError, BranchSummaryError, CompactionError, SessionError, toError } from "./types.ts";
-
-function createUserMessage(text: string, images?: ImageContent[]): UserMessage {
-	const content: Array<{ type: "text"; text: string } | ImageContent> = [{ type: "text", text }];
-	if (images) content.push(...images);
-	return { role: "user", content, timestamp: Date.now() };
-}
-
-function createFailureMessage(model: Model<any>, error: unknown, aborted: boolean): AssistantMessage {
-	return {
-		role: "assistant",
-		content: [{ type: "text", text: "" }],
-		api: model.api,
-		provider: model.provider,
-		model: model.id,
-		stopReason: aborted ? "aborted" : "error",
-		errorMessage: error instanceof Error ? error.message : String(error),
-		timestamp: Date.now(),
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
-	};
-}
-
-function findDuplicateNames(names: string[]): string[] {
-	const seen = new Set<string>();
-	const duplicates = new Set<string>();
-	for (const name of names) {
-		if (seen.has(name)) duplicates.add(name);
-		seen.add(name);
-	}
-	return [...duplicates];
-}
 
 const SUBSCRIBER_EVENT_TYPE = "*";
 
@@ -533,7 +498,6 @@ export class AgentHarness<
 		text: string,
 		options?: { images?: ImageContent[] },
 	): Promise<AssistantMessage> {
-		let activeTurnState = turnState;
 		let messages: AgentMessage[] = [createUserMessage(text, options?.images)];
 		if (this.nextTurnQueue.length > 0) {
 			const queuedMessages = this.nextTurnQueue.splice(0);
@@ -554,6 +518,20 @@ export class AgentHarness<
 		});
 		if (beforeResult?.messages) messages = [...messages, ...beforeResult.messages];
 
+		const result = await this.executeAgentRun(
+			turnState,
+			this.createContext(turnState, beforeResult?.systemPrompt),
+			messages,
+		);
+		return await this.recoverContextOverflow(result);
+	}
+
+	private async executeAgentRun(
+		turnState: AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>,
+		context: AgentContext,
+		initialMessages?: AgentMessage[],
+	): Promise<AssistantMessage> {
+		let activeTurnState = turnState;
 		const abortController = new AbortController();
 		const getTurnState = () => activeTurnState;
 		const setTurnState = (nextTurnState: AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>) => {
@@ -561,19 +539,17 @@ export class AgentHarness<
 		};
 		this.runAbortController = abortController;
 		const completedMessages: AgentMessage[] = [];
+		const emit = async (event: AgentEvent): Promise<void> => {
+			if (event.type === "message_end") completedMessages.push(event.message);
+			await this.handleAgentEvent(event, abortController.signal);
+		};
 		const runResultPromise = (async () => {
 			try {
-				return await runAgentLoop(
-					messages,
-					this.createContext(turnState, beforeResult?.systemPrompt),
-					this.createLoopConfig(getTurnState, setTurnState),
-					async (event) => {
-						if (event.type === "message_end") completedMessages.push(event.message);
-						await this.handleAgentEvent(event, abortController.signal);
-					},
-					abortController.signal,
-					this.createStreamFn(getTurnState),
-				);
+				const loopConfig = this.createLoopConfig(getTurnState, setTurnState);
+				const streamFn = this.createStreamFn(getTurnState);
+				return initialMessages
+					? await runAgentLoop(initialMessages, context, loopConfig, emit, abortController.signal, streamFn)
+					: await runAgentLoopContinue(context, loopConfig, emit, abortController.signal, streamFn);
 			} catch (error) {
 				try {
 					return await this.emitRunFailure(
@@ -596,21 +572,47 @@ export class AgentHarness<
 			const newMessages = await runResultPromise;
 			for (let i = newMessages.length - 1; i >= 0; i--) {
 				const message = newMessages[i]!;
-				if (message.role === "assistant") {
-					return message;
-				}
+				if (message.role === "assistant") return message;
 			}
 			throw new AgentHarnessError("invalid_state", "AgentHarness prompt completed without an assistant message");
 		} finally {
 			try {
 				await this.flushPendingSessionWrites();
 			} finally {
-				// Ownership check: a re-entrant run started from a settled/agent_end
-				// listener may have installed its own controller already.
-				if (this.runAbortController === abortController) {
-					this.runAbortController = undefined;
-				}
+				if (this.runAbortController === abortController) this.runAbortController = undefined;
 			}
+		}
+	}
+
+	private async recoverContextOverflow(message: AssistantMessage): Promise<AssistantMessage> {
+		if (!this.compactionSettings.enabled || !isContextOverflow(message, this.model.contextWindow)) return message;
+		if (!this.getApiKeyAndHeaders) return message;
+		const leafId = await this.session.getLeafId();
+		if (!leafId) return message;
+		const leaf = await this.session.getEntry(leafId);
+		if (
+			leaf?.type !== "message" ||
+			leaf.message.role !== "assistant" ||
+			leaf.message.timestamp !== message.timestamp ||
+			!isContextOverflow(leaf.message, this.model.contextWindow)
+		) {
+			return message;
+		}
+
+		await this.session.moveTo(leaf.parentId);
+		this.phase = "retry";
+		try {
+			const compacted = await this.runCompaction({ automatic: true });
+			if (!compacted) {
+				await this.session.moveTo(leafId);
+				this.phase = "idle";
+				return message;
+			}
+			const turnState = await this.createTurnState();
+			return await this.executeAgentRun(turnState, this.createContext(turnState));
+		} catch (error) {
+			await this.session.moveTo(leafId);
+			throw error;
 		}
 	}
 

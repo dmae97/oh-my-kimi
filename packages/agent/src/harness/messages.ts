@@ -1,4 +1,4 @@
-import type { ImageContent, Message, TextContent } from "omk-ai";
+import type { AssistantMessage, ImageContent, Message, Model, TextContent, UserMessage } from "omk-ai";
 import type { AgentMessage } from "../types.ts";
 
 export const COMPACTION_SUMMARY_PREFIX = `The conversation history before this point was compacted into the following summary:
@@ -58,6 +58,33 @@ declare module "../types.ts" {
 		branchSummary: BranchSummaryMessage;
 		compactionSummary: CompactionSummaryMessage;
 	}
+}
+
+export function createUserMessage(text: string, images?: ImageContent[]): UserMessage {
+	const content: Array<{ type: "text"; text: string } | ImageContent> = [{ type: "text", text }];
+	if (images) content.push(...images);
+	return { role: "user", content, timestamp: Date.now() };
+}
+
+export function createFailureMessage(model: Model<any>, error: unknown, aborted: boolean): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [{ type: "text", text: "" }],
+		api: model.api,
+		provider: model.provider,
+		model: model.id,
+		stopReason: aborted ? "aborted" : "error",
+		errorMessage: error instanceof Error ? error.message : String(error),
+		timestamp: Date.now(),
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+	};
 }
 
 export function bashExecutionToText(msg: BashExecutionMessage): string {

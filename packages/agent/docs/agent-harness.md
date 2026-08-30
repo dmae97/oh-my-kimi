@@ -209,7 +209,7 @@ They are allowed only while idle and are not queued. They operate on persisted s
 
 Branch summary generation is part of the tree navigation operation.
 
-Threshold auto-compaction is implemented at the provider-request boundary. Context-overflow compaction and turn replay are not implemented in `AgentHarness` yet. Manual and automatic compaction plus branch-summary model calls apply the configured `streamOptions.summarizationRetry` policy to transient failures.
+Threshold auto-compaction is implemented at the provider-request boundary. Provider-reported context overflow receives one compact-and-continue recovery attempt. Manual and automatic compaction plus branch-summary model calls apply the configured `streamOptions.summarizationRetry` policy to transient failures.
 
 ### Threshold auto-compaction
 
@@ -217,7 +217,13 @@ Configure thresholds through `AgentHarnessOptions.compaction`; omitted fields us
 
 Automatic compaction is conservative at unavailable boundaries. It leaves the request unchanged when disabled, when no explicit summarization auth callback is available, when preparation finds a true no-op, or when `session_before_compact` cancels. It never loops on an unchanged context. The ordinary `session_before_compact` and `session_compact` events cover both manual and automatic runs.
 
-This path prevents projected headroom overflow. Provider-reported context overflow after a request is a separate recovery contract and remains unimplemented.
+This path prevents projected headroom overflow.
+
+### Context-overflow recovery
+
+When the session model still returns a recognized context-overflow assistant error, the harness makes at most one recovery attempt. The failed assistant entry stays in the append-only session tree for evidence, but the active leaf moves back to its parent before compaction. The harness then compacts and calls `runAgentLoopContinue()` from the persisted compacted context, so the original user message is not appended twice.
+
+Recovery runs only when compaction is enabled, explicit summarization auth is available, and the overflow assistant is still the active leaf. The leaf requirement prevents silently orphaning extension writes that may have settled after the error. Unavailable/no-op/cancelled compaction restores the original overflow leaf. If the continuation also overflows, that second error is terminal; recovery does not recurse.
 
 ### Summarization retries
 
@@ -327,7 +333,7 @@ Remaining:
 - Audit whether `settled` can fire too early.
 - Make session writes inside `settled` callbacks deterministic.
 - Audit follow-up behavior around `agent_end`.
-- Implement context-overflow turn replay; threshold auto-compaction and summarization retries are implemented.
+- Decide whether overflow recovery needs a configurable attempt limit; the implemented contract makes one attempt and stops if the continuation also overflows.
 - Verify `before_agent_start` hook semantics against coding-agent.
 - Decide whether `before_agent_start` needs more turn info such as tools/tool snippets.
 - Document or change runtime config event timing while busy.
