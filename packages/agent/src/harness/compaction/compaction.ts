@@ -1,5 +1,14 @@
-import type { AssistantMessage, ImageContent, Message, Model, TextContent, Usage } from "omk-ai";
-import { completeSimple } from "omk-ai";
+import type {
+	AssistantMessage,
+	ImageContent,
+	Message,
+	Model,
+	RetryCallbacks,
+	RetryPolicy,
+	TextContent,
+	Usage,
+} from "omk-ai";
+import { completeSimple, retryAssistantCall } from "omk-ai";
 import type { AgentMessage, ThinkingLevel } from "../../types.ts";
 import {
 	convertToLlm,
@@ -10,6 +19,12 @@ import {
 import { buildSessionContext } from "../session/session.ts";
 import { type CompactionEntry, CompactionError, err, ok, type Result, type SessionTreeEntry } from "../types.ts";
 import {
+	SUMMARIZATION_PROMPT,
+	SUMMARIZATION_SYSTEM_PROMPT,
+	TURN_PREFIX_SUMMARIZATION_PROMPT,
+	UPDATE_SUMMARIZATION_PROMPT,
+} from "./summarization-prompts.ts";
+import {
 	computeFileLists,
 	createFileOps,
 	extractFileOpsFromMessage,
@@ -17,6 +32,8 @@ import {
 	formatFileOperations,
 	serializeConversation,
 } from "./utils.ts";
+
+export { SUMMARIZATION_SYSTEM_PROMPT } from "./summarization-prompts.ts";
 
 /** File-operation details stored on generated compaction entries. */
 export interface CompactionDetails {
@@ -96,6 +113,11 @@ export interface CompactionResult<T = unknown> {
 	tokensBefore: number;
 	/** Optional implementation-specific details stored with the compaction entry. */
 	details?: T;
+}
+
+export interface SummarizationRetryOptions {
+	readonly retry?: RetryPolicy;
+	readonly callbacks?: RetryCallbacks;
 }
 
 /** Compaction thresholds and retention settings. */
@@ -438,82 +460,6 @@ export function findCutPoint(
 	};
 }
 
-export const SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI coding assistant, then produce a structured summary following the exact format specified.
-
-Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.`;
-
-const SUMMARIZATION_PROMPT = `The messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.
-
-Use this EXACT format:
-
-## Goal
-[What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]
-
-## Constraints & Preferences
-- [Any constraints, preferences, or requirements mentioned by user]
-- [Or "(none)" if none were mentioned]
-
-## Progress
-### Done
-- [x] [Completed tasks/changes]
-
-### In Progress
-- [ ] [Current work]
-
-### Blocked
-- [Issues preventing progress, if any]
-
-## Key Decisions
-- **[Decision]**: [Brief rationale]
-
-## Next Steps
-1. [Ordered list of what should happen next]
-
-## Critical Context
-- [Any data, examples, or references needed to continue]
-- [Or "(none)" if not applicable]
-
-Keep each section concise. Preserve exact file paths, function names, and error messages.`;
-
-const UPDATE_SUMMARIZATION_PROMPT = `The messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.
-
-Update the existing structured summary with new information. RULES:
-- PRESERVE all existing information from the previous summary
-- ADD new progress, decisions, and context from the new messages
-- UPDATE the Progress section: move items from "In Progress" to "Done" when completed
-- UPDATE "Next Steps" based on what was accomplished
-- PRESERVE exact file paths, function names, and error messages
-- If something is no longer relevant, you may remove it
-
-Use this EXACT format:
-
-## Goal
-[Preserve existing goals, add new ones if the task expanded]
-
-## Constraints & Preferences
-- [Preserve existing, add new ones discovered]
-
-## Progress
-### Done
-- [x] [Include previously done items AND newly completed items]
-
-### In Progress
-- [ ] [Current work - update based on progress]
-
-### Blocked
-- [Current blockers - remove if resolved]
-
-## Key Decisions
-- **[Decision]**: [Brief rationale] (preserve all previous, add new)
-
-## Next Steps
-1. [Update based on current state]
-
-## Critical Context
-- [Preserve important context, add new if needed]
-
-Keep each section concise. Preserve exact file paths, function names, and error messages.`;
-
 /** Generate or update a conversation summary for compaction. */
 export async function generateSummary(
 	currentMessages: AgentMessage[],
@@ -525,6 +471,7 @@ export async function generateSummary(
 	customInstructions?: string,
 	previousSummary?: string,
 	thinkingLevel?: ThinkingLevel,
+	retryOptions?: SummarizationRetryOptions,
 ): Promise<Result<string, CompactionError>> {
 	const maxTokens = Math.min(
 		Math.floor(0.8 * reserveTokens),
@@ -555,10 +502,16 @@ export async function generateSummary(
 			? { maxTokens, signal, apiKey, headers, reasoning: thinkingLevel }
 			: { maxTokens, signal, apiKey, headers };
 
-	const response = await completeSimple(
-		model,
-		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-		completionOptions,
+	const response = await retryAssistantCall(
+		() =>
+			completeSimple(
+				model,
+				{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
+				completionOptions,
+			),
+		retryOptions?.retry,
+		signal,
+		retryOptions?.callbacks,
 	);
 	if (response.stopReason === "aborted") {
 		return err(new CompactionError("aborted", response.errorMessage || "Summarization aborted"));
@@ -676,21 +629,6 @@ export function prepareCompaction(
 	});
 }
 
-const TURN_PREFIX_SUMMARIZATION_PROMPT = `This is the PREFIX of a turn that was too large to keep. The SUFFIX (recent work) is retained.
-
-Summarize the prefix to provide context for the retained suffix:
-
-## Original Request
-[What did the user ask for in this turn?]
-
-## Early Progress
-- [Key decisions and work done in the prefix]
-
-## Context for Suffix
-- [Information needed to understand the retained recent work]
-
-Be concise. Focus on what's needed to understand the kept suffix.`;
-
 export { serializeConversation } from "./utils.ts";
 
 /**
@@ -760,6 +698,7 @@ export async function compact(
 	customInstructions?: string,
 	signal?: AbortSignal,
 	thinkingLevel?: ThinkingLevel,
+	retryOptions?: SummarizationRetryOptions,
 ): Promise<Result<CompactionResult, CompactionError>> {
 	const {
 		firstKeptEntryId,
@@ -791,6 +730,7 @@ export async function compact(
 						customInstructions,
 						previousSummary,
 						thinkingLevel,
+						retryOptions,
 					)
 				: Promise.resolve(ok<string, CompactionError>("No prior history.")),
 			generateTurnPrefixSummary(
@@ -801,6 +741,7 @@ export async function compact(
 				headers,
 				signal,
 				thinkingLevel,
+				retryOptions,
 			),
 		]);
 		if (!historyResult.ok) return err(historyResult.error);
@@ -817,6 +758,7 @@ export async function compact(
 			customInstructions,
 			previousSummary,
 			thinkingLevel,
+			retryOptions,
 		);
 		if (!summaryResult.ok) return err(summaryResult.error);
 		summary = summaryResult.value;
@@ -840,6 +782,7 @@ async function generateTurnPrefixSummary(
 	headers?: Record<string, string>,
 	signal?: AbortSignal,
 	thinkingLevel?: ThinkingLevel,
+	retryOptions?: SummarizationRetryOptions,
 ): Promise<Result<string, CompactionError>> {
 	const maxTokens = Math.min(
 		Math.floor(0.5 * reserveTokens),
@@ -856,12 +799,18 @@ async function generateTurnPrefixSummary(
 		},
 	];
 
-	const response = await completeSimple(
-		model,
-		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-		model.reasoning && thinkingLevel && thinkingLevel !== "off"
-			? { maxTokens, signal, apiKey, headers, reasoning: thinkingLevel }
-			: { maxTokens, signal, apiKey, headers },
+	const response = await retryAssistantCall(
+		() =>
+			completeSimple(
+				model,
+				{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
+				model.reasoning && thinkingLevel && thinkingLevel !== "off"
+					? { maxTokens, signal, apiKey, headers, reasoning: thinkingLevel }
+					: { maxTokens, signal, apiKey, headers },
+			),
+		retryOptions?.retry,
+		signal,
+		retryOptions?.callbacks,
 	);
 	if (response.stopReason === "aborted") {
 		return err(new CompactionError("aborted", response.errorMessage || "Turn prefix summarization aborted"));

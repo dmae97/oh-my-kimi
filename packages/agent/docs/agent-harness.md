@@ -209,7 +209,13 @@ They are allowed only while idle and are not queued. They operate on persisted s
 
 Branch summary generation is part of the tree navigation operation.
 
-Auto-compaction and retry decision points are not implemented in `AgentHarness` yet.
+Automatic threshold/overflow compaction and turn replay are not implemented in `AgentHarness` yet. Manual compaction and branch-summary model calls do apply the configured `streamOptions.summarizationRetry` policy to transient failures.
+
+### Summarization retries
+
+Set `streamOptions.summarizationRetry` to a bounded `RetryPolicy` for generated compaction and branch-summary calls. It uses `omk-ai`'s shared classifier and exponential backoff: transient provider/transport failures retry, quota/billing failures fail fast, and aborts never retry.
+
+The harness emits `retry_scheduled`, `retry_attempt_start`, and `retry_finished` with operation (`compaction` or `branch_summary`), attempt information, and the final outcome. Retry callbacks are awaited, so listener failure fails the owning structural operation rather than becoming an unobserved rejection.
 
 ## Test organization
 
@@ -313,7 +319,7 @@ Remaining:
 - Make session writes inside `settled` callbacks deterministic.
 - Audit follow-up behavior around `agent_end`.
 - Implement auto-compaction decision point.
-- Implement retry handling.
+- Implement context-overflow turn replay; compaction and branch-summary transient retries are implemented.
 - Verify `before_agent_start` hook semantics against coding-agent.
 - Decide whether `before_agent_start` needs more turn info such as tools/tool snippets.
 - Document or change runtime config event timing while busy.

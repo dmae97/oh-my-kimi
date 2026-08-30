@@ -1,4 +1,4 @@
-import type { ImageContent, Model, SimpleStreamOptions, TextContent, Transport } from "omk-ai";
+import type { ImageContent, Model, TextContent } from "omk-ai";
 import type { AgentEvent, AgentMessage, AgentTool, QueueMode, ThinkingLevel } from "../index.ts";
 
 export {
@@ -10,6 +10,17 @@ export {
 } from "./errors.ts";
 
 import type { Session } from "./session/session.ts";
+import type { AgentHarnessStreamOptions, AgentHarnessStreamOptionsPatch } from "./stream-options.ts";
+import type { SummarizationRetryEvent } from "./summarization-retry.ts";
+
+export type { AgentHarnessStreamOptions, AgentHarnessStreamOptionsPatch } from "./stream-options.ts";
+export type {
+	RetryAttemptStartEvent,
+	RetryFinishedEvent,
+	RetryScheduledEvent,
+	SummarizationOperation,
+	SummarizationRetryEvent,
+} from "./summarization-retry.ts";
 
 /** Result of a fallible operation. Expected failures are returned as `ok: false` instead of thrown. */
 export type Result<TValue, TError> = { ok: true; value: TValue } | { ok: false; error: TError };
@@ -73,33 +84,6 @@ export interface AgentHarnessResources<
 	promptTemplates?: TPromptTemplate[];
 	/** Skills available to the model and explicit skill invocation. */
 	skills?: TSkill[];
-}
-
-/** Curated provider request options owned by the harness and snapshotted per turn. */
-export interface AgentHarnessStreamOptions {
-	/** Preferred transport forwarded to the stream function. */
-	transport?: Transport;
-	/** Provider request timeout in milliseconds. */
-	timeoutMs?: number;
-	/** Maximum provider retry attempts. */
-	maxRetries?: number;
-	/** Optional cap for provider-requested retry delays. */
-	maxRetryDelayMs?: number;
-	/** Additional request headers merged with auth and lifecycle headers. */
-	headers?: Record<string, string>;
-	/** Provider metadata forwarded with requests. */
-	metadata?: SimpleStreamOptions["metadata"];
-	/** Provider cache retention hint. */
-	cacheRetention?: SimpleStreamOptions["cacheRetention"];
-}
-
-/** Per-request stream option patch returned by provider hooks. */
-export interface AgentHarnessStreamOptionsPatch
-	extends Omit<Partial<AgentHarnessStreamOptions>, "headers" | "metadata"> {
-	/** Header patch. `undefined` values delete keys; explicit `headers: undefined` clears all headers. */
-	headers?: Record<string, string | undefined>;
-	/** Metadata patch. `undefined` values delete keys; explicit `metadata: undefined` clears all metadata. */
-	metadata?: Record<string, unknown | undefined>;
 }
 
 /** Kind of filesystem object as addressed by a {@link FileSystem}. Symlinks are not followed automatically. */
@@ -632,6 +616,7 @@ export type AgentHarnessOwnEvent<
 	| SessionCompactEvent
 	| SessionBeforeTreeEvent
 	| SessionTreeEvent
+	| SummarizationRetryEvent
 	| ModelUpdateEvent
 	| ThinkingLevelUpdateEvent
 	| ResourcesUpdateEvent<TSkill, TPromptTemplate>
@@ -695,6 +680,9 @@ export type AgentHarnessEventResultMap = {
 	session_compact: undefined;
 	session_before_tree: SessionBeforeTreeResult | undefined;
 	session_tree: undefined;
+	retry_scheduled: undefined;
+	retry_attempt_start: undefined;
+	retry_finished: undefined;
 	model_update: undefined;
 	thinking_level_update: undefined;
 	resources_update: undefined;

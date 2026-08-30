@@ -1,5 +1,5 @@
-import type { Model } from "omk-ai";
-import { completeSimple } from "omk-ai";
+import type { Model, RetryCallbacks, RetryPolicy } from "omk-ai";
+import { completeSimple, retryAssistantCall } from "omk-ai";
 import type { AgentMessage } from "../../types.ts";
 import {
 	convertToLlm,
@@ -63,6 +63,10 @@ export interface GenerateBranchSummaryOptions {
 	replaceInstructions?: boolean;
 	/** Tokens reserved for prompt and model output. Defaults to 16384. */
 	reserveTokens?: number;
+	/** Optional transient-error retry policy. */
+	retry?: RetryPolicy;
+	/** Retry lifecycle callbacks used by the owning harness for observability. */
+	callbacks?: RetryCallbacks;
 }
 
 /** Collect entries that should be summarized before navigating to a different session tree entry. */
@@ -202,7 +206,17 @@ export async function generateBranchSummary(
 	entries: SessionTreeEntry[],
 	options: GenerateBranchSummaryOptions,
 ): Promise<Result<BranchSummaryResult, BranchSummaryError>> {
-	const { model, apiKey, headers, signal, customInstructions, replaceInstructions, reserveTokens = 16384 } = options;
+	const {
+		model,
+		apiKey,
+		headers,
+		signal,
+		customInstructions,
+		replaceInstructions,
+		reserveTokens = 16384,
+		retry,
+		callbacks,
+	} = options;
 	const contextWindow = model.contextWindow || 128000;
 	const tokenBudget = contextWindow - reserveTokens;
 
@@ -230,10 +244,16 @@ export async function generateBranchSummary(
 			timestamp: Date.now(),
 		},
 	];
-	const response = await completeSimple(
-		model,
-		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-		{ apiKey, headers, signal, maxTokens: 2048 },
+	const response = await retryAssistantCall(
+		() =>
+			completeSimple(
+				model,
+				{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
+				{ apiKey, headers, signal, maxTokens: 2048 },
+			),
+		retry,
+		signal,
+		callbacks,
 	);
 	if (response.stopReason === "aborted") {
 		return err(new BranchSummaryError("aborted", response.errorMessage || "Branch summary aborted"));

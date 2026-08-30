@@ -16,6 +16,8 @@ import { HarnessSessionFacade } from "./harness-session.ts";
 import { convertToLlm } from "./messages.ts";
 import { formatPromptTemplateInvocation } from "./prompt-templates.ts";
 import { formatSkillInvocation } from "./skills.ts";
+import { applyStreamOptionsPatch, cloneStreamOptions, mergeHeaders } from "./stream-options.ts";
+import { createSummarizationRetry } from "./summarization-retry.ts";
 import type {
 	AbortResult,
 	AgentHarnessEvent,
@@ -25,7 +27,6 @@ import type {
 	AgentHarnessPhase,
 	AgentHarnessResources,
 	AgentHarnessStreamOptions,
-	AgentHarnessStreamOptionsPatch,
 	ExecutionEnv,
 	HarnessSession,
 	NavigateTreeResult,
@@ -63,25 +64,6 @@ function createFailureMessage(model: Model<any>, error: unknown, aborted: boolea
 	};
 }
 
-function cloneStreamOptions(streamOptions?: AgentHarnessStreamOptions): AgentHarnessStreamOptions {
-	return {
-		...streamOptions,
-		headers: streamOptions?.headers ? { ...streamOptions.headers } : undefined,
-		metadata: streamOptions?.metadata ? { ...streamOptions.metadata } : undefined,
-	};
-}
-
-function mergeHeaders(...headers: Array<Record<string, string> | undefined>): Record<string, string> | undefined {
-	const merged: Record<string, string> = {};
-	let hasHeaders = false;
-	for (const entry of headers) {
-		if (!entry) continue;
-		Object.assign(merged, entry);
-		hasHeaders = true;
-	}
-	return hasHeaders ? merged : undefined;
-}
-
 function findDuplicateNames(names: string[]): string[] {
 	const seen = new Set<string>();
 	const duplicates = new Set<string>();
@@ -90,48 +72,6 @@ function findDuplicateNames(names: string[]): string[] {
 		seen.add(name);
 	}
 	return [...duplicates];
-}
-
-function applyStreamOptionsPatch(
-	base: AgentHarnessStreamOptions,
-	patch?: AgentHarnessStreamOptionsPatch,
-): AgentHarnessStreamOptions {
-	const result = cloneStreamOptions(base);
-	if (!patch) return result;
-
-	if (Object.hasOwn(patch, "transport")) result.transport = patch.transport;
-	if (Object.hasOwn(patch, "timeoutMs")) result.timeoutMs = patch.timeoutMs;
-	if (Object.hasOwn(patch, "maxRetries")) result.maxRetries = patch.maxRetries;
-	if (Object.hasOwn(patch, "maxRetryDelayMs")) result.maxRetryDelayMs = patch.maxRetryDelayMs;
-	if (Object.hasOwn(patch, "cacheRetention")) result.cacheRetention = patch.cacheRetention;
-
-	if (Object.hasOwn(patch, "headers")) {
-		if (patch.headers === undefined) {
-			result.headers = undefined;
-		} else {
-			const headers = { ...(result.headers ?? {}) };
-			for (const [key, value] of Object.entries(patch.headers)) {
-				if (value === undefined) delete headers[key];
-				else headers[key] = value;
-			}
-			result.headers = Object.keys(headers).length > 0 ? headers : undefined;
-		}
-	}
-
-	if (Object.hasOwn(patch, "metadata")) {
-		if (patch.metadata === undefined) {
-			result.metadata = undefined;
-		} else {
-			const metadata = { ...(result.metadata ?? {}) };
-			for (const [key, value] of Object.entries(patch.metadata)) {
-				if (value === undefined) delete metadata[key];
-				else metadata[key] = value;
-			}
-			result.metadata = Object.keys(metadata).length > 0 ? metadata : undefined;
-		}
-	}
-
-	return result;
 }
 
 const SUBSCRIBER_EVENT_TYPE = "*";
@@ -760,6 +700,9 @@ export class AgentHarness<
 						customInstructions,
 						undefined,
 						this.thinkingLevel,
+						createSummarizationRetry("compaction", this.streamOptions.summarizationRetry, (event) =>
+							this.emitOwn(event),
+						),
 					);
 			if (!compactResult.ok) throw compactResult.error;
 			const result = compactResult.value;
@@ -822,6 +765,9 @@ export class AgentHarness<
 					signal: new AbortController().signal,
 					customInstructions: hookResult?.customInstructions ?? options?.customInstructions,
 					replaceInstructions: hookResult?.replaceInstructions ?? options?.replaceInstructions,
+					...createSummarizationRetry("branch_summary", this.streamOptions.summarizationRetry, (event) =>
+						this.emitOwn(event),
+					),
 				});
 				if (!branchSummary.ok) {
 					if (branchSummary.error.code === "aborted") return { cancelled: true };
