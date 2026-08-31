@@ -178,10 +178,13 @@ jobs:
 
       - name: Setup Node.js
         # actions/setup-node v5.0.0
+        # No registry-url: it writes an .npmrc `_authToken=${NODE_AUTH_TOKEN}`
+        # line that npm prefers over the OIDC trusted-publisher exchange. With
+        # the variable unset that sends an empty credential, which the registry
+        # rejects as E404, masking a working trusted publisher.
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: "22"
-          registry-url: "https://registry.npmjs.org"
           package-manager-cache: false
 
       - name: Pin npm
@@ -223,8 +226,11 @@ jobs:
             ':(exclude)packages/ai/src/models.generated.ts'
 
       - name: Publish npm packages
-        env:
-          # Token fallback: npm falls back to NODE_AUTH_TOKEN when the OIDC
-          # trusted-publisher exchange does not match this repository.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: node scripts/publish.mjs
+        # Credential-free: authentication is the OIDC trusted-publisher exchange
+        # backed by this job's id-token permission and the npm-publish
+        # environment. npm revoked classic tokens on 2025-12-09, so a
+        # NODE_AUTH_TOKEN fallback can no longer publish -- it only suppresses
+        # the OIDC path.
+        run: |
+          npm config delete //registry.npmjs.org/:_authToken --location=user || true
+          node scripts/publish.mjs
