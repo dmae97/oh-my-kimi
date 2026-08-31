@@ -85,7 +85,7 @@ Session storage implementations must persist leaf changes as `leaf` entries. `se
 
 Session writes requested while an operation is active are queued as pending session writes. Pending writes are based on session-entry shapes without generated fields (`id`, `parentId`, `timestamp`).
 
-Pending session writes are always persisted. They are flushed at save points, at operation settlement, and in failure cleanup.
+Pending session writes are always persisted. `SessionWriteCoordinator` owns their FIFO queue, snapshots plain-data writes at enqueue acceptance, and serializes flush boundaries at save points, operation settlement, and failure cleanup. If persistence fails, the head remains queued; a later idle write flushes the accepted queue first and cannot overtake it. Durable model identity and active-tool names are captured when their setter is invoked, before serialized persistence can observe later caller mutation. Coordinator-routed persistence rejects synchronous reentry with `AgentHarnessError` code `"invalid_state"` instead of deadlocking. `SessionStorage` mutations are non-reentrant and must not call or await mutators on their owning session or harness while unsettled.
 
 `AgentHarness.getSession()` returns a `HarnessSession` facade. It exposes persisted reads and ordered extension writes without exposing raw storage.
 
@@ -318,7 +318,8 @@ Done:
 - `nextTurn` messages are inserted before the new user prompt.
 - Structural compaction/tree operations restore phase with `finally`.
 - Public harness failures normalize subsystem causes to `AgentHarnessError`.
-- Pending session writes flush one-by-one and are not dropped on failure.
+- Pending session writes flush one-by-one, are not dropped on failure, and cannot be overtaken by later idle writes after persistence recovers.
+- Extracted pending-write state and flush serialization into `SessionWriteCoordinator`.
 - Queue drains roll back if queue-update notification fails.
 - `message_end` persistence happens before subscriber notification.
 - `abort()` signals cancellation before notifications and still waits for idle through notification errors.

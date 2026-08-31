@@ -13,6 +13,9 @@
 
 ### Fixed
 
+- Corrected `session-write-coordinator.md` durability claims: the coordinator guarantees single-process FIFO ordering and acknowledgement-gated dequeue, not unconditional exactly-once durability. Added the `commit_unknown` failure vocabulary and linked the `PreparedSessionMutation` milestone that closes the gap.
+- Coordinator enqueue and serialized idle model/active-tool updates now persist invocation-time snapshots instead of rereading caller-owned mutable inputs after validation; synchronous persistence reentry rejects instead of deadlocking.
+- Pending `AgentHarness` session writes now retain FIFO order after a persistence failure: recovered writes flush before any later idle write, with queue ownership and flush serialization isolated in `SessionWriteCoordinator`.
 - `AgentHarness.abort()` now rejects during compaction, branch navigation, and retry phases instead of reporting success while an untracked structural operation remains active. Turn cancellation and idle queue clearing keep their existing behavior.
 
 ## [0.98.0] - 2026-08-28

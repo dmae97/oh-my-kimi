@@ -31,6 +31,7 @@ import { HarnessSessionFacade } from "./harness-session.ts";
 import { convertToLlm, createFailureMessage, createUserMessage } from "./messages.ts";
 import { findDuplicateNames } from "./name-validation.ts";
 import { formatPromptTemplateInvocation } from "./prompt-templates.ts";
+import { SessionWriteCoordinator } from "./session-write-coordinator.ts";
 import { formatSkillInvocation } from "./skills.ts";
 import { applyStreamOptionsPatch, cloneStreamOptions, mergeHeaders } from "./stream-options.ts";
 import { createSummarizationRetry } from "./summarization-retry.ts";
@@ -48,7 +49,6 @@ import type {
 	ExecutionEnv,
 	HarnessSession,
 	NavigateTreeResult,
-	PendingSessionWrite,
 	PromptTemplate,
 	Session,
 	Skill,
@@ -95,7 +95,7 @@ export class AgentHarness<
 	private phase: AgentHarnessPhase = "idle";
 	private runAbortController?: AbortController;
 	private runPromise?: Promise<void>;
-	private pendingSessionWrites: PendingSessionWrite[] = [];
+	private readonly sessionWrites: SessionWriteCoordinator<AgentMessage>;
 	private model: Model<any>;
 	private thinkingLevel: ThinkingLevel;
 	private systemPrompt: AgentHarnessOptions<TSkill, TPromptTemplate, TTool>["systemPrompt"];
@@ -115,7 +115,8 @@ export class AgentHarness<
 	constructor(options: AgentHarnessOptions<TSkill, TPromptTemplate, TTool>) {
 		this.env = options.env;
 		this.session = options.session;
-		this.sessionFacade = new HarnessSessionFacade(this.session, () => this.phase, this.pendingSessionWrites);
+		this.sessionWrites = new SessionWriteCoordinator(this.session);
+		this.sessionFacade = new HarnessSessionFacade(this.session, () => this.phase, this.sessionWrites);
 		this.resources = options.resources ?? {};
 		this.streamOptions = cloneStreamOptions(options.streamOptions);
 		this.compactionSettings = { ...DEFAULT_COMPACTION_SETTINGS, ...options.compaction };
@@ -377,7 +378,7 @@ export class AgentHarness<
 					: undefined;
 			},
 			prepareNextTurn: async () => {
-				await this.flushPendingSessionWrites();
+				await this.sessionWrites.flush();
 				const nextTurnState = await this.createTurnState();
 				setTurnState(nextTurnState);
 				return {
@@ -403,32 +404,6 @@ export class AgentHarness<
 		if (missing.length > 0) throw new AgentHarnessError("invalid_argument", `Unknown tool(s): ${missing.join(", ")}`);
 	}
 
-	private async flushPendingSessionWrites(): Promise<void> {
-		while (this.pendingSessionWrites.length > 0) {
-			const write = this.pendingSessionWrites[0]!;
-			if (write.type === "message") {
-				await this.session.appendMessage(write.message);
-			} else if (write.type === "model_change") {
-				await this.session.appendModelChange(write.provider, write.modelId);
-			} else if (write.type === "thinking_level_change") {
-				await this.session.appendThinkingLevelChange(write.thinkingLevel);
-			} else if (write.type === "active_tools_change") {
-				await this.session.appendActiveToolsChange(write.activeToolNames);
-			} else if (write.type === "custom") {
-				await this.session.appendCustomEntry(write.customType, write.data);
-			} else if (write.type === "custom_message") {
-				await this.session.appendCustomMessageEntry(write.customType, write.content, write.display, write.details);
-			} else if (write.type === "label") {
-				await this.session.appendLabel(write.targetId, write.label);
-			} else if (write.type === "session_info") {
-				await this.session.appendSessionName(write.name ?? "");
-			} else if (write.type === "leaf") {
-				await this.session.getStorage().setLeafId(write.targetId);
-			}
-			this.pendingSessionWrites.shift();
-		}
-	}
-
 	private async handleAgentEvent(event: AgentEvent, signal?: AbortSignal): Promise<void> {
 		if (event.type === "message_end") {
 			await this.session.appendMessage(event.message);
@@ -442,8 +417,8 @@ export class AgentHarness<
 			} catch (error) {
 				eventError = error;
 			}
-			const hadPendingMutations = this.pendingSessionWrites.length > 0;
-			await this.flushPendingSessionWrites();
+			const hadPendingMutations = this.sessionWrites.hasPending();
+			await this.sessionWrites.flush();
 			if (eventError) throw eventError;
 			await this.emitOwn({ type: "save_point", hadPendingMutations });
 			return;
@@ -452,7 +427,7 @@ export class AgentHarness<
 			// Finish this run's cleanup before flipping to "idle": listeners observing
 			// agent_end/settled may start the next prompt() immediately, and that run
 			// must not inherit state still owned by the run that just completed.
-			await this.flushPendingSessionWrites();
+			await this.sessionWrites.flush();
 			if (this.runAbortController && this.runAbortController.signal === signal) {
 				this.runAbortController = undefined;
 			}
@@ -565,7 +540,7 @@ export class AgentHarness<
 			throw new AgentHarnessError("invalid_state", "AgentHarness prompt completed without an assistant message");
 		} finally {
 			try {
-				await this.flushPendingSessionWrites();
+				await this.sessionWrites.flush();
 			} finally {
 				if (this.runAbortController === abortController) this.runAbortController = undefined;
 			}
@@ -881,10 +856,16 @@ export class AgentHarness<
 	async setModel(model: Model<any>): Promise<void> {
 		try {
 			const previousModel = this.model;
+			const nextProvider = model.provider;
+			const nextModelId = model.id;
 			if (this.phase === "idle") {
-				await this.session.appendModelChange(model.provider, model.id);
+				await this.sessionWrites.persistAfterPending({
+					type: "model_change",
+					provider: nextProvider,
+					modelId: nextModelId,
+				});
 			} else {
-				this.pendingSessionWrites.push({ type: "model_change", provider: model.provider, modelId: model.id });
+				this.sessionWrites.enqueue({ type: "model_change", provider: nextProvider, modelId: nextModelId });
 			}
 			this.model = model;
 			await this.emitOwn({ type: "model_update", model, previousModel, source: "set" });
@@ -901,9 +882,9 @@ export class AgentHarness<
 		try {
 			const previousLevel = this.thinkingLevel;
 			if (this.phase === "idle") {
-				await this.session.appendThinkingLevelChange(level);
+				await this.sessionWrites.persistAfterPending({ type: "thinking_level_change", thinkingLevel: level });
 			} else {
-				this.pendingSessionWrites.push({ type: "thinking_level_change", thinkingLevel: level });
+				this.sessionWrites.enqueue({ type: "thinking_level_change", thinkingLevel: level });
 			}
 			this.thinkingLevel = level;
 			await this.emitOwn({ type: "thinking_level_update", level, previousLevel });
@@ -928,9 +909,12 @@ export class AgentHarness<
 			const previousToolNames = [...this.tools.keys()];
 			const previousActiveToolNames = [...this.activeToolNames];
 			if (this.phase === "idle") {
-				await this.session.appendActiveToolsChange(nextActiveToolNames);
+				await this.sessionWrites.persistAfterPending({
+					type: "active_tools_change",
+					activeToolNames: [...nextActiveToolNames],
+				});
 			} else {
-				this.pendingSessionWrites.push({ type: "active_tools_change", activeToolNames: [...nextActiveToolNames] });
+				this.sessionWrites.enqueue({ type: "active_tools_change", activeToolNames: [...nextActiveToolNames] });
 			}
 			this.tools = nextTools;
 			this.activeToolNames = [...nextActiveToolNames];
@@ -953,15 +937,22 @@ export class AgentHarness<
 
 	async setActiveTools(toolNames: string[]): Promise<void> {
 		try {
-			this.validateToolNames(toolNames);
+			const nextActiveToolNames = [...toolNames];
+			this.validateToolNames(nextActiveToolNames);
 			const previousToolNames = [...this.tools.keys()];
 			const previousActiveToolNames = [...this.activeToolNames];
 			if (this.phase === "idle") {
-				await this.session.appendActiveToolsChange(toolNames);
+				await this.sessionWrites.persistAfterPending({
+					type: "active_tools_change",
+					activeToolNames: [...nextActiveToolNames],
+				});
 			} else {
-				this.pendingSessionWrites.push({ type: "active_tools_change", activeToolNames: [...toolNames] });
+				this.sessionWrites.enqueue({
+					type: "active_tools_change",
+					activeToolNames: [...nextActiveToolNames],
+				});
 			}
-			this.activeToolNames = [...toolNames];
+			this.activeToolNames = [...nextActiveToolNames];
 			await this.emitOwn({
 				type: "tools_update",
 				toolNames: [...this.tools.keys()],

@@ -377,6 +377,12 @@ export interface JsonlSessionMetadata extends SessionMetadata {
 	parentSessionPath?: string;
 }
 
+/**
+ * Durable session storage adapter.
+ *
+ * Mutation methods are non-reentrant: while a storage mutation is unsettled, its implementation must not call or await
+ * mutators on the owning `Session`, `HarnessSession`, or `AgentHarness`.
+ */
 export interface SessionStorage<TMetadata extends SessionMetadata = SessionMetadata> {
 	getMetadata(): Promise<TMetadata>;
 	getLeafId(): Promise<string | null>;

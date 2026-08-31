@@ -1,6 +1,7 @@
 import type { ImageContent, TextContent } from "omk-ai";
 import { createImmutableSnapshot } from "../plain-data.ts";
 import { AgentHarnessError, toError } from "./errors.ts";
+import type { QueuedSessionWrite, SessionWriteCoordinator } from "./session-write-coordinator.ts";
 
 type FacadeWrite<TMessage> =
 	| { readonly type: "message"; readonly message: TMessage }
@@ -16,28 +17,7 @@ type FacadeWrite<TMessage> =
 	| { readonly type: "session_info"; readonly name?: string }
 	| { readonly type: "leaf"; readonly targetId: string | null };
 
-type PendingWrite<TMessage> =
-	| FacadeWrite<TMessage>
-	| { readonly type: "thinking_level_change"; readonly thinkingLevel: string }
-	| { readonly type: "model_change"; readonly provider: string; readonly modelId: string }
-	| { readonly type: "active_tools_change"; readonly activeToolNames: string[] }
-	| {
-			readonly type: "compaction";
-			readonly summary: string;
-			readonly firstKeptEntryId: string;
-			readonly tokensBefore: number;
-			readonly details?: unknown;
-			readonly fromHook?: boolean;
-	  }
-	| {
-			readonly type: "branch_summary";
-			readonly fromId: string;
-			readonly summary: string;
-			readonly details?: unknown;
-			readonly fromHook?: boolean;
-	  };
-
-interface SessionPort<TMessage, TEntry, TContext, TMetadata> {
+interface SessionPort<TEntry, TContext, TMetadata> {
 	getMetadata(): Promise<TMetadata>;
 	getLeafId(): Promise<string | null>;
 	getEntry(id: string): Promise<TEntry | undefined>;
@@ -46,17 +26,6 @@ interface SessionPort<TMessage, TEntry, TContext, TMetadata> {
 	buildContext(): Promise<TContext>;
 	getLabel(id: string): Promise<string | undefined>;
 	getSessionName(): Promise<string | undefined>;
-	appendMessage(message: TMessage): Promise<string>;
-	appendCustomEntry(customType: string, data?: unknown): Promise<string>;
-	appendCustomMessageEntry(
-		customType: string,
-		content: string | (TextContent | ImageContent)[],
-		display: boolean,
-		details?: unknown,
-	): Promise<string>;
-	appendLabel(targetId: string, label: string | undefined): Promise<string>;
-	appendSessionName(name: string): Promise<string>;
-	moveTo(entryId: string | null): Promise<string | undefined>;
 }
 
 interface CustomMessageInput<T = unknown> {
@@ -75,18 +44,18 @@ interface CustomMessageInput<T = unknown> {
  * type imports as architectural edges. Generic ports keep the implementation a leaf.
  */
 export class HarnessSessionFacade<TMessage, TEntry, TContext, TMetadata> {
-	private readonly session: SessionPort<TMessage, TEntry, TContext, TMetadata>;
+	private readonly session: SessionPort<TEntry, TContext, TMetadata>;
 	private readonly getPhase: () => string;
-	private readonly pendingWrites: PendingWrite<TMessage>[];
+	private readonly sessionWrites: SessionWriteCoordinator<TMessage>;
 
 	constructor(
-		session: SessionPort<TMessage, TEntry, TContext, TMetadata>,
+		session: SessionPort<TEntry, TContext, TMetadata>,
 		getPhase: () => string,
-		pendingWrites: PendingWrite<TMessage>[],
+		sessionWrites: SessionWriteCoordinator<TMessage>,
 	) {
 		this.session = session;
 		this.getPhase = getPhase;
-		this.pendingWrites = pendingWrites;
+		this.sessionWrites = sessionWrites;
 	}
 
 	async getMetadata(): Promise<Readonly<TMetadata>> {
@@ -121,18 +90,16 @@ export class HarnessSessionFacade<TMessage, TEntry, TContext, TMetadata> {
 		return this.read(() => this.session.getSessionName());
 	}
 
-	getPendingWrites(): readonly PendingWrite<TMessage>[] {
-		return createImmutableSnapshot(this.pendingWrites);
+	getPendingWrites(): readonly QueuedSessionWrite<TMessage>[] {
+		return this.sessionWrites.snapshot();
 	}
 
 	async appendMessage(message: TMessage): Promise<void> {
-		const write = this.snapshot({ type: "message", message });
-		await this.write(write, () => this.session.appendMessage(write.message));
+		await this.write(this.snapshot({ type: "message", message }));
 	}
 
 	async appendCustomEntry(customType: string, data?: unknown): Promise<void> {
-		const write = this.snapshot({ type: "custom", customType, data });
-		await this.write(write, () => this.session.appendCustomEntry(write.customType, write.data));
+		await this.write(this.snapshot({ type: "custom", customType, data }));
 	}
 
 	async appendCustomMessage<T = unknown>(input: CustomMessageInput<T>): Promise<void> {
@@ -143,30 +110,25 @@ export class HarnessSessionFacade<TMessage, TEntry, TContext, TMetadata> {
 			display: input.display,
 			details: input.details,
 		});
-		await this.write(write, () =>
-			this.session.appendCustomMessageEntry(write.customType, write.content, write.display, write.details),
-		);
+		await this.write(write);
 	}
 
 	async appendLabel(targetId: string, label: string | undefined): Promise<void> {
 		if (!(await this.getEntry(targetId))) {
 			throw new AgentHarnessError("invalid_argument", `Entry ${targetId} not found`);
 		}
-		const write = this.snapshot({ type: "label", targetId, label });
-		await this.write(write, () => this.session.appendLabel(write.targetId, write.label));
+		await this.write(this.snapshot({ type: "label", targetId, label }));
 	}
 
 	async appendSessionName(name: string): Promise<void> {
-		const write = this.snapshot({ type: "session_info", name: name.trim() });
-		await this.write(write, () => this.session.appendSessionName(write.name ?? ""));
+		await this.write(this.snapshot({ type: "session_info", name: name.trim() }));
 	}
 
 	async setLeafId(targetId: string | null): Promise<void> {
 		if (targetId !== null && !(await this.getEntry(targetId))) {
 			throw new AgentHarnessError("invalid_argument", `Entry ${targetId} not found`);
 		}
-		const write = this.snapshot({ type: "leaf", targetId });
-		await this.write(write, () => this.session.moveTo(write.targetId));
+		await this.write(this.snapshot({ type: "leaf", targetId }));
 	}
 
 	private async read<T>(operation: () => Promise<T>): Promise<T> {
@@ -185,18 +147,19 @@ export class HarnessSessionFacade<TMessage, TEntry, TContext, TMetadata> {
 		}
 	}
 
-	private async write(write: FacadeWrite<TMessage>, persist: () => Promise<unknown>): Promise<void> {
+	private async write(write: FacadeWrite<TMessage>): Promise<void> {
 		const phase = this.getPhase();
 		if (phase === "turn") {
-			this.pendingWrites.push(write);
+			this.sessionWrites.enqueue(write);
 			return;
 		}
 		if (phase !== "idle") {
 			throw new AgentHarnessError("invalid_state", `Cannot write session state during ${phase}`);
 		}
 		try {
-			await persist();
+			await this.sessionWrites.persistAfterPending(write);
 		} catch (error) {
+			if (error instanceof AgentHarnessError && error.code === "invalid_state") throw error;
 			throw new AgentHarnessError("session", "Session write failed", toError(error));
 		}
 	}
