@@ -123,7 +123,7 @@ describe("operation settlement characterization", () => {
 		expect(settledCount()).toBe(1);
 	});
 
-	it("currently settles twice across overflow recovery (pre-fix trace)", async () => {
+	it("settles exactly once across overflow recovery (post-fix trace)", async () => {
 		const registration = registerFauxProvider({
 			models: [{ id: "large-context", reasoning: false, contextWindow: 100_000, maxTokens: 2_000 }],
 		});
@@ -143,10 +143,10 @@ describe("operation settlement characterization", () => {
 		const result = await harness.prompt("latest request");
 
 		expect(result.content).toContainEqual({ type: "text", text: "recovered answer" });
-		expect(settledCount()).toBe(2);
+		expect(settledCount()).toBe(1);
 	});
 
-	it("currently settles twice when the continuation also overflows (pre-fix trace)", async () => {
+	it("settles exactly once when the continuation also overflows (post-fix trace)", async () => {
 		const registration = registerFauxProvider({
 			models: [{ id: "large-context", reasoning: false, contextWindow: 100_000, maxTokens: 2_000 }],
 		});
@@ -166,6 +166,6 @@ describe("operation settlement characterization", () => {
 		const result = await harness.prompt("latest request");
 
 		expect(result.errorMessage).toBe(OVERFLOW);
-		expect(settledCount()).toBe(2);
+		expect(settledCount()).toBe(1);
 	});
 });

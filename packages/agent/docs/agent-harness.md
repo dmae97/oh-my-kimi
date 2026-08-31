@@ -89,25 +89,16 @@ Pending session writes are always persisted. `SessionWriteCoordinator` owns thei
 
 `AgentHarness.getSession()` returns a `HarnessSession` facade. It exposes persisted reads and ordered extension writes without exposing raw storage.
 
-## Operation phases
+## Operation lifecycle
 
-The harness has an explicit phase:
+Public operations are owned by `OperationLifecycleController` (see [operation-lifecycle.md](./operation-lifecycle.md)). One public operation may span several low-level agent attempts:
 
-```ts
-type AgentHarnessPhase = "idle" | "turn" | "compaction" | "branch_summary" | "retry";
-```
+- `prompt`, `skill`, `promptFromTemplate` run an initial attempt plus at most one overflow-recovery continuation
+- `compact` and `navigateTree` are structural operations with no attempts
 
-Structural operations require `phase === "idle"` and synchronously set the phase before the first `await`:
+Starting another operation while one is active or settling rejects with `AgentHarnessError` code `"busy"`. Inline reentry from observational callbacks (`agent_end`, `settled`) is rejected the same way; queue the next unit of work with `nextTurn()` or start it after the caller's promise settles.
 
-- `prompt`
-- `skill`
-- `promptFromTemplate`
-- `compact`
-- `navigateTree`
-
-Starting another structural operation while the harness is not idle rejects with `AgentHarnessError` code `"busy"`.
-
-The following operations are allowed during a turn where appropriate:
+The following operations are allowed during an active operation where appropriate:
 
 - `steer`
 - `followUp`
@@ -115,13 +106,15 @@ The following operations are allowed during a turn where appropriate:
 - `abort`
 - runtime config setters
 
-Phase/settlement semantics are still provisional and need a full lifecycle pass.
+`steer` and `followUp` reject while the harness is idle or settling. `nextTurn` is always accepted. Config setters persist immediately outside an active operation and enqueue an immutable write during one.
+
+The deprecated `AgentHarnessPhase` union survives only as the session facade's write-gate vocabulary, mapped from lifecycle state: prompt-family operations gate as `"turn"`, structural operations as `"compaction"`/`"branch_summary"`, and `settling` gates as `"idle"` so settlement-listener writes persist after the final queue drain.
 
 ## Turn execution
 
 `prompt`, `skill`, and `promptFromTemplate` follow the same flow:
 
-1. Assert idle and set phase to `"turn"`.
+1. Begin an operation lease through `runOperation()`.
 2. Create a turn snapshot with `createTurnState()`.
 3. Derive invocation text from that snapshot.
 4. Execute the turn with `executeTurn()`.
@@ -154,7 +147,7 @@ The low-level loop converts harness `ThinkingLevel` to provider `reasoning` at t
 - `"off"` -> `undefined`
 - all other thinking levels pass through
 
-No state refresh is needed on `agent_end` except flushing leftover pending session writes and clearing the operation phase. The exact `settled` event timing is still under review.
+No state refresh is needed on `agent_end` except flushing leftover pending session writes. `agent_end` is an attempt event: it never settles the public operation. Settlement happens exactly once inside `runOperation()`'s settling barrier, after the final session-write flush, and emits the `settled` event with `operationId`, `outcome`, and `attemptCount`. A final flush failure overrides a provider success: the operation rejects with a `session`-classified error and the recorded outcome is `failed`, never `completed`.
 
 If the system-prompt callback throws while starting `prompt`, `skill`, or `promptFromTemplate`, the operation rejects with `AgentHarnessError` and the harness returns to idle. If it throws from the save-point snapshot created by `prepareNextTurn`, the low-level agent run records an assistant error message.
 
@@ -199,7 +192,9 @@ Abort does not clear `nextTurn` messages. Messages queued with `nextTurn()` surv
 
 Abort does not discard pending session writes. Pending writes flush at the next save point if reached, at `agent_end`, or in operation failure cleanup.
 
-`abort()` is fail-closed outside `idle` and `turn`. During `compaction`, `branch_summary`, or a future `retry` phase it rejects with `AgentHarnessError` code `"invalid_state"`: those structural operations do not own the turn's abort controller, so reporting abort completion would be false while the operation remained live. Actual structural-operation cancellation requires its own controller and settlement barrier rather than reusing turn abort.
+`abort()` captures the current operation at call time and waits only for that operation's settlement; work started later by listeners is never its target. During a prompt-family operation the operation's signal reaches the provider stream, tools, and overflow-recovery compaction, including the recovery stage that used to be a separate uncancellable phase.
+
+`abort()` stays fail-closed during structural operations. While `compact` or `navigateTree` is active it rejects with `AgentHarnessError` code `"invalid_state"`: those operations own no provider attempt, so reporting abort completion would be false while the operation remained live. Structural cancellation uses the lifecycle's declared commit points rather than reusing turn abort.
 
 ## Compaction and tree navigation
 
@@ -224,6 +219,8 @@ This path prevents projected headroom overflow.
 When the session model still returns a recognized context-overflow assistant error, the harness makes at most one recovery attempt. The failed assistant entry stays in the append-only session tree for evidence, but the active leaf moves back to its parent before compaction. The harness then compacts and calls `runAgentLoopContinue()` from the persisted compacted context, so the original user message is not appended twice.
 
 Recovery runs only when compaction is enabled, explicit summarization auth is available, and the overflow assistant is still the active leaf. The leaf requirement prevents silently orphaning extension writes that may have settled after the error. Unavailable/no-op/cancelled compaction restores the original overflow leaf. If the continuation also overflows, that second error is terminal; recovery does not recurse.
+
+Recovery is a stage of the originating operation, not a new run: it keeps the same `operationId`, starts the continuation as attempt `a1` with reason `context_overflow_recovery`, and the public operation settles exactly once after the continuation. There is no run-ownership re-check because the lease itself proves ownership; a newer operation cannot start mid-recovery.
 
 ### Summarization retries
 
@@ -327,17 +324,21 @@ Done:
 - Idle model/thinking/tool updates validate and persist before committing in-memory state.
 - `setLeafId()` persists durable `leaf` entries so tree navigation survives storage reopen.
 - Projected context is checked before each provider request; successful automatic compaction replaces the request messages with the persisted compacted context.
+- Public operations route through `OperationLifecycleController` leases; the `phase`, `runPromise`, and `runAbortController` fields are gone.
+- `agent_end` no longer flips lifecycle state or emits `settled`; settlement is exactly-once inside the settling barrier with `operationId`, `outcome`, and `attemptCount` on the event.
+- Overflow recovery keeps the originating operation id and emits `attempt_started`/`attempt_finished` per attempt.
+- `abort()` waits only for the operation captured at call time.
+- New own events: `operation_started`, `attempt_started`, `attempt_finished`.
+- Inline structural reentry from observational callbacks rejects with `"busy"` instead of chaining runs.
+- `settled` fires for failed operations too; the outcome field carries the terminal classification.
 
 Remaining:
 
-- Finalize phase/idle semantics.
-- Audit whether `settled` can fire too early.
-- Make session writes inside `settled` callbacks deterministic.
-- Audit follow-up behavior around `agent_end`.
 - Decide whether overflow recovery needs a configurable attempt limit; the implemented contract makes one attempt and stops if the continuation also overflows.
 - Verify `before_agent_start` hook semantics against coding-agent.
 - Decide whether `before_agent_start` needs more turn info such as tools/tool snippets.
 - Document or change runtime config event timing while busy.
+- Add the deferred command queue so callback-driven follow-on work has a strict-mode replacement for direct `prompt()` reentry.
 
 ### 4. Implement generic hook/event extension mechanism
 

@@ -9,6 +9,12 @@ export {
 	toError,
 } from "./errors.ts";
 
+import type {
+	HarnessAttemptRef,
+	HarnessAttemptSummary,
+	HarnessOperationOutcome,
+	HarnessOperationRef,
+} from "./operation-lifecycle-types.ts";
 import type { Session } from "./session/session.ts";
 import type { AgentHarnessStreamOptions, AgentHarnessStreamOptionsPatch } from "./stream-options.ts";
 import type { SummarizationRetryEvent } from "./summarization-retry.ts";
@@ -435,6 +441,11 @@ export interface JsonlSessionListOptions {
 export interface JsonlSessionRepoApi
 	extends SessionRepo<JsonlSessionMetadata, JsonlSessionCreateOptions, JsonlSessionListOptions> {}
 
+/**
+ * @deprecated Internal facade-gate vocabulary. Operation lifecycle state is
+ * owned by `OperationLifecycleController`; this union remains only as the
+ * session facade's write-gate mapping and will be removed at 1.0.
+ */
 export type AgentHarnessPhase = "idle" | "turn" | "compaction" | "branch_summary" | "retry";
 
 export type PendingSessionWrite = SessionTreeEntry extends infer TEntry
@@ -490,6 +501,26 @@ export interface AbortEvent {
 export interface SettledEvent {
 	type: "settled";
 	nextTurnCount: number;
+	/** Identity of the public operation that just settled exactly once. */
+	operationId: string;
+	outcome: HarnessOperationOutcome;
+	attemptCount: number;
+}
+
+export interface OperationStartedEvent {
+	type: "operation_started";
+	operation: HarnessOperationRef;
+}
+
+export interface AttemptStartedEvent {
+	type: "attempt_started";
+	attempt: HarnessAttemptRef;
+}
+
+/** Emitted once per low-level agent attempt; carries a bounded summary, never a transcript. */
+export interface AttemptFinishedEvent {
+	type: "attempt_finished";
+	summary: HarnessAttemptSummary;
 }
 
 export interface BeforeAgentStartEvent<
@@ -611,6 +642,9 @@ export type AgentHarnessOwnEvent<
 	| SavePointEvent
 	| AbortEvent
 	| SettledEvent
+	| OperationStartedEvent
+	| AttemptStartedEvent
+	| AttemptFinishedEvent
 	| BeforeAgentStartEvent<TSkill, TPromptTemplate>
 	| ContextEvent
 	| BeforeProviderRequestEvent
@@ -697,6 +731,9 @@ export type AgentHarnessEventResultMap = {
 	save_point: undefined;
 	abort: undefined;
 	settled: undefined;
+	operation_started: undefined;
+	attempt_started: undefined;
+	attempt_finished: undefined;
 };
 
 export interface AgentHarnessPromptOptions {

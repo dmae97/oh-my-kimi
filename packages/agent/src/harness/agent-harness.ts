@@ -30,8 +30,20 @@ import type { HarnessCompactionRunOptions } from "./compaction/operation.ts";
 import { HarnessSessionFacade } from "./harness-session.ts";
 import { convertToLlm, createFailureMessage, createUserMessage } from "./messages.ts";
 import { findDuplicateNames } from "./name-validation.ts";
+import {
+	type AttemptLease,
+	type OperationLease,
+	OperationLifecycleController,
+} from "./operation-lifecycle-controller.ts";
+import type {
+	HarnessAttemptOutcome,
+	HarnessAttemptReason,
+	HarnessOperationKind,
+	HarnessOperationOutcome,
+} from "./operation-lifecycle-types.ts";
 import { formatPromptTemplateInvocation } from "./prompt-templates.ts";
-import { SessionWriteCoordinator } from "./session-write-coordinator.ts";
+import { uuidv7 } from "./session/uuid.ts";
+import { type QueuedSessionWrite, SessionWriteCoordinator } from "./session-write-coordinator.ts";
 import { formatSkillInvocation } from "./skills.ts";
 import { applyStreamOptionsPatch, cloneStreamOptions, mergeHeaders } from "./stream-options.ts";
 import { createSummarizationRetry } from "./summarization-retry.ts";
@@ -58,6 +70,15 @@ import { AgentHarnessError, BranchSummaryError, CompactionError, SessionError, t
 const SUBSCRIBER_EVENT_TYPE = "*";
 
 type AgentHarnessHandler = (event: any, signal?: AbortSignal) => Promise<any> | any;
+
+/** Result-based outcome for prompt-family operations that resolve with a failure/abort assistant message. */
+function classifyAssistantOutcome(message: AssistantMessage): HarnessOperationOutcome | undefined {
+	if (message.stopReason === "aborted") return { status: "aborted" };
+	if (message.stopReason === "error") {
+		return { status: "failed", code: "provider", message: message.errorMessage ?? "Provider error" };
+	}
+	return undefined;
+}
 
 function normalizeHarnessError(error: unknown, fallbackCode: AgentHarnessError["code"]): AgentHarnessError {
 	if (error instanceof AgentHarnessError) return error;
@@ -92,9 +113,7 @@ export class AgentHarness<
 	readonly env: ExecutionEnv;
 	private session: Session;
 	private readonly sessionFacade: HarnessSession;
-	private phase: AgentHarnessPhase = "idle";
-	private runAbortController?: AbortController;
-	private runPromise?: Promise<void>;
+	private readonly lifecycle: OperationLifecycleController;
 	private readonly sessionWrites: SessionWriteCoordinator<AgentMessage>;
 	private model: Model<any>;
 	private thinkingLevel: ThinkingLevel;
@@ -116,7 +135,11 @@ export class AgentHarness<
 		this.env = options.env;
 		this.session = options.session;
 		this.sessionWrites = new SessionWriteCoordinator(this.session);
-		this.sessionFacade = new HarnessSessionFacade(this.session, () => this.phase, this.sessionWrites);
+		this.lifecycle = new OperationLifecycleController({
+			createOperationId: () => uuidv7(),
+			now: () => Date.now(),
+		});
+		this.sessionFacade = new HarnessSessionFacade(this.session, () => this.currentPhase(), this.sessionWrites);
 		this.resources = options.resources ?? {};
 		this.streamOptions = cloneStreamOptions(options.streamOptions);
 		this.compactionSettings = { ...DEFAULT_COMPACTION_SETTINGS, ...options.compaction };
@@ -231,23 +254,139 @@ export class AgentHarness<
 		});
 	}
 
-	private startRunPromise(): { runPromise: Promise<void>; finishRunPromise: () => void } {
-		let finish = () => {};
-		const runPromise = new Promise<void>((resolve) => {
-			finish = resolve;
-		});
-		this.runPromise = runPromise;
-		return {
-			runPromise,
-			finishRunPromise: () => {
-				// A settled/agent_end listener may have started a new run while this
-				// one was still unwinding; only clear state still owned by this run.
-				if (this.runPromise === runPromise) {
-					this.runPromise = undefined;
-				}
-				finish();
-			},
-		};
+	/**
+	 * Facade write-gate vocabulary mapped from lifecycle state. `settling` maps
+	 * to "idle": the queue is drained by the settlement finalizer first, and
+	 * listener writes persist after it through the coordinator tail.
+	 */
+	private currentPhase(): AgentHarnessPhase {
+		const snapshot = this.lifecycle.getSnapshot();
+		if (snapshot.tag !== "active") return "idle";
+		switch (snapshot.operation.kind) {
+			case "manual_compaction":
+				return "compaction";
+			case "tree_navigation":
+				return "branch_summary";
+			default:
+				return "turn";
+		}
+	}
+
+	/** Config writes persist immediately outside an active operation and queue during one. */
+	private async persistConfigChange(write: QueuedSessionWrite<AgentMessage>): Promise<void> {
+		if (this.lifecycle.getSnapshot().tag !== "active") {
+			await this.sessionWrites.persistAfterPending(write);
+		} else {
+			this.sessionWrites.enqueue(write);
+		}
+	}
+
+	private classifyOperationOutcome(bodyError: unknown, lease: OperationLease): HarnessOperationOutcome {
+		if (bodyError === undefined) return { status: "completed" };
+		if (lease.signal.aborted) return { status: "aborted" };
+		const normalized = normalizeHarnessError(bodyError, "unknown");
+		return { status: "failed", code: normalized.code, message: normalized.message };
+	}
+
+	private classifyAttemptOutcome(message: AssistantMessage, model: Model<any>): HarnessAttemptOutcome {
+		if (message.stopReason === "aborted") return "aborted";
+		if (isContextOverflow(message, model.contextWindow)) return "overflow";
+		if (message.stopReason === "error") return "failed";
+		return "completed";
+	}
+
+	private lastAttemptSummary(lease: OperationLease, attemptLease: AttemptLease) {
+		const summary = this.lifecycle
+			.getAttemptSummaries(lease)
+			.find((candidate) => candidate.attemptId === attemptLease.attempt.attemptId);
+		if (!summary) {
+			throw new AgentHarnessError(
+				"invalid_state",
+				`No summary recorded for attempt ${attemptLease.attempt.attemptId}`,
+			);
+		}
+		return summary;
+	}
+
+	/**
+	 * Single wrapper for every public operation: begin a lease, run the body,
+	 * then settle exactly once. The final flush and the `settled` event happen
+	 * inside the settling barrier; a finalizer failure never reports success.
+	 */
+	private async runOperation<T>(
+		kind: HarnessOperationKind,
+		fallbackCode: AgentHarnessError["code"],
+		body: (lease: OperationLease) => Promise<T>,
+		classifyResult?: (result: T) => HarnessOperationOutcome | undefined,
+	): Promise<T> {
+		const lease = this.lifecycle.begin(kind);
+		await this.emitOwn({ type: "operation_started", operation: lease.operation });
+		let result: T | undefined;
+		let bodyError: unknown;
+		try {
+			result = await body(lease);
+		} catch (error) {
+			bodyError = error;
+		}
+		// The final flush precedes classification: a persistence failure after a
+		// provider success must never record or report a completed operation.
+		let flushError: unknown;
+		try {
+			await this.sessionWrites.flush();
+		} catch (error) {
+			flushError = error;
+		}
+		let outcome = this.classifyOperationOutcome(bodyError ?? flushError, lease);
+		if (bodyError === undefined && flushError === undefined) {
+			outcome =
+				classifyResult?.(result as T) ?? (lease.signal.aborted ? { status: "aborted" } : { status: "completed" });
+		}
+		if (bodyError !== undefined && flushError !== undefined) {
+			outcome = {
+				status: "failed",
+				code: "session",
+				message: "Operation failed and the final session flush failed",
+			};
+		}
+		let settleError: unknown;
+		try {
+			await this.lifecycle.settle(lease, outcome, async () => {
+				await this.emitOwn(
+					{
+						type: "settled",
+						nextTurnCount: this.nextTurnQueue.length,
+						operationId: lease.operation.operationId,
+						outcome,
+						attemptCount: this.lifecycle.getAttemptSummaries(lease).length,
+					},
+					lease.signal,
+				);
+			});
+		} catch (error) {
+			settleError = error;
+		}
+		const primaryError = bodyError ?? flushError;
+		if (primaryError !== undefined && settleError !== undefined) {
+			const normalized = normalizeHarnessError(primaryError, fallbackCode);
+			const cause = new AggregateError(
+				[toError(primaryError), toError(settleError)],
+				"Operation failed and settlement failed",
+			);
+			throw new AgentHarnessError(normalized.code, cause.message, cause);
+		}
+		if (settleError !== undefined) throw normalizeHarnessError(settleError, "hook");
+		if (flushError !== undefined) {
+			if (bodyError !== undefined) {
+				const cause = new AggregateError(
+					[toError(bodyError), toError(flushError)],
+					"Operation failed and the final flush failed",
+				);
+				throw new AgentHarnessError("session", cause.message, cause);
+			}
+			throw normalizeHarnessError(flushError, "session");
+		}
+		if (bodyError !== undefined) throw normalizeHarnessError(bodyError, fallbackCode);
+		return result as T;
 	}
 
 	private async createTurnState(): Promise<AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>> {
@@ -344,6 +483,7 @@ export class AgentHarness<
 	private createLoopConfig(
 		getTurnState: () => AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>,
 		setTurnState: (turnState: AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>) => void,
+		lease?: OperationLease,
 	): AgentLoopConfig {
 		const turnState = getTurnState();
 		return {
@@ -379,6 +519,12 @@ export class AgentHarness<
 			},
 			prepareNextTurn: async () => {
 				await this.sessionWrites.flush();
+				if (lease) {
+					const snapshot = this.lifecycle.getSnapshot();
+					if (snapshot.tag === "active" && snapshot.stage === "save_point") {
+						this.lifecycle.setStage(lease, "attempt_running");
+					}
+				}
 				const nextTurnState = await this.createTurnState();
 				setTurnState(nextTurnState);
 				return {
@@ -404,7 +550,7 @@ export class AgentHarness<
 		if (missing.length > 0) throw new AgentHarnessError("invalid_argument", `Unknown tool(s): ${missing.join(", ")}`);
 	}
 
-	private async handleAgentEvent(event: AgentEvent, signal?: AbortSignal): Promise<void> {
+	private async handleAgentEvent(event: AgentEvent, signal?: AbortSignal, lease?: OperationLease): Promise<void> {
 		if (event.type === "message_end") {
 			await this.session.appendMessage(event.message);
 			await this.emitAny(event, signal);
@@ -419,21 +565,21 @@ export class AgentHarness<
 			}
 			const hadPendingMutations = this.sessionWrites.hasPending();
 			await this.sessionWrites.flush();
+			if (lease) {
+				const snapshot = this.lifecycle.getSnapshot();
+				if (snapshot.tag === "active" && snapshot.stage === "attempt_running") {
+					this.lifecycle.setStage(lease, "save_point");
+				}
+			}
 			if (eventError) throw eventError;
 			await this.emitOwn({ type: "save_point", hadPendingMutations });
 			return;
 		}
 		if (event.type === "agent_end") {
-			// Finish this run's cleanup before flipping to "idle": listeners observing
-			// agent_end/settled may start the next prompt() immediately, and that run
-			// must not inherit state still owned by the run that just completed.
+			// agent_end is an attempt event: flush its accepted writes, but lifecycle
+			// settlement and the settled event belong to OperationLease.settle().
 			await this.sessionWrites.flush();
-			if (this.runAbortController && this.runAbortController.signal === signal) {
-				this.runAbortController = undefined;
-			}
-			this.phase = "idle";
 			await this.emitAny(event, signal);
-			await this.emitOwn({ type: "settled", nextTurnCount: this.nextTurnQueue.length }, signal);
 			return;
 		}
 		await this.emitAny(event, signal);
@@ -445,22 +591,23 @@ export class AgentHarness<
 		aborted: boolean,
 		signal: AbortSignal,
 		completedMessages: readonly AgentMessage[],
+		lease?: OperationLease,
 	): Promise<AgentMessage[]> {
 		const failureMessage = createFailureMessage(model, error, aborted);
 		const messages = [...completedMessages, failureMessage];
-		await this.handleAgentEvent({ type: "message_start", message: failureMessage }, signal);
-		await this.handleAgentEvent({ type: "message_end", message: failureMessage }, signal);
-		await this.handleAgentEvent({ type: "turn_end", message: failureMessage, toolResults: [] }, signal);
-		await this.handleAgentEvent({ type: "agent_end", messages }, signal);
+		await this.handleAgentEvent({ type: "message_start", message: failureMessage }, signal, lease);
+		await this.handleAgentEvent({ type: "message_end", message: failureMessage }, signal, lease);
+		await this.handleAgentEvent({ type: "turn_end", message: failureMessage, toolResults: [] }, signal, lease);
+		await this.handleAgentEvent({ type: "agent_end", messages }, signal, lease);
 		return messages;
 	}
 
 	private async executeTurn(
+		lease: OperationLease,
 		turnState: AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>,
 		text: string,
 		options?: { images?: ImageContent[] },
 	): Promise<AssistantMessage> {
-		const runOwner = this.runPromise;
 		let messages: AgentMessage[] = [createUserMessage(text, options?.images)];
 		if (this.nextTurnQueue.length > 0) {
 			const queuedMessages = this.nextTurnQueue.splice(0);
@@ -482,45 +629,51 @@ export class AgentHarness<
 		if (beforeResult?.messages) messages = [...messages, ...beforeResult.messages];
 
 		const result = await this.executeAgentRun(
+			lease,
+			"initial",
 			turnState,
 			this.createContext(turnState, beforeResult?.systemPrompt),
 			messages,
 		);
-		return await this.recoverContextOverflow(result, runOwner);
+		return await this.recoverContextOverflow(lease, result);
 	}
 
 	private async executeAgentRun(
+		lease: OperationLease,
+		reason: HarnessAttemptReason,
 		turnState: AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>,
 		context: AgentContext,
 		initialMessages?: AgentMessage[],
 	): Promise<AssistantMessage> {
+		const attemptLease = this.lifecycle.beginAttempt(lease, reason);
+		await this.emitOwn({ type: "attempt_started", attempt: attemptLease.attempt }, lease.signal);
 		let activeTurnState = turnState;
-		const abortController = new AbortController();
+		const signal = attemptLease.signal;
 		const getTurnState = () => activeTurnState;
 		const setTurnState = (nextTurnState: AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>) => {
 			activeTurnState = nextTurnState;
 		};
-		this.runAbortController = abortController;
 		const completedMessages: AgentMessage[] = [];
 		const emit = async (event: AgentEvent): Promise<void> => {
 			if (event.type === "message_end") completedMessages.push(event.message);
-			await this.handleAgentEvent(event, abortController.signal);
+			await this.handleAgentEvent(event, signal, lease);
 		};
 		const runResultPromise = (async () => {
 			try {
-				const loopConfig = this.createLoopConfig(getTurnState, setTurnState);
+				const loopConfig = this.createLoopConfig(getTurnState, setTurnState, lease);
 				const streamFn = this.createStreamFn(getTurnState);
 				return initialMessages
-					? await runAgentLoop(initialMessages, context, loopConfig, emit, abortController.signal, streamFn)
-					: await runAgentLoopContinue(context, loopConfig, emit, abortController.signal, streamFn);
+					? await runAgentLoop(initialMessages, context, loopConfig, emit, signal, streamFn)
+					: await runAgentLoopContinue(context, loopConfig, emit, signal, streamFn);
 			} catch (error) {
 				try {
 					return await this.emitRunFailure(
 						activeTurnState.model,
 						error,
-						abortController.signal.aborted,
-						abortController.signal,
+						signal.aborted,
+						signal,
 						completedMessages,
+						lease,
 					);
 				} catch (failureError) {
 					const cause = new AggregateError(
@@ -535,28 +688,33 @@ export class AgentHarness<
 			const newMessages = await runResultPromise;
 			for (let i = newMessages.length - 1; i >= 0; i--) {
 				const message = newMessages[i]!;
-				if (message.role === "assistant") return message;
+				if (message.role === "assistant") {
+					this.lifecycle.finishAttempt(
+						lease,
+						attemptLease,
+						this.classifyAttemptOutcome(message, activeTurnState.model),
+					);
+					await this.emitOwn(
+						{ type: "attempt_finished", summary: this.lastAttemptSummary(lease, attemptLease) },
+						signal,
+					);
+					return message;
+				}
 			}
 			throw new AgentHarnessError("invalid_state", "AgentHarness prompt completed without an assistant message");
 		} finally {
-			try {
-				await this.sessionWrites.flush();
-			} finally {
-				if (this.runAbortController === abortController) this.runAbortController = undefined;
-			}
+			await this.sessionWrites.flush();
 		}
 	}
 
-	private async recoverContextOverflow(
-		message: AssistantMessage,
-		runOwner: Promise<void> | undefined,
-	): Promise<AssistantMessage> {
-		if (
-			this.runPromise !== runOwner ||
-			this.phase !== "idle" ||
-			!this.compactionSettings.enabled ||
-			!isContextOverflow(message, this.model.contextWindow)
-		) {
+	/**
+	 * One-shot overflow recovery inside the originating operation. The lease is
+	 * proof that this operation still owns the harness, so no run-ownership or
+	 * phase re-check is needed; a strict lifecycle makes a newer operation
+	 * starting mid-recovery impossible.
+	 */
+	private async recoverContextOverflow(lease: OperationLease, message: AssistantMessage): Promise<AssistantMessage> {
+		if (!this.compactionSettings.enabled || !isContextOverflow(message, this.model.contextWindow)) {
 			return message;
 		}
 		if (!this.getApiKeyAndHeaders) return message;
@@ -573,16 +731,20 @@ export class AgentHarness<
 		}
 
 		await this.session.moveTo(leaf.parentId);
-		this.phase = "retry";
+		this.lifecycle.setStage(lease, "recovering_overflow");
 		try {
-			const compacted = await this.runCompaction({ automatic: true });
+			const compacted = await this.runCompaction({ automatic: true, signal: lease.signal });
 			if (!compacted) {
 				await this.session.moveTo(leafId);
-				this.phase = "idle";
 				return message;
 			}
 			const turnState = await this.createTurnState();
-			return await this.executeAgentRun(turnState, this.createContext(turnState));
+			return await this.executeAgentRun(
+				lease,
+				"context_overflow_recovery",
+				turnState,
+				this.createContext(turnState),
+			);
 		} catch (error) {
 			await this.session.moveTo(leafId);
 			throw error;
@@ -590,64 +752,51 @@ export class AgentHarness<
 	}
 
 	async prompt(text: string, options?: { images?: ImageContent[] }): Promise<AssistantMessage> {
-		if (this.phase !== "idle") throw new AgentHarnessError("busy", "AgentHarness is busy");
-		this.phase = "turn";
-		const { runPromise, finishRunPromise } = this.startRunPromise();
-		try {
-			const turnState = await this.createTurnState();
-			return await this.executeTurn(turnState, text, options);
-		} catch (error) {
-			// Only reset the phase if this call still owns the run; a listener may
-			// have started the next run while this one was unwinding.
-			if (this.runPromise === runPromise) this.phase = "idle";
-			throw normalizeHarnessError(error, "unknown");
-		} finally {
-			finishRunPromise();
-		}
+		return this.runOperation(
+			"prompt",
+			"unknown",
+			async (lease) => {
+				const turnState = await this.createTurnState();
+				return await this.executeTurn(lease, turnState, text, options);
+			},
+			classifyAssistantOutcome,
+		);
 	}
 
 	async skill(name: string, additionalInstructions?: string): Promise<AssistantMessage> {
-		if (this.phase !== "idle") throw new AgentHarnessError("busy", "AgentHarness is busy");
-		this.phase = "turn";
-		const { runPromise, finishRunPromise } = this.startRunPromise();
-		try {
-			const turnState = await this.createTurnState();
-			const skill = (turnState.resources.skills ?? []).find((candidate) => candidate.name === name);
-			if (!skill) throw new AgentHarnessError("invalid_argument", `Unknown skill: ${name}`);
-			return await this.executeTurn(turnState, formatSkillInvocation(skill, additionalInstructions));
-		} catch (error) {
-			if (this.runPromise === runPromise) this.phase = "idle";
-			throw normalizeHarnessError(error, "unknown");
-		} finally {
-			finishRunPromise();
-		}
+		return this.runOperation(
+			"skill",
+			"unknown",
+			async (lease) => {
+				const turnState = await this.createTurnState();
+				const skill = (turnState.resources.skills ?? []).find((candidate) => candidate.name === name);
+				if (!skill) throw new AgentHarnessError("invalid_argument", `Unknown skill: ${name}`);
+				return await this.executeTurn(lease, turnState, formatSkillInvocation(skill, additionalInstructions));
+			},
+			classifyAssistantOutcome,
+		);
 	}
 
 	async promptFromTemplate(name: string, args: string[] = []): Promise<AssistantMessage> {
-		if (this.phase !== "idle") throw new AgentHarnessError("busy", "AgentHarness is busy");
-		this.phase = "turn";
-		const { runPromise, finishRunPromise } = this.startRunPromise();
-		try {
+		return this.runOperation("prompt_template", "unknown", async (lease) => {
 			const turnState = await this.createTurnState();
 			const template = (turnState.resources.promptTemplates ?? []).find((candidate) => candidate.name === name);
 			if (!template) throw new AgentHarnessError("invalid_argument", `Unknown prompt template: ${name}`);
-			return await this.executeTurn(turnState, formatPromptTemplateInvocation(template, args));
-		} catch (error) {
-			if (this.runPromise === runPromise) this.phase = "idle";
-			throw normalizeHarnessError(error, "unknown");
-		} finally {
-			finishRunPromise();
-		}
+			return await this.executeTurn(lease, turnState, formatPromptTemplateInvocation(template, args));
+		});
 	}
 
 	async steer(text: string, options?: { images?: ImageContent[] }): Promise<void> {
-		if (this.phase === "idle") throw new AgentHarnessError("invalid_state", "Cannot steer while idle");
+		const tag = this.lifecycle.getSnapshot().tag;
+		if (tag === "idle" || tag === "settling") throw new AgentHarnessError("invalid_state", "Cannot steer while idle");
 		this.steerQueue.push(createUserMessage(text, options?.images));
 		await this.emitQueueUpdate();
 	}
 
 	async followUp(text: string, options?: { images?: ImageContent[] }): Promise<void> {
-		if (this.phase === "idle") throw new AgentHarnessError("invalid_state", "Cannot follow up while idle");
+		const tag = this.lifecycle.getSnapshot().tag;
+		if (tag === "idle" || tag === "settling")
+			throw new AgentHarnessError("invalid_state", "Cannot follow up while idle");
 		this.followUpQueue.push(createUserMessage(text, options?.images));
 		await this.emitQueueUpdate();
 	}
@@ -733,26 +882,20 @@ export class AgentHarness<
 	}
 
 	async compact(customInstructions?: string): Promise<CompactResult> {
-		if (this.phase !== "idle") throw new AgentHarnessError("busy", "compact() requires idle harness");
-		this.phase = "compaction";
-		try {
+		return this.runOperation("manual_compaction", "compaction", async (lease) => {
+			this.lifecycle.setStage(lease, "structural_running");
 			const result = await this.runCompaction({ automatic: false, customInstructions });
 			if (!result) throw new AgentHarnessError("compaction", "Nothing to compact");
 			return result;
-		} catch (error) {
-			throw normalizeHarnessError(error, "compaction");
-		} finally {
-			this.phase = "idle";
-		}
+		});
 	}
 
 	async navigateTree(
 		targetId: string,
 		options?: { summarize?: boolean; customInstructions?: string; replaceInstructions?: boolean; label?: string },
 	): Promise<NavigateTreeResult> {
-		if (this.phase !== "idle") throw new AgentHarnessError("busy", "navigateTree() requires idle harness");
-		this.phase = "branch_summary";
-		try {
+		return this.runOperation("tree_navigation", "branch_summary", async (lease) => {
+			this.lifecycle.setStage(lease, "structural_running");
 			const oldLeafId = await this.session.getLeafId();
 			if (oldLeafId === targetId) return { cancelled: false };
 			const targetEntry = await this.session.getEntry(targetId);
@@ -842,11 +985,7 @@ export class AgentHarness<
 				fromHook: hookResult?.summary !== undefined,
 			});
 			return { cancelled: false, editorText, summaryEntry };
-		} catch (error) {
-			throw normalizeHarnessError(error, "branch_summary");
-		} finally {
-			this.phase = "idle";
-		}
+		});
 	}
 
 	getModel(): Model<any> {
@@ -858,15 +997,7 @@ export class AgentHarness<
 			const previousModel = this.model;
 			const nextProvider = model.provider;
 			const nextModelId = model.id;
-			if (this.phase === "idle") {
-				await this.sessionWrites.persistAfterPending({
-					type: "model_change",
-					provider: nextProvider,
-					modelId: nextModelId,
-				});
-			} else {
-				this.sessionWrites.enqueue({ type: "model_change", provider: nextProvider, modelId: nextModelId });
-			}
+			await this.persistConfigChange({ type: "model_change", provider: nextProvider, modelId: nextModelId });
 			this.model = model;
 			await this.emitOwn({ type: "model_update", model, previousModel, source: "set" });
 		} catch (error) {
@@ -881,11 +1012,7 @@ export class AgentHarness<
 	async setThinkingLevel(level: ThinkingLevel): Promise<void> {
 		try {
 			const previousLevel = this.thinkingLevel;
-			if (this.phase === "idle") {
-				await this.sessionWrites.persistAfterPending({ type: "thinking_level_change", thinkingLevel: level });
-			} else {
-				this.sessionWrites.enqueue({ type: "thinking_level_change", thinkingLevel: level });
-			}
+			await this.persistConfigChange({ type: "thinking_level_change", thinkingLevel: level });
 			this.thinkingLevel = level;
 			await this.emitOwn({ type: "thinking_level_update", level, previousLevel });
 		} catch (error) {
@@ -908,14 +1035,7 @@ export class AgentHarness<
 			this.validateToolNames(nextActiveToolNames, nextTools);
 			const previousToolNames = [...this.tools.keys()];
 			const previousActiveToolNames = [...this.activeToolNames];
-			if (this.phase === "idle") {
-				await this.sessionWrites.persistAfterPending({
-					type: "active_tools_change",
-					activeToolNames: [...nextActiveToolNames],
-				});
-			} else {
-				this.sessionWrites.enqueue({ type: "active_tools_change", activeToolNames: [...nextActiveToolNames] });
-			}
+			await this.persistConfigChange({ type: "active_tools_change", activeToolNames: [...nextActiveToolNames] });
 			this.tools = nextTools;
 			this.activeToolNames = [...nextActiveToolNames];
 			await this.emitOwn({
@@ -941,17 +1061,7 @@ export class AgentHarness<
 			this.validateToolNames(nextActiveToolNames);
 			const previousToolNames = [...this.tools.keys()];
 			const previousActiveToolNames = [...this.activeToolNames];
-			if (this.phase === "idle") {
-				await this.sessionWrites.persistAfterPending({
-					type: "active_tools_change",
-					activeToolNames: [...nextActiveToolNames],
-				});
-			} else {
-				this.sessionWrites.enqueue({
-					type: "active_tools_change",
-					activeToolNames: [...nextActiveToolNames],
-				});
-			}
+			await this.persistConfigChange({ type: "active_tools_change", activeToolNames: [...nextActiveToolNames] });
 			this.activeToolNames = [...nextActiveToolNames];
 			await this.emitOwn({
 				type: "tools_update",
@@ -1007,11 +1117,18 @@ export class AgentHarness<
 	}
 
 	async abort(): Promise<AbortResult> {
-		if (this.phase !== "idle" && this.phase !== "turn")
-			throw new AgentHarnessError("invalid_state", `Cannot abort during ${this.phase}`);
+		const snapshot = this.lifecycle.getSnapshot();
+		if (snapshot.tag === "active" && snapshot.operation.kind === "manual_compaction") {
+			throw new AgentHarnessError("invalid_state", "Cannot abort during compaction");
+		}
+		if (snapshot.tag === "active" && snapshot.operation.kind === "tree_navigation") {
+			throw new AgentHarnessError("invalid_state", "Cannot abort during branch_summary");
+		}
+		// Capture the current operation before delivering any signal: an operation
+		// started later by a settlement listener is never this call's target.
+		const capture = this.lifecycle.requestAbort();
 		const clearedSteer = this.steerQueue.splice(0);
 		const clearedFollowUp = this.followUpQueue.splice(0);
-		this.runAbortController?.abort();
 		const errors: Error[] = [];
 		try {
 			await this.emitQueueUpdate();
@@ -1019,7 +1136,7 @@ export class AgentHarness<
 			errors.push(toError(error));
 		}
 		try {
-			await this.waitForIdle();
+			if (capture.target) await capture.target.settled;
 		} catch (error) {
 			errors.push(toError(error));
 		}
@@ -1036,11 +1153,8 @@ export class AgentHarness<
 	}
 
 	async waitForIdle(): Promise<void> {
-		// Runs can chain: a settled listener may start the next prompt() before the
-		// previous run's promise resolves, so keep waiting until no run is active.
-		while (this.runPromise) {
-			await this.runPromise;
-		}
+		// Delegates to the lifecycle: resolves once no operation is active or settling.
+		await this.lifecycle.waitForIdle();
 	}
 
 	subscribe(

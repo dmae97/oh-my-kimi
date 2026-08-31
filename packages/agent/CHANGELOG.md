@@ -7,6 +7,7 @@
 ### Added
 
 - Added the operation lifecycle foundation modules: pure `operation-lifecycle-types` vocabulary, a side-effect-free `operation-lifecycle-reducer` transition table with classified violations, and `OperationLifecycleController` with operation/attempt leases, target-captured abort, exactly-once settlement, and a finalizer barrier. `AgentHarness` is not routed through them yet; integration is the next slice.
+- Routed every public `AgentHarness` operation through `runOperation()` on the lifecycle controller: `settled` now fires exactly once per operation with `operationId`, `outcome`, and `attemptCount`, and new `operation_started`, `attempt_started`, and `attempt_finished` events correlate attempts to operations. The final session-write flush precedes outcome classification, so a flush failure after provider success rejects with a `session`-classified error and never records `completed`.
 - Added one-shot context-overflow recovery to `AgentHarness`: the failed assistant is removed from the active branch, history is compacted, and `runAgentLoopContinue()` retries without duplicating the user message. A second overflow is terminal, and unavailable recovery restores the original overflow leaf.
 - Added projected-token auto-compaction before provider requests through `AgentHarnessOptions.compaction`. Successful runs rebuild the request from persisted compacted context; disabled, unauthenticated, cancelled, and true no-op decisions leave the request unchanged.
 - Added bounded transient retry for generated compaction and branch-summary calls through `streamOptions.summarizationRetry`, with awaited `retry_scheduled`, `retry_attempt_start`, and `retry_finished` events. Quota/billing failures and aborts still fail fast.
@@ -14,6 +15,8 @@
 
 ### Fixed
 
+- Kept context-overflow recovery inside the originating operation: the continuation runs as attempt `a1` under the same `operationId`, so one public prompt settles exactly once instead of emitting a second `settled` after recovery. Recovery compaction now runs on the operation abort signal.
+- Made `abort()` target-captured: it waits only for the operation current at call time, and operations started later by listeners are never its target. Inline structural reentry from observational callbacks now rejects with `"busy"` instead of chaining runs.
 - Corrected `session-write-coordinator.md` durability claims: the coordinator guarantees single-process FIFO ordering and acknowledgement-gated dequeue, not unconditional exactly-once durability. Added the `commit_unknown` failure vocabulary and linked the `PreparedSessionMutation` milestone that closes the gap.
 - Coordinator enqueue and serialized idle model/active-tool updates now persist invocation-time snapshots instead of rereading caller-owned mutable inputs after validation; synchronous persistence reentry rejects instead of deadlocking.
 - Pending `AgentHarness` session writes now retain FIFO order after a persistence failure: recovered writes flush before any later idle write, with queue ownership and flush serialization isolated in `SessionWriteCoordinator`.

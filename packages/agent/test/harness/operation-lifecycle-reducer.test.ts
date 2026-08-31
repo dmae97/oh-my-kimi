@@ -229,15 +229,19 @@ describe("reduceHarnessLifecycle violations", () => {
 		);
 	});
 
-	it("rejects attempt_end mismatches and attempt_end from save_point", () => {
+	it("rejects attempt_end mismatches and accepts attempt_end from save_point", () => {
 		const { state, attemptRef, opId } = activePromptRunning();
 		expect(violation(state, { type: "attempt_end", attemptId: "op-x:a9", outcome: "completed" }).code).toBe(
 			"attempt_mismatch",
 		);
 		const saved = apply(state, { type: "stage", operationId: opId, stage: "save_point" });
-		expect(
-			violation(saved, { type: "attempt_end", attemptId: attemptRef.attemptId, outcome: "completed" }).code,
-		).toBe("invalid_transition");
+		const ended = reduceHarnessLifecycle(saved, {
+			type: "attempt_end",
+			attemptId: attemptRef.attemptId,
+			outcome: "completed",
+		});
+		expect(ended.ok).toBe(true);
+		if (ended.ok) expect(ended.value).toMatchObject({ tag: "active", stage: "preparing", attempt: undefined });
 	});
 
 	it("rejects abort_request for another operation", () => {

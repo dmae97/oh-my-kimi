@@ -171,7 +171,9 @@ function reduceAttemptEnd(
 			command,
 		);
 	}
-	if (state.stage !== "attempt_running") {
+	// save_point is an intra-attempt stage between provider turns; the attempt
+	// remains logically running there, so it may end from either stage.
+	if (state.stage !== "attempt_running" && state.stage !== "save_point") {
 		return reject("invalid_transition", `Cannot end an attempt from stage ${state.stage}`, state, command);
 	}
 	const { attempt } = state;

@@ -122,7 +122,7 @@ describe("AgentHarness context-overflow recovery", () => {
 		).toBe(OVERFLOW);
 	});
 
-	it("does not recover an old overflow after a settled listener starts a new run", async () => {
+	it("keeps recovery inside the originating operation when a settled listener tries to start a run", async () => {
 		const registration = registerFauxProvider({
 			models: [{ id: "large-context", reasoning: false, contextWindow: 100_000, maxTokens: 2_000 }],
 		});
@@ -137,7 +137,11 @@ describe("AgentHarness context-overflow recovery", () => {
 			},
 			() => {
 				calls++;
-				return fauxAssistantMessage("second answer");
+				return fauxAssistantMessage("## Goal\nRecovered context");
+			},
+			() => {
+				calls++;
+				return fauxAssistantMessage("recovered answer");
 			},
 		]);
 		const session = await seededSession();
@@ -148,19 +152,20 @@ describe("AgentHarness context-overflow recovery", () => {
 			getApiKeyAndHeaders: async () => ({ apiKey: "test-key" }),
 			compaction: { enabled: true, reserveTokens: 500, keepRecentTokens: 100, maxUsageRatio: 0.99 },
 		});
-		let secondRun: Promise<AssistantMessage> | undefined;
+		// The strict lifecycle rejects inline structural reentry: a run started from
+		// a settled listener fails with busy instead of hijacking the operation.
+		let reentry: Promise<AssistantMessage> | undefined;
 		harness.subscribe((event) => {
-			if (event.type === "settled" && !secondRun) secondRun = harness.prompt("second request");
+			if (event.type === "settled" && !reentry) reentry = harness.prompt("second request");
 		});
 
 		const first = await harness.prompt("first request");
-		if (!secondRun) throw new Error("Settled listener did not start the second run");
-		const second = await secondRun;
+		if (!reentry) throw new Error("Settled listener did not attempt the second run");
 
-		expect(first.errorMessage).toBe(OVERFLOW);
-		expect(second.content).toContainEqual({ type: "text", text: "second answer" });
-		expect(calls).toBe(2);
-		expect((await session.getEntries()).some((entry) => entry.type === "compaction")).toBe(false);
+		await expect(reentry).rejects.toMatchObject({ code: "busy" });
+		expect(first.content).toContainEqual({ type: "text", text: "recovered answer" });
+		expect(calls).toBe(3);
+		expect((await session.getEntries()).some((entry) => entry.type === "compaction")).toBe(true);
 	});
 
 	it("stops after one compact-and-retry recovery when the retry also overflows", async () => {

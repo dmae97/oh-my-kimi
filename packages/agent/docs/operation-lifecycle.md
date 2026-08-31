@@ -12,12 +12,14 @@ prompt-family operations, one bounded overflow-recovery continuation. The
 controller keeps operation identity, attempt identity, cancellation
 ownership, and settlement ordering in one place, behind a pure reducer.
 
-Status: **foundation slice**. The types, reducer, and controller land as
-self-contained modules with their own test suites; `AgentHarness` does not
-route through them yet. Integration (lease-routed public operations,
-same-operation overflow recovery, target-captured abort, operation/attempt
-events, strict reentrancy) is the next slice and must not skip these
-contracts.
+Status: **integrated**. `AgentHarness` routes every public operation
+(`prompt`, `skill`, `promptFromTemplate`, `compact`, `navigateTree`) through
+`runOperation()`, which begins a lease, runs the body, flushes accepted
+session writes before classification, and settles exactly once. Overflow
+recovery is a stage of the originating prompt operation; `agent_end` is an
+attempt event and no longer settles anything. Inline structural reentry from
+observational callbacks rejects with `"busy"`; the deferred command queue
+for callback-driven follow-on work is a later slice.
 
 Related: [session-write-coordinator.md](./session-write-coordinator.md) for
 the write-ordering layer below this one, and
@@ -168,21 +170,29 @@ must not read a clock. `getAttemptSummaries` renders public
 `HarnessAttemptSummary` values from those records plus the controller's own
 clock readings.
 
-## 6. What integration must preserve
+## 6. Integration invariants (enforced)
 
-These invariants are the acceptance contract for wiring `AgentHarness`
-public operations through the controller:
+These invariants held while wiring `AgentHarness` public operations through
+the controller and are pinned by tests:
 
 - at most one active operation and one active attempt per harness
-- exactly one `settled` resolution per public operation, across overflow
-  recovery, failure, and abort
-- `agent_end` is an attempt event; it must not transition lifecycle state
-  to `idle`
-- overflow recovery keeps the originating `operationId` and is capped at
-  one continuation attempt
-- final session-write flush completes before `settle_finish`
-- a failed final flush never produces a `completed` outcome
-- abort waits only for the captured operation's settlement
+- exactly one `settled` per public operation, across overflow recovery,
+  failure, and abort; failed operations settle with a `failed` outcome
+- `agent_end` is an attempt event; it never transitions lifecycle state
+- overflow recovery keeps the originating `operationId` and runs at most one
+  continuation attempt with reason `context_overflow_recovery`
+- the final session-write flush precedes outcome classification; a failed
+  flush never produces a `completed` outcome and rejects the public promise
+  with a `session`-classified error
+- abort waits only for the captured operation's `settled` promise
+- attempts share the operation's abort signal; no attempt owns an
+  `AbortController`
+- `save_point` is an intra-attempt stage: attempts may end from
+  `attempt_running` or `save_point`
+
+Remaining integration slices: strict callback reentrancy with deferred
+commands, flush context/summaries on the write coordinator, durable journal,
+proof runtime.
 
 ## 7. Verification
 
@@ -205,6 +215,13 @@ npx vitest run --config vitest.harness.config.ts \
   stale-lease rejection, violation-cause preservation, attempt id
   derivation and summaries, abort capture across idle/active/settling and
   across successive operations, `waitForIdle` ordering.
+- integration suite (`operation-lifecycle-integration.test.ts`): event
+  correlation and ordering, inline-reentry rejection from `agent_end`,
+  flush-failure precedence over provider success, same-operation overflow
+  recovery correlation, and target-captured abort.
+- characterization fixtures (`operation-settlement.characterization.test.ts`)
+  pin normal/failure/abort single-settlement and post-fix single-settlement
+  overflow traces.
 
 Run counts are smoke-level PR gates, not correctness proofs; the
 integration slice adds the full model-based harness property with the
