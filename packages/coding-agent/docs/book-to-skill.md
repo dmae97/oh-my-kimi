@@ -44,6 +44,23 @@ The compile and update commands start an agent turn with the bundled workflow. T
 
 Generated personal skills default to `~/.omk/agent/skills/`; project skills use `.omk/skills/`. The workflow asks when scope is ambiguous.
 
+## Reading an OpenKB knowledge base
+
+The package bundles a second skill, `openkb`, for the other shape of document knowledge: a wiki compiled by the [OpenKB](https://github.com/VectifyAI/OpenKB) CLI rather than a generated skill. It resolves the active knowledge base with `openkb status`, reads `wiki/index.md` to pick relevant slugs, then reads concept, entity, and summary pages and follows their wikilinks.
+
+```text
+/skill:openkb
+!openkb
+```
+
+Routing between the two is fixed. Compiling a document into a reusable skill stays on `/book-to-skill-compile`, which produces a provenance record that `/book-to-skill-verify` checks; the `openkb` skill routes away from OpenKB's own Skill Factory so the request has one answer. Reading an already-compiled knowledge base is the `openkb` skill's job.
+
+The skill is read-only by construction. Ingest (`openkb add`), removal, `lint --fix`, and the interactive and watch modes are proposed to the user with the exact command and its effect, never run on the agent's initiative. Compiled pages are model-generated from documents the user ingested, so the skill treats them as untrusted data rather than instructions, and prefers reading pages directly over `openkb query` — routing wiki text through a second model call gives an injected instruction another chance to be obeyed.
+
+OpenKB is a separate Python CLI (3.10+) with its own model credentials. OMK installs neither, and the skill stops and says so when `openkb` is absent instead of guessing a path. Nothing is vendored from OpenKB; the skill is original prose pinned to an upstream commit, recorded in `skills/openkb/SOURCE.md` in the package.
+
+Despite the similar name, this is unrelated to OMK's own [`openwiki/`](../../../README.md#repository-understanding) corpus, which is generated from source code rather than documents.
+
 ## Provenance and verification
 
 After generation, the skill runs the upstream advisory scanner and records `.book-to-skill-provenance.json`. The bundled workflow resolves `scripts/provenance.mjs` from the skill directory, so it does not depend on an npm bin path. If `omk-book-to-skill` is on `PATH`, the standalone CLI can repeat the checks:
