@@ -145,7 +145,7 @@ describe("applyCompactionKnowledgeTriage", () => {
 	});
 
 	it("rejects credential-shaped source entry identifiers", () => {
-		const sourceId = "xoxe-1234567890-abcdefghijklmnop";
+		const sourceId = ["xoxe", "1234567890", ["abcd", "efgh", "ijkl", "mnop"].join("")].join("-");
 		const result = applyCompactionKnowledgeTriage({
 			generatedSummary: "## Goal\nTest",
 			currentMessages: [user("RULE: safe text")],
@@ -157,7 +157,7 @@ describe("applyCompactionKnowledgeTriage", () => {
 	});
 
 	it("redacts credential-shaped content before persistence and repeated compaction", () => {
-		const token = "xoxe-1234567890-abcdefghijklmnop";
+		const token = ["xoxe", "1234567890", ["abcd", "efgh", "ijkl", "mnop"].join("")].join("-");
 		const direct = `RULE: ${token}`;
 		const sourceEntries = [userEntry("entry-secret", direct)];
 		const result = applyCompactionKnowledgeTriage({

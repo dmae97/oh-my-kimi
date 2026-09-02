@@ -54,24 +54,30 @@ describe("withFileMutationQueue", () => {
 	});
 
 	it("allows different files to proceed in parallel", async () => {
-		const order: string[] = [];
+		// Asserting this through wall-clock interleaving measured the scheduler,
+		// not the queue: each callback slept 30ms and the test required b:start to
+		// land before a:end. Under the full suite the event loop can run `a` to
+		// completion before `b` is ever scheduled, so the run failed with
+		// "expected 2 to be less than 1" while the queue had blocked nothing.
+		//
+		// The handshake below is load-independent. `a` cannot finish until `b` has
+		// entered its callback, so it resolves only if both hold their own queues
+		// at the same time — which is the actual claim. If a regression gave
+		// different files one shared queue, the two deadlock and this fails on the
+		// bound rather than on timing luck.
+		const aStarted = createDeferred();
+		const bStarted = createDeferred();
 
-		await Promise.all([
-			withFileMutationQueue("/tmp/file-mutation-queue-a", async () => {
-				order.push("a:start");
-				await delay(30);
-				order.push("a:end");
-			}),
-			withFileMutationQueue("/tmp/file-mutation-queue-b", async () => {
-				order.push("b:start");
-				await delay(30);
-				order.push("b:end");
-			}),
-		]);
+		const a = withFileMutationQueue("/tmp/file-mutation-queue-a", async () => {
+			aStarted.resolve();
+			await bStarted.promise;
+		});
+		const b = withFileMutationQueue("/tmp/file-mutation-queue-b", async () => {
+			await aStarted.promise;
+			bStarted.resolve();
+		});
 
-		expect(order.indexOf("a:start")).toBeLessThan(order.indexOf("a:end"));
-		expect(order.indexOf("b:start")).toBeLessThan(order.indexOf("b:end"));
-		expect(order.indexOf("b:start")).toBeLessThan(order.indexOf("a:end"));
+		expect(await resolvesWithin(Promise.all([a, b]), 5_000)).toBe(true);
 	});
 
 	it("uses the same queue for symlink aliases", async () => {
