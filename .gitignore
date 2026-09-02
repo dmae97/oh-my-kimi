@@ -135,9 +135,9 @@ collect.sh
 .turbo/**
 
 # Local-only scratch / operator protocol notes (not package content).
-# The root AGENTS.md stays versioned — the OpenWiki workflow writes its managed block —
-# but the ~/.omk/agent protocol kernel and session directive it loads are operator-local,
-# like their *.hard.md twins.
+# The root AGENTS.md and CLAUDE.md stay versioned as this project's rule surface, but the
+# ~/.omk/agent protocol kernel and session directive they load are operator-local, like
+# their *.hard.md twins. CLAUDE.local.md is Claude Code's per-operator memory file.
 /dashscope-call.py
 /maas-media.py
 /AGENTS.GODMODE.md
@@ -145,6 +145,7 @@ collect.sh
 /AGENTS.override.md
 /AGENTS.override.hard.md
 /AGENTS.stub.md
+/CLAUDE.local.md
 
 # OpenWiki generated pages ARE versioned (the scheduled workflow opens PRs against them).
 # Local-only scratch inside the wiki can be ignored per-operator in .git/info/exclude.

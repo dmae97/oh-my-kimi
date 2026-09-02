@@ -7,29 +7,42 @@ commands, code style, git discipline, release, and what may never be published h
 
 1. The operator's global agent manual, if the machine has one. It is machine-local and
    deliberately not versioned here — see [Publication boundary](#publication-boundary).
-2. This file — project rules for `/home/yu/omk`.
-3. [`CLAUDE.md`](CLAUDE.md) — Claude Code interoperability and quick reference, not a
+2. This file — project rules for this checkout.
+3. [`CLAUDE.md`](CLAUDE.md) — a Claude Code entry point that imports this file, not a
    second source of behavioral truth.
 
 [`specs/constitution.md`](specs/constitution.md) outranks all three on release,
 versioning, and governance questions.
 
+OMK loads the first of `AGENTS.md`/`CLAUDE.md` it finds in a directory, so an OMK session
+here reads this file and never sees `CLAUDE.md`; Claude Code reads `CLAUDE.md`, which
+imports this file. Behavioral rules belong here: a rule copied into `CLAUDE.md` becomes a
+fork only one of the two hosts ever reads.
+
 ## Repository map
 
 | Path | Contents |
 | --- | --- |
+| `packages/coding-agent` | `open-multi-agent-kit` — the `omk` CLI, its docs and examples |
 | `packages/ai` | `omk-ai` — multi-provider LLM API |
 | `packages/agent` | `omk-agent-core` — agent runtime |
-| `packages/coding-agent` | `open-multi-agent-kit` — the CLI, docs, examples |
 | `packages/tui` | `omk-tui` — terminal UI |
 | `packages/protocol` | `omk-protocol` — wire types |
-| `packages/adaptorch-wpl` | `omk-adaptorch-wpl` — reliability kernel component |
+| `packages/adaptorch-wpl` | `omk-adaptorch-wpl` — Work Packet Loop primitives; the CLI's advisory adaptorch bridge is opt-in and default-off |
 | `packages/book-to-skill` | `omk-book-to-skill` |
-| `.omk/skills` | project-local skills discovered from a checkout |
+| `packages/initcheck`, `packages/promptguard` | Go modules, outside the npm workspaces and the lockstep version |
+| `.omk/skills`, `.omk/extensions`, `.omk/prompts` | project-local skills, extensions, and prompt templates discovered from a checkout — see [`SKILLS.md`](SKILLS.md) |
 | `specs/` | constitution and spec-kit artifacts |
 | `scripts/` | release, publish, and repository guards |
+| `.github/` | CI workflows and per-release notes |
+
+User-facing documentation lives in `packages/coding-agent/docs/`. The root `docs/` tree is
+git-ignored working material: never link to it from a tracked file, because such a link
+resolves on this disk and breaks in a fresh clone.
 
 ## Commands
+
+Node `>=22.19.0`, npm `11.14.1`.
 
 | Task | Command |
 | --- | --- |
@@ -37,6 +50,7 @@ versioning, and governance questions.
 | Lint, format, typecheck, guards | `npm run check` |
 | Tests (non-e2e) | `./test.sh` |
 | One test file | `node ../../node_modules/vitest/dist/cli.js --run test/x.test.ts` |
+| Go modules | `go test ./...` inside `packages/initcheck` or `packages/promptguard` |
 | Run the CLI from source | `./omk-test.sh` |
 | Build | `npm run build` |
 
@@ -64,6 +78,29 @@ interactive slash commands.
 - Modules are held to a 250-line pure-LOC ratchet (`scripts/check-module-size.mjs`).
 - Read a file in full before a wide-ranging change, and ask before removing code that
   looks intentional.
+
+## Generated model catalogs
+
+`packages/ai/src/models.generated.ts` and `image-models.generated.ts` are committed
+artifacts. Never hand-edit them: change the generators under `packages/ai/scripts/`, then
+run `npm run models:refresh` as its own reviewed change. The generators read live provider
+APIs, so a model can disappear from the diff because an endpoint was unreachable rather
+than retired — read the diff before committing it. Releases never regenerate them.
+
+A user overlay at `~/.omk/agent/models.json` overrides the built catalog per provider at
+runtime. When a model's metadata looks wrong in a running session, check that overlay
+first, and restart the process after changing either layer.
+
+## Adding a provider
+
+Follow [`.omk/skills/add-llm-provider.md`](.omk/skills/add-llm-provider.md) in order: core
+types, provider module, lazy registration in `register-builtins.ts`, credential detection,
+model generation, tests, coding-agent wiring, docs. A new provider must appear in
+`packages/ai/test/stream.test.ts` with at least one representative model even when it
+reuses an existing API implementation, plus the wider matrix (`tokens`, `abort`, `empty`,
+`context-overflow`, `cross-provider-handoff`, and the rest) wherever it applies. Gate
+live-credential cases behind `describe.skipIf` on that provider's own environment
+variable so a keyless run still passes.
 
 ## Git and safety
 
