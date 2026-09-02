@@ -65,6 +65,10 @@
           "path": "extensions.md"
         },
         {
+          "title": "Extension Security",
+          "path": "security.md"
+        },
+        {
           "title": "Skills",
           "path": "skills.md"
         },

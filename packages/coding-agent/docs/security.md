@@ -1,8 +1,6 @@
 # Extension Runtime Threat Model
 
 > **Scope**: This document covers every OMK extension. OMK does not currently provide extension permission tiers or an extension-specific OS sandbox.
->
-> **Version**: 0.96.1
 
 ## 1. Overview
 
@@ -126,10 +124,7 @@ If a malicious or compromised extension is suspected:
 
 ## 8. References
 
-- OMK Extension Manifest Specification: `packages/coding-agent/docs/extensions.md`
-- OMK Session Format: `packages/coding-agent/docs/session-format.md`
-- OMK Settings and Configuration: `packages/coding-agent/docs/settings.md`
-
----
-
-*Last updated: 2026-08-19*
+- [Extensions](extensions.md) - extension manifest, loading, and the tool/command API.
+- [Session format](session-format.md) - what a session file records on disk.
+- [Settings](settings.md) - global and project configuration.
+- [Containerization](containerization.md) - running the whole process under an OS sandbox.

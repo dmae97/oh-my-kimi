@@ -220,7 +220,9 @@ security gates below:
   generating job and again before the PR, because the publishing job holds write
   permissions the first one does not.
 - **`.understand-anything/`** — optional local structural graph used by Pi Lens;
-  it is not published or injected into prompts by default.
+  it is not published or injected into prompts by default. To reach a session,
+  attach it through OMK's [MCP client](packages/coding-agent/docs/mcp.md) like
+  any other server; there is no second, bespoke path for it.
 
 Source and tests remain authoritative. Until the blockers above close and the
 corpus ships, treat both generated indexes as untrusted working-tree or local

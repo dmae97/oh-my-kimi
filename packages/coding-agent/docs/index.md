@@ -49,8 +49,10 @@ For the full first-run flow, see [Quickstart](quickstart.md).
 ## Customization
 
 - [Extensions](extensions.md) - TypeScript modules for tools, commands, events, and custom UI.
+- [Extension security](security.md) - the extension runtime threat model and what a loaded extension can reach.
 - [Skills](skills.md) - Agent Skills for reusable on-demand capabilities.
 - [Book to Skill](book-to-skill.md) - optional document-to-skill compiler with local provenance checks.
+- [MCP](mcp.md) - attach Model Context Protocol servers and expose their tools to the model.
 - [Prompt templates](prompt-templates.md) - reusable prompts that expand from slash commands.
 - [Themes](themes.md) - built-in and custom terminal themes.
 - [OMK packages](packages.md) - bundle and share extensions, skills, prompts, and themes.
