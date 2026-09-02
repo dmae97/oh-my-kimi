@@ -130,6 +130,26 @@ describe("classifySessionTermination", () => {
 		expect(rendered).not.toContain("stack");
 	});
 
+	it("Given provider_auth with the unknown-provider placeholder, When formatted, Then it never tells the user to log into 'unknown'", () => {
+		// A fresh install with no credentials resolves a placeholder model whose
+		// provider is literally "unknown"; the recovery hint must stay actionable.
+		const termination = classifySessionTermination({
+			sessionId: "session-1",
+			runId: "preflight-1",
+			timestamp: NOW,
+			source: "observed",
+			message: "No API key found for the selected model.",
+			cause: { area: "provider", code: "auth" },
+			sideEffects: "none",
+			provider: "unknown",
+			model: "unknown",
+		});
+
+		expect(termination.nextAction).not.toContain("/login unknown");
+		expect(termination.nextAction).toMatch(/\/login/);
+		expect(termination.nextAction).toMatch(/API key/i);
+	});
+
 	it("only marks side-effect-free transient provider failures safe for automatic retry", () => {
 		expect(classify({ area: "provider", code: "network" }).safeToAutoRetry).toBe(true);
 		expect(classify({ area: "provider", code: "rate_limit" }).safeToAutoRetry).toBe(true);

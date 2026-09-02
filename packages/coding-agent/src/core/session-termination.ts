@@ -524,7 +524,9 @@ function nextActionFor(classification: Classification, input: ClassifySessionTer
 		case "provider_abort":
 			return "Confirm provider availability, then retry the request.";
 		case "provider_auth":
-			return `Run /login${input.provider ? ` ${input.provider}` : ""} or configure valid credentials, then retry.`;
+			// A credential-less install resolves a placeholder model whose provider is
+			// literally "unknown"; never echo that back as a login target.
+			return `Run /login${input.provider && input.provider !== "unknown" ? ` ${input.provider}` : ""} in an interactive session, or set the provider's API key environment variable, then retry.`;
 		case "provider_rate_limit":
 			return "Wait for the provider retry window or choose another model, then retry.";
 		case "provider_network":
