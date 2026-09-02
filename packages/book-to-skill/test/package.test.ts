@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
@@ -11,15 +12,52 @@ type UpstreamManifest = {
 
 const packageRoot = resolve(import.meta.dirname, "..");
 
+/**
+ * Paths git ignores, out of the candidates passed in.
+ *
+ * One `git check-ignore` call for the whole set; a per-file call is the same
+ * answer at N times the cost. Exit code 1 means "nothing matched", which is a
+ * normal empty result, not a failure.
+ */
+function ignoredPaths(candidates: string[]): Set<string> {
+	if (candidates.length === 0) return new Set();
+	const result = spawnSync("git", ["check-ignore", "--stdin"], {
+		cwd: packageRoot,
+		input: candidates.join("\n"),
+		encoding: "utf8",
+	});
+	if (result.status !== 0 && result.status !== 1) {
+		throw new Error(`git check-ignore failed: ${result.stderr}`);
+	}
+	return new Set(result.stdout.split("\n").filter(Boolean));
+}
+
+/**
+ * The vendored files that actually ship, not everything sitting in the directory.
+ *
+ * This compares against `upstream.json`, so it has to enumerate the same thing
+ * npm publishes. A raw filesystem walk does not: running pytest anywhere under
+ * `vendor/book-to-skill` leaves a `.pytest_cache/` that npm excludes (verified
+ * with `npm pack`) but the walk still reported, so the integrity check failed
+ * on a developer's disk while CI and the published tarball were both fine.
+ *
+ * Filtering by `git check-ignore` rather than by a `.pytest_cache` name keeps
+ * the tamper detection intact: an unexpected file that would really ship is
+ * not ignored, so it still fails here.
+ */
 function listFiles(directory: string): string[] {
 	const files: string[] = [];
-	for (const entry of readdirSync(directory, { withFileTypes: true })) {
-		const path = join(directory, entry.name);
-		if (entry.isSymbolicLink()) throw new Error(`Unexpected vendored symlink: ${path}`);
-		if (entry.isDirectory()) files.push(...listFiles(path));
-		else if (entry.isFile()) files.push(relative(packageRoot, path).split(sep).join("/"));
-	}
-	return files.sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+	const walk = (current: string): void => {
+		for (const entry of readdirSync(current, { withFileTypes: true })) {
+			const path = join(current, entry.name);
+			if (entry.isSymbolicLink()) throw new Error(`Unexpected vendored symlink: ${path}`);
+			if (entry.isDirectory()) walk(path);
+			else if (entry.isFile()) files.push(relative(packageRoot, path).split(sep).join("/"));
+		}
+	};
+	walk(directory);
+	const ignored = ignoredPaths(files);
+	return files.filter((path) => !ignored.has(path)).sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
 }
 
 describe("omk-book-to-skill package", () => {
