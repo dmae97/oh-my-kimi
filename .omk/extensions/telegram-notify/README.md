@@ -6,19 +6,35 @@ walked away from.
 ## Setup
 
 ```bash
-export TELEGRAM_BOT_TOKEN='<bot id>:<secret>'   # from @BotFather
-export TELEGRAM_CHAT_ID='<your chat id>'        # message the bot, then read it from
-                                                # https://api.telegram.org/bot<token>/getUpdates
+npm run connect -- --token '<bot id>:<secret>'   # token from @BotFather
 ```
 
-Without both, the extension registers nothing and the run is unaffected. Credentials are
-read from the environment only: a bot token in a committed config is a bot token in
-everyone's checkout.
+Then send the bot any message from Telegram. A chat id cannot be looked up — Telegram
+reveals it only once the human has written to the bot — so the script waits for that
+message, writes `~/.omk/telegram.env` with mode 600, and sends a confirmation. Restart
+omk afterwards: the file is read once at startup.
+
+`npm run connect -- --test` re-sends to the stored chat without changing anything.
+
+Environment variables still work and take precedence, which keeps a one-off
+`TELEGRAM_CHAT_ID=... omk` honest and suits a server with no home directory:
+
+```bash
+export TELEGRAM_BOT_TOKEN='<bot id>:<secret>'
+export TELEGRAM_CHAT_ID='<your chat id>'
+```
+
+With neither source, the extension registers nothing and the run is unaffected.
+Credentials never live in the repository: a bot token in a committed config is a bot
+token in everyone's checkout. The credential file is owner-only, so it is narrower than
+a shell rc, which is read by every process the account starts. A file readable by group
+or world still works but says so once at startup.
 
 | Variable | Default | Does |
 | --- | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | — | Required. Bot token from @BotFather. |
 | `TELEGRAM_CHAT_ID` | — | Required. Where to send. |
+| `OMK_TELEGRAM_ENV_FILE` | `~/.omk/telegram.env` | Where the credentials live. |
 | `OMK_TELEGRAM_NOTIFY` | on | `0` disables without unsetting credentials. |
 | `OMK_TELEGRAM_MIN_DURATION_MS` | `5000` | Successful runs shorter than this stay quiet. |
 | `OMK_TELEGRAM_ON_SUCCESS` | on | |
@@ -50,6 +66,21 @@ Inbound control is a different feature with a different threat model: anyone who
 message the bot would get command execution on this machine, so it would need chat-id
 allowlisting, per-command confirmation for anything destructive, and a sandbox. None of
 that is here.
+
+`connect.mjs` reads Telegram, but only during pairing, and only to learn a chat id. It
+is a script the owner runs, not a listener the extension starts.
+
+Telegram allows one reader per bot, so pairing fails with a 409 while a full bridge such
+as `@llblab/pi-telegram` is polling the same bot. Either pair before connecting the
+bridge, pass `--chat-id` and skip the wait, or give this extension its own bot. Sending
+is unaffected: any number of processes may post as one bot, so a notifier and a bridge
+coexist once paired.
+
+## Rotating a leaked token
+
+Anyone holding the token can post as the bot and read what is sent to it. Message
+@BotFather, `/revoke`, then re-run `npm run connect` with the new token. The old one
+stops working immediately, and the extension picks up the new one on the next start.
 
 ## Failure behaviour
 

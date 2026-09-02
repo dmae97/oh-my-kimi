@@ -7,23 +7,38 @@
  * command execution on this machine, which is a different feature with a
  * different threat model and is deliberately not this one.
  *
- * Configuration is environment-only; see README.md.
+ * Configuration comes from the environment, or from an owner-only credential
+ * file when the environment is silent; see README.md.
  */
 
 import type { ExtensionAPI } from "open-multi-agent-kit";
+import { defaultCredentialPath, withCredentialFile } from "./credentials.ts";
 import { buildMessage, deriveOutcome, resolveConfig, shouldNotify, telegramApiUrl } from "./notify.ts";
 
 /** Bound so a hung request cannot outlive the run that triggered it. */
 const REQUEST_TIMEOUT_MS = 10_000;
 
 export default function telegramNotifyExtension(omk: ExtensionAPI): void {
+	// Read once at startup. The credential file is configuration, and re-reading
+	// it would put a disk read on the settle path of every run.
+	const { env, permissiveMode } = withCredentialFile(process.env);
+
 	// Missing credentials are the normal case for anyone who has not set this
 	// up, so the extension registers nothing rather than failing every run.
-	const config = resolveConfig(process.env);
+	const config = resolveConfig(env);
 	if (!config) return;
 
-	const label = process.env.OMK_TELEGRAM_LABEL?.trim() || undefined;
+	const label = env.OMK_TELEGRAM_LABEL?.trim() || undefined;
 	let startedAt: number | undefined;
+
+	if (permissiveMode !== undefined) {
+		// Once, at startup. A warning attached to every notification is a warning
+		// that gets filtered out.
+		omk.on("session_start", (_event, ctx) => {
+			const mode = permissiveMode.toString(8).padStart(3, "0");
+			ctx.ui.notify(`Telegram credential file is mode ${mode}; run chmod 600 ${defaultCredentialPath(env)}`, "warning");
+		});
+	}
 
 	omk.on("agent_start", () => {
 		startedAt = Date.now();

@@ -4,7 +4,9 @@
 	"version": "0.1.0",
 	"type": "module",
 	"scripts": {
-		"check": "../../../node_modules/.bin/tsc --noEmit -p tsconfig.json"
+		"check": "../../../node_modules/.bin/tsc --noEmit -p tsconfig.json",
+		"test": "node --test credentials.test.ts index.test.ts",
+		"connect": "node connect.mjs"
 	},
 	"omk": {
 		"extensions": [
