@@ -361,7 +361,7 @@ is not published with the repository.
 - [Containerization](packages/coding-agent/docs/containerization.md)
 - [Public skill catalog](SKILLS.md)
 - [Changelog](packages/coding-agent/CHANGELOG.md)
-- [Release notes for v0.98.1](.github/RELEASE_NOTES_v0.98.1.md)
+- [Release notes for v0.98.2](.github/RELEASE_NOTES_v0.98.2.md)
 
 ## Development
 
@@ -413,6 +413,22 @@ structure for bounded recovery instead of silently starting over.
 
 <!-- releases:start -->
 
+## Release v0.98.2
+
+### Added
+
+- The `omk` CLI now connects configured MCP servers. `AgentSession.attachMcpServers()` was complete and tested but had no caller outside the SDK, so a `~/.omk/mcp.json` or `.omk/mcp.json` written by a CLI user spawned nothing and the control-panel MCP rows only ever showed the config inventory. The single CLI session factory now attaches on every session it creates — interactive, `-p`, RPC, `/new`, `/resume`, and forks — while `--help` and `--list-models` still spawn nothing. A server that fails to start becomes a startup warning naming the server and the reason (never an env value); the session continues with the servers that did connect.
+
+### Fixed
+
+- A dirty working-tree entry whose name the receipt parser rejects no longer kills every verified bash call in the session. `resolveSessionWorkspaceScope` handed the whole `git status` set to `captureWorkspaceFingerprint`, which throws on any path containing a backslash, `..`, or an empty segment; a mangled `\wsl.localhost\...` directory left in a repo root therefore failed each bash invocation with `workspace scope artifactPaths[N] must be a normalized root-relative path`, and subagent lanes lost their shell entirely. The scope builder now filters with the same `isNormalizedArtifactPath` predicate the parser enforces, which also subsumes the earlier one-off trailing-slash and nested-repository exclusions.
+- A credential-less install no longer tells the user to `Run /login unknown`. The placeholder model resolved when no provider is configured carries the literal provider `unknown`, and the `provider_auth` recovery hint interpolated it verbatim; the hint now omits an unknown provider and mentions the API-key environment variable path for headless `-p` runs where `/login` is not available.
+- Classified Anthropic's `claude_code_version_too_old` rejection (HTTP 400 carrying `invalid_request_error`) as a permanent configuration fault: it no longer enters the transient retry/failover loop, and the session failure cause reports `configuration`/`invalid` instead of the retryable protocol default. The usage and quota probes now read the spoofed Claude Code client version from omk-ai's single `CLAUDE_CODE_VERSION` constant, so every request presents the same user-agent as the messages API.
+- Compaction now recovers from an OAuth token the provider rejects as expired while the stored expiry still lies ahead. ChatGPT/Codex answers `401 token_expired` days before the JWT `exp`, and because `compaction.model` can differ from the session model (`openai-codex/gpt-5.6-sol` under an `xai/grok-4.6` session), every turn kept succeeding while every compaction failed with "Provided authentication token is expired" — and the transient-retry classifier rightly never replays a 401. `AuthStorage.refreshRejectedOAuthToken()` now force-refreshes the rejected credential under the storage lock (skipping the refresh when another omk process already rotated it), and manual and automatic compaction retry the summarization once with the new token. A failed refresh names `/login <provider>`. Compaction failures are now attributed to the compaction model instead of the session model.
+- Compaction now asks for an OAuth access token with at least ten minutes of remaining validity. Compaction resolves auth once and reuses it for a summarization that can stream for minutes with retries, so a token accepted seconds before expiry came back as a provider 401 mid-run. `AuthStorage.getApiKey()` accepts `minRemainingMs` and refreshes proactively, falling back to the still-valid token when that early refresh fails.
+
+Release notes live in [RELEASE_NOTES_v0.98.2.md](.github/RELEASE_NOTES_v0.98.2.md).
+
 ## Release v0.98.1
 
 
@@ -455,32 +471,6 @@ Release notes live in [RELEASE_NOTES_v0.98.1.md](.github/RELEASE_NOTES_v0.98.1.m
 - Removed ten unreachable internal modules totalling 1,855 pure lines of code: a superseded context-budget governor and its `lean-ctx` predecessor, an unused sandbox policy evaluator (the live path is the workspace sandbox policy), leftover read-anchor and recovery-checkpoint helpers from the removed OMP seam, and a dead guardrails/lane-grant cluster. None were exported from the package's public entry points, so no import can break; the shipped tarball simply carries less code. Each removal was verified by symbol-level reference search, public-barrel absence, and a full type-check and test run rather than by a dead-code reporter alone. `image-resize-worker`, which is loaded by path and bundled separately, was correctly retained.
 
 Release notes live in [RELEASE_NOTES_v0.98.0.md](.github/RELEASE_NOTES_v0.98.0.md).
-
-## Release v0.97.0
-
-### Added
-
-- Added the repository-understanding default: a generated `openwiki/` evidence index with grounded, staleness-tracked claims, OpenWiki managed blocks in root `AGENTS.md`/`CLAUDE.md`, a scheduled `openwiki-update` GitHub Actions workflow (Gemini provider by default), and a README section describing the local-wiki protocol for fresh sessions. The vendored `oh-my-pi` tree was removed; README now acknowledges pi (badlogic/pi-mono) and oh-my-pi as upstream origins.
-- Added global-only `defaultActiveSkills` so operator-selected, user-scoped skill names can stay active in every prompt while full instructions remain on-demand.
-- The model registry now keeps a bounded audit trail of every successfully loaded `models.json` (last 10 snapshots) and warns when model entries disappear between loads, so silent config rewrites by other sessions surface immediately instead of losing custom models.
-- Images pasted or dragged into the interactive editor now attach as preview chips above the input through a bounded in-memory attachment store instead of per-paste temp files. Attachments are released exactly when their prompt is accepted and stay attached for retry when the turn fails before acceptance.
-- Compaction summarization now walks the configured resilience failover chain once when the summarization model hits quota/billing exhaustion; if every candidate is also quota-blocked it fails with a new non-retryable `compaction.quota_exhausted` termination cause whose guidance points at `/model`, `compaction.model`, or waiting for reset.
-- Upstream availability failures (gateway 5xx passthroughs, streams ending without a finish reason) are classified as network errors, and the retry path first rotates to another authenticated route serving the same underlying model family before falling back to the standard retry/failover chain.
-
-### Changed
-
-- YOLO mode (`OMK_YOLO` / `OMK_COMMAND_SAFETY=0` / `OMK_DISABLE_COMMAND_SAFETY`) is now evaluated in one place, the shared command-safety gate decision engine: every verdict — including block-tier commands and privilege prompts — runs without prompting, and the RPC headless bash safety floor honors the same opt-out.
-- Refreshed the bundled model catalog (new DeepSeek V4 Flash Vision experimental routes and Thinking Machines Inkling free routes; removed dead free-tier aliases).
-
-### Security
-
-- The bash command-safety classifier now extracts command substitutions (`$(...)`, backticks, `<(...)`/`>(...)`) with quote-aware matching and recursively classifies their bodies up to a bounded depth, merging every risk signal by severity instead of returning on the first hit, so a destructive body such as `echo $(rm -rf ~)` can no longer ride behind a benign-looking outer command.
-
-### Fixed
-
-- Empty streamed completions (`stop` with no text, thinking, or tool call) are now treated as dead streams and retried within the existing retry budget instead of being accepted as a successful turn.
-
-Release notes live in [RELEASE_NOTES_v0.97.0.md](.github/RELEASE_NOTES_v0.97.0.md).
 
 <!-- releases:end -->
 

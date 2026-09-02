@@ -1,6 +1,6 @@
 {
 	"name": "omk-agent-core",
-	"version": "0.98.1",
+	"version": "0.98.2",
 	"description": "General-purpose agent with transport abstraction, state management, and attachment support",
 	"type": "module",
 	"main": "./dist/index.js",
@@ -29,7 +29,7 @@
 		"prepublishOnly": "npm run clean && npm run build"
 	},
 	"dependencies": {
-		"omk-ai": "^0.98.1",
+		"omk-ai": "^0.98.2",
 		"ignore": "7.0.6",
 		"typebox": "1.3.11",
 		"yaml": "2.9.0"
