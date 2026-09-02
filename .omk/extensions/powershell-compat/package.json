@@ -1,0 +1,15 @@
+{
+	"name": "omk-extension-powershell-compat",
+	"private": true,
+	"version": "0.1.0",
+	"type": "module",
+	"scripts": {
+		"check": "../../../node_modules/.bin/tsc --noEmit -p tsconfig.json",
+		"test": "node --test translate.test.ts"
+	},
+	"omk": {
+		"extensions": [
+			"./index.ts"
+		]
+	}
+}
