@@ -15,6 +15,7 @@ import { type Args, type Mode, parseArgs, printHelp } from "./cli/args.ts";
 import { processFileArguments } from "./cli/file-processor.ts";
 import { buildInitialMessage } from "./cli/initial-message.ts";
 import { listModels } from "./cli/list-models.ts";
+import { mcpAttachDiagnostics } from "./cli/mcp-attach.ts";
 import { isExplicitExtensionDiagnostic, resolveCliPaths } from "./cli/resource-paths.ts";
 import { selectSession } from "./cli/session-picker.ts";
 import { handleCodexBarQuotaCommand } from "./codexbar-cli.ts";
@@ -800,6 +801,12 @@ export async function main(args: string[], options?: MainOptions) {
 		const cliThinkingOverride = parsed.thinking !== undefined || cliThinkingFromModel;
 		if (created.session.model && cliThinkingOverride) {
 			created.session.setThinkingLevel(created.session.thinkingLevel);
+		}
+		// Connect configured MCP servers so their tools reach the model in every CLI
+		// mode and on every session switch. No configuration returns at once; a server
+		// that fails to start is a warning, never fatal. Help/list-models never spawn.
+		if (!parsed.help && parsed.listModels === undefined) {
+			diagnostics.push(...mcpAttachDiagnostics(await created.session.attachMcpServers()));
 		}
 
 		return {

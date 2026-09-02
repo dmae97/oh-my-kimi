@@ -47,6 +47,14 @@ Servers are read from three files, later wins on a name collision:
 
 ## Using it
 
+The `omk` CLI calls `attachMcpServers()` for every session it creates —
+interactive, `-p`, and RPC, including `/new`, `/resume`, and forks — so a
+configured server's tools reach the model without further setup. A server that
+fails to start is reported as a startup warning and the session continues.
+`--help` and `--list-models` never spawn servers.
+
+SDK callers attach explicitly:
+
 ```ts
 const status = await session.attachMcpServers();
 // [{ name: "playwright", state: "ready", toolCount: 24, serverVersion: "1.62.0" }]
@@ -54,8 +62,8 @@ const status = await session.attachMcpServers();
 session.getToolDefinition("playwright__navigate");
 ```
 
-- **Nothing is spawned until `attachMcpServers()` is called.** A workspace can
-  configure 25 servers without paying for them at startup.
+- **Nothing is spawned until `attachMcpServers()` is called.** An SDK session
+  can configure 25 servers without paying for them until it attaches.
 - Tools are exposed as `<server>__<tool>`, truncated to 64 characters with the
   server prefix preserved.
 - A built-in tool always wins a name collision; MCP can never shadow `bash`.
