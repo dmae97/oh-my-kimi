@@ -8,6 +8,11 @@ const EXPECTED_CURRENT_ADAPTIVE_THINKING_MODELS = [
 	"vercel-ai-gateway/anthropic/claude-opus-4.8",
 	// Claude Sonnet 5 ships with adaptive thinking forced on (see packages/ai/CHANGELOG.md [Unreleased]).
 	"anthropic/claude-sonnet-5",
+	// The Fable family has no budget-based mode at all: `budget_tokens` is a 400.
+	"anthropic/claude-fable-5",
+	"anthropic/claude-fable-5-1",
+	"opencode/claude-fable-5",
+	"vercel-ai-gateway/anthropic/claude-fable-5.1",
 ];
 
 function getAllModels(): Model<Api>[] {
@@ -24,7 +29,7 @@ describe("Anthropic adaptive thinking model metadata", () => {
 
 		expect(flaggedModels).toEqual(expect.arrayContaining([...EXPECTED_CURRENT_ADAPTIVE_THINKING_MODELS].sort()));
 		expect(flaggedModels).toEqual(
-			flaggedModels.filter((modelId) => /(opus[-.]4[-.][678]|sonnet[-.]4[-.]6|sonnet[-.]5)/.test(modelId)),
+			flaggedModels.filter((modelId) => /(opus[-.]4[-.][678]|sonnet[-.]4[-.]6|sonnet[-.]5|fable)/.test(modelId)),
 		);
 	});
 });

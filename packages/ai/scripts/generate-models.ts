@@ -301,8 +301,22 @@ function isGoogleThinkingApi(model: Model<any>): boolean {
 	return model.api === "google-generative-ai" || model.api === "google-vertex";
 }
 
+/**
+ * Claude Fable family, in every provider spelling: `claude-fable-5`,
+ * `claude-fable-5-1`, `anthropic/claude-fable-5.1`, `anthropic.claude-fable-5`,
+ * `~anthropic/claude-fable-latest`, and the `:batch` variants.
+ *
+ * Thinking is always on for this family. `{type: "enabled", budget_tokens: N}`
+ * and every sampling parameter are rejected with HTTP 400, and depth is chosen
+ * through `output_config.effort`, which runs low -> max.
+ */
+function isClaudeFableModel(modelId: string): boolean {
+	return modelId.toLowerCase().includes("fable");
+}
+
 function isAnthropicAdaptiveThinkingModel(modelId: string): boolean {
 	return (
+		isClaudeFableModel(modelId) ||
 		modelId.includes("opus-4-6") ||
 		modelId.includes("opus-4.6") ||
 		modelId.includes("opus-4-7") ||
@@ -318,6 +332,7 @@ function isAnthropicAdaptiveThinkingModel(modelId: string): boolean {
 function isAnthropicTemperatureUnsupportedModel(modelId: string): boolean {
 	const id = modelId.toLowerCase();
 	return (
+		isClaudeFableModel(id) ||
 		id.includes("opus-4-7") ||
 		id.includes("opus-4.7") ||
 		id.includes("opus-4-8") ||
@@ -399,9 +414,11 @@ function applyModelMetadata(model: Model<Api>): void {
 		model.id.includes("opus-4-7") ||
 		model.id.includes("opus-4.7") ||
 		model.id.includes("opus-4-8") ||
-		model.id.includes("opus-4.8")
+		model.id.includes("opus-4.8") ||
+		isClaudeFableModel(model.id)
 	) {
-		// Per the changelog contract, only Opus 4.7 and 4.8 expose both top effort tiers: xhigh (effort xhigh) and max (effort max).
+		// Opus 4.7/4.8 and the Fable family are the only Claude models exposing both
+		// top effort tiers: xhigh (effort xhigh) and max (effort max).
 		mergeThinkingLevelMap(model, { xhigh: "xhigh", max: "max" });
 	}
 	if (model.api === "anthropic-messages" && isAnthropicAdaptiveThinkingModel(model.id)) {

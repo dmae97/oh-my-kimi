@@ -169,6 +169,8 @@ const INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14";
 function getAnthropicCompat(
 	model: Model<"anthropic-messages">,
 ): Required<Omit<AnthropicMessagesCompat, "forceAdaptiveThinking">> {
+	// Fable rejects `thinking.type.disabled`; every other Anthropic model accepts it.
+	const rejectsDisabledThinking = /(^|[/.])claude-fable-/.test(model.id);
 	// Auto-detect session affinity and cache control support from provider
 	const isFireworks = model.provider === "fireworks";
 	const isCloudflareAiGatewayAnthropic =
@@ -180,6 +182,7 @@ function getAnthropicCompat(
 			model.compat?.sendSessionAffinityHeaders ?? !!(isFireworks || isCloudflareAiGatewayAnthropic),
 		supportsCacheControlOnTools: model.compat?.supportsCacheControlOnTools ?? !isFireworks,
 		supportsTemperature: model.compat?.supportsTemperature ?? true,
+		supportsDisabledThinking: model.compat?.supportsDisabledThinking ?? !rejectsDisabledThinking,
 		allowEmptySignature: model.compat?.allowEmptySignature ?? false,
 	};
 }
@@ -1038,7 +1041,11 @@ function buildParams(
 					display,
 				};
 			}
-		} else if (options?.thinkingEnabled === false) {
+		} else if (options?.thinkingEnabled === false && compat.supportsDisabledThinking) {
+			// Omitted for models that reject an explicit disable (Fable 5/5.1):
+			// they always think, so the field is dropped and the API applies its
+			// adaptive default. Every other model still gets the explicit disable,
+			// so "thinking off" keeps meaning off (and stays unbilled) there.
 			params.thinking = { type: "disabled" };
 		}
 	}

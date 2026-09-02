@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- Claude Fable models were configured for budget-based thinking, which that family does not accept: `thinking: {type: "enabled", budget_tokens: N}` and any sampling parameter each return HTTP 400, so every reasoning turn on `claude-fable-5` / `claude-fable-5-1` failed before producing a token. Fable now carries `forceAdaptiveThinking` and `supportsTemperature: false` like the Opus 4.7/4.8 line, so requests send `thinking: {type: "adaptive"}` and drop temperature.
+- Claude Fable exposed no `thinkingLevelMap`, so its `xhigh` and `max` effort tiers were invisible to `getSupportedThinkingLevels()` and `/thinking max` silently clamped to `high` (top-tier levels are only exposed when a model maps them explicitly). All 18 Fable routes now map `xhigh` -> effort `xhigh` and `max` -> effort `max`, matching Opus 4.7/4.8.
+- Claude Fable rejected every **thinking-off** turn with `400 "thinking.type.disabled" is not supported for this model`, so `claude-fable-5` / `claude-fable-5-1` failed whenever reasoning was not requested — the common default path. Fable always thinks adaptively, so the `thinking` field is now omitted for that family instead of sending an explicit disable. The new `supportsDisabledThinking` compat flag scopes this to Fable only: Opus 4.6/4.8, Opus 5, and Sonnet 5 are adaptive too but still accept an explicit disable, and dropping it there would have billed users for thinking they had turned off.
 - The spoofed Claude Code client version was pinned at 2.1.75 and had drifted into three separate copies (2.1.75 / 2.1.75 / 2.1.177). Anthropic gates newer models on that version, so `claude-fable-5-1` rejected every request with `400 claude_code_version_too_old`. The version now lives in one module (`CLAUDE_CODE_VERSION`) at 2.1.258.
 
 ## [0.98.1] - 2026-08-30

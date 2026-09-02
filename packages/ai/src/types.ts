@@ -496,6 +496,18 @@ export interface AnthropicMessagesCompat {
 	 * Default: false.
 	 */
 	forceAdaptiveThinking?: boolean;
+	/**
+	 * Whether the model accepts `thinking: { type: "disabled" }`.
+	 *
+	 * Claude Fable 5 / 5.1 reject it with HTTP 400 ("thinking.type.disabled is
+	 * not supported for this model; thinking defaults to adaptive mode when not
+	 * specified"), so a thinking-off turn must omit the field entirely. This is
+	 * narrower than {@link forceAdaptiveThinking}: Opus 4.6/4.8, Opus 5, and
+	 * Sonnet 5 are adaptive yet still accept an explicit disable, and silently
+	 * dropping it there would bill users for thinking they turned off.
+	 * Default: true.
+	 */
+	supportsDisabledThinking?: boolean;
 	/** Whether to replay empty thinking signatures as `signature: ""` instead of converting thinking to text. Default: false. */
 	allowEmptySignature?: boolean;
 }

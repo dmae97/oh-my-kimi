@@ -95,6 +95,9 @@ describe("Anthropic forceAdaptiveThinking compat override", () => {
 	});
 
 	it("preserves thinking.type=disabled when reasoning is off regardless of override", async () => {
+		// Adaptive thinking and disable support are independent: an adaptive model
+		// that still accepts an explicit disable must keep getting one, or a
+		// thinking-off turn would silently bill the user for thinking.
 		const payload = await capturePayload(makeCustomModel({ forceAdaptiveThinking: true }));
 
 		expect(payload.thinking).toEqual({ type: "disabled" });

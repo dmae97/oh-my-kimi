@@ -132,6 +132,26 @@ describe("Anthropic thinking disable payload", () => {
 		expect(payload.output_config).toBeUndefined();
 	});
 
+	// Fable is the only family that rejects an explicit disable: the live API
+	// answers `thinking.type.disabled` with HTTP 400, so the field must be
+	// omitted and the adaptive default used instead.
+	it.each(["claude-fable-5", "claude-fable-5-1"] as const)(
+		"omits thinking for %s when thinking is off",
+		async (modelId) => {
+			const payload = await capturePayload(getModel("anthropic", modelId));
+
+			expect(payload.thinking).toBeUndefined();
+			expect(payload.output_config).toBeUndefined();
+		},
+	);
+
+	it("still sends adaptive thinking for Fable when reasoning is enabled", async () => {
+		const payload = await capturePayload(getModel("anthropic", "claude-fable-5"), { reasoning: "medium" });
+
+		expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+		expect(payload.output_config).toEqual({ effort: "medium" });
+	});
+
 	it("uses adaptive thinking for Claude Opus 4.8 when reasoning is enabled", async () => {
 		const payload = await capturePayload(getModel("anthropic", "claude-opus-4-8"), { reasoning: "high" });
 
