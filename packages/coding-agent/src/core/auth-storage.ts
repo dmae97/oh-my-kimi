@@ -668,6 +668,7 @@ export class AuthStorage {
 	private async resolveOAuthTokenWithLock(
 		providerId: OAuthProviderId,
 		minRemainingMs = 0,
+		rejectedApiKey?: string,
 	): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
 		const provider = getOAuthProvider(providerId);
 		if (!provider) {
@@ -689,7 +690,7 @@ export class AuthStorage {
 			const account = accounts[accountIndex];
 			if (!account) return { result: null };
 
-			const resolved = await this.resolveAccountToken(provider, providerId, account, minRemainingMs);
+			const resolved = await this.resolveAccountToken(provider, providerId, account, minRemainingMs, rejectedApiKey);
 			if (!resolved) return { result: null };
 
 			if (resolved.newCredentials === account) {
@@ -711,21 +712,46 @@ export class AuthStorage {
 	}
 
 	/**
+	 * Force-refresh the selected account after the provider rejected `rejectedApiKey`.
+	 *
+	 * Local expiry is not the last word: ChatGPT/Codex answers `401 token_expired`
+	 * for a token whose JWT `exp` and our stored `expires` still lie days ahead
+	 * (server-side revocation, rotation from another login). Refreshing only on
+	 * the local clock would keep replaying the dead token until that date.
+	 *
+	 * Several omk processes share auth.json. If the stored token no longer equals
+	 * the rejected one, another process already rotated it and the current token
+	 * is returned without a second refresh, which would only burn the new refresh
+	 * token. A failed refresh propagates so the caller can ask for `/login`; the
+	 * credential is left in place for that login to replace.
+	 */
+	async refreshRejectedOAuthToken(providerId: OAuthProviderId, rejectedApiKey: string): Promise<string | undefined> {
+		return (await this.resolveOAuthTokenWithLock(providerId, 0, rejectedApiKey))?.apiKey;
+	}
+
+	/**
 	 * Token for one account, refreshing when it is expired or too close to it.
 	 *
 	 * Hard expiry must refresh, and a refresh failure there is fatal. A margin
 	 * miss is only a precaution: the token is still valid, so a failed proactive
-	 * refresh falls back to it instead of breaking a working session.
+	 * refresh falls back to it instead of breaking a working session. A token the
+	 * provider already rejected (`rejectedApiKey`) is refreshed unconditionally,
+	 * and that failure is fatal too.
 	 */
 	private async resolveAccountToken(
 		provider: OAuthProviderInterface,
 		providerId: OAuthProviderId,
 		account: OAuthCredentials,
 		minRemainingMs: number,
+		rejectedApiKey?: string,
 	): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
 		const now = Date.now();
 		if (now >= account.expires) {
 			return await getOAuthApiKey(providerId, { [providerId]: account });
+		}
+		if (rejectedApiKey !== undefined && provider.getApiKey(account) === rejectedApiKey) {
+			const refreshed = await provider.refreshToken(account);
+			return { apiKey: provider.getApiKey(refreshed), newCredentials: refreshed };
 		}
 		if (minRemainingMs > 0 && now + minRemainingMs >= account.expires) {
 			try {

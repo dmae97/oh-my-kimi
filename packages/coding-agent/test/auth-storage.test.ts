@@ -702,6 +702,90 @@ describe("AuthStorage", () => {
 			expect(authStorage.drainErrors()).toEqual([]);
 		});
 
+		test("force-refreshes a locally valid token the provider rejected as expired", async () => {
+			// ChatGPT/Codex answers 401 token_expired for a token whose JWT `exp` (and
+			// our stored `expires`) still lie days ahead. Local expiry alone would keep
+			// sending the dead token until that date.
+			const providerId = `test-oauth-rejected-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+			let refreshes = 0;
+			registerOAuthProvider({
+				id: providerId,
+				name: "Test Rejected Token Provider",
+				async login() {
+					throw new Error("Not used in this test");
+				},
+				async refreshToken(credentials) {
+					refreshes += 1;
+					return { ...credentials, access: `rotated-${refreshes}`, expires: Date.now() + 3_600_000 };
+				},
+				getApiKey(credentials) {
+					return credentials.access;
+				},
+			});
+			const account = { refresh: "r", access: "dead-but-locally-valid", expires: Date.now() + 6 * 86_400_000 };
+			authStorage = AuthStorage.inMemory({ [providerId]: { ...account, type: "oauth" } });
+
+			expect(await authStorage.getApiKey(providerId)).toBe("dead-but-locally-valid");
+			expect(await authStorage.refreshRejectedOAuthToken(providerId, "dead-but-locally-valid")).toBe("rotated-1");
+			expect(refreshes).toBe(1);
+			expect(await authStorage.getApiKey(providerId)).toBe("rotated-1");
+			const stored = authStorage.get(providerId);
+			if (stored?.type !== "oauth") throw new Error("Expected OAuth credentials");
+			expect(stored.access).toBe("rotated-1");
+		});
+
+		test("does not refresh again when another process already rotated the rejected token", async () => {
+			// Several omk processes share auth.json. If the token on disk no longer
+			// matches the one that was rejected, someone else already refreshed; a
+			// second refresh would only burn the new refresh token.
+			const providerId = `test-oauth-rejected-dedupe-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+			let refreshes = 0;
+			registerOAuthProvider({
+				id: providerId,
+				name: "Test Rejected Token Dedupe Provider",
+				async login() {
+					throw new Error("Not used in this test");
+				},
+				async refreshToken(credentials) {
+					refreshes += 1;
+					return { ...credentials, access: "should-not-happen", expires: Date.now() + 3_600_000 };
+				},
+				getApiKey(credentials) {
+					return credentials.access;
+				},
+			});
+			const account = { refresh: "r", access: "already-rotated", expires: Date.now() + 3_600_000 };
+			authStorage = AuthStorage.inMemory({ [providerId]: { ...account, type: "oauth" } });
+
+			expect(await authStorage.refreshRejectedOAuthToken(providerId, "old-rejected-token")).toBe("already-rotated");
+			expect(refreshes).toBe(0);
+		});
+
+		test("surfaces a failed forced refresh so the caller can ask for /login", async () => {
+			const providerId = `test-oauth-rejected-fail-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+			registerOAuthProvider({
+				id: providerId,
+				name: "Test Rejected Token Failure Provider",
+				async login() {
+					throw new Error("Not used in this test");
+				},
+				async refreshToken() {
+					throw new Error("refresh_token_reused");
+				},
+				getApiKey(credentials) {
+					return credentials.access;
+				},
+			});
+			const account = { refresh: "r", access: "dead", expires: Date.now() + 3_600_000 };
+			authStorage = AuthStorage.inMemory({ [providerId]: { ...account, type: "oauth" } });
+
+			await expect(authStorage.refreshRejectedOAuthToken(providerId, "dead")).rejects.toThrow(
+				/refresh_token_reused/,
+			);
+			// The dead credential stays so /login can replace it; nothing is dropped.
+			expect(authStorage.get(providerId)?.type).toBe("oauth");
+		});
+
 		test("keeps the legacy single-account storage shape until another account is added", async () => {
 			const providerId = `test-oauth-legacy-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 			registerOAuthProvider({

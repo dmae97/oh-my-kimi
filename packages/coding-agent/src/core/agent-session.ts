@@ -56,6 +56,7 @@ import {
 	stepCompactionHysteresis,
 } from "./compaction/hysteresis.ts";
 import {
+	type CompactionPreparation,
 	type CompactionResult,
 	calculateContextTokens,
 	collectEntriesForBranchSummary,
@@ -66,6 +67,7 @@ import {
 	prepareCompaction,
 	resolveCompactionModel,
 } from "./compaction/index.ts";
+import { summarizeWithOAuthRecovery } from "./compaction/oauth-recovery.ts";
 import { compactionEmitWillRetry } from "./compaction/resume-policy.ts";
 import { isSessionModelOverflow, shouldSkipCompactionCheck } from "./compaction-gate.ts";
 import {
@@ -3478,6 +3480,43 @@ export class AgentSession {
 	 * Used when the primary model's quota is exhausted (same-model retry is
 	 * useless until reset; another provider can still save the compaction).
 	 */
+	/**
+	 * Summarize for manual and automatic compaction alike. If the provider
+	 * rejects the OAuth token as expired despite a still-future stored expiry
+	 * (ChatGPT `401 token_expired`), the credential is force-refreshed once and
+	 * the summarization retried; the retry classifier rightly never replays a 401.
+	 */
+	private _summarizeCompaction(input: {
+		preparation: CompactionPreparation;
+		model: Model<Api>;
+		apiKey: string | undefined;
+		headers: Record<string, string> | undefined;
+		customInstructions?: string;
+		signal: AbortSignal;
+		reason: "manual" | "overflow" | "threshold";
+	}): Promise<CompactionResult> {
+		const { model } = input;
+		return summarizeWithOAuthRecovery({
+			apiKey: input.apiKey,
+			provider: model.provider,
+			refreshRejectedToken: (rejected) => this._modelRegistry.refreshRejectedOAuthToken(model, rejected),
+			run: (requestApiKey) =>
+				compact(
+					input.preparation,
+					model,
+					requestApiKey,
+					input.headers,
+					input.customInstructions,
+					input.signal,
+					this.thinkingLevel,
+					this.agent.streamFn,
+					this.settingsManager.getRetrySettings(),
+					this._summarizationRetryCallbacks({ source: "compaction", reason: input.reason }),
+					this._compactionFailoverModels(model),
+				),
+		});
+	}
+
 	private _compactionFailoverModels(primary: Model<Api>): Model<Api>[] {
 		const candidates = resolveFailoverCandidates(this.settingsManager.getProviderResilienceSettings());
 		const available = this._modelRegistry.getAvailable();
@@ -3501,13 +3540,16 @@ export class AgentSession {
 		this._compactionAbortController = new AbortController();
 		this._emit({ type: "compaction_start", reason: "manual" });
 		let committedCompaction = false;
+		// Hoisted so a failure is attributed to the model that actually summarized,
+		// which `compaction.model` may make different from the session model.
+		let compactionModel: Model<Api> | undefined;
 
 		try {
 			if (!this.model) {
 				throw new Error(formatNoModelSelectedMessage());
 			}
 
-			const compactionModel = this._resolveCompactionModel(this.model);
+			compactionModel = this._resolveCompactionModel(this.model);
 			const { apiKey, headers } = await this._getCompactionRequestAuth(compactionModel);
 
 			const settings = this.settingsManager.getCompactionSettings();
@@ -3558,20 +3600,15 @@ export class AgentSession {
 				tokensBefore = extensionCompaction.tokensBefore;
 				details = extensionCompaction.details;
 			} else {
-				// Generate compaction result
-				const result = await compact(
+				const result = await this._summarizeCompaction({
 					preparation,
-					compactionModel,
+					model: compactionModel,
 					apiKey,
 					headers,
 					customInstructions,
-					this._compactionAbortController.signal,
-					this.thinkingLevel,
-					this.agent.streamFn,
-					this.settingsManager.getRetrySettings(),
-					this._summarizationRetryCallbacks({ source: "compaction", reason: "manual" }),
-					this._compactionFailoverModels(compactionModel),
-				);
+					signal: this._compactionAbortController.signal,
+					reason: "manual",
+				});
 				summary = result.summary;
 				firstKeptEntryId = result.firstKeptEntryId;
 				tokensBefore = result.tokensBefore;
@@ -3625,7 +3662,11 @@ export class AgentSession {
 					message: terminationMessage(message, "Manual compaction failed."),
 					cause: { area: "compaction", code: compactionCode },
 					sideEffects: committedCompaction ? "confirmed" : "none",
-					...(this.model ? { provider: this.model.provider, model: this.model.id } : {}),
+					...(compactionModel
+						? { provider: compactionModel.provider, model: compactionModel.id }
+						: this.model
+							? { provider: this.model.provider, model: this.model.id }
+							: {}),
 				}),
 			);
 			this._emit({
@@ -3846,6 +3887,8 @@ export class AgentSession {
 
 		this._emit({ type: "compaction_start", reason });
 		this._autoCompactionAbortController = new AbortController();
+		// Hoisted so the failure message names the model that actually summarized.
+		let compactionModel: Model<Api> | undefined;
 
 		try {
 			if (!this.model) {
@@ -3859,7 +3902,7 @@ export class AgentSession {
 				return false;
 			}
 
-			const compactionModel = this._resolveCompactionModel(this.model);
+			compactionModel = this._resolveCompactionModel(this.model);
 			let apiKey: string | undefined;
 			let headers: Record<string, string> | undefined;
 			if (isBuiltinStreamFn(this.agent.streamFn)) {
@@ -3942,20 +3985,14 @@ export class AgentSession {
 				tokensBefore = extensionCompaction.tokensBefore;
 				details = extensionCompaction.details;
 			} else {
-				// Generate compaction result
-				const compactResult = await compact(
+				const compactResult = await this._summarizeCompaction({
 					preparation,
-					compactionModel,
+					model: compactionModel,
 					apiKey,
 					headers,
-					undefined,
-					this._autoCompactionAbortController.signal,
-					this.thinkingLevel,
-					this.agent.streamFn,
-					this.settingsManager.getRetrySettings(),
-					this._summarizationRetryCallbacks({ source: "compaction", reason }),
-					this._compactionFailoverModels(compactionModel),
-				);
+					signal: this._autoCompactionAbortController.signal,
+					reason,
+				});
 				summary = compactResult.summary;
 				firstKeptEntryId = compactResult.firstKeptEntryId;
 				tokensBefore = compactResult.tokensBefore;
@@ -4027,6 +4064,7 @@ export class AgentSession {
 			return willResume;
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : "compaction failed";
+			const modelLabel = compactionModel ? ` (${compactionModel.provider}/${compactionModel.id})` : "";
 			this._emit({
 				type: "compaction_end",
 				reason,
@@ -4035,8 +4073,8 @@ export class AgentSession {
 				willRetry: false,
 				errorMessage:
 					reason === "overflow"
-						? `Context overflow recovery failed: ${errorMessage}`
-						: `Auto-compaction failed: ${errorMessage}`,
+						? `Context overflow recovery failed${modelLabel}: ${errorMessage}`
+						: `Auto-compaction failed${modelLabel}: ${errorMessage}`,
 			});
 			return false;
 		} finally {

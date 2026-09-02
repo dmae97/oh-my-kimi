@@ -845,6 +845,17 @@ export class ModelRegistry {
 	}
 
 	/**
+	 * Force-refresh the model's OAuth credential after the provider rejected
+	 * `rejectedApiKey` as expired despite a still-future stored expiry. Resolves
+	 * with the replacement key, or `undefined` when the provider is not OAuth
+	 * authenticated (nothing to refresh). A failed refresh rejects.
+	 */
+	async refreshRejectedOAuthToken(model: Model<Api>, rejectedApiKey: string): Promise<string | undefined> {
+		if (this.authStorage.get(model.provider)?.type !== "oauth") return undefined;
+		return this.authStorage.refreshRejectedOAuthToken(model.provider, rejectedApiKey);
+	}
+
+	/**
 	 * Get API key and request headers for a model.
 	 */
 	async getApiKeyAndHeaders(model: Model<Api>, options?: { minRemainingMs?: number }): Promise<ResolvedRequestAuth> {
