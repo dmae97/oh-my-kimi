@@ -85,12 +85,24 @@ function reduceBegin(
 	};
 }
 
+/**
+ * Overflow recovery answers an observed overflow. It is legal only when the
+ * most recently closed attempt ended with `overflow`; otherwise the operation
+ * would sit in a stage from which no attempt can begin (index 0 must start
+ * from `preparing`, index > 0 needs a prior overflow) and could only settle.
+ */
+function lastAttemptOverflowed(state: ActiveState): boolean {
+	return state.attempts.at(-1)?.outcome === "overflow";
+}
+
 function isLegalStageMove(state: ActiveState, to: ActiveState["stage"]): boolean {
 	const from = state.stage;
 	const kind = state.operation.kind;
 	if (from === "attempt_running" && to === "save_point") return state.attempt !== undefined;
 	if (from === "save_point" && to === "attempt_running") return state.attempt !== undefined;
-	if (from === "preparing" && to === "recovering_overflow") return isPromptFamily(kind) && state.attempt === undefined;
+	if (from === "preparing" && to === "recovering_overflow") {
+		return isPromptFamily(kind) && state.attempt === undefined && lastAttemptOverflowed(state);
+	}
 	if (from === "preparing" && to === "structural_running") return !isPromptFamily(kind);
 	return from === "structural_running" && to === "committing";
 }
@@ -207,6 +219,17 @@ function reduceSettleBegin(
 	if (state.tag === "settling") return reject("invalid_transition", "Operation is already settling", state, command);
 	const current = expectCurrentOperation(state, command.operationId, command);
 	if (!current.ok) return current;
+	// Last line of defence against a silently orphaned attempt: an integration
+	// bug that drops `attempt_end` must fail loudly here, not settle an
+	// operation whose summary is missing a started attempt.
+	if (state.attempt !== undefined) {
+		return reject(
+			"attempt_mismatch",
+			`Cannot settle operation ${state.operation.operationId} while attempt ${state.attempt.attemptId} is active`,
+			state,
+			command,
+		);
+	}
 	return {
 		ok: true,
 		value: {

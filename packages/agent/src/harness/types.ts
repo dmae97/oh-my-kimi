@@ -1,5 +1,7 @@
 import type { ImageContent, Model, TextContent } from "omk-ai";
-import type { AgentEvent, AgentMessage, AgentTool, QueueMode, ThinkingLevel } from "../index.ts";
+// Imported from the defining module, not the package barrel: routing through
+// `../index.ts` would pull `agent-harness.ts` back in and close an import cycle.
+import type { AgentEvent, AgentMessage, AgentTool, QueueMode, ThinkingLevel } from "../types.ts";
 
 export {
 	AgentHarnessError,
@@ -845,5 +847,3 @@ export interface AgentHarnessOptions<
 	steeringMode?: QueueMode;
 	followUpMode?: QueueMode;
 }
-
-export type { AgentHarness } from "./agent-harness.ts";

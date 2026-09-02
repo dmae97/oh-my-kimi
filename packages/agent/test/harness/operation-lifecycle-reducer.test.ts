@@ -108,10 +108,17 @@ describe("reduceHarnessLifecycle legal transitions", () => {
 		expect(flagged).toMatchObject({ tag: "active", stage: "attempt_running", abortRequested: true });
 	});
 
-	it("settles from any active stage", () => {
-		const { state, opId } = activePromptRunning();
-		const settling = apply(state, { type: "settle_begin", operationId: opId, outcome: { status: "aborted" } });
+	it("settles from any active stage once no attempt is open", () => {
+		const { state, attemptRef, opId } = activePromptRunning();
+		const closed = endAttempt(state, attemptRef, "aborted");
+		const settling = apply(closed, { type: "settle_begin", operationId: opId, outcome: { status: "aborted" } });
 		expect(settling).toMatchObject({ tag: "settling", outcome: { status: "aborted" } });
+
+		const { state: structural, opId: structuralId } = activeStructural();
+		const running = apply(structural, { type: "stage", operationId: structuralId, stage: "structural_running" });
+		expect(apply(running, { type: "settle_begin", operationId: structuralId, outcome: COMPLETED })).toMatchObject({
+			tag: "settling",
+		});
 	});
 });
 
@@ -205,6 +212,29 @@ describe("reduceHarnessLifecycle violations", () => {
 		);
 	});
 
+	it("rejects recovering_overflow unless the last closed attempt overflowed", () => {
+		// Recovery is a response to an observed overflow. Entering it with no
+		// attempt yet, or after a completed/failed/aborted attempt, would leave the
+		// operation in a dead end where no attempt can legally begin.
+		const fresh = activePrompt();
+		const freshId = fresh.tag === "active" ? fresh.operation.operationId : "";
+		expect(violation(fresh, { type: "stage", operationId: freshId, stage: "recovering_overflow" }).code).toBe(
+			"invalid_transition",
+		);
+		for (const outcome of ["completed", "failed", "aborted"] as const) {
+			const { state, attemptRef, opId } = activePromptRunning();
+			const ended = endAttempt(state, attemptRef, outcome);
+			expect(violation(ended, { type: "stage", operationId: opId, stage: "recovering_overflow" }).code).toBe(
+				"invalid_transition",
+			);
+		}
+		const { state, attemptRef, opId } = activePromptRunning();
+		const overflowed = endAttempt(state, attemptRef, "overflow");
+		expect(
+			reduceHarnessLifecycle(overflowed, { type: "stage", operationId: opId, stage: "recovering_overflow" }).ok,
+		).toBe(true);
+	});
+
 	it("rejects prompt operations entering structural stages and vice versa", () => {
 		const prompt = activePrompt();
 		const promptId = prompt.tag === "active" ? prompt.operation.operationId : "";
@@ -247,6 +277,17 @@ describe("reduceHarnessLifecycle violations", () => {
 	it("rejects abort_request for another operation", () => {
 		const { state } = activePromptRunning();
 		expect(violation(state, { type: "abort_request", operationId: "op-other" }).code).toBe("stale_operation");
+	});
+
+	it("rejects settle_begin while an attempt is still active", () => {
+		// Last line of defence: an operation must never settle with a started
+		// attempt that was never closed, or its summary would silently lose it.
+		const { state, opId } = activePromptRunning();
+		const error = violation(state, { type: "settle_begin", operationId: opId, outcome: COMPLETED });
+		expect(error.code).toBe("attempt_mismatch");
+		// Rejection never mutates the input state.
+		expect(state).toMatchObject({ tag: "active", stage: "attempt_running" });
+		expect(state.tag === "active" && state.attempt?.attemptId).toBe(`${opId}:a0`);
 	});
 
 	it("rejects settle_finish before settling begins", () => {

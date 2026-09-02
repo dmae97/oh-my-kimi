@@ -62,23 +62,29 @@ function legalCommands(state: HarnessLifecycleState, context: WalkContext): Harn
 					attempt: { operationId: opId, attemptId: `${opId}:a0`, index: 0, reason: "initial", startedAtMs: 0 },
 				});
 			}
-			if (promptFamily && state.attempts.length > 0) {
+			// Recovery is legal only as a response to the last closed attempt overflowing.
+			if (promptFamily && state.attempts.at(-1)?.outcome === "overflow") {
 				commands.push({ type: "stage", operationId: opId, stage: "recovering_overflow" });
 			}
 			if (!promptFamily) commands.push({ type: "stage", operationId: opId, stage: "structural_running" });
 			return commands;
 		}
+		// An open attempt must be closed before settling, so `settle` is not a
+		// legal move from either attempt-open stage.
 		case "attempt_running":
 			return [
 				{ type: "stage", operationId: opId, stage: "save_point" },
 				{ type: "attempt_end", attemptId: `${opId}:a${state.attempts.length}`, outcome: "completed" },
 				{ type: "attempt_end", attemptId: `${opId}:a${state.attempts.length}`, outcome: "overflow" },
 				{ type: "attempt_end", attemptId: `${opId}:a${state.attempts.length}`, outcome: "aborted" },
-				settle,
 				abort,
 			];
 		case "save_point":
-			return [{ type: "stage", operationId: opId, stage: "attempt_running" }, settle, abort];
+			return [
+				{ type: "stage", operationId: opId, stage: "attempt_running" },
+				{ type: "attempt_end", attemptId: `${opId}:a${state.attempts.length}`, outcome: "completed" },
+				abort,
+			];
 		case "recovering_overflow":
 			return [
 				{
@@ -175,6 +181,8 @@ function assertStateShape(state: HarnessLifecycleState): void {
 function walk(choices: number[], injected: (HarnessLifecycleCommand | null)[]): HarnessLifecycleState {
 	let state = initialHarnessLifecycleState();
 	const context: WalkContext = { operationSeq: 1, attemptIndex: 0, settledIds: [] };
+	const startedAttempts: string[] = [];
+	const finishedAttempts: string[] = [];
 	for (let step = 0; step < choices.length; step += 1) {
 		const inject = injected[step];
 		const command =
@@ -194,7 +202,14 @@ function walk(choices: number[], injected: (HarnessLifecycleCommand | null)[]): 
 		state = next.value;
 		assertStateShape(state);
 		if (command.type === "begin") context.operationSeq += 1;
+		if (command.type === "attempt_begin") startedAttempts.push(command.attempt.attemptId);
+		if (command.type === "attempt_end") finishedAttempts.push(command.attemptId);
 		if (command.type === "settle_begin") {
+			// An accepted settle proves no attempt was left open, and that every
+			// attempt started so far was closed in the order it was started.
+			expect(before.tag).toBe("active");
+			if (before.tag === "active") expect(before.attempt).toBeUndefined();
+			expect(finishedAttempts).toEqual(startedAttempts);
 			expect(context.settledIds).not.toContain(command.operationId);
 			context.settledIds.push(command.operationId);
 		}

@@ -260,6 +260,50 @@ describe("AgentHarness session-write ordering properties", () => {
 		expect((await session.getEntries()).some((entry) => entry.type === "custom")).toBe(false);
 	});
 
+	it("does not let a later enqueue overtake an already reserved idle boundary", async () => {
+		// Given: storage that blocks the first idle write until released.
+		const persisted: string[] = [];
+		const releaseFirst = deferred();
+		let blocking = true;
+		const port = {
+			getStorage: () => ({ setLeafId: async () => undefined }),
+			appendMessage: async () => undefined,
+			appendThinkingLevelChange: async () => undefined,
+			appendModelChange: async () => undefined,
+			appendActiveToolsChange: async () => undefined,
+			appendCustomEntry: async (customType: string) => {
+				if (blocking) {
+					blocking = false;
+					await releaseFirst.promise;
+				}
+				persisted.push(customType);
+				return undefined;
+			},
+			appendCustomMessageEntry: async () => undefined,
+			appendLabel: async () => undefined,
+			appendSessionName: async () => undefined,
+			moveTo: async () => undefined,
+		};
+		const coordinator = new SessionWriteCoordinator<string>(port);
+
+		// When: B reserves its boundary while A is blocked, and only then is C enqueued.
+		const a = coordinator.persistAfterPending({ type: "custom", customType: "A" });
+		await Promise.resolve();
+		const b = coordinator.persistAfterPending({ type: "custom", customType: "B" });
+		coordinator.enqueue({ type: "custom", customType: "C" });
+		releaseFirst.resolve();
+		await a;
+		await b;
+
+		// Then: C was accepted after B's boundary, so it cannot precede B.
+		expect(persisted).toEqual(["A", "B"]);
+		expect(coordinator.hasPending()).toBe(true);
+
+		await coordinator.flush();
+		expect(persisted).toEqual(["A", "B", "C"]);
+		expect(coordinator.hasPending()).toBe(false);
+	});
+
 	it("keeps accepted pending writes ahead of a later idle write after persistence recovers", async () => {
 		const registration = registerFauxProvider();
 		registrations.push(registration);

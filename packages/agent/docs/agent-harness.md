@@ -29,7 +29,7 @@ The current split is:
 - high-level mutation/orchestration APIs such as `Session` and `AgentHarness` reject/throw instead of returning bare results that can be ignored
 - public `AgentHarness` failures are normalized to `AgentHarnessError` where practical; subsystem errors are preserved as `cause`
 
-Harness events observe committed state. Public mutators validate required input and persistence before committing when practical, then await notifications. If a hook or subscriber fails after commit, the state change is not rolled back and the public method rejects with `AgentHarnessError` code `"hook"`.
+Harness events observe committed state. Public mutators validate required input and persistence before committing when practical, then await notifications. If a hook or subscriber fails after commit, the state change is not rolled back and the public method rejects with `AgentHarnessError` code `"hook"`. Subscriber fan-out and its callback self-wait barrier live in `SubscriberFanout` (`src/harness/subscriber-fanout.ts`), a leaf the harness delegates to.
 
 ## State model
 
@@ -106,7 +106,7 @@ The following operations are allowed during an active operation where appropriat
 - `abort`
 - runtime config setters
 
-`steer` and `followUp` reject while the harness is idle or settling. `nextTurn` is always accepted. Config setters persist immediately outside an active operation and enqueue an immutable write during one.
+`steer` and `followUp` reject with `AgentHarnessError` code `"invalid_state"` while the harness is idle or settling, and also while a structural operation (`compact`, `navigateTree`) is active: those operations run no agent attempt, so nothing could consume the message and it would leak into the next prompt. `nextTurn` is always accepted. Config setters persist immediately outside an active operation and enqueue an immutable write during one.
 
 The deprecated `AgentHarnessPhase` union survives only as the session facade's write-gate vocabulary, mapped from lifecycle state: prompt-family operations gate as `"turn"`, structural operations as `"compaction"`/`"branch_summary"`, and `settling` gates as `"idle"` so settlement-listener writes persist after the final queue drain.
 

@@ -18,7 +18,7 @@ import type {
 	StreamFn,
 	ThinkingLevel,
 } from "../types.ts";
-import { collectEntriesForBranchSummary, generateBranchSummary } from "./compaction/branch-summarization.ts";
+import { collectEntriesForBranchSummary } from "./compaction/branch-summarization.ts";
 import {
 	compact,
 	DEFAULT_COMPACTION_SETTINGS,
@@ -35,18 +35,31 @@ import {
 	type OperationLease,
 	OperationLifecycleController,
 } from "./operation-lifecycle-controller.ts";
-import type {
-	HarnessAttemptOutcome,
-	HarnessAttemptReason,
-	HarnessOperationKind,
-	HarnessOperationOutcome,
+import {
+	type HarnessAttemptOutcome,
+	type HarnessAttemptReason,
+	type HarnessOperationKind,
+	type HarnessOperationOutcome,
+	PROMPT_FAMILY_KINDS,
 } from "./operation-lifecycle-types.ts";
+import {
+	classifyAssistantOutcome,
+	classifyAttemptFailure,
+	classifyAttemptOutcome,
+	classifyNavigateTreeOutcome,
+	combineBoundaryErrors,
+	normalizeHarnessError,
+	resolveOperationFailure,
+	resolveOperationOutcome,
+} from "./operation-outcome.ts";
 import { formatPromptTemplateInvocation } from "./prompt-templates.ts";
 import { uuidv7 } from "./session/uuid.ts";
 import { type QueuedSessionWrite, SessionWriteCoordinator } from "./session-write-coordinator.ts";
 import { formatSkillInvocation } from "./skills.ts";
 import { applyStreamOptionsPatch, cloneStreamOptions, mergeHeaders } from "./stream-options.ts";
+import { SubscriberFanout } from "./subscriber-fanout.ts";
 import { createSummarizationRetry } from "./summarization-retry.ts";
+import { resolveNavigationTarget, runBranchSummary } from "./tree-navigation.ts";
 import type {
 	AbortResult,
 	AgentHarnessEvent,
@@ -65,29 +78,9 @@ import type {
 	Session,
 	Skill,
 } from "./types.ts";
-import { AgentHarnessError, BranchSummaryError, CompactionError, SessionError, toError } from "./types.ts";
-
-const SUBSCRIBER_EVENT_TYPE = "*";
+import { AgentHarnessError, toError } from "./types.ts";
 
 type AgentHarnessHandler = (event: any, signal?: AbortSignal) => Promise<any> | any;
-
-/** Result-based outcome for prompt-family operations that resolve with a failure/abort assistant message. */
-function classifyAssistantOutcome(message: AssistantMessage): HarnessOperationOutcome | undefined {
-	if (message.stopReason === "aborted") return { status: "aborted" };
-	if (message.stopReason === "error") {
-		return { status: "failed", code: "provider", message: message.errorMessage ?? "Provider error" };
-	}
-	return undefined;
-}
-
-function normalizeHarnessError(error: unknown, fallbackCode: AgentHarnessError["code"]): AgentHarnessError {
-	if (error instanceof AgentHarnessError) return error;
-	const cause = toError(error);
-	if (cause instanceof SessionError) return new AgentHarnessError("session", cause.message, cause);
-	if (cause instanceof CompactionError) return new AgentHarnessError("compaction", cause.message, cause);
-	if (cause instanceof BranchSummaryError) return new AgentHarnessError("branch_summary", cause.message, cause);
-	return new AgentHarnessError(fallbackCode, cause.message, cause);
-}
 
 interface AgentHarnessTurnState<
 	TSkill extends Skill = Skill,
@@ -130,6 +123,7 @@ export class AgentHarness<
 	private followUpQueueMode: QueueMode;
 	private nextTurnQueue: AgentMessage[] = [];
 	private handlers = new Map<string, Set<AgentHarnessHandler>>();
+	private readonly subscribers = new SubscriberFanout<AgentHarnessEvent<TSkill, TPromptTemplate>>();
 
 	constructor(options: AgentHarnessOptions<TSkill, TPromptTemplate, TTool>) {
 		this.env = options.env;
@@ -164,23 +158,17 @@ export class AgentHarness<
 	}
 
 	private async emitOwn(event: AgentHarnessOwnEvent<TSkill, TPromptTemplate>, signal?: AbortSignal): Promise<void> {
-		for (const listener of this.handlers.get(SUBSCRIBER_EVENT_TYPE) ?? []) {
-			try {
-				await listener(event, signal);
-			} catch (error) {
-				throw normalizeHarnessError(error, "hook");
-			}
-		}
+		await this.emitAny(event as AgentHarnessEvent<TSkill, TPromptTemplate>, signal);
 	}
 
+	/** Subscriber fan-out; the self-wait barrier lives in `SubscriberFanout`. */
 	private async emitAny(event: AgentHarnessEvent<TSkill, TPromptTemplate>, signal?: AbortSignal): Promise<void> {
-		for (const listener of this.handlers.get(SUBSCRIBER_EVENT_TYPE) ?? []) {
-			try {
-				await listener(event, signal);
-			} catch (error) {
-				throw normalizeHarnessError(error, "hook");
-			}
-		}
+		await this.subscribers.emit(event, this.lifecycle.getCurrentOperation()?.operationId, signal);
+	}
+
+	/** Fail closed when an awaited listener tries to wait on its own operation. */
+	private rejectCurrentOperationSelfWait(api: string): void {
+		this.subscribers.assertNotSelfWait(api, this.lifecycle.getCurrentOperation()?.operationId);
 	}
 
 	private async emitHook<TType extends keyof AgentHarnessEventResultMap>(
@@ -281,33 +269,6 @@ export class AgentHarness<
 		}
 	}
 
-	private classifyOperationOutcome(bodyError: unknown, lease: OperationLease): HarnessOperationOutcome {
-		if (bodyError === undefined) return { status: "completed" };
-		if (lease.signal.aborted) return { status: "aborted" };
-		const normalized = normalizeHarnessError(bodyError, "unknown");
-		return { status: "failed", code: normalized.code, message: normalized.message };
-	}
-
-	private classifyAttemptOutcome(message: AssistantMessage, model: Model<any>): HarnessAttemptOutcome {
-		if (message.stopReason === "aborted") return "aborted";
-		if (isContextOverflow(message, model.contextWindow)) return "overflow";
-		if (message.stopReason === "error") return "failed";
-		return "completed";
-	}
-
-	private lastAttemptSummary(lease: OperationLease, attemptLease: AttemptLease) {
-		const summary = this.lifecycle
-			.getAttemptSummaries(lease)
-			.find((candidate) => candidate.attemptId === attemptLease.attempt.attemptId);
-		if (!summary) {
-			throw new AgentHarnessError(
-				"invalid_state",
-				`No summary recorded for attempt ${attemptLease.attempt.attemptId}`,
-			);
-		}
-		return summary;
-	}
-
 	/**
 	 * Single wrapper for every public operation: begin a lease, run the body,
 	 * then settle exactly once. The final flush and the `settled` event happen
@@ -320,10 +281,13 @@ export class AgentHarness<
 		classifyResult?: (result: T) => HarnessOperationOutcome | undefined,
 	): Promise<T> {
 		const lease = this.lifecycle.begin(kind);
-		await this.emitOwn({ type: "operation_started", operation: lease.operation });
 		let result: T | undefined;
 		let bodyError: unknown;
+		// Everything after a successful begin() runs inside one capture region. A
+		// throwing `operation_started` listener must not escape before settle(),
+		// or the lifecycle would stay active and wedge the harness at "busy".
 		try {
+			await this.emitOwn({ type: "operation_started", operation: lease.operation });
 			result = await body(lease);
 		} catch (error) {
 			bodyError = error;
@@ -336,18 +300,14 @@ export class AgentHarness<
 		} catch (error) {
 			flushError = error;
 		}
-		let outcome = this.classifyOperationOutcome(bodyError ?? flushError, lease);
-		if (bodyError === undefined && flushError === undefined) {
-			outcome =
-				classifyResult?.(result as T) ?? (lease.signal.aborted ? { status: "aborted" } : { status: "completed" });
-		}
-		if (bodyError !== undefined && flushError !== undefined) {
-			outcome = {
-				status: "failed",
-				code: "session",
-				message: "Operation failed and the final session flush failed",
-			};
-		}
+		const outcome = resolveOperationOutcome({
+			signalAborted: lease.signal.aborted,
+			result,
+			bodyError,
+			flushError,
+			classifyResult,
+			fallbackCode,
+		});
 		let settleError: unknown;
 		try {
 			await this.lifecycle.settle(lease, outcome, async () => {
@@ -365,27 +325,8 @@ export class AgentHarness<
 		} catch (error) {
 			settleError = error;
 		}
-		const primaryError = bodyError ?? flushError;
-		if (primaryError !== undefined && settleError !== undefined) {
-			const normalized = normalizeHarnessError(primaryError, fallbackCode);
-			const cause = new AggregateError(
-				[toError(primaryError), toError(settleError)],
-				"Operation failed and settlement failed",
-			);
-			throw new AgentHarnessError(normalized.code, cause.message, cause);
-		}
-		if (settleError !== undefined) throw normalizeHarnessError(settleError, "hook");
-		if (flushError !== undefined) {
-			if (bodyError !== undefined) {
-				const cause = new AggregateError(
-					[toError(bodyError), toError(flushError)],
-					"Operation failed and the final flush failed",
-				);
-				throw new AgentHarnessError("session", cause.message, cause);
-			}
-			throw normalizeHarnessError(flushError, "session");
-		}
-		if (bodyError !== undefined) throw normalizeHarnessError(bodyError, fallbackCode);
+		const failure = resolveOperationFailure({ bodyError, flushError, settleError, fallbackCode });
+		if (failure !== undefined) throw failure;
 		return result as T;
 	}
 
@@ -563,15 +504,28 @@ export class AgentHarness<
 			} catch (error) {
 				eventError = error;
 			}
+			// The flush runs even after a failing listener so accepted writes are
+			// not stranded; a failing flush must then report next to that listener
+			// error, not in place of it.
 			const hadPendingMutations = this.sessionWrites.hasPending();
-			await this.sessionWrites.flush();
+			let flushError: unknown;
+			try {
+				await this.sessionWrites.flush();
+			} catch (error) {
+				flushError = error;
+			}
 			if (lease) {
 				const snapshot = this.lifecycle.getSnapshot();
 				if (snapshot.tag === "active" && snapshot.stage === "attempt_running") {
 					this.lifecycle.setStage(lease, "save_point");
 				}
 			}
-			if (eventError) throw eventError;
+			const failure = combineBoundaryErrors(
+				[eventError, flushError],
+				"turn_end listener failed and the save-point flush failed",
+				"hook",
+			);
+			if (failure !== undefined) throw failure;
 			await this.emitOwn({ type: "save_point", hadPendingMutations });
 			return;
 		}
@@ -638,6 +592,59 @@ export class AgentHarness<
 		return await this.recoverContextOverflow(lease, result);
 	}
 
+	/**
+	 * Sole attempt boundary: begin, announce, run, classify, close, announce, flush.
+	 *
+	 * Once `beginAttempt()` succeeds the attempt is closed exactly once on every
+	 * path, so `count(attempt_started) == count(attempt_finished)` holds even when
+	 * the `attempt_started` observer throws. `attempt_finished` is emitted only
+	 * after the attempt is already closed, so a throwing observer can fail the
+	 * operation but can never reopen committed attempt state. The closing flush
+	 * is not a `finally`: a `finally` that awaits a throwing flush would replace
+	 * the body error, hiding the provider or listener failure from the audit trail.
+	 */
+	private async runAttempt<T>(
+		lease: OperationLease,
+		reason: HarnessAttemptReason,
+		body: (attempt: AttemptLease) => Promise<T>,
+		classify: (result: T) => HarnessAttemptOutcome,
+	): Promise<T> {
+		const attemptLease = this.lifecycle.beginAttempt(lease, reason);
+		let result: T | undefined;
+		let bodyError: unknown;
+		try {
+			await this.emitOwn({ type: "attempt_started", attempt: attemptLease.attempt }, lease.signal);
+			result = await body(attemptLease);
+		} catch (error) {
+			bodyError = error;
+		}
+		const outcome: HarnessAttemptOutcome =
+			bodyError === undefined ? classify(result as T) : classifyAttemptFailure(bodyError);
+		this.lifecycle.finishAttempt(lease, attemptLease, outcome);
+		let observerError: unknown;
+		try {
+			await this.emitOwn(
+				{ type: "attempt_finished", summary: this.lifecycle.getAttemptSummary(lease, attemptLease) },
+				lease.signal,
+			);
+		} catch (error) {
+			observerError = error;
+		}
+		let flushError: unknown;
+		try {
+			await this.sessionWrites.flush();
+		} catch (error) {
+			flushError = error;
+		}
+		const failure = combineBoundaryErrors(
+			[bodyError, observerError, flushError],
+			"Attempt failed and its attempt_finished reporting or closing flush failed",
+			"unknown",
+		);
+		if (failure !== undefined) throw failure;
+		return result as T;
+	}
+
 	private async executeAgentRun(
 		lease: OperationLease,
 		reason: HarnessAttemptReason,
@@ -645,66 +652,54 @@ export class AgentHarness<
 		context: AgentContext,
 		initialMessages?: AgentMessage[],
 	): Promise<AssistantMessage> {
-		const attemptLease = this.lifecycle.beginAttempt(lease, reason);
-		await this.emitOwn({ type: "attempt_started", attempt: attemptLease.attempt }, lease.signal);
 		let activeTurnState = turnState;
-		const signal = attemptLease.signal;
-		const getTurnState = () => activeTurnState;
-		const setTurnState = (nextTurnState: AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>) => {
-			activeTurnState = nextTurnState;
-		};
-		const completedMessages: AgentMessage[] = [];
-		const emit = async (event: AgentEvent): Promise<void> => {
-			if (event.type === "message_end") completedMessages.push(event.message);
-			await this.handleAgentEvent(event, signal, lease);
-		};
-		const runResultPromise = (async () => {
-			try {
-				const loopConfig = this.createLoopConfig(getTurnState, setTurnState, lease);
-				const streamFn = this.createStreamFn(getTurnState);
-				return initialMessages
-					? await runAgentLoop(initialMessages, context, loopConfig, emit, signal, streamFn)
-					: await runAgentLoopContinue(context, loopConfig, emit, signal, streamFn);
-			} catch (error) {
+		return await this.runAttempt(
+			lease,
+			reason,
+			async (attemptLease) => {
+				const signal = attemptLease.signal;
+				const getTurnState = () => activeTurnState;
+				const setTurnState = (nextTurnState: AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>) => {
+					activeTurnState = nextTurnState;
+				};
+				const completedMessages: AgentMessage[] = [];
+				const emit = async (event: AgentEvent): Promise<void> => {
+					if (event.type === "message_end") completedMessages.push(event.message);
+					await this.handleAgentEvent(event, signal, lease);
+				};
+				let newMessages: AgentMessage[];
 				try {
-					return await this.emitRunFailure(
-						activeTurnState.model,
-						error,
-						signal.aborted,
-						signal,
-						completedMessages,
-						lease,
-					);
-				} catch (failureError) {
-					const cause = new AggregateError(
-						[toError(error), toError(failureError)],
-						"Agent run failed and failure reporting failed",
-					);
-					throw new AgentHarnessError("unknown", cause.message, cause);
+					const loopConfig = this.createLoopConfig(getTurnState, setTurnState, lease);
+					const streamFn = this.createStreamFn(getTurnState);
+					newMessages = initialMessages
+						? await runAgentLoop(initialMessages, context, loopConfig, emit, signal, streamFn)
+						: await runAgentLoopContinue(context, loopConfig, emit, signal, streamFn);
+				} catch (error) {
+					try {
+						newMessages = await this.emitRunFailure(
+							activeTurnState.model,
+							error,
+							signal.aborted,
+							signal,
+							completedMessages,
+							lease,
+						);
+					} catch (failureError) {
+						const cause = new AggregateError(
+							[toError(error), toError(failureError)],
+							"Agent run failed and failure reporting failed",
+						);
+						throw new AgentHarnessError("unknown", cause.message, cause);
+					}
 				}
-			}
-		})();
-		try {
-			const newMessages = await runResultPromise;
-			for (let i = newMessages.length - 1; i >= 0; i--) {
-				const message = newMessages[i]!;
-				if (message.role === "assistant") {
-					this.lifecycle.finishAttempt(
-						lease,
-						attemptLease,
-						this.classifyAttemptOutcome(message, activeTurnState.model),
-					);
-					await this.emitOwn(
-						{ type: "attempt_finished", summary: this.lastAttemptSummary(lease, attemptLease) },
-						signal,
-					);
-					return message;
+				for (let i = newMessages.length - 1; i >= 0; i--) {
+					const message = newMessages[i]!;
+					if (message.role === "assistant") return message;
 				}
-			}
-			throw new AgentHarnessError("invalid_state", "AgentHarness prompt completed without an assistant message");
-		} finally {
-			await this.sessionWrites.flush();
-		}
+				throw new AgentHarnessError("invalid_state", "AgentHarness prompt completed without an assistant message");
+			},
+			(message) => classifyAttemptOutcome(message, activeTurnState.model.contextWindow),
+		);
 	}
 
 	/**
@@ -778,25 +773,43 @@ export class AgentHarness<
 	}
 
 	async promptFromTemplate(name: string, args: string[] = []): Promise<AssistantMessage> {
-		return this.runOperation("prompt_template", "unknown", async (lease) => {
-			const turnState = await this.createTurnState();
-			const template = (turnState.resources.promptTemplates ?? []).find((candidate) => candidate.name === name);
-			if (!template) throw new AgentHarnessError("invalid_argument", `Unknown prompt template: ${name}`);
-			return await this.executeTurn(lease, turnState, formatPromptTemplateInvocation(template, args));
-		});
+		return this.runOperation(
+			"prompt_template",
+			"unknown",
+			async (lease) => {
+				const turnState = await this.createTurnState();
+				const template = (turnState.resources.promptTemplates ?? []).find((candidate) => candidate.name === name);
+				if (!template) throw new AgentHarnessError("invalid_argument", `Unknown prompt template: ${name}`);
+				return await this.executeTurn(lease, turnState, formatPromptTemplateInvocation(template, args));
+			},
+			classifyAssistantOutcome,
+		);
+	}
+
+	/**
+	 * Steering and follow-up input is consumed only by a running agent attempt.
+	 * A structural operation (`compact`, `navigateTree`) runs none, so accepting
+	 * input there would silently inject it into an unrelated later prompt.
+	 */
+	private expectQueueConsumer(action: string): void {
+		const snapshot = this.lifecycle.getSnapshot();
+		if (snapshot.tag !== "active") throw new AgentHarnessError("invalid_state", `Cannot ${action} while idle`);
+		if (!PROMPT_FAMILY_KINDS.includes(snapshot.operation.kind)) {
+			throw new AgentHarnessError(
+				"invalid_state",
+				`Cannot ${action} during ${snapshot.operation.kind}: no agent attempt can consume it`,
+			);
+		}
 	}
 
 	async steer(text: string, options?: { images?: ImageContent[] }): Promise<void> {
-		const tag = this.lifecycle.getSnapshot().tag;
-		if (tag === "idle" || tag === "settling") throw new AgentHarnessError("invalid_state", "Cannot steer while idle");
+		this.expectQueueConsumer("steer");
 		this.steerQueue.push(createUserMessage(text, options?.images));
 		await this.emitQueueUpdate();
 	}
 
 	async followUp(text: string, options?: { images?: ImageContent[] }): Promise<void> {
-		const tag = this.lifecycle.getSnapshot().tag;
-		if (tag === "idle" || tag === "settling")
-			throw new AgentHarnessError("invalid_state", "Cannot follow up while idle");
+		this.expectQueueConsumer("follow up");
 		this.followUpQueue.push(createUserMessage(text, options?.images));
 		await this.emitQueueUpdate();
 	}
@@ -858,6 +871,7 @@ export class AgentHarness<
 				);
 		if (!compactResult.ok) throw compactResult.error;
 		const result = compactResult.value;
+		options.beforeCommit?.();
 		const entryId = await this.session.appendCompaction(
 			result.summary,
 			result.firstKeptEntryId,
@@ -884,7 +898,13 @@ export class AgentHarness<
 	async compact(customInstructions?: string): Promise<CompactResult> {
 		return this.runOperation("manual_compaction", "compaction", async (lease) => {
 			this.lifecycle.setStage(lease, "structural_running");
-			const result = await this.runCompaction({ automatic: false, customInstructions });
+			const result = await this.runCompaction({
+				automatic: false,
+				customInstructions,
+				beforeCommit: () => {
+					this.lifecycle.setStage(lease, "committing");
+				},
+			});
 			if (!result) throw new AgentHarnessError("compaction", "Nothing to compact");
 			return result;
 		});
@@ -894,98 +914,81 @@ export class AgentHarness<
 		targetId: string,
 		options?: { summarize?: boolean; customInstructions?: string; replaceInstructions?: boolean; label?: string },
 	): Promise<NavigateTreeResult> {
-		return this.runOperation("tree_navigation", "branch_summary", async (lease) => {
-			this.lifecycle.setStage(lease, "structural_running");
-			const oldLeafId = await this.session.getLeafId();
-			if (oldLeafId === targetId) return { cancelled: false };
-			const targetEntry = await this.session.getEntry(targetId);
-			if (!targetEntry) throw new AgentHarnessError("invalid_argument", `Entry ${targetId} not found`);
-			const { entries, commonAncestorId } = await collectEntriesForBranchSummary(this.session, oldLeafId, targetId);
-			const preparation = {
-				targetId,
-				oldLeafId,
-				commonAncestorId,
-				entriesToSummarize: entries,
-				userWantsSummary: options?.summarize ?? false,
-				customInstructions: options?.customInstructions,
-				replaceInstructions: options?.replaceInstructions,
-				label: options?.label,
-			};
-			const signal = new AbortController().signal;
-			const hookResult = await this.emitHook({ type: "session_before_tree", preparation, signal });
-			if (hookResult?.cancel) return { cancelled: true };
-			let summaryEntry: NavigateTreeResult["summaryEntry"];
-			let summaryText: string | undefined = hookResult?.summary?.summary;
-			let summaryDetails: unknown = hookResult?.summary?.details;
-			if (!summaryText && options?.summarize && entries.length > 0) {
-				const model = this.model;
-				if (!model) throw new AgentHarnessError("invalid_state", "No model set for branch summary");
-				const auth = await this.getApiKeyAndHeaders?.(model);
-				if (!auth) throw new AgentHarnessError("auth", "No auth available for branch summary");
-				const branchSummary = await generateBranchSummary(entries, {
-					model,
-					apiKey: auth.apiKey,
-					headers: auth.headers,
-					signal: new AbortController().signal,
-					customInstructions: hookResult?.customInstructions ?? options?.customInstructions,
-					replaceInstructions: hookResult?.replaceInstructions ?? options?.replaceInstructions,
-					...createSummarizationRetry("branch_summary", this.streamOptions.summarizationRetry, (event) =>
-						this.emitOwn(event),
-					),
-				});
-				if (!branchSummary.ok) {
-					if (branchSummary.error.code === "aborted") return { cancelled: true };
-					throw new AgentHarnessError("branch_summary", branchSummary.error.message, branchSummary.error);
-				}
-				summaryText = branchSummary.value.summary;
-				summaryDetails = {
-					readFiles: branchSummary.value.readFiles,
-					modifiedFiles: branchSummary.value.modifiedFiles,
+		return this.runOperation(
+			"tree_navigation",
+			"branch_summary",
+			async (lease) => {
+				this.lifecycle.setStage(lease, "structural_running");
+				const oldLeafId = await this.session.getLeafId();
+				// No-op navigation mutates nothing, so it completes without ever
+				// entering the `committing` stage.
+				if (oldLeafId === targetId) return { cancelled: false };
+				const targetEntry = await this.session.getEntry(targetId);
+				if (!targetEntry) throw new AgentHarnessError("invalid_argument", `Entry ${targetId} not found`);
+				const { entries, commonAncestorId } = await collectEntriesForBranchSummary(
+					this.session,
+					oldLeafId,
+					targetId,
+				);
+				const preparation = {
+					targetId,
+					oldLeafId,
+					commonAncestorId,
+					entriesToSummarize: entries,
+					userWantsSummary: options?.summarize ?? false,
+					customInstructions: options?.customInstructions,
+					replaceInstructions: options?.replaceInstructions,
+					label: options?.label,
 				};
-			}
-			let editorText: string | undefined;
-			let newLeafId: string | null;
-			if (targetEntry.type === "message" && targetEntry.message.role === "user") {
-				newLeafId = targetEntry.parentId;
-				const content = targetEntry.message.content;
-				editorText =
-					typeof content === "string"
-						? content
-						: content
-								.filter((c): c is { readonly type: "text"; readonly text: string } => c.type === "text")
-								.map((c) => c.text)
-								.join("");
-			} else if (targetEntry.type === "custom_message") {
-				newLeafId = targetEntry.parentId;
-				editorText =
-					typeof targetEntry.content === "string"
-						? targetEntry.content
-						: targetEntry.content
-								.filter((c): c is { readonly type: "text"; readonly text: string } => c.type === "text")
-								.map((c) => c.text)
-								.join("");
-			} else {
-				newLeafId = targetId;
-			}
-			const summaryId = await this.session.moveTo(
-				newLeafId,
-				summaryText
-					? { summary: summaryText, details: summaryDetails, fromHook: hookResult?.summary !== undefined }
-					: undefined,
-			);
-			if (summaryId) {
-				const entry = await this.session.getEntry(summaryId);
-				if (entry?.type === "branch_summary") summaryEntry = entry;
-			}
-			await this.emitOwn({
-				type: "session_tree",
-				newLeafId: await this.session.getLeafId(),
-				oldLeafId,
-				summaryEntry,
-				fromHook: hookResult?.summary !== undefined,
-			});
-			return { cancelled: false, editorText, summaryEntry };
-		});
+				const signal = new AbortController().signal;
+				const hookResult = await this.emitHook({ type: "session_before_tree", preparation, signal });
+				if (hookResult?.cancel) return { cancelled: true };
+				let summaryEntry: NavigateTreeResult["summaryEntry"];
+				let summaryText: string | undefined = hookResult?.summary?.summary;
+				let summaryDetails: unknown = hookResult?.summary?.details;
+				if (!summaryText && options?.summarize && entries.length > 0) {
+					const model = this.model;
+					if (!model) throw new AgentHarnessError("invalid_state", "No model set for branch summary");
+					const auth = await this.getApiKeyAndHeaders?.(model);
+					if (!auth) throw new AgentHarnessError("auth", "No auth available for branch summary");
+					const branchSummary = await runBranchSummary({
+						entries,
+						model,
+						apiKey: auth.apiKey,
+						headers: auth.headers,
+						customInstructions: hookResult?.customInstructions ?? options?.customInstructions,
+						replaceInstructions: hookResult?.replaceInstructions ?? options?.replaceInstructions,
+						summarizationRetry: this.streamOptions.summarizationRetry,
+						emit: (event) => this.emitOwn(event),
+					});
+					if (branchSummary.cancelled) return { cancelled: true };
+					summaryText = branchSummary.summary;
+					summaryDetails = branchSummary.details;
+				}
+				const { newLeafId, editorText } = resolveNavigationTarget(targetEntry, targetId);
+				// Single declared commit point of a tree navigation.
+				this.lifecycle.setStage(lease, "committing");
+				const summaryId = await this.session.moveTo(
+					newLeafId,
+					summaryText
+						? { summary: summaryText, details: summaryDetails, fromHook: hookResult?.summary !== undefined }
+						: undefined,
+				);
+				if (summaryId) {
+					const entry = await this.session.getEntry(summaryId);
+					if (entry?.type === "branch_summary") summaryEntry = entry;
+				}
+				await this.emitOwn({
+					type: "session_tree",
+					newLeafId: await this.session.getLeafId(),
+					oldLeafId,
+					summaryEntry,
+					fromHook: hookResult?.summary !== undefined,
+				});
+				return { cancelled: false, editorText, summaryEntry };
+			},
+			classifyNavigateTreeOutcome,
+		);
 	}
 
 	getModel(): Model<any> {
@@ -1117,6 +1120,9 @@ export class AgentHarness<
 	}
 
 	async abort(): Promise<AbortResult> {
+		// Aborting awaits the captured operation's settlement, so a listener of that
+		// same operation must never reach the wait below.
+		this.rejectCurrentOperationSelfWait("abort()");
 		const snapshot = this.lifecycle.getSnapshot();
 		if (snapshot.tag === "active" && snapshot.operation.kind === "manual_compaction") {
 			throw new AgentHarnessError("invalid_state", "Cannot abort during compaction");
@@ -1153,6 +1159,7 @@ export class AgentHarness<
 	}
 
 	async waitForIdle(): Promise<void> {
+		this.rejectCurrentOperationSelfWait("waitForIdle()");
 		// Delegates to the lifecycle: resolves once no operation is active or settling.
 		await this.lifecycle.waitForIdle();
 	}
@@ -1160,13 +1167,7 @@ export class AgentHarness<
 	subscribe(
 		listener: (event: AgentHarnessEvent<TSkill, TPromptTemplate>, signal?: AbortSignal) => Promise<void> | void,
 	): () => void {
-		let handlers = this.handlers.get(SUBSCRIBER_EVENT_TYPE);
-		if (!handlers) {
-			handlers = new Set();
-			this.handlers.set(SUBSCRIBER_EVENT_TYPE, handlers);
-		}
-		handlers.add(listener as AgentHarnessHandler);
-		return () => handlers!.delete(listener as AgentHarnessHandler);
+		return this.subscribers.subscribe(listener);
 	}
 
 	on<TType extends keyof AgentHarnessEventResultMap>(

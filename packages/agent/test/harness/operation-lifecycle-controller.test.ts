@@ -93,6 +93,33 @@ describe("OperationLifecycleController begin and settle", () => {
 		expect(order).toEqual(["finalize:settling", "after:idle"]);
 	});
 
+	it("does not wedge after a rejected settle_begin: the operation can still settle once the attempt closes", async () => {
+		const { controller } = makeController();
+		const lease = controller.begin("prompt");
+		const attempt = controller.beginAttempt(lease, "initial");
+		const idleWait = controller.waitForIdle();
+		let finalized = 0;
+		// The reducer refuses to settle while an attempt is open. That refusal is
+		// not a settlement: the controller must not remember it as one.
+		await expect(
+			controller.settle(lease, COMPLETED, async () => {
+				finalized += 1;
+			}),
+		).rejects.toMatchObject({ code: "invalid_state" });
+		expect(finalized).toBe(0);
+		expect(controller.getSnapshot()).toMatchObject({ tag: "active", stage: "attempt_running" });
+		controller.finishAttempt(lease, attempt, "completed");
+		await expect(
+			controller.settle(lease, COMPLETED, async () => {
+				finalized += 1;
+			}),
+		).resolves.toEqual(COMPLETED);
+		expect(finalized).toBe(1);
+		expect(controller.getSnapshot()).toEqual({ tag: "idle", lastSequence: 1 });
+		await expect(lease.settled).resolves.toEqual(COMPLETED);
+		await idleWait;
+	});
+
 	it("rejects settle when the finalizer fails but still releases state and resolves the lease", async () => {
 		const { controller } = makeController();
 		const lease = controller.begin("prompt");

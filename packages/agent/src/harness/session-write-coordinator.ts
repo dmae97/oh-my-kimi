@@ -37,9 +37,23 @@ interface SessionWritePort<TMessage> {
 	moveTo(targetId: string | null): Promise<unknown>;
 }
 
-/** Owns ordered pending writes and serializes coordinator-routed persistence. */
+/** A queued write tagged with the monotonic order in which it was accepted. */
+interface SequencedSessionWrite<TMessage> {
+	readonly sequence: number;
+	readonly write: QueuedSessionWrite<TMessage>;
+}
+
+/**
+ * Owns ordered pending writes and serializes coordinator-routed persistence.
+ *
+ * Persistence follows *acceptance* order, not the queue contents observed when
+ * a boundary finally runs. Each boundary captures a watermark at invocation
+ * time and drains only writes accepted at or before it, so a write enqueued
+ * after an idle boundary was reserved can never overtake it.
+ */
 export class SessionWriteCoordinator<TMessage> {
-	private readonly pendingWrites: QueuedSessionWrite<TMessage>[] = [];
+	private readonly pendingWrites: SequencedSessionWrite<TMessage>[] = [];
+	private nextSequence = 1;
 	private operationTail?: Promise<void>;
 	private invokingOperation = false;
 	private readonly session: SessionWritePort<TMessage>;
@@ -49,7 +63,7 @@ export class SessionWriteCoordinator<TMessage> {
 	}
 
 	enqueue(write: QueuedSessionWrite<TMessage>): void {
-		this.pendingWrites.push(createImmutableSnapshot(write));
+		this.pendingWrites.push({ sequence: this.nextSequence++, write: createImmutableSnapshot(write) });
 	}
 
 	hasPending(): boolean {
@@ -57,30 +71,42 @@ export class SessionWriteCoordinator<TMessage> {
 	}
 
 	snapshot(): readonly QueuedSessionWrite<TMessage>[] {
-		return createImmutableSnapshot(this.pendingWrites);
+		// Each queued write was frozen on acceptance, so exposing them needs no clone.
+		return Object.freeze(this.pendingWrites.map((entry) => entry.write));
 	}
 
 	async flush(): Promise<void> {
-		await this.serialize(async () => await this.flushPending());
+		const acceptedThrough = this.nextSequence - 1;
+		await this.serialize(async () => await this.flushPendingThrough(acceptedThrough));
 	}
 
 	async persistAfterPending(write: QueuedSessionWrite<TMessage>): Promise<void> {
 		const snapshot = createImmutableSnapshot(write);
-		await this.serialize(async () => await this.flushPending(snapshot));
+		// Reserve the boundary now: only writes already accepted precede this one.
+		const acceptedThrough = this.nextSequence - 1;
+		await this.serialize(async () => {
+			await this.flushPendingThrough(acceptedThrough);
+			await this.persistIdleWrite(snapshot);
+		});
 	}
 
-	private async flushPending(persistAfter?: QueuedSessionWrite<TMessage>): Promise<void> {
+	/** Drains queued writes up to `acceptedThrough`; a failed head stays at the head. */
+	private async flushPendingThrough(acceptedThrough: number): Promise<void> {
 		while (this.pendingWrites.length > 0) {
-			const write = this.pendingWrites[0];
-			if (write === undefined) return;
-			await this.persist(write);
+			const head = this.pendingWrites[0];
+			if (head === undefined || head.sequence > acceptedThrough) return;
+			await this.persist(head.write);
 			this.pendingWrites.shift();
 		}
-		if (persistAfter?.type === "leaf") {
-			await this.session.moveTo(persistAfter.targetId);
-		} else if (persistAfter) {
-			await this.persist(persistAfter);
+	}
+
+	/** Idle leaf moves keep the summarizing `Session.moveTo()` path. */
+	private async persistIdleWrite(write: QueuedSessionWrite<TMessage>): Promise<void> {
+		if (write.type === "leaf") {
+			await this.session.moveTo(write.targetId);
+			return;
 		}
+		await this.persist(write);
 	}
 
 	private async persist(write: QueuedSessionWrite<TMessage>): Promise<void> {

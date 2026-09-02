@@ -18,6 +18,7 @@
  * so callers cannot strand an unhandled rejection by ignoring `lease.settled`.
  */
 
+import { createImmutableSnapshot } from "../plain-data.ts";
 import { AgentHarnessError } from "./errors.ts";
 import { initialHarnessLifecycleState, reduceHarnessLifecycle } from "./operation-lifecycle-reducer.ts";
 import type {
@@ -59,9 +60,27 @@ interface OperationRecord {
 	resolveSettled: (outcome: HarnessOperationOutcome) => void;
 }
 
+/**
+ * Deep-freeze a reducer-produced state in place.
+ *
+ * Operation and attempt refs are already frozen at creation, and the reducer
+ * allocates fresh state objects per transition, so this is O(attempts) per
+ * transition rather than a clone. That keeps `getSnapshot()` free to hand out
+ * the live reference: `readonly` is compile-time only, but a frozen object
+ * resists `Reflect.set` from extension code at runtime too.
+ */
+function freezeLifecycleState(state: HarnessLifecycleState): HarnessLifecycleState {
+	if (state.tag !== "idle") {
+		for (const settled of state.attempts) Object.freeze(settled);
+		Object.freeze(state.attempts);
+	}
+	if (state.tag === "settling") Object.freeze(state.outcome);
+	return Object.freeze(state);
+}
+
 export class OperationLifecycleController {
 	private readonly deps: HarnessLifecycleDependencies;
-	private state: HarnessLifecycleState = initialHarnessLifecycleState();
+	private state: HarnessLifecycleState = freezeLifecycleState(initialHarnessLifecycleState());
 	private current?: OperationRecord;
 	private readonly idleWaiters = new Set<() => void>();
 
@@ -79,12 +98,14 @@ export class OperationLifecycleController {
 
 	begin(kind: HarnessOperationKind): OperationLease {
 		const sequence = this.state.tag === "idle" ? this.state.lastSequence + 1 : -1;
-		const operation: HarnessOperationRef = {
+		// Frozen once here so every downstream copy — lease, getters, and event
+		// payloads — shares one identity no listener can rewrite.
+		const operation = createImmutableSnapshot<HarnessOperationRef>({
 			operationId: this.deps.createOperationId(),
 			sequence,
 			kind,
 			startedAtMs: this.deps.now(),
-		};
+		});
 		this.apply({ type: "begin", operation });
 		const controller = new AbortController();
 		let resolveSettled: (outcome: HarnessOperationOutcome) => void = () => undefined;
@@ -104,13 +125,13 @@ export class OperationLifecycleController {
 	beginAttempt(lease: OperationLease, reason: HarnessAttemptRef["reason"]): AttemptLease {
 		const record = this.expectCurrentLease(lease);
 		const active = this.expectActive();
-		const attempt: HarnessAttemptRef = {
+		const attempt = createImmutableSnapshot<HarnessAttemptRef>({
 			operationId: lease.operation.operationId,
 			attemptId: `${lease.operation.operationId}:a${active.attempts.length}`,
 			index: active.attempts.length,
 			reason,
 			startedAtMs: this.deps.now(),
-		};
+		});
 		this.apply({ type: "attempt_begin", attempt });
 		record.attemptFinishTimes.delete(attempt.attemptId);
 		return { attempt, signal: lease.signal };
@@ -150,8 +171,12 @@ export class OperationLifecycleController {
 		if (record.settleStarted) {
 			throw new AgentHarnessError("invalid_state", `Operation ${lease.operation.operationId} is already settling`);
 		}
-		record.settleStarted = true;
+		// A rejected settle_begin (e.g. an attempt still open) is not a settlement.
+		// Marking it as one would wedge the operation: every later settle() would
+		// report "already settling" while the state never left `active`, and
+		// `lease.settled` plus every waitForIdle() waiter would hang forever.
 		this.apply({ type: "settle_begin", operationId: lease.operation.operationId, outcome });
+		record.settleStarted = true;
 		let finalizeError: unknown;
 		try {
 			await finalize();
@@ -183,6 +208,16 @@ export class OperationLifecycleController {
 		}));
 	}
 
+	/** The recorded summary for one attempt of the current operation. */
+	getAttemptSummary(lease: OperationLease, attempt: AttemptLease): HarnessAttemptSummary {
+		const attemptId = attempt.attempt.attemptId;
+		const summary = this.getAttemptSummaries(lease).find((candidate) => candidate.attemptId === attemptId);
+		if (summary === undefined) {
+			throw new AgentHarnessError("invalid_state", `No summary recorded for attempt ${attemptId}`);
+		}
+		return summary;
+	}
+
 	async waitForIdle(): Promise<void> {
 		if (this.state.tag === "idle") return;
 		await new Promise<void>((resolve) => {
@@ -211,7 +246,7 @@ export class OperationLifecycleController {
 	private apply(command: HarnessLifecycleCommand): void {
 		const next = reduceHarnessLifecycle(this.state, command);
 		if (!next.ok) throw this.asHarnessError(next.error);
-		this.state = next.value;
+		this.state = freezeLifecycleState(next.value);
 	}
 
 	private asHarnessError(violation: HarnessLifecycleViolation): AgentHarnessError {

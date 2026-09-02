@@ -107,12 +107,22 @@ configuration setters, which is why the facade no longer declares them.
 
 ### 4.1 Queue discipline
 
-`enqueue(write)` snapshots the write (section 6.1) and appends it to
-`pendingWrites`. `flush()` drains the queue strictly head-first: the head is
-persisted, and only after that persistence resolves is it removed with
-`shift()`. Removal is therefore acknowledgement-gated rather than
-fire-and-forget, and within a single process no accepted write is persisted
-twice by the coordinator itself.
+`enqueue(write)` snapshots the write (section 6.1), tags it with a monotonic
+acceptance `sequence`, and appends it to `pendingWrites`. `flush()` drains the
+queue strictly head-first: the head is persisted, and only after that
+persistence resolves is it removed with `shift()`. Removal is therefore
+acknowledgement-gated rather than fire-and-forget, and within a single process
+no accepted write is persisted twice by the coordinator itself.
+
+Ordering follows *acceptance*, not the queue contents observed when a boundary
+finally runs:
+
+```text
+accept(A) < accept(B) < accept(C)  =>  persist(A) < persist(B) < persist(C)
+```
+
+The one documented exception is deferred active-turn writes, which do not begin
+persisting until an explicit flush boundary.
 
 This is not yet an exactly-once durability guarantee. It holds only while the
 storage adapter honors the implication "a rejected append means nothing was
@@ -138,13 +148,25 @@ does not wedge the chain, and the next serialized operation still starts.
 
 ### 4.3 Empty-boundary reservation
 
-`persistAfterPending(write)` snapshots the idle write, then serializes
-"drain the queue, then persist this write". Because the boundary is reserved
-synchronously at invocation time, an idle write invoked first owns its
-boundary even when a later `enqueue` happens in the same tick or the next
-microtask: the queued write lands behind the already-scheduled boundary and
-is persisted by a later flush. The property tests cover both the synchronous
-and the `queueMicrotask` interleavings.
+`persistAfterPending(write)` snapshots the idle write, captures the current
+acceptance watermark (`nextSequence - 1`), then serializes "drain everything
+accepted at or before that watermark, then persist this write". `flush()`
+captures a watermark the same way.
+
+The watermark is what makes the reservation real. Serializing alone fixes only
+the *order boundaries run in*, not the *set each one drains*: a boundary that
+re-read the whole queue at execution time would sweep up writes accepted after
+it was reserved. Concretely, with A blocked in storage:
+
+```text
+A blocked -> B reserves boundary -> C enqueued -> A resolves
+persist order: A, B          C persists at a later flush
+```
+
+Because C's sequence exceeds B's watermark, C cannot be pulled into B's
+boundary and persist ahead of it. Pinned by the A/B/C regression and the
+ordering properties in section 9. The property tests also cover the synchronous
+and `queueMicrotask` enqueue interleavings.
 
 Within the boundary, `leaf` is special-cased: an idle leaf write goes through
 `session.moveTo(targetId)` (which updates live session state in addition to
@@ -283,7 +305,11 @@ no accepted write outlives the moment its meaning changes:
 
 `turn_end` ordering is deliberate: extension errors are captured first, the
 flush runs, and only then is the captured error rethrown — a failing listener
-cannot strand accepted writes.
+cannot strand accepted writes. When the flush fails as well, both causes are
+rethrown together as one `AggregateError` classified by the listener failure;
+the same rule applies to the attempt-closing flush in `runAttempt()`, which
+is deliberately not a `finally` because a `finally` that awaits a throwing
+flush would replace the body error it followed.
 
 ## 8. Contracts
 
