@@ -149,20 +149,22 @@ function exactArray(value: unknown, label: string): unknown[] {
 	return snapshot;
 }
 
+/** Scope producers filter with this so one stray dirty entry cannot poison every receipt. */
+export function isNormalizedArtifactPath(path: unknown): path is string {
+	return (
+		typeof path === "string" &&
+		path.length > 0 &&
+		!path.includes("\0") &&
+		!path.includes("\\") &&
+		!isAbsolute(path) &&
+		!win32.isAbsolute(path) &&
+		posix.normalize(path) === path &&
+		!path.split("/").some((segment) => segment === "" || segment === "." || segment === "..")
+	);
+}
+
 function assertNormalizedArtifactPath(path: unknown, label = "artifact path"): asserts path is string {
-	if (
-		typeof path !== "string" ||
-		path.length === 0 ||
-		path.includes("\0") ||
-		path.includes("\\") ||
-		isAbsolute(path) ||
-		win32.isAbsolute(path) ||
-		path === "." ||
-		posix.normalize(path) !== path ||
-		path.split("/").some((segment) => segment === "" || segment === "." || segment === "..")
-	) {
-		throw new Error(`${label} must be a normalized root-relative path`);
-	}
+	if (!isNormalizedArtifactPath(path)) throw new Error(`${label} must be a normalized root-relative path`);
 }
 
 function assertSortedUniquePaths(paths: readonly string[], label: string): void {

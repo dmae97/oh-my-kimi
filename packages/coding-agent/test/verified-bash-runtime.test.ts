@@ -72,6 +72,27 @@ describe("resolveSessionWorkspaceScope", () => {
 		expect(captureWorkspaceFingerprint(scope).kind).toBe("git");
 	});
 
+	it("skips dirty entries that can never be a normalized artifact path", () => {
+		execFileSync("git", ["init", "-q"], { cwd: root });
+		execFileSync("git", ["config", "user.email", "scope@test.invalid"], { cwd: root });
+		execFileSync("git", ["config", "user.name", "scope"], { cwd: root });
+		writeFileSync(join(root, "tracked.txt"), "v1\n");
+		execFileSync("git", ["add", "."], { cwd: root });
+		execFileSync("git", ["commit", "-qm", "init"], { cwd: root });
+		// A mangled Windows UNC path (`\\wsl.localhost\...` with separators collapsed)
+		// once landed in a repo root as a literal backslash directory. Its files are
+		// real dirty entries, but `captureWorkspaceFingerprint` rejects any path
+		// containing a backslash, which previously killed every verified bash call.
+		mkdirSync(join(root, "\\wsl.localhostUbuntu", ".omk"), { recursive: true });
+		writeFileSync(join(root, "\\wsl.localhostUbuntu", ".omk", "cache.json"), "{}\n");
+		writeFileSync(join(root, "untracked.txt"), "new\n");
+
+		const scope = resolveSessionWorkspaceScope(root);
+		expect(scope.artifactPaths).toEqual(["untracked.txt"]);
+		expect(() => captureWorkspaceFingerprint(scope)).not.toThrow();
+		expect(captureWorkspaceFingerprint(scope).kind).toBe("git");
+	});
+
 	it("skips untracked nested repositories (trailing-slash survivors)", () => {
 		execFileSync("git", ["init", "-q"], { cwd: root });
 		execFileSync("git", ["config", "user.email", "scope@test.invalid"], { cwd: root });
