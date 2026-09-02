@@ -129,6 +129,16 @@ const DISABLED_ENV_VALUES = new Set(["0", "false", "off", "disable", "disabled"]
 const MAX_OVERFLOW_RECOVERY_ATTEMPTS = 2;
 const OVERFLOW_RECOVERY_EMERGENCY_TOKENS = 4_096;
 const MAX_RESOURCE_OBSERVATION_JOURNALS = 32;
+/**
+ * Token headroom demanded before a compaction run.
+ *
+ * Compaction resolves auth once and then reuses that token for a summarization
+ * that can stream for minutes and be retried with backoff. A token accepted
+ * with only seconds of validity left comes back as a provider 401 mid-run
+ * ("authentication token is expired"), which reads as a compaction failure.
+ * Refreshing up front is cheap; failing a long compaction is not.
+ */
+const COMPACTION_MIN_TOKEN_VALIDITY_MS = 10 * 60 * 1000;
 
 function isDisabledEnvValue(value: string | undefined): boolean {
 	return value !== undefined && DISABLED_ENV_VALUES.has(value.trim().toLowerCase());
@@ -1121,11 +1131,14 @@ export class AgentSession {
 		return this._bashRuntime.sandboxPreflight(override);
 	}
 
-	private async _getRequiredRequestAuth(model: Model<any>): Promise<{
+	private async _getRequiredRequestAuth(
+		model: Model<any>,
+		options?: { minRemainingMs?: number },
+	): Promise<{
 		apiKey: string;
 		headers?: Record<string, string>;
 	}> {
-		const result = await this._modelRegistry.getApiKeyAndHeaders(model);
+		const result = await this._modelRegistry.getApiKeyAndHeaders(model, options);
 		if (!result.ok) {
 			if (result.error.startsWith("No API key found")) {
 				throw new Error(formatNoApiKeyFoundMessage(model.provider));
@@ -1151,11 +1164,12 @@ export class AgentSession {
 		apiKey?: string;
 		headers?: Record<string, string>;
 	}> {
+		const options = { minRemainingMs: COMPACTION_MIN_TOKEN_VALIDITY_MS };
 		if (isBuiltinStreamFn(this.agent.streamFn)) {
-			return this._getRequiredRequestAuth(model);
+			return this._getRequiredRequestAuth(model, options);
 		}
 
-		const result = await this._modelRegistry.getApiKeyAndHeaders(model);
+		const result = await this._modelRegistry.getApiKeyAndHeaders(model, options);
 		return result.ok ? { apiKey: result.apiKey, headers: result.headers } : {};
 	}
 
@@ -3849,7 +3863,9 @@ export class AgentSession {
 			let apiKey: string | undefined;
 			let headers: Record<string, string> | undefined;
 			if (isBuiltinStreamFn(this.agent.streamFn)) {
-				const authResult = await this._modelRegistry.getApiKeyAndHeaders(compactionModel);
+				const authResult = await this._modelRegistry.getApiKeyAndHeaders(compactionModel, {
+					minRemainingMs: COMPACTION_MIN_TOKEN_VALIDITY_MS,
+				});
 				if (!authResult.ok || !authResult.apiKey) {
 					const providerLabel = compactionModel.provider;
 					this._emit({

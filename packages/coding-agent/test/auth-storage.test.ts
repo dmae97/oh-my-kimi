@@ -648,6 +648,60 @@ describe("AuthStorage", () => {
 			expect(authStorage.getOAuthAccountCount(providerId)).toBe(2);
 		});
 
+		test("refreshes a still-valid token that lacks the caller's required headroom", async () => {
+			const providerId = `test-oauth-headroom-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+			let refreshes = 0;
+			registerOAuthProvider({
+				id: providerId,
+				name: "Test Headroom Provider",
+				async login() {
+					throw new Error("Not used in this test");
+				},
+				async refreshToken(credentials) {
+					refreshes += 1;
+					return { ...credentials, access: "refreshed-access", expires: Date.now() + 3_600_000 };
+				},
+				getApiKey(credentials) {
+					return credentials.access;
+				},
+			});
+			// Valid for another minute: fine for a short request, not for a long one.
+			const account = { refresh: "r", access: "near-expiry-access", expires: Date.now() + 60_000 };
+			authStorage = AuthStorage.inMemory({ [providerId]: { ...account, type: "oauth" } });
+
+			// No headroom requested: the token is not expired, so it is used as-is.
+			expect(await authStorage.getApiKey(providerId)).toBe("near-expiry-access");
+			expect(refreshes).toBe(0);
+
+			// A caller that will run for ten minutes gets a freshly refreshed token.
+			expect(await authStorage.getApiKey(providerId, { minRemainingMs: 10 * 60 * 1000 })).toBe("refreshed-access");
+			expect(refreshes).toBe(1);
+			expect(authStorage.drainErrors()).toEqual([]);
+		});
+
+		test("falls back to the still-valid token when a headroom refresh fails", async () => {
+			const providerId = `test-oauth-headroom-fail-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+			registerOAuthProvider({
+				id: providerId,
+				name: "Test Headroom Failure Provider",
+				async login() {
+					throw new Error("Not used in this test");
+				},
+				async refreshToken() {
+					throw new Error("refresh endpoint unavailable");
+				},
+				getApiKey(credentials) {
+					return credentials.access;
+				},
+			});
+			const account = { refresh: "r", access: "still-valid-access", expires: Date.now() + 60_000 };
+			authStorage = AuthStorage.inMemory({ [providerId]: { ...account, type: "oauth" } });
+
+			// A precautionary refresh must never break a session whose token still works.
+			expect(await authStorage.getApiKey(providerId, { minRemainingMs: 10 * 60 * 1000 })).toBe("still-valid-access");
+			expect(authStorage.drainErrors()).toEqual([]);
+		});
+
 		test("keeps the legacy single-account storage shape until another account is added", async () => {
 			const providerId = `test-oauth-legacy-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 			registerOAuthProvider({

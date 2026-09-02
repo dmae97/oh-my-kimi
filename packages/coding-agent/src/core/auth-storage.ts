@@ -13,6 +13,7 @@ import {
 	type OAuthCredentials,
 	type OAuthLoginCallbacks,
 	type OAuthProviderId,
+	type OAuthProviderInterface,
 } from "omk-ai";
 import { getOAuthApiKey, getOAuthProvider, getOAuthProviders } from "omk-ai/oauth";
 import { dirname, join } from "path";
@@ -656,9 +657,17 @@ export class AuthStorage {
 		this.remove(provider);
 	}
 
-	/** Resolve the explicitly selected account and refresh it under the storage lock. */
+	/**
+	 * Resolve the explicitly selected account and refresh it under the storage lock.
+	 *
+	 * `minRemainingMs` lets a long operation demand headroom. An access token is
+	 * resolved once and then reused for the whole request, so a token that is
+	 * merely "not expired yet" can still expire mid-flight and come back as a
+	 * provider 401. Callers that run for minutes (compaction) ask for a margin.
+	 */
 	private async resolveOAuthTokenWithLock(
 		providerId: OAuthProviderId,
+		minRemainingMs = 0,
 	): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
 		const provider = getOAuthProvider(providerId);
 		if (!provider) {
@@ -680,10 +689,7 @@ export class AuthStorage {
 			const account = accounts[accountIndex];
 			if (!account) return { result: null };
 
-			const resolved =
-				Date.now() < account.expires
-					? { apiKey: provider.getApiKey(account), newCredentials: account }
-					: await getOAuthApiKey(providerId, { [providerId]: account });
+			const resolved = await this.resolveAccountToken(provider, providerId, account, minRemainingMs);
 			if (!resolved) return { result: null };
 
 			if (resolved.newCredentials === account) {
@@ -705,6 +711,34 @@ export class AuthStorage {
 	}
 
 	/**
+	 * Token for one account, refreshing when it is expired or too close to it.
+	 *
+	 * Hard expiry must refresh, and a refresh failure there is fatal. A margin
+	 * miss is only a precaution: the token is still valid, so a failed proactive
+	 * refresh falls back to it instead of breaking a working session.
+	 */
+	private async resolveAccountToken(
+		provider: OAuthProviderInterface,
+		providerId: OAuthProviderId,
+		account: OAuthCredentials,
+		minRemainingMs: number,
+	): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
+		const now = Date.now();
+		if (now >= account.expires) {
+			return await getOAuthApiKey(providerId, { [providerId]: account });
+		}
+		if (minRemainingMs > 0 && now + minRemainingMs >= account.expires) {
+			try {
+				const refreshed = await provider.refreshToken(account);
+				return { apiKey: provider.getApiKey(refreshed), newCredentials: refreshed };
+			} catch {
+				// Still valid right now; prefer a usable token over a hard failure.
+			}
+		}
+		return { apiKey: provider.getApiKey(account), newCredentials: account };
+	}
+
+	/**
 	 * Get API key for a provider.
 	 * Priority:
 	 * 1. Runtime override (CLI --api-key)
@@ -713,7 +747,10 @@ export class AuthStorage {
 	 * 4. Environment variable
 	 * 5. Fallback resolver (models.json custom providers)
 	 */
-	async getApiKey(providerId: string, options?: { includeFallback?: boolean }): Promise<string | undefined> {
+	async getApiKey(
+		providerId: string,
+		options?: { includeFallback?: boolean; minRemainingMs?: number },
+	): Promise<string | undefined> {
 		// Runtime override takes highest priority
 		const runtimeKey = this.runtimeOverrides.get(providerId);
 		if (runtimeKey) {
@@ -728,7 +765,7 @@ export class AuthStorage {
 
 		if (cred?.type === "oauth") {
 			try {
-				const result = await this.resolveOAuthTokenWithLock(providerId);
+				const result = await this.resolveOAuthTokenWithLock(providerId, options?.minRemainingMs ?? 0);
 				if (result) {
 					return result.apiKey;
 				}

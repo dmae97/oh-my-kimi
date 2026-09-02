@@ -847,10 +847,13 @@ export class ModelRegistry {
 	/**
 	 * Get API key and request headers for a model.
 	 */
-	async getApiKeyAndHeaders(model: Model<Api>): Promise<ResolvedRequestAuth> {
+	async getApiKeyAndHeaders(model: Model<Api>, options?: { minRemainingMs?: number }): Promise<ResolvedRequestAuth> {
 		try {
 			const providerConfig = this.providerRequestConfigs.get(model.provider);
-			const apiKeyFromAuthStorage = await this.authStorage.getApiKey(model.provider, { includeFallback: false });
+			const apiKeyFromAuthStorage = await this.authStorage.getApiKey(model.provider, {
+				includeFallback: false,
+				minRemainingMs: options?.minRemainingMs,
+			});
 			const apiKey =
 				apiKeyFromAuthStorage ??
 				(providerConfig?.apiKey
