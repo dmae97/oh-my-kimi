@@ -16,7 +16,11 @@
  */
 
 import { type AssistantMessage, isContextOverflow } from "omk-ai";
-import { isQuotaExhaustionMessage, isUpstreamUnavailableMessage } from "./provider-resilience.ts";
+import {
+	isClaudeCodeVersionTooOldMessage,
+	isQuotaExhaustionMessage,
+	isUpstreamUnavailableMessage,
+} from "./provider-resilience.ts";
 import { redactSensitiveText } from "./redaction.ts";
 import { MAX_SESSION_TERMINATION_MESSAGE_LENGTH, type SessionTerminationCause } from "./session-termination.ts";
 
@@ -62,6 +66,12 @@ export function providerFailureCause(message: AssistantMessage, contextWindow: n
 		)
 	) {
 		return { area: "provider", code: "refusal" };
+	}
+	// A stale spoofed Claude Code version against a newer model's gate is a client
+	// configuration fault, not a transcript-shape one: it must not inherit the
+	// retryable protocol default at the bottom of this function.
+	if (isClaudeCodeVersionTooOldMessage(text)) {
+		return { area: "configuration", code: "invalid" };
 	}
 	// Quota/billing exhaustion is checked BEFORE the generic 401/403 auth
 	// patterns: "403 ... usage limit for this billing cycle" is transient per

@@ -1,3 +1,4 @@
+import { CLAUDE_CODE_EXTERNAL_USER_AGENT } from "omk-ai";
 import { describe, expect, it, vi } from "vitest";
 import {
 	buildQwenCliEnvironment,
@@ -298,6 +299,11 @@ describe("subscription usage providers", () => {
 		expect(requests[1]?.url).toBe("https://api.anthropic.com/v1/messages");
 		expect(requests[1]?.init?.method).toBe("POST");
 		expect(new Headers(requests[1]?.init?.headers).get("authorization")).toBe(`Bearer ${token}`);
+		// Both calls must present the one shared Claude Code version; a drifted copy
+		// here is what let the messages API fall behind the model version gate.
+		for (const request of requests) {
+			expect(new Headers(request.init?.headers).get("user-agent")).toBe(CLAUDE_CODE_EXTERNAL_USER_AGENT);
+		}
 		expect(JSON.parse(String(requests[1]?.init?.body))).toEqual({
 			model: "claude-haiku-4-5",
 			max_tokens: 1,

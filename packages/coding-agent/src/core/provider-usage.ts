@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import type { ProviderRateLimitSnapshot, ProviderRateLimitWindow } from "omk-ai";
+import { CLAUDE_CODE_EXTERNAL_USER_AGENT, type ProviderRateLimitSnapshot, type ProviderRateLimitWindow } from "omk-ai";
 import type { AgentSession } from "./agent-session.ts";
 
 const FIVE_HOUR_SECONDS = 5 * 60 * 60;
@@ -591,7 +591,7 @@ async function fetchClaudeUsage(
 			Authorization: `Bearer ${apiKey}`,
 			Accept: "application/json",
 			"anthropic-beta": "claude-code-20250219,oauth-2025-04-20",
-			"User-Agent": "claude-cli/2.1.177 (external, cli)",
+			"User-Agent": CLAUDE_CODE_EXTERNAL_USER_AGENT,
 		},
 	});
 	const windows = [...(parseClaudeUsageSnapshot(response.payload) ?? [])];
@@ -642,7 +642,7 @@ async function probeClaudeQuota(apiKey: string, fetchImpl: FetchLike, nowMs = Da
 					"anthropic-version": "2023-06-01",
 					"anthropic-beta": "claude-code-20250219,oauth-2025-04-20",
 					"anthropic-dangerous-direct-browser-access": "true",
-					"User-Agent": "claude-cli/2.1.177 (external, cli)",
+					"User-Agent": CLAUDE_CODE_EXTERNAL_USER_AGENT,
 					"x-app": "cli",
 				},
 				body: JSON.stringify({

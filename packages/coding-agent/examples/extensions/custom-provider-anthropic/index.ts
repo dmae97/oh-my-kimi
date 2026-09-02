@@ -375,7 +375,10 @@ function streamCustomAnthropic(
 					accept: "application/json",
 					"anthropic-dangerous-direct-browser-access": "true",
 					"anthropic-beta": `claude-code-20250219,oauth-2025-04-20,${betaFeatures.join(",")}`,
-					"user-agent": "claude-cli/2.1.2 (external, cli)",
+					// Anthropic gates newer models on this version (400
+					// claude_code_version_too_old). Canonical value: CLAUDE_CODE_VERSION
+					// in omk-ai (packages/ai/src/utils/claude-code-identity.ts).
+					"user-agent": "claude-cli/2.1.258 (external, cli)",
 					"x-app": "cli",
 				};
 			} else {

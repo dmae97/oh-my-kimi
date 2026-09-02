@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	DEFAULT_SAFETY_FAILOVER_CANDIDATES,
+	isClaudeCodeVersionTooOldMessage,
 	isContentSafetyStopMessage,
 	isNoSafetyFailoverModel,
 	isOrphanToolCallIdError,
@@ -51,6 +52,18 @@ describe("provider-resilience (root-level)", () => {
 		expect(isTransientProviderErrorMessage("JSON error injected into SSE stream")).toBe(true);
 		expect(isTransientProviderErrorMessage("payload injected into SSE stream")).toBe(true);
 		expect(isTransientProviderErrorMessage("Authentication failed")).toBe(false);
+	});
+
+	it("treats a stale Claude Code client version as permanent, not transient", () => {
+		const error =
+			'400 {"type":"error","error":{"type":"invalid_request_error","message":"Claude Code 2.1.75 does not support this model; version 2.1.251 or newer is required. Run \'claude update\', or update the Claude desktop app, then try again.","details":{"error_code":"claude_code_version_too_old"}}}';
+
+		expect(isClaudeCodeVersionTooOldMessage(error)).toBe(true);
+		expect(isClaudeCodeVersionTooOldMessage("tool_call_id is not found")).toBe(false);
+		expect(isClaudeCodeVersionTooOldMessage(undefined)).toBe(false);
+		// Every retry re-sends the same spoofed user-agent, so this must stay out of
+		// the retry loop even though it carries the transient `invalid_request_error`.
+		expect(isTransientProviderErrorMessage(error)).toBe(false);
 	});
 
 	it("picks first allowed non-sticky failover candidate", () => {

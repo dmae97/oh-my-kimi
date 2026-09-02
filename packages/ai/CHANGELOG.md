@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- The spoofed Claude Code client version was pinned at 2.1.75 and had drifted into three separate copies (2.1.75 / 2.1.75 / 2.1.177). Anthropic gates newer models on that version, so `claude-fable-5-1` rejected every request with `400 claude_code_version_too_old`. The version now lives in one module (`CLAUDE_CODE_VERSION`) at 2.1.258.
+
 ## [0.98.1] - 2026-08-30
 
 ## [0.98.0] - 2026-08-28

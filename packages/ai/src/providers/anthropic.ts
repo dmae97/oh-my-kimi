@@ -27,6 +27,7 @@ import type {
 	ToolCall,
 	ToolResultMessage,
 } from "../types.ts";
+import { CLAUDE_CODE_CLI_USER_AGENT } from "../utils/claude-code-identity.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord } from "../utils/headers.ts";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.ts";
@@ -70,8 +71,6 @@ function getCacheControl(
 }
 
 // Stealth mode: Mimic Claude Code's tool naming exactly
-const claudeCodeVersion = "2.1.75";
-
 // Claude Code 2.x tool names (canonical casing)
 // Source: https://cchistory.mariozechner.at/data/prompts-2.1.11.md
 // To update: https://github.com/badlogic/cchistory
@@ -934,7 +933,7 @@ function createClient(
 					accept: "application/json",
 					"anthropic-dangerous-direct-browser-access": "true",
 					"anthropic-beta": ["claude-code-20250219", "oauth-2025-04-20", ...betaFeatures].join(","),
-					"user-agent": `claude-cli/${claudeCodeVersion}`,
+					"user-agent": CLAUDE_CODE_CLI_USER_AGENT,
 					"x-app": "cli",
 				},
 				model.headers,

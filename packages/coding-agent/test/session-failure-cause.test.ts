@@ -85,6 +85,16 @@ describe("providerFailureCause", () => {
 		});
 	});
 
+	it("classifies a stale Claude Code client version as a configuration fault", () => {
+		// Left to the protocol default this reads as retryable and advertises the
+		// orphan tool_call_id sanitize path — wrong on both counts for a permanent
+		// client-version rejection.
+		const error =
+			'400 {"type":"error","error":{"type":"invalid_request_error","message":"Claude Code 2.1.75 does not support this model; version 2.1.251 or newer is required.","details":{"error_code":"claude_code_version_too_old"}}}';
+
+		expect(providerFailureCause(assistantError(error), 0)).toEqual({ area: "configuration", code: "invalid" });
+	});
+
 	it("separates tool timeout from tool fatal", () => {
 		expect(providerFailureCause(assistantError("tool timed out after 30s"), 0)).toEqual({
 			area: "tool",

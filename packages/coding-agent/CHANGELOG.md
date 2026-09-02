@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Classified Anthropic's `claude_code_version_too_old` rejection (HTTP 400 carrying `invalid_request_error`) as a permanent configuration fault: it no longer enters the transient retry/failover loop, and the session failure cause reports `configuration`/`invalid` instead of the retryable protocol default. The usage and quota probes now read the spoofed Claude Code client version from omk-ai's single `CLAUDE_CODE_VERSION` constant, so every request presents the same user-agent as the messages API.
+
 ## [0.98.1] - 2026-08-30
 
 ## [0.98.0] - 2026-08-28

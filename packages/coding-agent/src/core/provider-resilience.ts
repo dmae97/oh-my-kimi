@@ -84,6 +84,20 @@ export function isQuotaExhaustionMessage(text: string | undefined): boolean {
 	);
 }
 
+/**
+ * Anthropic rejecting the spoofed Claude Code client version because the target
+ * model is gated on a newer one (`claude_code_version_too_old`, HTTP 400).
+ * Permanent for this build: every retry and every failover re-sends the same
+ * user-agent, so the fix is bumping `CLAUDE_CODE_VERSION` in omk-ai (or
+ * selecting an ungated model).
+ */
+export function isClaudeCodeVersionTooOldMessage(text: string | undefined): boolean {
+	if (!text) return false;
+	return /claude_code_version_too_old|does not support this model;\s*version\s+[\d.]+\s+or newer is required/i.test(
+		text,
+	);
+}
+
 /** Orphan tool results / Kimi-K3 protocol shape errors that heal after sanitize+retry. */
 export function isOrphanToolCallIdError(text: string | undefined): boolean {
 	if (!text) return false;
@@ -155,6 +169,10 @@ export function sameModelRouteCandidates<
  */
 export function isTransientProviderErrorMessage(text: string | undefined): boolean {
 	if (!text) return false;
+	// Checked first: the payload carries `invalid_request_error`, which the
+	// pattern below treats as transient, but a stale client version never heals
+	// by retrying.
+	if (isClaudeCodeVersionTooOldMessage(text)) return false;
 	return /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|connection.?lost|websocket.?closed|websocket.?error|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|ended without|stream ended before message_stop|http2 request did not get a response|timed? out|timeout|\bterminated\b|retry delay|content\/safety stop|stop_reason\s*=\s*(refusal|sensitive)|safety stop|tool_call_id\s+is\s+not\s+found|tool_call_id\s+not\s+found|invalid_request_error|json error injected into sse stream|injected into sse/i.test(
 		text,
 	);

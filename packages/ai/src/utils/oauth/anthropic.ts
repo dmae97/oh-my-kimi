@@ -6,6 +6,7 @@
  */
 
 import type { Server } from "node:http";
+import { CLAUDE_CODE_BOOTSTRAP_USER_AGENT } from "../claude-code-identity.ts";
 import { oauthErrorHtml, oauthSuccessHtml } from "./oauth-page.ts";
 import { generatePKCE } from "./pkce.ts";
 import type { OAuthCredentials, OAuthLoginCallbacks, OAuthPrompt, OAuthProviderInterface } from "./types.ts";
@@ -30,7 +31,6 @@ const AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
 const TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
 const BOOTSTRAP_URL = "https://api.anthropic.com/api/claude_cli/bootstrap";
 const BOOTSTRAP_MODEL = "claude-opus-4-8";
-const BOOTSTRAP_USER_AGENT = "claude-code/2.1.75";
 const CALLBACK_HOST = process.env.OMK_OAUTH_CALLBACK_HOST || "127.0.0.1";
 const CALLBACK_PORT = 53692;
 const CALLBACK_PATH = "/callback";
@@ -65,7 +65,7 @@ async function getAnthropicIdentity(accessToken: string): Promise<AnthropicIdent
 				Accept: "application/json, text/plain, */*",
 				Authorization: `Bearer ${accessToken}`,
 				"Content-Type": "application/json",
-				"User-Agent": BOOTSTRAP_USER_AGENT,
+				"User-Agent": CLAUDE_CODE_BOOTSTRAP_USER_AGENT,
 				"anthropic-beta": "oauth-2025-04-20",
 			},
 			signal: AbortSignal.timeout(30_000),
