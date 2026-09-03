@@ -30,7 +30,7 @@ npm run check
 npm test
 ```
 
-All gates must pass. Add or update tests for behavioral changes and update the matching file under `packages/coding-agent/docs/` when public behavior changes.
+All gates must pass. `npm run check` only verifies: it never rewrites a file, and CI fails if the tree is dirty afterwards. Use `npm run format` to apply Biome's fixes, then commit the result. Add or update tests for behavioral changes and update the matching file under `packages/coding-agent/docs/` when public behavior changes.
 
 Do not edit release sections in the root `README.md`; `scripts/sync-readme-releases.mjs` generates them from changelogs. Package changelog entries are maintained as part of the release process.
 

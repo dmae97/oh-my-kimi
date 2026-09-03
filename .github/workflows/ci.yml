@@ -91,6 +91,12 @@ jobs:
       - name: Check
         run: npm run check
 
+      - name: Verify the check did not modify the tree
+        # `npm run check` must verify, never rewrite. A gate that formats the tree
+        # cannot fail on the dirt it just removed, so any diff here is a defect:
+        # run `npm run format` and commit the result.
+        run: git diff --exit-code
+
       - name: Verify release consistency receipt
         id: verify_receipt
         run: node packages/coding-agent/dist/verify-ci.js
