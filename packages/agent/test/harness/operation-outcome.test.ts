@@ -203,7 +203,55 @@ describe("resolveOperationFailure", () => {
 		).toMatchObject({ code: "hook", message: "settled listener" });
 	});
 
-	it("property: a failed outcome always rejects, and a flush-only failure rejects with the outcome code", () => {
+	/** Outcome inputs for this block: no classified result, no raised signal. */
+	function outcomeOf(input: { bodyError?: unknown; flushError?: unknown }) {
+		return resolveOperationOutcome({
+			signalAborted: false,
+			result: "ok",
+			bodyError: input.bodyError,
+			flushError: input.flushError,
+			classifyResult: undefined,
+			fallbackCode: "unknown",
+		});
+	}
+
+	function aggregateCauses(failure: AgentHarnessError | undefined): readonly unknown[] {
+		if (failure === undefined) throw new Error("unreachable: this combination must reject");
+		return (failure.cause as AggregateError).errors;
+	}
+
+	it("keeps the outcome code equal to the rejection code when flush and settle fail together", () => {
+		// The classification source is the flush, so the recorded outcome is a session
+		// failure. The rejection must carry that same code even though the operation's
+		// own fallback code is something else, and must still expose both causes.
+		const flushError = new Error("flush");
+		const settleError = new Error("settled listener");
+		const outcome = outcomeOf({ flushError });
+		const failure = resolveOperationFailure({
+			bodyError: undefined,
+			flushError,
+			settleError,
+			fallbackCode: "hook",
+		});
+		expect(outcome).toEqual({ status: "failed", code: "session", message: "flush" });
+		expect(failure?.code).toBe("session");
+		expect(aggregateCauses(failure)).toEqual([flushError, settleError]);
+	});
+
+	it("keeps the outcome code equal to the rejection code when body, flush and settle all fail", () => {
+		// A pre-classified flush failure outranks the body for the code, while the
+		// cause order stays body, flush, settle so every stage remains reachable.
+		const bodyError = new Error("body");
+		const flushError = new AgentHarnessError("invalid_state", "reentry");
+		const settleError = new Error("settled listener");
+		const outcome = outcomeOf({ bodyError, flushError });
+		const failure = resolveOperationFailure({ bodyError, flushError, settleError, fallbackCode: "unknown" });
+		expect(outcome).toEqual({ status: "failed", code: "invalid_state", message: "reentry" });
+		expect(failure?.code).toBe("invalid_state");
+		expect(aggregateCauses(failure)).toEqual([bodyError, flushError, settleError]);
+	});
+
+	it("property: every failed outcome rejects with exactly the outcome code", () => {
 		const errorArb = fc.oneof(
 			fc.constant(undefined),
 			fc.constant(new Error("plain")),
@@ -227,24 +275,27 @@ describe("resolveOperationFailure", () => {
 						fallbackCode: "unknown",
 					});
 					const failure = resolveOperationFailure({ bodyError, flushError, settleError, fallbackCode: "unknown" });
-					if (outcome.status === "failed") expect(failure).toBeDefined();
+					// A failed outcome always has a public rejection, and the two codes agree.
+					if (outcome.status === "failed") {
+						expect(failure).toBeDefined();
+						expect(failure?.code).toBe(outcome.code);
+					}
+					// A settle-only failure records no failure outcome but still rejects as a hook.
 					if (bodyError === undefined && flushError === undefined) {
-						// A settle-only failure keeps a pre-classified code and falls back to "hook".
 						const expectedCode =
 							settleError === undefined ? "none" : normalizeHarnessError(settleError, "hook").code;
 						expect(failure?.code ?? "none").toBe(expectedCode);
 					}
-					if (
-						flushError !== undefined &&
-						bodyError === undefined &&
-						settleError === undefined &&
-						outcome.status === "failed"
-					) {
-						expect(outcome.code).toBe(failure?.code);
+					// Every concurrent cause stays reachable, in body, flush, settle order.
+					const present = [bodyError, flushError, settleError].filter((error) => error !== undefined);
+					if (present.length > 1) {
+						expect(aggregateCauses(failure)).toEqual(present);
+					} else if (present.length === 1) {
+						expect(failure?.cause ?? failure).toBe(present[0]);
 					}
 				},
 			),
-			{ numRuns: 200 },
+			{ numRuns: 1000 },
 		);
 	});
 });

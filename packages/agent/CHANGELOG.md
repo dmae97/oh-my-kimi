@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- A failed operation could record one top-level code and reject with another. `resolveOperationOutcome` classified a failure as `flush > body`, but `resolveOperationFailure` picked its primary as `body ?? flush` and then hardcoded `session` for a body-plus-flush failure while using the operation's own fallback code for a flush-plus-settle failure. A plain flush error alongside a settle error therefore settled as `session` and rejected as (say) `hook`, and a pre-classified flush error (`invalid_state`) alongside a body error settled as `invalid_state` and rejected as `unknown`. Both now read the top-level code from one shared `flush > body` classification source, so `outcome.code === rejection.code` for every failed outcome, while every concurrent cause stays reachable through one `AggregateError` in body, flush, settle order. A 1,000-combination property test pins the parity and the cause order.
+
 ## [0.98.2] - 2026-09-02
 
 ### Added
