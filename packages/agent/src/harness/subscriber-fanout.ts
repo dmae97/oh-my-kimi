@@ -9,6 +9,9 @@
  * falsely rejecting an unrelated concurrent caller that runs later while the
  * listener's promise is merely pending.
  *
+ * Delivery is observational: every subscriber runs even when an earlier one
+ * fails, and the failures are raised together afterwards.
+ *
  * This module imports no harness or session types so it stays a leaf for the
  * import-cycle ratchet; the harness passes the current operation id in.
  */
@@ -30,8 +33,19 @@ export class SubscriberFanout<TEvent extends { readonly type: string }> {
 		return () => this.listeners.delete(listener);
 	}
 
-	/** Deliver `event` to every subscriber in order; a throwing subscriber fails the emission as `hook`. */
+	/**
+	 * Deliver `event` to every subscriber in registration order, then fail the
+	 * emission once the fanout has completed.
+	 *
+	 * Observational subscribers must not starve each other: one throwing telemetry
+	 * or audit listener cannot hide `settled` / `attempt_finished` from the
+	 * listeners registered after it. Failures are collected and raised after the
+	 * last listener ran — a single failure keeps its own classification, several
+	 * become one `AggregateError` classified by the first. Policy and mutation
+	 * hooks live on `AgentHarness.on()` and stay fail-fast.
+	 */
 	async emit(event: TEvent, currentOperationId: string | undefined, signal?: AbortSignal): Promise<void> {
+		const failures: unknown[] = [];
 		for (const listener of this.listeners) {
 			const previousOperationId = this.operationId;
 			const previousEventType = this.eventType;
@@ -42,20 +56,23 @@ export class SubscriberFanout<TEvent extends { readonly type: string }> {
 			try {
 				pending = listener(event, signal);
 			} catch (error) {
-				this.operationId = previousOperationId;
-				this.eventType = previousEventType;
-				throw normalizeHarnessError(error, "hook");
+				failures.push(error);
 			} finally {
 				this.syncFrameDepth -= 1;
 			}
 			try {
 				await pending;
 			} catch (error) {
-				throw normalizeHarnessError(error, "hook");
+				failures.push(error);
 			} finally {
 				this.operationId = previousOperationId;
 				this.eventType = previousEventType;
 			}
+		}
+		if (failures.length === 1) throw normalizeHarnessError(failures[0], "hook");
+		if (failures.length > 1) {
+			const cause = new AggregateError(failures, `${failures.length} subscribers failed for ${event.type}`);
+			throw new AgentHarnessError(normalizeHarnessError(failures[0], "hook").code, cause.message, cause);
 		}
 	}
 
@@ -71,7 +88,8 @@ export class SubscriberFanout<TEvent extends { readonly type: string }> {
 		if (this.syncFrameDepth > 0 && currentOperationId !== undefined && currentOperationId === this.operationId) {
 			throw new AgentHarnessError(
 				"invalid_state",
-				`${api} cannot await the current operation from an awaited ${this.eventType ?? "unknown"} callback`,
+				`${api} cannot await the current operation from an awaited ${this.eventType ?? "unknown"} callback; ` +
+					"use runWhenIdle() to schedule work for after it settles",
 			);
 		}
 	}

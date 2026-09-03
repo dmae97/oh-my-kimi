@@ -196,6 +196,31 @@ describe("Agent", () => {
 		expect(agent.state.errorMessage).toBe("provider exploded");
 	});
 
+	it("delivers an event to every subscriber when an earlier one throws", async () => {
+		const agent = new Agent({
+			streamFn: () => {
+				throw new Error("provider exploded");
+			},
+		});
+		const seen: string[] = [];
+		agent.subscribe((event) => {
+			if (event.type === "agent_start") throw new Error("observer exploded");
+		});
+		agent.subscribe((event) => {
+			seen.push(event.type);
+		});
+
+		await agent.prompt("hello");
+
+		// The observer that threw cannot starve the one registered after it: the
+		// later listener still receives the very event that failed, and the run
+		// still reaches its terminal event.
+		expect(seen[0]).toBe("agent_start");
+		expect(seen).toContain("agent_end");
+		// The observer failure still surfaces as a run failure, not a silent drop.
+		expect(agent.state.errorMessage).toBe("observer exploded");
+	});
+
 	it("should await async subscribers before prompt resolves", async () => {
 		const barrier = createDeferred();
 		const agent = new Agent({
