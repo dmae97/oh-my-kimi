@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- A session workspace scope now reports what it could not bind. `resolveSessionWorkspaceScope()` drops dirty paths two ways — a 32-path cap and the normalized-path filter the receipt parser forces — and both were silent, so a receipt captured from a partial view of the working tree read exactly like one that saw all of it. The new `resolveSessionWorkspaceScopeReport(cwd, options?)` returns the same scope plus `totalDirtyPathCount`, `selectedPathCount`, `excludedPathCount`, `truncated`, a `completeness` of `complete` / `partial_truncated` / `partial_excluded` / `unavailable`, and an `excludedPathSetSha256` binding the dropped set. `SessionBashRuntime.workspaceScopeReport()` exposes it for the current session. `unavailable` is deliberately not `complete`: outside a worktree nothing was enumerated, so an empty artifact set is an absence of evidence rather than a clean tree. Dropping paths stays deliberate; hiding the drop was the defect. The scope cache is now keyed by `(cwd, maxPaths)` so a capped probe cannot serve a later full request its truncated answer.
+
 ## [0.98.2] - 2026-09-02
 
 ### Added

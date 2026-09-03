@@ -1248,8 +1248,29 @@ Ledger and receipt publication are fail-closed but not one filesystem transactio
 ### Freshness, ledger load, and store hardening
 
 - **Freshness** compares only the caller-selected artifact set (`WorkspaceScope.artifactPaths`). It issues no Git command and carries no Git fingerprint.
+- **Scope completeness**: a session scope is bounded on purpose, so a receipt captured from one proves its selected paths and nothing more. `resolveSessionWorkspaceScopeReport(cwd)` returns the scope together with what it could not bind, and `SessionBashRuntime.workspaceScopeReport()` exposes the same for the current session.
 - **Ledger**: `ReplayLedgerManager` verifies an existing ledger on construction (sequence order, prev-hash chain, payload hash, event hash) and **fails closed** on any violation.
 - **Store**: `EvidenceReceiptStore` uses an owner-only directory, symlink rejection, no-overwrite hard-link publication, and identity rechecks to detect observed path replacement. These checks assume same-UID path mutation is quiescent; they are **not** filesystem sandbox isolation.
+
+### Session scope completeness
+
+`resolveSessionWorkspaceScope()` drops dirty paths two ways: a hard cap (32 by default) that keeps one enormous working tree from stalling every receipt, and the normalized-path filter the receipt parser forces, which rejects names carrying a backslash, `..`, or an empty segment. Both drops are deliberate; reporting them is what stops a partial view from reading like a whole-workspace proof.
+
+`resolveSessionWorkspaceScopeReport(cwd, options?)` returns:
+
+| Field | Meaning |
+| --- | --- |
+| `scope` | Exactly what `resolveSessionWorkspaceScope()` returns |
+| `totalDirtyPathCount` | Unique dirty entries Git reported, before the cap and the filter |
+| `selectedPathCount` | Entries the scope binds (`scope.artifactPaths.length`) |
+| `excludedPathCount` | Unique dirty entries no receipt can bind |
+| `truncated` | True when the cap, not the filter, kept an eligible path out |
+| `completeness` | `complete`, `partial_truncated`, `partial_excluded`, or `unavailable` |
+| `excludedPathSetSha256` | Digest of the sorted excluded set; absent when nothing was excluded |
+
+`unavailable` is not `complete`: outside a worktree, or when Git cannot be read, nothing was enumerated, so the empty artifact set is an absence of evidence rather than evidence of a clean tree. Truncation outranks exclusion in `completeness` because an excluded path is named by the digest while a capped one is an unbounded unknown.
+
+The report is cached per `(cwd, maxPaths)` for one second, so a capped probe never serves a later full request a truncated answer.
 
 ### Protocol-first semantic evaluation
 
