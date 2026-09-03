@@ -2,6 +2,7 @@
 export * from "./agent.ts";
 // Loop functions
 export * from "./agent-loop.ts";
+export * from "./harness/abort-delivery.ts";
 export * from "./harness/agent-harness.ts";
 export {
 	type BranchPreparation,
@@ -25,6 +26,7 @@ export {
 	serializeConversation,
 	shouldCompact,
 } from "./harness/compaction/compaction.ts";
+export * from "./harness/deferred-commands.ts";
 export * from "./harness/messages.ts";
 export * from "./harness/prompt-templates.ts";
 export * from "./harness/reverse-skill.ts";

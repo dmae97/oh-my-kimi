@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Split the harness abort/wait surface so a callback can act on its own operation without deadlocking it. `requestAbort()` delivers the abort signal and reports `{ operationId, signalDelivered, alreadySettling }` without awaiting settlement, so it is safe from inside a listener of the operation being settled; `abort()` remains the waiting form and still refuses a self-wait. `runWhenIdle(command)` queues work behind the current operation and returns a durable `CommandRef` immediately — commands run in registration order once the lifecycle is idle, each ref reports `queued`/`running`/`completed`/`failed`/`cancelled`, `done` never rejects, and `cancel()` stops a command that has not started. The self-wait rejection now names `runWhenIdle()` as the sanctioned path. A synchronous prologue guard still cannot see a wait placed behind an arbitrary `await` inside a callback, so deferring — not waiting — remains the only callback-safe option.
+
 ### Fixed
 
 - A failed operation could record one top-level code and reject with another. `resolveOperationOutcome` classified a failure as `flush > body`, but `resolveOperationFailure` picked its primary as `body ?? flush` and then hardcoded `session` for a body-plus-flush failure while using the operation's own fallback code for a flush-plus-settle failure. A plain flush error alongside a settle error therefore settled as `session` and rejected as (say) `hook`, and a pre-classified flush error (`invalid_state`) alongside a body error settled as `invalid_state` and rejected as `unknown`. Both now read the top-level code from one shared `flush > body` classification source, so `outcome.code === rejection.code` for every failed outcome, while every concurrent cause stays reachable through one `AggregateError` in body, flush, settle order. A 1,000-combination property test pins the parity and the cause order.

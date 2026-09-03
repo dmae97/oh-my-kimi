@@ -18,6 +18,7 @@ import type {
 	StreamFn,
 	ThinkingLevel,
 } from "../types.ts";
+import { type AbortSignalDeliveryResult, assertAbortAllowed, describeAbortDelivery } from "./abort-delivery.ts";
 import { collectEntriesForBranchSummary } from "./compaction/branch-summarization.ts";
 import {
 	compact,
@@ -27,6 +28,7 @@ import {
 	shouldCompact,
 } from "./compaction/compaction.ts";
 import type { HarnessCompactionRunOptions } from "./compaction/operation.ts";
+import { type CommandRef, DeferredCommandQueue, type DeferredHarnessCommand } from "./deferred-commands.ts";
 import { HarnessSessionFacade } from "./harness-session.ts";
 import { convertToLlm, createFailureMessage, createUserMessage } from "./messages.ts";
 import { findDuplicateNames } from "./name-validation.ts";
@@ -47,6 +49,7 @@ import {
 	classifyAttemptFailure,
 	classifyAttemptOutcome,
 	classifyNavigateTreeOutcome,
+	collectStepErrors,
 	combineBoundaryErrors,
 	normalizeHarnessError,
 	resolveOperationFailure,
@@ -124,6 +127,7 @@ export class AgentHarness<
 	private nextTurnQueue: AgentMessage[] = [];
 	private handlers = new Map<string, Set<AgentHarnessHandler>>();
 	private readonly subscribers = new SubscriberFanout<AgentHarnessEvent<TSkill, TPromptTemplate>>();
+	private readonly deferredCommands = new DeferredCommandQueue(() => this.lifecycle.getSnapshot().tag === "idle");
 
 	constructor(options: AgentHarnessOptions<TSkill, TPromptTemplate, TTool>) {
 		this.env = options.env;
@@ -325,6 +329,10 @@ export class AgentHarness<
 		} catch (error) {
 			settleError = error;
 		}
+		// Deferred commands registered from this operation's callbacks run now that
+		// the lifecycle is idle. Not awaited: this call's result must not depend on
+		// work a listener scheduled.
+		void this.deferredCommands.drain();
 		const failure = resolveOperationFailure({ bodyError, flushError, settleError, fallbackCode });
 		if (failure !== undefined) throw failure;
 		return result as T;
@@ -1119,38 +1127,45 @@ export class AgentHarness<
 		this.streamOptions = cloneStreamOptions(streamOptions);
 	}
 
+	/**
+	 * Deliver the abort signal to the current operation without waiting for it to
+	 * settle. Safe from an operation's own callbacks: nothing here awaits
+	 * settlement, so it cannot form the cycle `abort()` has to refuse.
+	 */
+	requestAbort(): AbortSignalDeliveryResult {
+		assertAbortAllowed(this.lifecycle.getSnapshot());
+		return describeAbortDelivery(this.lifecycle.requestAbort());
+	}
+
+	/**
+	 * Queue work to run once the harness is idle and return its ref immediately.
+	 *
+	 * This is the callback-safe way to schedule follow-up work: awaiting
+	 * `waitForIdle()` or `abort()` from a callback of the operation being settled
+	 * deadlocks, because settlement awaits that callback. The ref reports the
+	 * command's outcome and cancels it while it is still queued.
+	 */
+	async runWhenIdle(command: DeferredHarnessCommand): Promise<CommandRef> {
+		return this.deferredCommands.enqueue(command);
+	}
+
 	async abort(): Promise<AbortResult> {
 		// Aborting awaits the captured operation's settlement, so a listener of that
 		// same operation must never reach the wait below.
 		this.rejectCurrentOperationSelfWait("abort()");
-		const snapshot = this.lifecycle.getSnapshot();
-		if (snapshot.tag === "active" && snapshot.operation.kind === "manual_compaction") {
-			throw new AgentHarnessError("invalid_state", "Cannot abort during compaction");
-		}
-		if (snapshot.tag === "active" && snapshot.operation.kind === "tree_navigation") {
-			throw new AgentHarnessError("invalid_state", "Cannot abort during branch_summary");
-		}
+		assertAbortAllowed(this.lifecycle.getSnapshot());
 		// Capture the current operation before delivering any signal: an operation
 		// started later by a settlement listener is never this call's target.
 		const capture = this.lifecycle.requestAbort();
 		const clearedSteer = this.steerQueue.splice(0);
 		const clearedFollowUp = this.followUpQueue.splice(0);
-		const errors: Error[] = [];
-		try {
-			await this.emitQueueUpdate();
-		} catch (error) {
-			errors.push(toError(error));
-		}
-		try {
-			if (capture.target) await capture.target.settled;
-		} catch (error) {
-			errors.push(toError(error));
-		}
-		try {
-			await this.emitOwn({ type: "abort", clearedSteer, clearedFollowUp });
-		} catch (error) {
-			errors.push(toError(error));
-		}
+		const errors = await collectStepErrors([
+			() => this.emitQueueUpdate(),
+			async () => {
+				if (capture.target) await capture.target.settled;
+			},
+			() => this.emitOwn({ type: "abort", clearedSteer, clearedFollowUp }),
+		]);
 		if (errors.length > 0) {
 			const cause = errors.length === 1 ? errors[0]! : new AggregateError(errors, "Abort completed with errors");
 			throw normalizeHarnessError(cause, "hook");
