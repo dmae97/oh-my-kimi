@@ -1,3 +1,32 @@
+export { isBlockingVerdict, minimalBlockingCut } from "./claims/claim-blocking-cut.ts";
+export { evaluateProofClosure } from "./claims/claim-closure.ts";
+export {
+	ClaimGraphError,
+	canonicalClaimGraph,
+	rootClaimIds,
+	topologicalClaimOrder,
+	validateClaimGraph,
+} from "./claims/claim-graph.ts";
+export {
+	CLAIM_GRAPH_SCHEMA_VERSION,
+	CLAIM_VERDICT_PRECEDENCE,
+	type ClaimClosureEvaluation,
+	type ClaimGraph,
+	type ClaimNode,
+	type ClaimNodeKind,
+	type ClaimRule,
+	type ClaimSeverity,
+	type ClaimVerdict,
+	OBSERVATION_TRUST_RANK,
+	type ObservationNode,
+	type ObservationPolarity,
+	type ObservationSource,
+	type ProofClosureInput,
+	type ProofClosureResult,
+	type VerificationVerdict,
+	type WaiverNode,
+	type WorkspaceCompleteness,
+} from "./claims/claim-types.ts";
 export { reduceRuntimeDecision } from "./decision.ts";
 export { evaluateTask, ProtocolInvariantError } from "./evaluation.ts";
 export type {
