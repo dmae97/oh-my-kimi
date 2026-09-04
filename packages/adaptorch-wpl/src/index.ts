@@ -112,6 +112,18 @@ export {
 	runFastWall,
 	scanDiffLinesForSecrets,
 } from "./policy-wall.ts";
+export type {
+	ProofClosureSummary,
+	ProofProjection,
+	ProofProjectionReasonCode,
+	VeraOutcomeAdmission,
+} from "./proof-projection.ts";
+export {
+	admitVeraOutcome,
+	PROOF_PROJECTION_REASON_CODES,
+	projectProofClosure,
+	projectProofEvaluationFailure,
+} from "./proof-projection.ts";
 export type { SignedWallReceipt, SignWallReceiptInput, VerifyWallReceiptInput } from "./receipt-signature.ts";
 export { signWallReceipt, verifyWallReceipt } from "./receipt-signature.ts";
 export type { BuildRegeneratePacketInput, RegeneratePacket } from "./regenerate-packet.ts";
@@ -138,4 +150,23 @@ export type {
 	WorkPacketState,
 } from "./types.ts";
 export { ADJUDICATIONS_DIR, LOOP_STATE_FILE, PACKET_INDEX_FILE, PACKETS_DIR, RUN_MAP_FILE } from "./types.ts";
+export type {
+	VeraDriftStatus,
+	VeraEvidenceCausality,
+	VeraEvidenceSeverity,
+	VeraVerificationDecision,
+	VeraVerificationOutcomeKind,
+} from "./vera-vocabulary.ts";
+export {
+	isVeraDriftStatus,
+	isVeraEvidenceCausality,
+	isVeraEvidenceSeverity,
+	isVeraVerificationDecision,
+	isVeraVerificationOutcomeKind,
+	VERA_DRIFT_STATUSES,
+	VERA_EVIDENCE_CAUSALITIES,
+	VERA_EVIDENCE_SEVERITIES,
+	VERA_VERIFICATION_DECISIONS,
+	VERA_VERIFICATION_OUTCOME_KINDS,
+} from "./vera-vocabulary.ts";
 export { CORRECTNESS_WALL_VERSION } from "./wall-meta.ts";
