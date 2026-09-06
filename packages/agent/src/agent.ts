@@ -9,6 +9,7 @@ import {
 	type Transport,
 } from "omk-ai";
 import { planFailureTermination, runAgentLoop, runAgentLoopContinue } from "./agent-loop.ts";
+import { deliverToListeners } from "./listener-delivery.ts";
 import { createImmutableSnapshot } from "./tool-execution-boundary.ts";
 import type {
 	AfterToolCallContext,
@@ -607,8 +608,7 @@ export class Agent {
 			// delivered (with an inert signal) instead of being dropped; every
 			// other event outside an active run remains a hard invariant break.
 			if (event.type === "tool_execution_late_settlement") {
-				const inertSignal = new AbortController().signal;
-				for (const listener of this.listeners) await listener(createImmutableSnapshot(event), inertSignal);
+				await deliverToListeners(this.listeners, event, new AbortController().signal);
 				return;
 			}
 			throw new Error("Agent listener invoked outside active run");
@@ -622,6 +622,6 @@ export class Agent {
 			}
 			return;
 		}
-		for (const listener of this.listeners) await listener(createImmutableSnapshot(event), signal);
+		await deliverToListeners(this.listeners, event, signal);
 	}
 }

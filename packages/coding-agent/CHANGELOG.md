@@ -4,6 +4,12 @@
 
 ### Added
 
+- A session workspace scope now reports what it could not bind. `resolveSessionWorkspaceScope()` drops dirty paths two ways — a 32-path cap and the normalized-path filter the receipt parser forces — and both were silent, so a receipt captured from a partial view of the working tree read exactly like one that saw all of it. The new `resolveSessionWorkspaceScopeReport(cwd, options?)` returns the same scope plus `totalDirtyPathCount`, `selectedPathCount`, `excludedPathCount`, `truncated`, a `completeness` of `complete` / `partial_truncated` / `partial_excluded` / `unavailable`, and an `excludedPathSetSha256` binding the dropped set. `SessionBashRuntime.workspaceScopeReport()` exposes it for the current session. `unavailable` is deliberately not `complete`: outside a worktree nothing was enumerated, so an empty artifact set is an absence of evidence rather than a clean tree. Dropping paths stays deliberate; hiding the drop was the defect. The scope cache is now keyed by `(cwd, maxPaths)` so a capped probe cannot serve a later full request its truncated answer.
+
+## [0.98.2] - 2026-09-02
+
+### Added
+
 - The `omk` CLI now connects configured MCP servers. `AgentSession.attachMcpServers()` was complete and tested but had no caller outside the SDK, so a `~/.omk/mcp.json` or `.omk/mcp.json` written by a CLI user spawned nothing and the control-panel MCP rows only ever showed the config inventory. The single CLI session factory now attaches on every session it creates — interactive, `-p`, RPC, `/new`, `/resume`, and forks — while `--help` and `--list-models` still spawn nothing. A server that fails to start becomes a startup warning naming the server and the reason (never an env value); the session continues with the servers that did connect.
 
 ### Fixed

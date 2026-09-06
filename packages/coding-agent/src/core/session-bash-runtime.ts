@@ -21,7 +21,11 @@ import { createWorkspaceSandboxPolicy, resolveBashSandboxMode } from "./sandbox/
 import type { SandboxBackendStatus, SandboxMode } from "./sandbox/policy.ts";
 import type { BashOperations, BashSandboxPreflight } from "./tools/bash.ts";
 import { executeVerifiedBash } from "./verified-bash-adapter.ts";
-import { isVerifiedBashEnabled, resolveSessionWorkspaceScope } from "./verified-bash-runtime.ts";
+import {
+	isVerifiedBashEnabled,
+	resolveSessionWorkspaceScope,
+	resolveSessionWorkspaceScopeReport,
+} from "./verified-bash-runtime.ts";
 
 export interface SessionBashRuntimeOptions {
 	readonly cwd: string;
@@ -132,6 +136,16 @@ export class SessionBashRuntime {
 	/** Git-aware workspace scope for verified bash receipts (TTL-cached). */
 	workspaceScope() {
 		return resolveSessionWorkspaceScope(this.options.cwd);
+	}
+
+	/**
+	 * The same scope plus what it could not bind. A receipt captured from a
+	 * `partial_truncated` or `partial_excluded` scope proves only its selected
+	 * paths, so a caller that presents a receipt as workspace-wide evidence must
+	 * read this first.
+	 */
+	workspaceScopeReport() {
+		return resolveSessionWorkspaceScopeReport(this.options.cwd);
 	}
 
 	get goalId(): string | undefined {

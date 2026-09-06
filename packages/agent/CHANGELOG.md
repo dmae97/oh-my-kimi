@@ -4,6 +4,17 @@
 
 ### Added
 
+- Split the harness abort/wait surface so a callback can act on its own operation without deadlocking it. `requestAbort()` delivers the abort signal and reports `{ operationId, signalDelivered, alreadySettling }` without awaiting settlement, so it is safe from inside a listener of the operation being settled; `abort()` remains the waiting form and still refuses a self-wait. `runWhenIdle(command)` queues work behind the current operation and returns a durable `CommandRef` immediately — commands run in registration order once the lifecycle is idle, each ref reports `queued`/`running`/`completed`/`failed`/`cancelled`, `done` never rejects, and `cancel()` stops a command that has not started. The self-wait rejection now names `runWhenIdle()` as the sanctioned path. A synchronous prologue guard still cannot see a wait placed behind an arbitrary `await` inside a callback, so deferring — not waiting — remains the only callback-safe option.
+
+### Fixed
+
+- A failed operation could record one top-level code and reject with another. `resolveOperationOutcome` classified a failure as `flush > body`, but `resolveOperationFailure` picked its primary as `body ?? flush` and then hardcoded `session` for a body-plus-flush failure while using the operation's own fallback code for a flush-plus-settle failure. A plain flush error alongside a settle error therefore settled as `session` and rejected as (say) `hook`, and a pre-classified flush error (`invalid_state`) alongside a body error settled as `invalid_state` and rejected as `unknown`. Both now read the top-level code from one shared `flush > body` classification source, so `outcome.code === rejection.code` for every failed outcome, while every concurrent cause stays reachable through one `AggregateError` in body, flush, settle order. A 1,000-combination property test pins the parity and the cause order.
+- One throwing observational subscriber starved every subscriber registered after it, so a single failing extension could silently drop `settled`, `attempt_finished`, telemetry, and audit events. Both fan-out paths now deliver to every listener in registration order and raise the failures afterwards: `SubscriberFanout.emit()` in the harness, and `Agent`'s delivery, which moved to the new `listener-delivery.ts` leaf. A single failure still surfaces untouched so its own classification survives; several become one `AggregateError` classified by the first. Policy and mutation hooks (`AgentHarness.on()`) are unchanged and stay fail-fast, and each `Agent` listener still receives its own immutable snapshot so one observer's view cannot be rewritten into another's.
+
+## [0.98.2] - 2026-09-02
+
+### Added
+
 - Added the operation lifecycle foundation modules: pure `operation-lifecycle-types` vocabulary, a side-effect-free `operation-lifecycle-reducer` transition table with classified violations, and `OperationLifecycleController` with operation/attempt leases, target-captured abort, exactly-once settlement, and a finalizer barrier.
 - Routed every public `AgentHarness` operation through `runOperation()` on the lifecycle controller: `settled` now fires exactly once per operation with `operationId`, `outcome`, and `attemptCount`, and new `operation_started`, `attempt_started`, and `attempt_finished` events correlate attempts to operations. The final session-write flush precedes outcome classification, so a flush failure after provider success rejects with a `session`-classified error and never records `completed`.
 

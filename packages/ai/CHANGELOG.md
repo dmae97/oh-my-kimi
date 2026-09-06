@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.98.2] - 2026-09-02
+
 ### Fixed
 
 - Claude Fable models were configured for budget-based thinking, which that family does not accept: `thinking: {type: "enabled", budget_tokens: N}` and any sampling parameter each return HTTP 400, so every reasoning turn on `claude-fable-5` / `claude-fable-5-1` failed before producing a token. Fable now carries `forceAdaptiveThinking` and `supportsTemperature: false` like the Opus 4.7/4.8 line, so requests send `thinking: {type: "adaptive"}` and drop temperature.

@@ -15,11 +15,28 @@ The intended rule is:
 - runtime config setters update future snapshots without mutating the current provider request
 - session writes made during a turn are durably queued and flushed in deterministic order; structural phases reject them
 - getters return latest harness config, not in-flight snapshots
-- listeners/hooks can close over the harness and call `getSession()`; hook payloads do not yet carry a context facade. Calling settlement APIs such as `waitForIdle()` from the active run can deadlock, so a future hook context should expose `runWhenIdle()` instead.
+- listeners/hooks can close over the harness and call `getSession()`; hook payloads do not yet carry a context facade. Calling settlement APIs such as `waitForIdle()` from the active run can deadlock, so a callback defers work with `runWhenIdle()` and delivers an abort with `requestAbort()` instead — see [Callback-safe operations](#callback-safe-operations).
 
 `AssistantMessageStream` already decouples provider transport streaming, such as SSE or websocket reads, from downstream event consumption. The harness can therefore await listeners, extension hooks, persistence, and save-point work without blocking the provider transport reader or reintroducing ad hoc event queues. Lifecycle code should prefer explicit awaited sequencing at harness boundaries over fire-and-forget hook/event settlement.
 
 A final lifecycle hardening pass should prove these guarantees with a broad listener/hook reentrancy test suite.
+
+## Callback-safe operations
+
+A listener that awaits the settlement of the operation whose event it is handling forms a cycle: settlement awaits the listener, and the listener awaits settlement. The harness splits the abort surface so the waiting half is the only part a callback must avoid.
+
+| API | Waits for settlement | Safe inside a callback of the current operation |
+| --- | --- | --- |
+| `requestAbort(): AbortSignalDeliveryResult` | no | yes |
+| `runWhenIdle(command): Promise<CommandRef>` | no | yes |
+| `abort(): Promise<AbortResult>` | yes | no — rejects `invalid_state` |
+| `waitForIdle(): Promise<void>` | yes | no — rejects `invalid_state` |
+
+`requestAbort()` delivers the signal to the operation captured at call time and returns `{ operationId?, signalDelivered, alreadySettling }` without awaiting anything. `alreadySettling` is true when the target had already entered settlement, so no signal could be delivered.
+
+`runWhenIdle(command)` enqueues `{ name, run }` and returns a `CommandRef` immediately. Commands run in registration order once the lifecycle reports idle, so a command that starts a new operation leaves the rest queued for the next idle transition. `ref.done` always resolves — never rejects — with `{ status: "completed" | "failed" | "cancelled", value?, error? }`, because a deferred command has no caller to observe a rejection. `ref.cancel()` returns true only while the command is still `queued`; a running command owns its own lifecycle and is stopped through the normal abort path.
+
+The self-wait rejection is raised from the listener's synchronous prologue, which is where `await harness.waitForIdle()` and `await harness.abort()` issue their call. A wait placed behind an unrelated `await` inside the same callback is not detected, so deferring with `runWhenIdle()` — not detection — is what makes callback follow-up work safe.
 
 ## Error handling
 

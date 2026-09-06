@@ -1,10 +1,12 @@
 import { fauxAssistantMessage, fauxToolCall, getModel, registerFauxProvider } from "omk-ai";
 import { afterEach, describe, expect, it } from "vitest";
+import type { AbortSignalDeliveryResult } from "../../src/harness/abort-delivery.ts";
 import { AgentHarness } from "../../src/harness/agent-harness.ts";
+import type { CommandRef } from "../../src/harness/deferred-commands.ts";
 import { NodeExecutionEnv } from "../../src/harness/env/nodejs.ts";
 import { InMemorySessionStorage } from "../../src/harness/session/memory-storage.ts";
 import { Session } from "../../src/harness/session/session.ts";
-import type { PromptTemplate, Skill } from "../../src/harness/types.ts";
+import { AgentHarnessError, type PromptTemplate, type Skill } from "../../src/harness/types.ts";
 import type { AgentMessage, AgentTool } from "../../src/types.ts";
 import { calculateTool } from "../utils/calculate.ts";
 import { getCurrentTimeTool } from "../utils/get-current-time.ts";
@@ -411,6 +413,84 @@ describe("AgentHarness", () => {
 		await Promise.all([promptPromise, idlePromise]);
 		expect(idleResolved).toBe(true);
 		expect(listenerFinished).toBe(true);
+	});
+
+	it("runs work a callback deferred past arbitrary awaits, in order, after the operation settles", async () => {
+		const registration = registerFauxProvider();
+		registrations.push(registration);
+		registration.setResponses([() => fauxAssistantMessage("ok")]);
+		const harness = new AgentHarness({
+			env: new NodeExecutionEnv({ cwd: process.cwd() }),
+			session: new Session(new InMemorySessionStorage()),
+			model: registration.getModel(),
+		});
+		const order: string[] = [];
+		const refs: CommandRef[] = [];
+		harness.subscribe(async (event) => {
+			if (event.type !== "settled") return;
+			// The gap a synchronous prologue guard cannot see: this callback awaits
+			// first and only then reaches for the harness. Waiting on the operation
+			// here would deadlock the settlement that is awaiting this listener.
+			await Promise.resolve();
+			await Promise.resolve();
+			refs.push(
+				await harness.runWhenIdle({
+					name: "first",
+					run: () => {
+						order.push("first");
+					},
+				}),
+			);
+			refs.push(
+				await harness.runWhenIdle({
+					name: "second",
+					run: () => {
+						order.push("second");
+					},
+				}),
+			);
+			order.push("listener-done");
+		});
+
+		await harness.prompt("hello");
+		await Promise.all(refs.map((ref) => ref.done));
+
+		expect(order).toEqual(["listener-done", "first", "second"]);
+		expect(refs.map((ref) => ref.status)).toEqual(["completed", "completed"]);
+		expect(refs.map((ref) => ref.name)).toEqual(["first", "second"]);
+		expect(refs[0]?.commandId).not.toBe(refs[1]?.commandId);
+	});
+
+	it("delivers an abort signal from a callback, where waiting from a callback is refused", async () => {
+		const registration = registerFauxProvider();
+		registrations.push(registration);
+		registration.setResponses([() => fauxAssistantMessage("ok")]);
+		const harness = new AgentHarness({
+			env: new NodeExecutionEnv({ cwd: process.cwd() }),
+			session: new Session(new InMemorySessionStorage()),
+			model: registration.getModel(),
+		});
+		let waitError: unknown;
+		let delivery: AbortSignalDeliveryResult | undefined;
+		harness.subscribe(async (event) => {
+			if (event.type !== "operation_started") return;
+			waitError = await harness.waitForIdle().then(
+				() => undefined,
+				(error: unknown) => error,
+			);
+			// Signal delivery never waits on settlement, so the same callback may use it.
+			delivery = harness.requestAbort();
+		});
+
+		// The point is that this settles at all: a deadlock would time the test out.
+		await harness.prompt("hello").catch(() => undefined);
+
+		expect(waitError).toBeInstanceOf(AgentHarnessError);
+		expect((waitError as AgentHarnessError).code).toBe("invalid_state");
+		expect((waitError as AgentHarnessError).message).toContain("runWhenIdle()");
+		expect(delivery?.signalDelivered).toBe(true);
+		expect(delivery?.alreadySettling).toBe(false);
+		expect(typeof delivery?.operationId).toBe("string");
 	});
 
 	it("runs tool_call and tool_result hooks through the direct loop", async () => {

@@ -65,6 +65,31 @@ export function classifyAttemptOutcome(
 }
 
 /**
+ * The single classification source for a failed operation: `flush > body`.
+ *
+ * Session persistence outranks the body because a flush failure after a provider
+ * success must never record or report a completed operation, and a flush error
+ * that already carries a harness classification (e.g. an `invalid_state`
+ * coordinator reentry) keeps it. Both the recorded outcome and the public
+ * rejection read their top-level code from here, so the two can never disagree.
+ * Settlement is not a source: it runs after the outcome is recorded, so it can
+ * only add a cause and a rejection.
+ */
+function classificationSource(input: {
+	readonly bodyError: unknown;
+	readonly flushError: unknown;
+	readonly fallbackCode: AgentHarnessError["code"];
+}):
+	| { readonly stage: "body" | "flush"; readonly error: unknown; readonly fallbackCode: AgentHarnessError["code"] }
+	| undefined {
+	if (input.flushError !== undefined) return { stage: "flush", error: input.flushError, fallbackCode: "session" };
+	if (input.bodyError !== undefined) {
+		return { stage: "body", error: input.bodyError, fallbackCode: input.fallbackCode };
+	}
+	return undefined;
+}
+
+/**
  * Single outcome-precedence rule for every public operation:
  *
  *   session persistence failure > non-abort body/hook failure >
@@ -83,22 +108,68 @@ export function resolveOperationOutcome<T>(input: {
 	readonly classifyResult: ((result: T) => HarnessOperationOutcome | undefined) | undefined;
 	readonly fallbackCode: AgentHarnessError["code"];
 }): HarnessOperationOutcome {
-	if (input.flushError !== undefined) {
-		// Mirror `resolveOperationFailure`: a flush error that already carries a
-		// harness classification (e.g. an `invalid_state` coordinator reentry)
-		// keeps it, so the recorded outcome and the rejection never disagree.
-		const error = normalizeHarnessError(input.flushError, "session");
-		return { status: "failed", code: error.code, message: error.message };
-	}
-	if (input.bodyError !== undefined) {
-		if (isExplicitAbortError(input.bodyError)) return { status: "aborted" };
-		const error = normalizeHarnessError(input.bodyError, input.fallbackCode);
+	const source = classificationSource(input);
+	if (source !== undefined) {
+		// Only a body failure can be an abort; a flush or settle failure is a failure
+		// even when the abort signal happens to be up.
+		if (source.stage === "body" && isExplicitAbortError(source.error)) return { status: "aborted" };
+		const error = normalizeHarnessError(source.error, source.fallbackCode);
 		return { status: "failed", code: error.code, message: error.message };
 	}
 	return (
 		input.classifyResult?.(input.result as T) ??
 		(input.signalAborted ? { status: "aborted" } : { status: "completed" })
 	);
+}
+
+/**
+ * Run boundary steps in order and collect their errors instead of stopping at
+ * the first. A boundary that must still report, flush, or settle after one step
+ * fails uses this so one failure cannot strand the rest.
+ */
+export async function collectStepErrors(steps: ReadonlyArray<() => Promise<void> | void>): Promise<Error[]> {
+	const errors: Error[] = [];
+	for (const step of steps) {
+		try {
+			await step();
+		} catch (error) {
+			errors.push(toError(error));
+		}
+	}
+	return errors;
+}
+
+/**
+ * Which error a public operation rejects with, or `undefined` on success.
+ *
+ * The top-level code comes from the same `flush > body` source the recorded
+ * outcome uses, so `outcome.code === rejection.code` for every failed outcome;
+ * settlement only ever contributes a cause. Every concurrent cause stays
+ * reachable through one `AggregateError` in body, flush, settle order, so an
+ * audit can still see that, say, the body and the final flush failed together.
+ */
+export function resolveOperationFailure(input: {
+	readonly bodyError: unknown;
+	readonly flushError: unknown;
+	readonly settleError: unknown;
+	readonly fallbackCode: AgentHarnessError["code"];
+}): AgentHarnessError | undefined {
+	const causes = [input.bodyError, input.flushError, input.settleError].filter((error) => error !== undefined);
+	if (causes.length === 0) return undefined;
+	const source = classificationSource(input) ?? {
+		stage: "settle" as const,
+		error: input.settleError,
+		fallbackCode: "hook" as const,
+	};
+	const code = normalizeHarnessError(source.error, source.fallbackCode).code;
+	if (causes.length === 1) return normalizeHarnessError(causes[0], source.fallbackCode);
+	const stages = [
+		input.bodyError !== undefined ? "body" : undefined,
+		input.flushError !== undefined ? "final flush" : undefined,
+		input.settleError !== undefined ? "settlement" : undefined,
+	].filter((stage) => stage !== undefined);
+	const cause = new AggregateError(causes.map(toError), `Operation failed (${stages.join(", ")})`);
+	return new AgentHarnessError(code, cause.message, cause);
 }
 
 /**
@@ -118,38 +189,4 @@ export function combineBoundaryErrors(
 	if (present.length <= 1) return present[0];
 	const cause = new AggregateError(present.map(toError), message);
 	return new AgentHarnessError(normalizeHarnessError(present[0], fallbackCode).code, cause.message, cause);
-}
-
-/**
- * Which error a public operation rejects with, or `undefined` on success.
- *
- * Mirrors the outcome precedence, but every concurrent cause is preserved in an
- * `AggregateError` so an audit can still see that, say, the body and the final
- * flush failed together.
- */
-export function resolveOperationFailure(input: {
-	readonly bodyError: unknown;
-	readonly flushError: unknown;
-	readonly settleError: unknown;
-	readonly fallbackCode: AgentHarnessError["code"];
-}): AgentHarnessError | undefined {
-	const primaryError = input.bodyError ?? input.flushError;
-	if (primaryError !== undefined && input.settleError !== undefined) {
-		const cause = new AggregateError(
-			[toError(primaryError), toError(input.settleError)],
-			"Operation failed and settlement failed",
-		);
-		return new AgentHarnessError(normalizeHarnessError(primaryError, input.fallbackCode).code, cause.message, cause);
-	}
-	if (input.settleError !== undefined) return normalizeHarnessError(input.settleError, "hook");
-	if (input.flushError !== undefined) {
-		if (input.bodyError === undefined) return normalizeHarnessError(input.flushError, "session");
-		const cause = new AggregateError(
-			[toError(input.bodyError), toError(input.flushError)],
-			"Operation failed and the final flush failed",
-		);
-		return new AgentHarnessError("session", cause.message, cause);
-	}
-	if (input.bodyError !== undefined) return normalizeHarnessError(input.bodyError, input.fallbackCode);
-	return undefined;
 }

@@ -565,6 +565,8 @@ export {
 	type VerifiedLocalBashExecutionRequest,
 } from "./core/verified-bash-adapter.ts";
 export { isVerifiedBashEnabled, resolveSessionWorkspaceScope } from "./core/verified-bash-runtime.ts";
+export { resolveSessionWorkspaceScopeReport } from "./core/verified-bash-runtime.ts";
+export type { SessionScopeCompleteness, SessionWorkspaceScopeReport } from "./core/verified-bash-runtime.ts";
 // Execution-bound evidence
 export {
 	type CommandHmacBinder,
