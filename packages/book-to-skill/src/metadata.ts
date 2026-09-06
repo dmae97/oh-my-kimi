@@ -1,6 +1,6 @@
 import type { CompilerIdentity } from "./types.ts";
 
-export const PACKAGE_VERSION = "0.98.2";
+export const PACKAGE_VERSION = "0.98.3";
 
 export const COMPILER_IDENTITY: CompilerIdentity = Object.freeze({
 	package: "omk-book-to-skill",

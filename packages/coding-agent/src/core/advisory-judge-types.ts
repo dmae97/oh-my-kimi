@@ -40,10 +40,27 @@ export interface AdvisoryJudgeCandidateScore {
 export type AdvisoryJudgeDecisionStatus = "selected" | "fallback" | "skipped";
 export type AdvisoryJudgeDecisionReason =
 	| "judge-ranked"
+	| "judge-tied"
 	| "judge-unavailable"
 	| "judge-response-invalid"
 	| "single-eligible"
 	| "no-eligible";
+
+export interface AdvisoryJudgeDiagnostics {
+	readonly submittedCandidates: number;
+	readonly eligibleCandidates: number;
+	readonly excludedCandidates: {
+		readonly fail: number;
+		readonly inconclusive: number;
+	};
+	readonly comparison: "not-compared" | "unavailable" | "invalid" | "scored";
+	/** Present only for a complete score matrix; these are not correctness probabilities. */
+	readonly ranking?: {
+		readonly distinctScores: number;
+		readonly topScoreTieCount: number;
+		readonly scoreMargin: number;
+	};
+}
 
 export interface AdvisoryJudgeDecision {
 	readonly status: AdvisoryJudgeDecisionStatus;
@@ -55,6 +72,8 @@ export interface AdvisoryJudgeDecision {
 	readonly selectedCandidateId?: string;
 	readonly candidateScores: readonly AdvisoryJudgeCandidateScore[];
 	readonly requestSha256?: string;
+	/** Optional for historical decisions; the built-in chooser always reports it. */
+	readonly diagnostics?: AdvisoryJudgeDiagnostics;
 }
 
 export interface AdvisoryJudgeInput {

@@ -1309,7 +1309,9 @@ const decision = await chooseWithAdvisoryJudge({
 
 The sidecar makes no call when zero or one candidate passes. For multiple passing candidates it sends only bounded, forced-redacted material through a tool-free request and requires a complete 0–4 score matrix. Invalid output or provider failure returns `status: "fallback"` with the deterministic first candidate and a sanitized reason. It never persists model prose. Re-run fresh deterministic gates after applying the selected result.
 
-`createModelAdvisoryJudge()` resolves current auth through `ModelRegistry` for each explicit call, uses no cache retention, and performs no model retry. Tests can inject `AdvisoryJudgeCompletion`; production defaults to `completeSimple()`.
+**Since v0.98.3:** the first-party `createModelAdvisoryJudge()` adapter requires an explicit normal `stop`; valid JSON from truncated, aborted or missing completion metadata cannot supply scores. The chooser checks cancellation before and after judge work. Top-score ties retain the caller's deterministic rank but report `judge-tied` / `deterministic`. Additive `diagnostics` preserve submitted/eligible/excluded counts and distinguish unmeasured comparisons from scored ties. See [Advisory selection integrity](advisory-selection.md).
+
+`createModelAdvisoryJudge()` resolves current auth through `ModelRegistry` for each non-aborted explicit call, uses no cache retention, and performs no model retry. Tests can inject `AdvisoryJudgeCompletion`; production defaults to `completeSimple()`. Custom judges still own completion metadata. This remains an explicit SDK API, not a default AgentSession/TUI judge.
 
 ### Durable-goal seam checkpoints
 

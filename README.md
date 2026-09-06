@@ -135,7 +135,9 @@ version is the source of truth.
 - Versioned `omk-protocol` observations, evaluations, and decisions for callers
   that explicitly adopt the protocol.
 - Acceptance predicates backed by fresh evidence in those explicit workflows.
-- Advisory judging that cannot replace required deterministic gates.
+- Advisory judging that cannot replace required deterministic gates. The v0.98.3
+  SDK rejects incomplete first-party judge responses and exposes deterministic ties;
+  it is not an automatic TUI judge.
 
 ### Routing and extensibility
 
@@ -191,15 +193,15 @@ Native `xai` keeps subscription OAuth and `XAI_API_KEY` billing separate. See
 npm install omk-agent-core
 npm install omk-ai
 npm install omk-protocol
-omk install npm:omk-book-to-skill@0.97.0
+omk install npm:omk-book-to-skill@0.98.3
 npm install omk-tui
 ```
 
 ## Repository understanding
 
 `v0.97.0` shipped the OpenWiki policy and workflow, but no versioned corpus or
-integrity checker. Current Worktree-only hardening remains blocked by the
-security gates below:
+integrity checker. The following integrity/output guards shipped in v0.98.0;
+the generated corpus remains optional and is not bundled:
 
 - **`openwiki/`** — absent. The previous untracked corpus was removed after the
   hardened gate proved it carried fabricated evidence: 8 frontmatter symbols
@@ -209,7 +211,7 @@ security gates below:
   restatement of this README's `Scope -> Route -> Verify -> Replay` loop as a
   strict engine state machine, which is not what the source implements.
   CI regenerates the corpus; nothing is lost.
-- **`scripts/check-openwiki.mjs`** — worktree checker. An `interrupted` corpus
+- **`scripts/check-openwiki.mjs`** — shipped integrity checker. An `interrupted` corpus
   now fails unless `openwiki/.manual-review.json` binds a review to the exact
   corpus digest, and every frontmatter symbol must bind to one of that page's
   own `source_paths` as a whole identifier.
@@ -224,9 +226,8 @@ security gates below:
   attach it through OMK's [MCP client](packages/coding-agent/docs/mcp.md) like
   any other server; there is no second, bespoke path for it.
 
-Source and tests remain authoritative. Until the blockers above close and the
-corpus ships, treat both generated indexes as untrusted working-tree or local
-advisory data.
+Source and tests remain authoritative. Shipped guards do not turn a generated
+index into authority: treat corpus pages as local advisory data and recheck source.
 
 ## OMK + AdaptOrch
 
@@ -361,7 +362,7 @@ is not published with the repository.
 - [Containerization](packages/coding-agent/docs/containerization.md)
 - [Public skill catalog](SKILLS.md)
 - [Changelog](packages/coding-agent/CHANGELOG.md)
-- [Release notes for v0.98.2](.github/RELEASE_NOTES_v0.98.2.md)
+- [Release notes for v0.98.3](.github/RELEASE_NOTES_v0.98.3.md)
 
 ## Development
 
@@ -409,9 +410,24 @@ structure for bounded recovery instead of silently starting over.
 > Historical correction: the immutable v0.97.0 notes below announced a
 > versioned OpenWiki corpus, but that release still ignored `/openwiki/` and did
 > not contain the corpus or checker. See the current repository-understanding
-> section above for the working-tree repair.
+> section above for the shipped guards and optional-corpus boundary.
 
 <!-- releases:start -->
+
+## Release v0.98.3
+
+### Added
+
+- Advisory-selection diagnostics now retain submitted/eligible/excluded counts, comparison availability, and top-score tie/margin data. Ties preserve caller rank while reporting `judge-tied` / `deterministic`; no correctness probability or default TUI judge is introduced.
+- Claim-closure-to-WPL/VERA projection is tested across the public protocol and integration packages. It classifies supplied evidence and never grants release authority.
+- A session workspace scope now reports what it could not bind. `resolveSessionWorkspaceScope()` drops dirty paths two ways — a 32-path cap and the normalized-path filter the receipt parser forces — and both were silent, so a receipt captured from a partial view of the working tree read exactly like one that saw all of it. The new `resolveSessionWorkspaceScopeReport(cwd, options?)` returns the same scope plus `totalDirtyPathCount`, `selectedPathCount`, `excludedPathCount`, `truncated`, a `completeness` of `complete` / `partial_truncated` / `partial_excluded` / `unavailable`, and an `excludedPathSetSha256` binding the dropped set. `SessionBashRuntime.workspaceScopeReport()` exposes it for the current session. `unavailable` is deliberately not `complete`: outside a worktree nothing was enumerated, so an empty artifact set is an absence of evidence rather than a clean tree. Dropping paths stays deliberate; hiding the drop was the defect. The scope cache is now keyed by `(cwd, maxPaths)` so a capped probe cannot serve a later full request its truncated answer.
+
+### Fixed
+
+- The first-party advisory model adapter now requires an explicit normal `stop`; complete score JSON from a truncated, aborted or missing completion state cannot override deterministic fallback. Cancellation before and after custom/model judge work prevents new calls and discards late advice, without additional completion calls or retries.
+- Release documentation now separates internal trace/effect primitives from public opt-in APIs and records the existing CI token-authentication path without claiming OIDC provenance. The published v0.98.2 history is retained as an ancestor rather than re-created.
+
+Release notes live in [RELEASE_NOTES_v0.98.3.md](.github/RELEASE_NOTES_v0.98.3.md).
 
 ## Release v0.98.2
 
@@ -434,43 +450,6 @@ Release notes live in [RELEASE_NOTES_v0.98.2.md](.github/RELEASE_NOTES_v0.98.2.m
 
 
 Release notes live in [RELEASE_NOTES_v0.98.1.md](.github/RELEASE_NOTES_v0.98.1.md).
-
-## Release v0.98.0
-
-### Added
-
-- Added `omk doctor resources --report [--json]`, a bounded local aggregate of resource-admission journals. It reports pressure/actions, would-throttle counts, reason coverage, probe partial/timeout counts, and a 30-record reason-qualified sample floor without exposing paths, run IDs, decision IDs, digests, a command field, or raw host capacity. Journal discovery and descriptor reads are bounded and reject symlink escapes. The sample flag never promotes `adaptive`; human review remains mandatory.
-- Added three repository gates to `npm run check`. `check:import-cycles` is a Tarjan-SCC ratchet whose unit is the module rather than the cycle, because a cycle's identity changes when a single edge merges it while "is this module trapped in a cycle" stays answerable across refactors; entering a cycle fails the build and leaving one tightens the baseline. `check:dep-tree` holds `npm ls` problems against a baseline while never baselining a dangling bin symlink. `check:feature-claims` gained two gates beyond file existence: twelve placeholder tokens are rejected as evidence, and at least one production module under `packages/*/src` must import the evidence module, so a claim can no longer be satisfied by an unwired file containing the word `export`. Importer resolution is path-precise, since this repository holds both `core/hooks/types.ts` and `core/extensions/types.ts` and basename matching would credit one module's wiring to the other.
-- Added a conservative type-aware compaction slice for the default compactor. Explicit uppercase user-authored rule/invariant markers are extracted deterministically, credential-redacted, and bound to user-entry/line digests; assistant/tool, attached file/stdin, and model-generated or forged marker sections are rejected. Up to 64 validated source records are persisted in additive compaction details only when their canonical block matches the prior summary, and a five-round property test preserves that block byte-identically. Custom hook summaries, branch summaries, natural-language classification, and cross-session memory remain out of scope.
-
-### Changed
-
-- Interactive TTY completion sounds are enabled by default at final `prompt_settled`. Successful prompts keep the 5-second duration floor, while failed and aborted/stopped prompts notify immediately. Intermediate `agent_end`, retry, continuation, and tool states remain silent; current subagent work stays covered by its enclosing tool call, while future direct child/shard paths must wire the settlement counters before activation; RPC, JSON, print mode, and CI never play sounds. Sound backends now use fixed absolute executables, a minimal environment without inherited `PATH` or credentials, and a neutral temp cwd; WSL uses BEL rather than PATH-resolved PowerShell. Set `notifications.completionSound.enabled: false` or `OMK_COMPLETION_SOUND=0` to opt out, and use `onSuccess`, `onFailure`, or the new `onAbort` switch per terminal outcome.
-- Split the failure-classification and message-snapshot cores out of `agent-session.ts` into `core/session-failure-cause.ts` and `core/agent-session-snapshot.ts` (92 pure lines each), dropping the session module from 4,287 to 4,113 pure lines. This is a move-only change with no behaviour difference: session state that the extracted code read off `this` is now passed in as arguments. Both cores carry ordering contracts that are easy to break silently and were previously unreachable from a direct test — provider classification must match quota/billing exhaustion before the generic 401/403 auth patterns, because `403 ... usage limit for this billing cycle` is transient per cycle and must fail over rather than terminate the turn as auth, and it must match upstream 5xx as network before the protocol fallback so guidance points at retry rather than transcript sanitize; the snapshot core rejects a `Date`, class instance, getter, or cycle at replacement time instead of letting it be flattened when SessionManager persists the message as JSON. Twenty-eight characterization tests now pin both orderings. The 512-character termination-message cap now references `MAX_SESSION_TERMINATION_MESSAGE_LENGTH` instead of repeating the literal.
-- The reasoning-router weight promotion gate now refuses evidence it cannot trust. Every gold row is replayed under both policies and only rows whose repeated observations agree can carry promotion credit, so a routing "win" that flips between two identical runs is withheld instead of banked. Because the classifier is deterministic the replay doubles as a determinism attestation: if nondeterminism ever reaches the routing path the rows land in the unstable bucket and the gate blocks rather than crediting whichever run scored better. Promotion evidence must also declare that the candidate was measured against the frozen reference policy, closing a hole where a candidate could qualify by beating a caller-chosen weak opponent. The new blockers are `insufficient_replays`, `unstable_evidence`, and `baseline_not_frozen`, and they are reported ahead of the statistical blockers because a p-value computed over unstable rows is not a weaker result but a result about nothing.
-
-### Fixed
-
-- Releases no longer regenerate the model catalogs from live provider APIs. `release.mjs` ran `generate-models` and `generate-image-models` as "release artifacts", but both fetch provider endpoints, so the shipped catalog was a function of which APIs answered the machine cutting the release and which credentials it happened to hold. A v0.98.0 attempt regenerated 1,279 models down to 1,217, losing 26 of 57 Cloudflare entries and 32 OpenRouter entries while other providers gained models — a mixed result that cannot be read as either upstream retirement or local unreachability, which is exactly the ambiguity that must not be resolved silently during a release. The typecheck caught it only because tests happened to reference two of the dropped ids. The catalogs are now committed artifacts refreshed deliberately through `npm run models:refresh` and reviewed as their own change; the release still regenerates the shrinkwrap, which is derived from the lockfile already in the tree.
-- The release stalled after the version bump because nothing retargeted the README release pointer. `check-release-consistency.mjs` reads the first `RELEASE_NOTES_v*.md` match in `README.md` as the advertised release surface, and that match is the documentation index entry, which sits above the generated block that `sync-readme-releases.mjs` rewrites — so the value deciding the gate was one no script maintained. The sync now retargets the index entry to the newest release, leaving links inside generated sections pointing at their own versions, and the script gained a main guard so importing it for tests no longer rewrites the repository.
-- The release stalled again at `check:dep-tree` because the version scripts run `npm install --package-lock-only`, which updates the lockfile while leaving stale physical copies under each package's `node_modules` that shadow the workspace links. The tree is now rebuilt right after the bump, on both the bump-type and explicit-version paths, so the checks run against the release as it actually is.
-- The OpenWiki integrity gate no longer trusts an unreviewed corpus. An `interrupted` generator pass previously warned and passed whenever `.last-update.json` recorded the current `HEAD`, so a partial corpus was trusted right until the next commit — and from that commit on the stale-head branch failed, meaning the repository could not accept any commit at all while a corpus sat in that state. An interrupted corpus now fails unless `openwiki/.manual-review.json` binds a review to the exact corpus digest. Anchoring the record to content rather than to a commit is what lets an approved corpus survive later commits, since code moving on is a staleness warning while any edit to the corpus invalidates the review outright. Frontmatter `symbols:` entries must now bind to one of that page's own `source_paths:` as a whole identifier; the previous check searched one concatenated haystack of the entire repository, which cannot fail for any plausible-looking identifier. Running the hardened gate against the existing corpus reported 8 symbols bound to no declared source path (`AgentLoop`, where the real export is the function `agentLoop`, plus `getModel`, `DeepWall`, `loadExtensions`, `createExtensionRuntime`, and `main`), so that corpus was removed rather than hand-patched, which the next generator run would overwrite. An absent corpus is now a reported warning rather than a failure: it lives in no commit, and one that does not exist cannot mislead a reader.
-- Slack `xoxe-` tokens (app-configuration and refresh tokens) escaped secret redaction, because the pattern matched only `xox[abprs]`.
-- Release workflows no longer build with write access. The binary job held `contents: write` without needing it; write permission is now isolated to a separate release job that consumes an artifact. The build also verifies that `SOURCE_REF` resolves to the commit `RELEASE_TAG` names, closing a path where an arbitrary ref could be built and published under a tag's name, and every action is pinned to a commit SHA.
-- Standing instructions no longer score lowest exactly when the agent is working. `scoreContextFileRelevance()` ranked context files by query/item token overlap, which read "no evidence" two different ways: 0.9 when there was no query at all, but 0.1 when a query existed and simply did not overlap. Measured against this repository's own `AGENTS.md`, a blended score of 0.900 with no query fell to 0.420 for "fix the WSL clipboard paste bug" and "why is the import cycle gate failing". The baseline is now a floor rather than a starting value, with coverage distributing only the headroom above it (`baseline + (1 - baseline) * coverage`), so zero coverage lands exactly on the baseline and both readings of "no evidence" reach the same conclusion. Monotonicity holds, so existing ordering contracts survive. Skills are deliberately left on lexical scoring, which is the correct signal for them because a skill really does have a topic scope. This subsystem is opt-in (`contextBudget.enabled` or `OMK_CONTEXT_GOVERNOR=1`) and off by default.
-- Detecting the built-in stream function no longer relies on reference identity. Callers decide whether provider credentials are mandatory by asking whether the stream function is still the built-in one, and `fn === streamSimple` answers that with object identity — which is not dependable, because this package can legitimately load twice in one process (a workspace symlink beside an installed copy, or two dependents resolving different versions). The comparison then reported "custom stream function" for what was really the built-in one and a credential check silently relaxed. The built-in is now branded through `Symbol.for`, whose per-realm registry gives every copy of the module the same symbol.
-- Tool-timeout settlement moved out of the agent loop into a pure decision module, and teardown now has a grace window that distinguishes a late-settling tool which may have touched the workspace from one that never started executing. Only the former raises session risk. The bash tool now discloses the timeout in its result so truncated output is not mistaken for a short successful run.
-- Extension startup diagnostics now keep every explicitly requested source fatal, including inline factories, direct files, manifest/directory entry points, opaque package sources, and symlinked entries. Only uncorrelated discovered-package failures may downgrade to warnings, so a missing security extension cannot silently disappear while stale optional discovery no longer kills every headless lane.
-- Image paste is now reachable inside Windows Terminal. `Ctrl+V` was the only default binding outside native Windows, but Windows Terminal binds that key to its own paste action and never forwards it, so every session running inside it — WSL included — had no working image-paste key at all: the terminal swallowed the keypress, tried to paste clipboard text, and after a `Win+Shift+S` capture there was none. `Alt+V` is now bound alongside `Ctrl+V` on every platform, so whichever key the host terminal actually delivers works.
-- Pasting a Windows screenshot into the prompt on WSL no longer fails silently. WSLg publishes the captured image as `image/bmp`, so the Wayland read succeeded and disqualified the PowerShell reader behind it — and when BMP conversion was unavailable (a packaged binary whose image-codec wasm sidecar is missing), the whole read returned nothing and the keypress did literally nothing. Each clipboard source now converts its own read, so an unconvertible format falls through to the next source instead of ending the search; the PowerShell reader returns PNG directly and needs no converter.
-- Scrolling back through a finished answer no longer runs into stale copies of the prompt box and footer. On WSL/Windows Terminal every screen-clearing redraw pushed the live frame into scrollback, so long reports were chopped apart by repeated prompt boxes. Redraws now repaint the screen in place.
-- Long answers no longer lose their beginning when earlier transcript rows change. Repairing a row above the viewport (a late tool result replacing its loader, an earlier prompt box re-rendering) reprinted the whole transcript from that row down, evicting the start of the current report from the terminal's scrollback. The repair repaint is now bounded to a few screens.
-
-### Removed
-
-- Removed ten unreachable internal modules totalling 1,855 pure lines of code: a superseded context-budget governor and its `lean-ctx` predecessor, an unused sandbox policy evaluator (the live path is the workspace sandbox policy), leftover read-anchor and recovery-checkpoint helpers from the removed OMP seam, and a dead guardrails/lane-grant cluster. None were exported from the package's public entry points, so no import can break; the shipped tarball simply carries less code. Each removal was verified by symbol-level reference search, public-barrel absence, and a full type-check and test run rather than by a dead-code reporter alone. `image-resize-worker`, which is loaded by path and bundled separately, was correctly retained.
-
-Release notes live in [RELEASE_NOTES_v0.98.0.md](.github/RELEASE_NOTES_v0.98.0.md).
 
 <!-- releases:end -->
 

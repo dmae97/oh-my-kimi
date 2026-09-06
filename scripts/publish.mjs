@@ -113,7 +113,7 @@ if (isMain) {
 	}
 
 	console.log(
-		`Publishing OMK packages at ${versions[0]}${dryRun ? " (dry run)" : ""} (provenance: ${provenance ? "on" : "off — local publish; CI attaches it"})`,
+		`Publishing OMK packages at ${versions[0]}${dryRun ? " (dry run)" : ""} (provenance: ${provenance ? "on" : "off — no provenance attestation"})`,
 	);
 	console.log();
 

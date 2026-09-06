@@ -1,10 +1,17 @@
 # Changelog
 
-## [Unreleased]
+## [0.98.3] - 2026-09-06
 
 ### Added
 
+- Advisory-selection diagnostics now retain submitted/eligible/excluded counts, comparison availability, and top-score tie/margin data. Ties preserve caller rank while reporting `judge-tied` / `deterministic`; no correctness probability or default TUI judge is introduced.
+- Claim-closure-to-WPL/VERA projection is tested across the public protocol and integration packages. It classifies supplied evidence and never grants release authority.
 - A session workspace scope now reports what it could not bind. `resolveSessionWorkspaceScope()` drops dirty paths two ways — a 32-path cap and the normalized-path filter the receipt parser forces — and both were silent, so a receipt captured from a partial view of the working tree read exactly like one that saw all of it. The new `resolveSessionWorkspaceScopeReport(cwd, options?)` returns the same scope plus `totalDirtyPathCount`, `selectedPathCount`, `excludedPathCount`, `truncated`, a `completeness` of `complete` / `partial_truncated` / `partial_excluded` / `unavailable`, and an `excludedPathSetSha256` binding the dropped set. `SessionBashRuntime.workspaceScopeReport()` exposes it for the current session. `unavailable` is deliberately not `complete`: outside a worktree nothing was enumerated, so an empty artifact set is an absence of evidence rather than a clean tree. Dropping paths stays deliberate; hiding the drop was the defect. The scope cache is now keyed by `(cwd, maxPaths)` so a capped probe cannot serve a later full request its truncated answer.
+
+### Fixed
+
+- The first-party advisory model adapter now requires an explicit normal `stop`; complete score JSON from a truncated, aborted or missing completion state cannot override deterministic fallback. Cancellation before and after custom/model judge work prevents new calls and discards late advice, without additional completion calls or retries.
+- Release documentation now separates internal trace/effect primitives from public opt-in APIs and records the existing CI token-authentication path without claiming OIDC provenance. The published v0.98.2 history is retained as an ancestor rather than re-created.
 
 ## [0.98.2] - 2026-09-02
 

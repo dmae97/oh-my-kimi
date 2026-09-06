@@ -1,8 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [0.98.3] - 2026-09-06
 
 ### Added
+
+- Added internal, browser-safe canonical digests, operation trace recording/comparison, and Effect Journal V2 phase/replay/recovery primitives with deterministic tests. They are not exported from the package root or wired into default runtime authority; matching digests alone do not prove trusted execution.
 
 - Split the harness abort/wait surface so a callback can act on its own operation without deadlocking it. `requestAbort()` delivers the abort signal and reports `{ operationId, signalDelivered, alreadySettling }` without awaiting settlement, so it is safe from inside a listener of the operation being settled; `abort()` remains the waiting form and still refuses a self-wait. `runWhenIdle(command)` queues work behind the current operation and returns a durable `CommandRef` immediately — commands run in registration order once the lifecycle is idle, each ref reports `queued`/`running`/`completed`/`failed`/`cancelled`, `done` never rejects, and `cancel()` stops a command that has not started. The self-wait rejection now names `runWhenIdle()` as the sanctioned path. A synchronous prologue guard still cannot see a wait placed behind an arbitrary `await` inside a callback, so deferring — not waiting — remains the only callback-safe option.
 

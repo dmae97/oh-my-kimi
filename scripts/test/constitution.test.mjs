@@ -119,12 +119,14 @@ describe("constitution: public lockstep packages", () => {
 });
 
 describe("constitution: CI-only npm publishing", () => {
-	it("declares CI OIDC publishing in specs/constitution.md", () => {
-		assert.match(
-			constitution,
-			/`build-binaries\.yml`, `publish-npm` job, environment `npm-publish`, OIDC trusted publishing/,
-			"constitution must pin the publish path",
-		);
+	it("declares the actual CI publication path without inventing OIDC provenance", () => {
+		assert.match(constitution, /`build-binaries\.yml`, `publish-npm` job, environment `npm-publish`/);
+		assert.match(constitution, /currently uses.*`NPM_TOKEN`/);
+		assert.match(constitution, /OIDC trusted publishing.*not currently enabled/);
+		const workflow = readFileOrThrow(join(root, ".github", "workflows", "build-binaries.yml"));
+		const publishJob = workflow.slice(workflow.indexOf("  publish-npm:"));
+		assert.match(publishJob, /NODE_AUTH_TOKEN: \$\{\{ secrets\.NPM_TOKEN \}\}/);
+		assert.doesNotMatch(publishJob, /^\s+id-token: write\s*$/m);
 	});
 });
 

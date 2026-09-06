@@ -69,7 +69,9 @@ Required, unwaived violations reduce to `fail`. Required, unwaived missing obser
 
 Candidate material, the task goal, and rubric descriptions are forced-redacted and bounded before the judge receives them. The model adapter uses a tool-free prompt, treats candidate text as untrusted data, disables retries and cache retention, and accepts only a complete matrix of known candidate and criterion IDs. A provider error, timeout, malformed JSON, unknown ID, or incomplete score matrix selects the existing deterministic first choice and reports a sanitized fallback reason.
 
-The sidecar never creates an `Observation`, changes `EvaluationResult.semanticVerdict`, supplies independent-verifier evidence, waives a claim, or changes `RuntimeDecision`. Run fresh tests, integrity checks, security gates, and evidence freshness checks after applying the selected candidate.
+Since v0.98.3, the first-party model adapter requires a normal `stop`, cancellation discards late advice, and top-score ties report their deterministic rank source. Diagnostic counts preserve intake and missingness; they are not independent verification. See [Advisory selection integrity](advisory-selection.md).
+
+The sidecar never creates an `Observation`, changes `EvaluationResult.semanticVerdict`, supplies independent-verifier evidence, waives a claim, or changes `RuntimeDecision`. Parsing the evaluation checks structure, not the truth of its evidence. Run fresh tests, integrity checks, security gates, and evidence freshness checks after applying the selected candidate.
 
 ## Waivers
 

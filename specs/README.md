@@ -30,18 +30,19 @@ runtime behavior.
 | 011 | [GPT-5.6 MoA and Ultra fix](011-gpt56-moa-ultra-fix/spec.md) | Released |
 | 012 | [Harness Graph engineering](012-harness-graph-engineering/spec.md) | Active repository-maintenance tooling; not default CLI orchestration |
 | 013 | [Command safety, attachments, and resilience](013-command-safety-attachment-resilience/spec.md) | Released in `v0.97.0` |
-| 014 | [Repository-understanding wiki](014-repository-understanding-wiki/spec.md) | Released (policy/workflow only); Worktree-only hardening; release blocked by security gates |
+| 014 | [Repository-understanding wiki](014-repository-understanding-wiki/spec.md) | Policy/workflow in v0.97.0; integrity/output guards in v0.98.0; no bundled corpus |
 | 015 | [Runtime algorithms and direction](015-runtime-algorithm-direction/spec.md) | Active documentation and governance sync |
-| 016 | [Terminal settlement notification](016-terminal-settlement-notification/spec.md) | Worktree-only implementation; unreleased |
-| 017 | [Resource promotion evidence](017-resource-promotion-evidence/spec.md) | Worktree-only report; adaptive promotion remains blocked |
-| 018 | [Type-aware compaction](018-type-aware-compaction/spec.md) | Worktree-only default-compactor slice; unreleased |
+| 016 | [Terminal settlement notification](016-terminal-settlement-notification/spec.md) | Released in v0.98.0 |
+| 017 | [Resource promotion evidence](017-resource-promotion-evidence/spec.md) | Report released in v0.98.0; adaptive-default promotion remains blocked |
+| 018 | [Type-aware compaction](018-type-aware-compaction/spec.md) | Explicit-rule default-compactor slice released in v0.98.0 |
 | 019 | [Cross-session verified memory](019-cross-session-verified-memory/spec.md) | Proposed; implementation blocked on fixtures and preregistration |
 | 020 | [Live lane and shard authority](020-live-lane-shard-authority/spec.md) | Proposed; implementation blocked on canonical production caller |
+| 021 | [Advisory selection integrity](021-advisory-selection-integrity/spec.md) | v0.98.3 opt-in SDK; no automatic TUI judge |
 
 ## Current direction
 
 Spec 015 is the entry point for current algorithm maturity and direction. Specs
-016–018 are bounded Worktree-only implementation slices; specs 019–020 are
+016–018 describe bounded slices released in v0.98.0; specs 019–020 are
 deliberately blocked at their design gates. Separate delivery, activation, and evidence labels
 prevent an internal mechanism or passing local test from being mistaken for a
 shipped live path.

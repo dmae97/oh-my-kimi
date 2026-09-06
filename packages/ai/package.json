@@ -1,6 +1,6 @@
 {
 	"name": "omk-ai",
-	"version": "0.98.2",
+	"version": "0.98.3",
 	"description": "Unified LLM API with automatic model discovery and provider configuration",
 	"type": "module",
 	"main": "./dist/index.js",
@@ -56,7 +56,8 @@
 	},
 	"files": [
 		"dist",
-		"README.md"
+		"README.md",
+		"CHANGELOG.md"
 	],
 	"scripts": {
 		"clean": "shx rm -rf dist",

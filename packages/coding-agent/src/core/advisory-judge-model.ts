@@ -45,6 +45,7 @@ export function createModelAdvisoryJudge(options: ModelAdvisoryJudgeOptions): Ad
 	const timeoutMs = boundedInteger(options.timeoutMs ?? DEFAULT_TIMEOUT_MS, 1_000, 120_000);
 	const completion: AdvisoryJudgeCompletion = options.completion ?? completeSimple;
 	return async (request, signal) => {
+		if (signal?.aborted) throw new AdvisoryJudgeModelError("completion-failed");
 		const prompt = buildPrompt(request);
 		let auth: Awaited<ReturnType<ModelRegistry["getApiKeyAndHeaders"]>>;
 		try {
@@ -53,6 +54,7 @@ export function createModelAdvisoryJudge(options: ModelAdvisoryJudgeOptions): Ad
 			throw new AdvisoryJudgeModelError("auth-unavailable");
 		}
 		if (!auth.ok) throw new AdvisoryJudgeModelError("auth-unavailable");
+		if (signal?.aborted) throw new AdvisoryJudgeModelError("completion-failed");
 		try {
 			const response = await completion(
 				options.model,
@@ -71,6 +73,7 @@ export function createModelAdvisoryJudge(options: ModelAdvisoryJudgeOptions): Ad
 					maxRetries: 0,
 				},
 			);
+			if (signal?.aborted) throw new AdvisoryJudgeModelError("completion-failed");
 			return responseText(response);
 		} catch (error) {
 			if (error instanceof AdvisoryJudgeModelError) throw error;
@@ -132,7 +135,8 @@ function normalizeRequest(value: unknown): AdvisoryJudgeRequest {
 }
 
 function responseText(value: unknown): string {
-	if (!isRecord(value) || value.stopReason === "error" || !Array.isArray(value.content)) {
+	// Parseable JSON is not proof that the provider completed its evaluation.
+	if (!isRecord(value) || value.stopReason !== "stop" || !Array.isArray(value.content)) {
 		throw new AdvisoryJudgeModelError("completion-failed");
 	}
 	const chunks: string[] = [];

@@ -1,7 +1,24 @@
 # Runtime Algorithms and Direction
 
-This page separates OMK's released behavior from internal mechanisms, current
-working-tree candidates, and proposals. Source and tests remain authoritative.
+## v0.98.3 release delta (2026-09-06)
+
+The explicit advisory SDK requires normal first-party model completion, honors cancellation,
+reports caller-rank top ties, and preserves intake/missingness diagnostics. See
+[Advisory selection integrity](advisory-selection.md). No default AgentSession/TUI judge,
+additional completion calls/retries, or calibrated risk policy is activated.
+
+`omk-protocol` also exports Claim Closure Graph v1 evaluation; `omk-adaptorch-wpl` exports
+proof-result/VERA projections. They consume caller-supplied evidence, not authenticated
+runner truth. The operation-trace and Effect Journal V2 modules in `omk-agent-core` remain
+internal primitives: this release does not wire them into a new live authority loop.
+
+The dated audit below preserves the v0.97.0 baseline and its then-working-tree classifications.
+The context floors, explicit-rule compactor, resource report, settlement notifications and
+OpenWiki guards described as working-tree changes below subsequently shipped in v0.98.0.
+That does not ship a generated OpenWiki corpus or promote the blocked lane/memory policies.
+Source and tests remain authoritative.
+
+## Historical v0.97.0 baseline audit
 
 - **Snapshot date:** 2026-08-27
 - **Released baseline:** OMK `v0.97.0` (`b38a2c8c84`)

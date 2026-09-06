@@ -48,7 +48,7 @@ All workspace packages share one lockstep version; `patch` covers fixes and addi
 
 A release is complete only when three surfaces agree: the `vX.Y.Z` tag reachable from `main`, the GitHub Release, and npm `latest` for all seven public lockstep packages: `open-multi-agent-kit`, `omk-ai`, `omk-agent-core`, `omk-tui`, `omk-protocol`, `omk-adaptorch-wpl`, and `omk-book-to-skill`. The `omk-adaptorch-wpl` npm package is an open-source OMK runtime component; it is distinct from the proprietary AdaptOrch.com service. Never bump versions past a release tag whose commits are not merged into `main`.
 
-npm publishing runs in CI (`build-binaries.yml`, `publish-npm` job, environment `npm-publish`, OIDC trusted publishing). The publish helper is idempotent: after a failed publish, fix the cause and rerun the tag workflow; never rerun the release script for the same version. Released changelog sections are immutable; new work goes under `[Unreleased]`, and a `/cl` audit precedes every release. Release-facing docs (README badges/links, `.github/RELEASE_NOTES_vX.Y.Z.md`) update in the same cycle as the version bump, guarded by `scripts/check-release-consistency.mjs`.
+npm publishing runs in CI (`build-binaries.yml`, `publish-npm` job, environment `npm-publish`). That job currently uses the environment's granular `NPM_TOKEN` through `NODE_AUTH_TOKEN`; OIDC trusted publishing is not currently enabled, and these releases must not claim OIDC/Sigstore provenance. Switching to trusted publishing requires registration and verification for all seven packages before changing the job's authentication. Local publishing is not the release path. The publish helper is idempotent: after a failed publish, fix the cause and rerun the tag workflow; never rerun the release script for the same version. Released changelog sections are immutable; new work goes under `[Unreleased]`, and a `/cl` audit precedes every release. Release-facing docs (README badges/links, `.github/RELEASE_NOTES_vX.Y.Z.md`) update in the same cycle as the version bump, guarded by `scripts/check-release-consistency.mjs`.
 
 ## Safety and Evidence
 
@@ -60,4 +60,4 @@ Do not read or copy secrets into spec-kit artifacts. Keep evidence to command na
 
 Local cache synchronization MUST flow one way from the tracked project sources. Reject symlinked or non-user-owned targets, write through a temporary file and atomic rename, and verify the content digest. Never reverse-sync generated state. Constitution amendments require corresponding template and constitution-test updates when they change specification obligations.
 
-**Version**: 1.2.0 | **Ratified**: 2026-06-25 | **Last Amended**: 2026-08-25
+**Version**: 1.2.1 | **Ratified**: 2026-06-25 | **Last Amended**: 2026-09-06
