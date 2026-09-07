@@ -1,4 +1,5 @@
 import type { ImageContent, Model, TextContent } from "omk-ai";
+import type { ModelContract } from "../run-model-contract.ts";
 // Imported from the defining module, not the package barrel: routing through
 // `../index.ts` would pull `agent-harness.ts` back in and close an import cycle.
 import type { AgentEvent, AgentMessage, AgentTool, QueueMode, ThinkingLevel } from "../types.ts";
@@ -843,6 +844,13 @@ export interface AgentHarnessOptions<
 	compaction?: CompactionSettings;
 	model: Model<any>;
 	thinkingLevel?: ThinkingLevel;
+	/**
+	 * Single-model execution contract (TB21 §7, B2). When set, compaction
+	 * summary requests are checked against it before send; a violation fails
+	 * the compaction (automatic compactions degrade to skipping) instead of
+	 * sending an out-of-contract provider request.
+	 */
+	modelContract?: ModelContract;
 	activeToolNames?: string[];
 	steeringMode?: QueueMode;
 	followUpMode?: QueueMode;
