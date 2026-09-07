@@ -118,3 +118,47 @@ describe("blockImages setting", () => {
 		});
 	});
 });
+
+describe("non-vision model image projection (TB21 §7.3)", () => {
+	const TEXT_ONLY_MODEL = { id: "deepseek-chat", provider: "deepseek", input: ["text"] } as never;
+	const VISION_MODEL = { id: "gpt-5.6-luna", provider: "openai-codex", input: ["text", "image"] } as never;
+
+	let testDir: string;
+	beforeEach(() => {
+		testDir = join(tmpdir(), `vision-projection-test-${Date.now()}`);
+		mkdirSync(testDir, { recursive: true });
+		writeFileSync(join(testDir, "test.png"), Buffer.from(TINY_PNG_BASE64, "base64"));
+	});
+	afterEach(() => {
+		rmSync(testDir, { recursive: true, force: true });
+	});
+
+	it("returns text projection only for a text-only model (no image block)", async () => {
+		const tool = createReadTool(testDir, { model: TEXT_ONLY_MODEL });
+		const result = await tool.execute("vision-1", { path: join(testDir, "test.png") });
+
+		const hasImage = result.content.some((c) => c.type === "image");
+		expect(hasImage).toBe(false);
+		expect(result.content.length).toBe(1);
+		expect(result.content[0].type).toBe("text");
+		const text = (result.content[0] as { text: string }).text;
+		expect(text).toMatch(/Read image file/);
+		expect(text).toMatch(/does not support images/);
+		// No fabricated description: only verifiable metadata.
+		expect(text).not.toMatch(/shows|depicts|contains a|picture of/i);
+	});
+
+	it("keeps the image block for a vision-capable model", async () => {
+		const tool = createReadTool(testDir, { model: VISION_MODEL });
+		const result = await tool.execute("vision-2", { path: join(testDir, "test.png") });
+
+		expect(result.content.some((c) => c.type === "image")).toBe(true);
+	});
+
+	it("keeps the image block when no model is in context (filtering happens downstream)", async () => {
+		const tool = createReadTool(testDir);
+		const result = await tool.execute("vision-3", { path: join(testDir, "test.png") });
+
+		expect(result.content.some((c) => c.type === "image")).toBe(true);
+	});
+});

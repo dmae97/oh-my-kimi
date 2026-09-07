@@ -2,6 +2,8 @@
 export * from "./agent.ts";
 // Loop functions
 export * from "./agent-loop.ts";
+export * from "./dag-barrier-waste.ts";
+export * from "./deadline-policy.ts";
 export * from "./harness/agent-harness.ts";
 export {
 	type BranchPreparation,
@@ -50,6 +52,8 @@ export {
 } from "./parallel-tool-batch.ts";
 // Proxy utilities
 export * from "./proxy.ts";
+export * from "./run-model-contract.ts";
+export * from "./stagnation-tracker.ts";
 // Deterministic resource-claim DAG scheduler (dag-v2)
 export {
 	applyConcurrencyCap,

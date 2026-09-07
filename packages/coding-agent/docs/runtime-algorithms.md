@@ -20,6 +20,33 @@ working-tree candidates, and proposals. Source and tests remain authoritative.
 A mechanism's existence does not make it authoritative. OMK promotes a mechanism
 only after its live call path, default, evidence, and rollback are all explicit.
 
+## Model contract and request ledger (TB21)
+
+**Status: Working tree.** Single-model execution boundary per TB21 §7:
+
+- `AgentLoopConfig.modelContract` declares the allowed model/provider/auth set,
+  thinking flag, output cap, and optional exact vision fallback. The final send
+  boundary enforces `Allowed(r)`; violations fail closed without sending.
+- Without a declared fallback, an image-bearing transcript on a text-only model
+  ends the turn with a contract denial — no silent cross-provider route.
+- Cross-provider routes resolve credentials strictly by routed provider; a
+  missing routed key refuses instead of reusing the session key. Routed models
+  drop session headers/compat.
+- Compaction summary requests pass the same contract (automatic compaction
+  degrades to skipping on violation).
+- Every provider call emits a `provider_request` audit event
+  (`main`/`vision-route`) with routing metadata only — no prompt content, no keys.
+  Every refusal emits `provider_denied` (`vision-fallback-denied`/
+  `contract-violation`/`missing-credentials`), so each attempted route leaves
+  either a request or a denial in the ledger.
+- `read` projects image files to text metadata when the serving model cannot
+  read images, so the transcript never silently arms a vision route.
+
+Related pure modules: `run-model-contract.ts`, `deadline-policy.ts`
+(monotonic run budget with verify/finalize/cleanup reserves),
+`stagnation-tracker.ts` (same-fingerprint repeat divert policy),
+`dag-barrier-waste.ts` (level-barrier wait measurement; executor unchanged).
+
 ## Runtime control path
 
 ```text

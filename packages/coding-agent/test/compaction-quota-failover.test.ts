@@ -201,3 +201,124 @@ describe("compact quota-exhaustion failover", () => {
 		expect(calls).toEqual(["anthropic/claude-sonnet"]);
 	});
 });
+
+describe("compact model contract gate (TB21 §7 B2)", () => {
+	it("rejects the primary model before any send when it violates the contract", async () => {
+		const primary = makeModel("evil-relay", "mimic");
+		const calls: string[] = [];
+		const streamFn = makeStreamFn({}, calls);
+
+		await expect(
+			compact(
+				makePreparation(),
+				primary,
+				"key",
+				undefined,
+				undefined,
+				undefined,
+				"off",
+				streamFn,
+				undefined,
+				undefined,
+				[],
+				{
+					contract: {
+						allowedModels: [{ provider: "openai", id: "mock" }],
+						allowedProviders: ["openai"],
+						allowedAuthOrigins: ["openai"],
+						thinking: false,
+						maxOutputTokens: 8192,
+					},
+				},
+			),
+		).rejects.toThrow(/not in the allowed model set/);
+		expect(calls).toEqual([]);
+	});
+
+	it("skips a contract-violating failover candidate and uses the next one", async () => {
+		const primary = makeModel("openai", "mock");
+		const bad = makeModel("evil-relay", "mimic");
+		const good = makeModel("openai", "mock-2");
+		const calls: string[] = [];
+		const streamFn = makeStreamFn(
+			{
+				"openai/mock": assistantError(QUOTA_ERROR),
+				"openai/mock-2": assistantText("summary ok"),
+			},
+			calls,
+		);
+
+		const result = await compact(
+			makePreparation(),
+			primary,
+			"key",
+			undefined,
+			undefined,
+			undefined,
+			"off",
+			streamFn,
+			undefined,
+			undefined,
+			[bad, good],
+			{
+				contract: {
+					allowedModels: [
+						{ provider: "openai", id: "mock" },
+						{ provider: "openai", id: "mock-2" },
+					],
+					allowedProviders: ["openai"],
+					allowedAuthOrigins: ["openai"],
+					thinking: false,
+					maxOutputTokens: 8192,
+				},
+			},
+		);
+
+		expect(calls).toEqual(["openai/mock", "openai/mock-2"]);
+		expect(JSON.stringify(result)).toContain("summary ok");
+	});
+
+	it("re-resolves credentials per provider on cross-provider failover", async () => {
+		const primary = makeModel("openai", "mock");
+		const candidate = makeModel("other", "model-2");
+		const calls: string[] = [];
+		const seenKeys: (string | undefined)[] = [];
+		const streamFn = ((model: Model<any>, _ctx: unknown, opts?: { apiKey?: string }) => {
+			calls.push(`${model.provider}/${model.id}`);
+			seenKeys.push(opts?.apiKey);
+			const outcome = model.provider === "openai" ? assistantError(QUOTA_ERROR) : assistantText("summary ok");
+			return { result: async () => outcome };
+		}) as unknown as StreamFn;
+
+		await compact(
+			makePreparation(),
+			primary,
+			"primary-key",
+			{ Authorization: "Bearer primary" },
+			undefined,
+			undefined,
+			"off",
+			streamFn,
+			undefined,
+			undefined,
+			[candidate],
+			{
+				contract: {
+					allowedModels: [
+						{ provider: "openai", id: "mock" },
+						{ provider: "other", id: "model-2" },
+					],
+					allowedProviders: ["openai", "other"],
+					allowedAuthOrigins: ["openai", "other"],
+					thinking: false,
+					maxOutputTokens: 8192,
+				},
+				resolveKey: (provider: string) =>
+					provider === "other" ? Promise.resolve({ apiKey: "other-key" }) : Promise.resolve(undefined),
+			},
+		);
+
+		expect(calls).toEqual(["openai/mock", "other/model-2"]);
+		expect(seenKeys[1]).toBe("other-key");
+	});
+});

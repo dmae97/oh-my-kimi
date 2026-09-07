@@ -11,6 +11,7 @@ import type {
 	ToolResultMessage,
 } from "omk-ai";
 import type { Static, TSchema } from "typebox";
+import type { ModelContract } from "./run-model-contract.ts";
 
 /**
  * Stream function used by the agent loop.
@@ -149,6 +150,14 @@ export interface PrepareNextTurnContext extends ShouldStopAfterTurnContext {}
 
 export interface AgentLoopConfig extends SimpleStreamOptions {
 	model: Model<any>;
+
+	/**
+	 * Single-model execution contract (TB21 §7). When set, the final send
+	 * boundary enforces Allowed(r): only the session model — or the
+	 * contract-declared vision fallback for image-bearing transcripts — may
+	 * serve. Absent preserves the legacy silent vision route.
+	 */
+	modelContract?: ModelContract;
 
 	/**
 	 * Maximum provider turns allowed in one loop invocation.
@@ -699,10 +708,35 @@ export interface AgentContext {
  * part of run settlement. `tool_execution_update` delivery is observation-only:
  * subscriber promises are detached and cannot delay timeout/abort terminality.
  */
+export type ProviderRequestKind = "main" | "vision-route";
+
+export type ProviderDeniedReason = "vision-fallback-denied" | "contract-violation" | "missing-credentials";
+
 export type AgentEvent =
 	// Agent lifecycle
 	| { type: "agent_start" }
 	| { type: "agent_end"; messages: AgentMessage[] }
+	// Audit-only: a provider request is about to be sent. Carries routing
+	// metadata only (no prompt content, no keys). Lets operators attribute
+	// every model call to main/summary/retry/route (TB21 §15 PR-2).
+	| {
+			type: "provider_request";
+			kind: ProviderRequestKind;
+			provider: string;
+			model: string;
+			routed: boolean;
+			routeReason: string;
+	  }
+	// Audit-only: a provider request was refused before send (TB21 §7.4).
+	// Pairs with provider_request: every attempted route leaves either a
+	// request or a denial in the ledger. No prompt content, no keys.
+	| {
+			type: "provider_denied";
+			deniedReason: ProviderDeniedReason;
+			attemptedProvider: string;
+			attemptedModel: string;
+			routeReason: string;
+	  }
 	// Turn lifecycle - a turn is one assistant response + any tool calls/results
 	| { type: "turn_start" }
 	| { type: "turn_end"; message: AgentMessage; toolResults: ToolResultMessage[] }

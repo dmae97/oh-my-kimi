@@ -598,3 +598,58 @@ describe("AgentHarness", () => {
 		expect(resolved.promptTemplates).not.toBe(resources.promptTemplates);
 	});
 });
+
+describe("AgentHarness model contract on compaction (TB21 §7 B2)", () => {
+	it("skips automatic compaction when the model violates the contract", async () => {
+		const session = new Session(new InMemorySessionStorage());
+		const harness = new AgentHarness({
+			env: new NodeExecutionEnv({ cwd: process.cwd() }),
+			session,
+			model: getModel("anthropic", "claude-sonnet-4-5"),
+			systemPrompt: "You are helpful.",
+			modelContract: {
+				// Contract allows only deepseek; the session model is anthropic.
+				allowedModels: [{ provider: "deepseek", id: "deepseek-chat" }],
+				allowedProviders: ["deepseek"],
+				allowedAuthOrigins: ["deepseek"],
+				thinking: false,
+				maxOutputTokens: 8192,
+			},
+		});
+
+		// Automatic compaction must degrade to skipping, never send.
+		const result = await (harness as unknown as { runCompaction: (o: unknown) => Promise<unknown> }).runCompaction({
+			automatic: true,
+		});
+		expect(result).toBeUndefined();
+	});
+
+	it("sends compaction when the model satisfies the contract", async () => {
+		const registration = registerFauxProvider();
+		registrations.push(registration);
+		registration.setResponses([() => fauxAssistantMessage("summary")]);
+		const session = new Session(new InMemorySessionStorage());
+		const harness = new AgentHarness({
+			env: new NodeExecutionEnv({ cwd: process.cwd() }),
+			session,
+			model: getModel("anthropic", "claude-sonnet-4-5"),
+			systemPrompt: "You are helpful.",
+			getApiKeyAndHeaders: () => Promise.resolve({ apiKey: "test-key" }),
+			modelContract: {
+				allowedModels: [{ provider: "anthropic", id: "claude-sonnet-4-5" }],
+				allowedProviders: ["anthropic"],
+				allowedAuthOrigins: ["anthropic"],
+				thinking: false,
+				maxOutputTokens: 8192,
+			},
+		});
+
+		// No branch entries: nothing to compact, but the contract gate passes
+		// (throws "Nothing to compact", not a contract violation).
+		await expect(
+			(harness as unknown as { runCompaction: (o: unknown) => Promise<unknown> }).runCompaction({
+				automatic: false,
+			}),
+		).rejects.toThrow(/Nothing to compact/);
+	});
+});

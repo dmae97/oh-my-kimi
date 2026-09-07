@@ -37,6 +37,8 @@ runtime behavior.
 | 018 | [Type-aware compaction](018-type-aware-compaction/spec.md) | Worktree-only default-compactor slice; unreleased |
 | 019 | [Cross-session verified memory](019-cross-session-verified-memory/spec.md) | Proposed; implementation blocked on fixtures and preregistration |
 | 020 | [Live lane and shard authority](020-live-lane-shard-authority/spec.md) | Proposed; implementation blocked on canonical production caller |
+| 021 | [Advisory selection integrity](021-advisory-selection-integrity/spec.md) | Worktree-only SDK hardening; no automatic judge activation |
+| 022 | [TB21 harness hardening](022-tb21-harness-hardening/spec.md) | Worktree-only on `feat/tb21-model-contract`; single-model boundary + ledger + deadline/stagnation/barrier modules; no default-path activation |
 
 ## Current direction
 

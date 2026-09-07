@@ -63,6 +63,12 @@ export interface ReadToolOptions {
 	/** Custom operations for file reading. Default: local filesystem */
 	operations?: ReadOperations;
 	canReadPath?: (absolutePath: string) => boolean;
+	/**
+	 * Active model for capability checks. When it cannot read images, image
+	 * files project to text metadata instead of image blocks (TB21 §7.3).
+	 * Absent keeps the legacy behavior; downstream filtering decides.
+	 */
+	model?: Model<Api>;
 }
 
 type ReadRenderArgs = { path?: string; file_path?: string; offset?: number; limit?: number };
@@ -249,7 +255,17 @@ export function createReadToolDefinition(
 							const mimeType = ops.detectImageMimeType ? await ops.detectImageMimeType(absolutePath) : undefined;
 							let content: (TextContent | ImageContent)[];
 							let details: ReadToolDetails | undefined;
-							const nonVisionImageNote = getNonVisionImageNote(ctx?.model);
+							// Live serving model wins: a stale static options.model
+							// (vision) must never shadow the true ctx.model
+							// (text-only) and re-arm image blocks (S2).
+							const activeModel = ctx?.model ?? options?.model;
+							const nonVisionImageNote = getNonVisionImageNote(activeModel);
+							// TB21 §7.3: when the active model cannot read images, project
+							// to verifiable text metadata only. Returning an image block
+							// here would silently arm the vision route in agent-loop
+							// while the note claims omission. No model context means
+							// downstream filtering decides; keep the block.
+							const projectToTextOnly = nonVisionImageNote !== undefined;
 							if (mimeType) {
 								// Read image as binary.
 								const buffer = await ops.readFile(absolutePath);
@@ -265,18 +281,22 @@ export function createReadToolDefinition(
 										let textNote = `Read image file [${resized.mimeType}]`;
 										if (dimensionNote) textNote += `\n${dimensionNote}`;
 										if (nonVisionImageNote) textNote += `\n${nonVisionImageNote}`;
-										content = [
-											{ type: "text", text: textNote },
-											{ type: "image", data: resized.data, mimeType: resized.mimeType },
-										];
+										content = projectToTextOnly
+											? [{ type: "text", text: textNote }]
+											: [
+													{ type: "text", text: textNote },
+													{ type: "image", data: resized.data, mimeType: resized.mimeType },
+												];
 									}
 								} else {
 									let textNote = `Read image file [${mimeType}]`;
 									if (nonVisionImageNote) textNote += `\n${nonVisionImageNote}`;
-									content = [
-										{ type: "text", text: textNote },
-										{ type: "image", data: buffer.toString("base64"), mimeType },
-									];
+									content = projectToTextOnly
+										? [{ type: "text", text: textNote }]
+										: [
+												{ type: "text", text: textNote },
+												{ type: "image", data: buffer.toString("base64"), mimeType },
+											];
 								}
 							} else {
 								// Read text content.

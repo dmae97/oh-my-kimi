@@ -8,6 +8,8 @@ import {
 	type UserMessage,
 } from "omk-ai";
 import { runAgentLoop, runAgentLoopContinue } from "../agent-loop.ts";
+import type { ModelContract } from "../run-model-contract.ts";
+import { assertModelContract } from "../run-model-contract.ts";
 import type {
 	AgentContext,
 	AgentEvent,
@@ -110,6 +112,7 @@ export class AgentHarness<
 	private readonly sessionWrites: SessionWriteCoordinator<AgentMessage>;
 	private model: Model<any>;
 	private thinkingLevel: ThinkingLevel;
+	private readonly modelContract: ModelContract | undefined;
 	private systemPrompt: AgentHarnessOptions<TSkill, TPromptTemplate, TTool>["systemPrompt"];
 	private streamOptions: AgentHarnessStreamOptions;
 	private compactionSettings: CompactionSettings;
@@ -148,6 +151,7 @@ export class AgentHarness<
 		}
 		this.model = options.model;
 		this.thinkingLevel = options.thinkingLevel ?? "off";
+		this.modelContract = options.modelContract;
 		this.activeToolNames = options.activeToolNames
 			? [...options.activeToolNames]
 			: (options.tools ?? []).map((tool) => tool.name);
@@ -430,6 +434,8 @@ export class AgentHarness<
 		return {
 			model: turnState.model,
 			reasoning: turnState.thinkingLevel === "off" ? undefined : turnState.thinkingLevel,
+			// Single-model boundary (TB21 §7): unset preserves legacy routing.
+			...(this.modelContract !== undefined ? { modelContract: this.modelContract } : {}),
 			convertToLlm,
 			transformContext: async (messages) => {
 				const result = await this.emitHook({ type: "context", messages: [...messages] });
@@ -829,6 +835,22 @@ export class AgentHarness<
 
 	private async runCompaction(options: HarnessCompactionRunOptions): Promise<CompactResult | undefined> {
 		const model = this.model;
+		// B2: compaction summary requests pass the same send boundary.
+		// A violation fails the compaction (automatic degrades to skipping)
+		// instead of sending an out-of-contract provider request.
+		if (this.modelContract !== undefined) {
+			try {
+				assertModelContract(this.modelContract, {
+					model: { provider: model.provider, id: model.id },
+					provider: model.provider,
+					authOrigin: model.provider,
+					thinking: this.thinkingLevel !== "off",
+				});
+			} catch (error) {
+				if (options.automatic) return undefined;
+				throw error;
+			}
+		}
 		const auth = await this.getApiKeyAndHeaders?.(model);
 		if (!auth) {
 			if (options.automatic) return undefined;

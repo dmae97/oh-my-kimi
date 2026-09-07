@@ -1136,6 +1136,7 @@ describe("agentLoop with AgentMessage", () => {
 			"turn_start",
 			"message_start",
 			"message_end",
+			"provider_request",
 			"message_start",
 			"message_end",
 			"tool_execution_start",
@@ -4196,5 +4197,352 @@ describe("tool-result/v2 disposition envelope (ALG001-C / ALG004-D)", () => {
 		});
 		const starts = events.flatMap((event) => (event.type === "tool_execution_start" ? [event.toolCallId] : []));
 		expect(starts).not.toContain("t2");
+	});
+});
+
+describe("agentLoop model contract (TB21 §7)", () => {
+	function contractConfig(overrides: Record<string, unknown> = {}): AgentLoopConfig {
+		return {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			modelContract: {
+				allowedModels: [{ provider: "openai", id: "mock" }],
+				allowedProviders: ["openai"],
+				allowedAuthOrigins: ["openai"],
+				thinking: false,
+				maxOutputTokens: 2048,
+			},
+			...overrides,
+		} as AgentLoopConfig;
+	}
+
+	function okStreamFn() {
+		return () => {
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				stream.push({
+					type: "done",
+					reason: "stop",
+					message: createAssistantMessage([{ type: "text", text: "ok" }]),
+				});
+			});
+			return stream;
+		};
+	}
+
+	it("sends the request when it satisfies the contract", async () => {
+		const context: AgentContext = { systemPrompt: "Hi.", messages: [], tools: [] };
+		const stream = agentLoop([createUserMessage("Hello")], context, contractConfig(), undefined, okStreamFn());
+		const messages = await stream.result();
+
+		expect(messages[messages.length - 1]?.role).toBe("assistant");
+	});
+
+	it("refuses without sending when the transcript has images and no fallback is declared", async () => {
+		const imagePrompt = {
+			role: "user",
+			content: [
+				{ type: "text", text: "describe this" },
+				{ type: "image", data: "aGk=", mimeType: "image/png" },
+			],
+			timestamp: Date.now(),
+		} as unknown as AgentMessage;
+		const context: AgentContext = { systemPrompt: "Hi.", messages: [], tools: [] };
+		let sent = false;
+		const streamFn = () => {
+			sent = true;
+			return okStreamFn()();
+		};
+		const stream = agentLoop([imagePrompt], context, contractConfig(), undefined, streamFn);
+		const events: AgentEvent[] = [];
+		for await (const event of stream) {
+			events.push(event);
+		}
+		await stream.result();
+
+		expect(sent).toBe(false);
+		const failures = events.filter((e) => e.type === "message_end" && e.message.role === "assistant");
+		expect(JSON.stringify(failures)).toMatch(/no vision fallback/);
+	});
+
+	it("routes to the declared fallback and resolves the key by the routed provider", async () => {
+		const imagePrompt = {
+			role: "user",
+			content: [
+				{ type: "text", text: "describe this" },
+				{ type: "image", data: "aGk=", mimeType: "image/png" },
+			],
+			timestamp: Date.now(),
+		} as unknown as AgentMessage;
+		const context: AgentContext = { systemPrompt: "Hi.", messages: [], tools: [] };
+		const seenModels: unknown[] = [];
+		const seenProviders: unknown[] = [];
+		const streamFn = ((model: unknown) => {
+			seenModels.push(model);
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				stream.push({
+					type: "done",
+					reason: "stop",
+					message: createAssistantMessage([{ type: "text", text: "seen" }]),
+				});
+			});
+			return stream;
+		}) as never;
+		const keyFn = ((provider: string) => {
+			seenProviders.push(provider);
+			return provider === "openai-codex" ? "codex-key" : undefined;
+		}) as never;
+		const stream = agentLoop(
+			[imagePrompt],
+			context,
+			contractConfig({
+				modelContract: {
+					allowedModels: [
+						{ provider: "openai", id: "mock" },
+						{ provider: "openai-codex", id: "gpt-5.6-luna" },
+					],
+					allowedProviders: ["openai", "openai-codex"],
+					allowedAuthOrigins: ["openai", "openai-codex"],
+					thinking: false,
+					maxOutputTokens: 2048,
+					visionFallback: { provider: "openai-codex", id: "gpt-5.6-luna" },
+				},
+				getApiKey: keyFn,
+			}),
+			undefined,
+			streamFn,
+		);
+
+		await stream.result();
+		expect((seenModels[0] as { provider: string }).provider).toBe("openai-codex");
+		// Session provider key must never satisfy the routed request.
+		expect(seenProviders).toEqual(["openai-codex"]);
+	});
+
+	it("refuses the route when the routed provider has no credentials", async () => {
+		const imagePrompt = {
+			role: "user",
+			content: [
+				{ type: "text", text: "describe this" },
+				{ type: "image", data: "aGk=", mimeType: "image/png" },
+			],
+			timestamp: Date.now(),
+		} as unknown as AgentMessage;
+		const context: AgentContext = { systemPrompt: "Hi.", messages: [], tools: [] };
+		let sent = false;
+		const stream = agentLoop(
+			[imagePrompt],
+			context,
+			contractConfig({
+				modelContract: {
+					allowedModels: [
+						{ provider: "openai", id: "mock" },
+						{ provider: "openai-codex", id: "gpt-5.6-luna" },
+					],
+					allowedProviders: ["openai", "openai-codex"],
+					allowedAuthOrigins: ["openai", "openai-codex"],
+					thinking: false,
+					maxOutputTokens: 2048,
+					visionFallback: { provider: "openai-codex", id: "gpt-5.6-luna" },
+				},
+				getApiKey: (() => undefined) as never,
+			}),
+			undefined,
+			(() => {
+				sent = true;
+				return okStreamFn()();
+			}) as never,
+		);
+
+		const events: AgentEvent[] = [];
+		for await (const event of stream) {
+			events.push(event);
+		}
+		await stream.result();
+
+		expect(sent).toBe(false);
+		const failures = events.filter((e) => e.type === "message_end" && e.message.role === "assistant");
+		expect(JSON.stringify(failures)).toMatch(/no credentials/);
+	});
+});
+
+describe("agentLoop provider_request ledger (TB21 §15 PR-2)", () => {
+	function ledgerConfig(): AgentLoopConfig {
+		return {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			modelContract: {
+				allowedModels: [{ provider: "openai", id: "mock" }],
+				allowedProviders: ["openai"],
+				allowedAuthOrigins: ["openai"],
+				thinking: false,
+				maxOutputTokens: 2048,
+			},
+		} as AgentLoopConfig;
+	}
+
+	function okStreamFn() {
+		return () => {
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				stream.push({
+					type: "done",
+					reason: "stop",
+					message: createAssistantMessage([{ type: "text", text: "ok" }]),
+				});
+			});
+			return stream;
+		};
+	}
+
+	it("emits provider_request with kind=main before sending", async () => {
+		const context: AgentContext = { systemPrompt: "Hi.", messages: [], tools: [] };
+		const stream = agentLoop([createUserMessage("Hello")], context, ledgerConfig(), undefined, okStreamFn());
+		const events: AgentEvent[] = [];
+		for await (const event of stream) {
+			events.push(event);
+		}
+		await stream.result();
+
+		const requests = events.filter((e) => e.type === "provider_request");
+		expect(requests).toHaveLength(1);
+		const req = requests[0] as Extract<AgentEvent, { type: "provider_request" }>;
+		expect(req.kind).toBe("main");
+		expect(req.provider).toBe("openai");
+		expect(req.model).toBe("mock");
+		expect(req.routed).toBe(false);
+		// No prompt content or keys in the ledger event.
+		expect(JSON.stringify(req)).not.toMatch(/Hello|sk-/);
+	});
+});
+
+describe("agentLoop provider_denied ledger (TB21 §7.4)", () => {
+	function contractConfig(overrides: Record<string, unknown> = {}): AgentLoopConfig {
+		return {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			modelContract: {
+				allowedModels: [{ provider: "openai", id: "mock" }],
+				allowedProviders: ["openai"],
+				allowedAuthOrigins: ["openai"],
+				thinking: false,
+				maxOutputTokens: 2048,
+			},
+			...overrides,
+		} as AgentLoopConfig;
+	}
+
+	function okStreamFn(sent: { value: boolean }) {
+		return () => {
+			sent.value = true;
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				stream.push({
+					type: "done",
+					reason: "stop",
+					message: createAssistantMessage([{ type: "text", text: "ok" }]),
+				});
+			});
+			return stream;
+		};
+	}
+
+	function imagePrompt(): AgentMessage {
+		return {
+			role: "user",
+			content: [
+				{ type: "text", text: "describe this" },
+				{ type: "image", data: "aGk=", mimeType: "image/png" },
+			],
+			timestamp: Date.now(),
+		} as unknown as AgentMessage;
+	}
+
+	it("emits provider_denied with no send on vision-fallback-denied", async () => {
+		const context: AgentContext = { systemPrompt: "Hi.", messages: [], tools: [] };
+		const sent = { value: false };
+		const stream = agentLoop([imagePrompt()], context, contractConfig(), undefined, okStreamFn(sent));
+		const events: AgentEvent[] = [];
+		for await (const event of stream) {
+			events.push(event);
+		}
+		await stream.result();
+
+		expect(sent.value).toBe(false);
+		const denied = events.filter((e) => e.type === "provider_denied");
+		expect(denied).toHaveLength(1);
+		const d = denied[0] as Extract<AgentEvent, { type: "provider_denied" }>;
+		expect(d.deniedReason).toBe("vision-fallback-denied");
+		expect(d.attemptedProvider).toBe("openai");
+		expect(JSON.stringify(d)).not.toMatch(/aGk=|describe this/);
+	});
+
+	it("emits provider_denied with no send on missing routed credentials", async () => {
+		const context: AgentContext = { systemPrompt: "Hi.", messages: [], tools: [] };
+		const sent = { value: false };
+		const stream = agentLoop(
+			[imagePrompt()],
+			context,
+			contractConfig({
+				modelContract: {
+					allowedModels: [
+						{ provider: "openai", id: "mock" },
+						{ provider: "openai-codex", id: "gpt-5.6-luna" },
+					],
+					allowedProviders: ["openai", "openai-codex"],
+					allowedAuthOrigins: ["openai", "openai-codex"],
+					thinking: false,
+					maxOutputTokens: 2048,
+					visionFallback: { provider: "openai-codex", id: "gpt-5.6-luna" },
+				},
+				getApiKey: (() => undefined) as never,
+			}),
+			undefined,
+			okStreamFn(sent),
+		);
+		const events: AgentEvent[] = [];
+		for await (const event of stream) {
+			events.push(event);
+		}
+		await stream.result();
+
+		expect(sent.value).toBe(false);
+		const denied = events.filter((e) => e.type === "provider_denied");
+		expect(denied).toHaveLength(1);
+		expect((denied[0] as Extract<AgentEvent, { type: "provider_denied" }>).deniedReason).toBe("missing-credentials");
+	});
+});
+
+describe("agentLoop vision fallback model hygiene (TB21 §7 B1)", () => {
+	it("drops session headers and compat on the routed model", async () => {
+		const { getVisionRouteModel } = await import("../src/agent-loop.ts");
+		const sessionModel = {
+			...createModel(),
+			headers: { Authorization: "Bearer session-secret" },
+			// compat is provider-typed; force an incompatible shape to prove
+			// the routed model drops it regardless of what it carries.
+			compat: { customFlag: true },
+		} as unknown as ReturnType<typeof createModel> & {
+			headers: Record<string, string>;
+			compat: unknown;
+		};
+
+		const routed = getVisionRouteModel(sessionModel);
+
+		expect(routed.provider).toBe("openai-codex");
+		expect(routed.id).toBe("gpt-5.6-luna");
+		expect(routed.api).toBe("openai-codex-responses");
+		expect(routed.baseUrl).toBe("https://chatgpt.com/backend-api");
+		expect("headers" in routed).toBe(false);
+		expect("compat" in routed).toBe(false);
+	});
+
+	it("refuses a fallback that is not the known vision route model", async () => {
+		const { buildVisionFallbackModel } = await import("../src/agent-loop.ts");
+
+		expect(() => buildVisionFallbackModel(createModel(), { provider: "evil-relay", id: "mimic" })).toThrow(
+			/not the known vision route model/,
+		);
 	});
 });

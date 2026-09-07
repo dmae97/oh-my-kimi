@@ -5,8 +5,8 @@
  * and after compaction the session is reloaded.
  */
 
-import type { AgentMessage, StreamFn, ThinkingLevel } from "omk-agent-core";
-import { uuidv7 } from "omk-agent-core";
+import type { AgentMessage, ModelContract, StreamFn, ThinkingLevel } from "omk-agent-core";
+import { assertModelContract, uuidv7 } from "omk-agent-core";
 import type { AssistantMessage, Context, Model, SimpleStreamOptions, Usage } from "omk-ai";
 import { completeSimple, type RetryCallbacks, type RetryPolicy, retryAssistantCall } from "omk-ai";
 import { computeReservedTokenBudget } from "../context-budget-reserved-tokens.ts";
@@ -796,6 +796,16 @@ Be concise. Focus on what's needed to understand the kept suffix.`;
  * @param preparation - Pre-calculated preparation from prepareCompaction()
  * @param customInstructions - Optional custom focus for the summary
  */
+export interface CompactionModelContract {
+	/** Send boundary contract; every model (primary + failover) is checked. */
+	readonly contract: ModelContract;
+	/** Resolve credentials per provider. Absent means the passed apiKey/headers serve only the primary provider. */
+	readonly resolveKey?: (
+		provider: string,
+	) => Promise<{ apiKey: string; headers?: Record<string, string> } | undefined>;
+	readonly thinkingLevel?: ThinkingLevel;
+}
+
 export async function compact(
 	preparation: CompactionPreparation,
 	model: Model<any>,
@@ -808,8 +818,21 @@ export async function compact(
 	retry?: RetryPolicy,
 	callbacks?: RetryCallbacks,
 	failoverModels?: readonly Model<any>[],
+	modelContract?: CompactionModelContract,
 ): Promise<CompactionResult> {
+	const checkContract = (candidate: Model<any>): void => {
+		if (modelContract === undefined) return;
+		assertModelContract(modelContract.contract, {
+			model: { provider: candidate.provider, id: candidate.id },
+			provider: candidate.provider,
+			authOrigin: candidate.provider,
+			thinking:
+				(modelContract.thinkingLevel ?? thinkingLevel) !== undefined &&
+				(modelContract.thinkingLevel ?? thinkingLevel) !== "off",
+		});
+	};
 	try {
+		checkContract(model);
 		return await compactWithModel(
 			preparation,
 			model,
@@ -828,12 +851,29 @@ export async function compact(
 		for (const candidate of failoverModels) {
 			if (candidate.provider === model.provider && candidate.id === model.id) continue;
 			if (signal?.aborted) throw error;
+			// Contract gate per candidate; cross-provider failover re-resolves
+			// credentials and never reuses the primary key/headers.
+			let candidateKey = apiKey;
+			let candidateHeaders = headers;
+			if (modelContract !== undefined) {
+				try {
+					checkContract(candidate);
+				} catch {
+					continue;
+				}
+				if (candidate.provider !== model.provider) {
+					const resolved = await modelContract.resolveKey?.(candidate.provider);
+					if (resolved === undefined) continue;
+					candidateKey = resolved.apiKey;
+					candidateHeaders = resolved.headers;
+				}
+			}
 			try {
 				return await compactWithModel(
 					preparation,
 					candidate,
-					apiKey,
-					headers,
+					candidateKey,
+					candidateHeaders,
 					customInstructions,
 					signal,
 					thinkingLevel,

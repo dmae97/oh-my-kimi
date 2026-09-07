@@ -17,6 +17,13 @@ import {
 import { bindToolIdentity } from "./builtin-tool-resource-claims.ts";
 import { partitionToolBatchWaves } from "./parallel-tool-batch.ts";
 import {
+	assertModelContract,
+	type ContractModelRef,
+	ModelContractViolationError,
+	type RouteReason,
+	resolveRouteDecision,
+} from "./run-model-contract.ts";
+import {
 	applyConcurrencyCap,
 	type DagSchedulePlan,
 	type ScheduleDagLevelsOptions,
@@ -601,6 +608,40 @@ async function runLoop(
  * Stream an assistant response from the LLM.
  * This is where AgentMessage[] gets transformed to Message[] for the LLM.
  */
+/**
+ * Build the contract-declared vision fallback model (B1 fix).
+ *
+ * Never spreads the session model: provider headers, compat flags, and API
+ * surface would ride the cross-provider request and the api/baseUrl dispatch
+ * would mismatch. Instead the fallback must exactly name the built-in vision
+ * route table entry, which carries its own api/baseUrl/window — anything
+ * else is denied at the resolve step, not patched onto a chimera.
+ */
+export function buildVisionFallbackModel(sessionModel: Model<any>, fallback: ContractModelRef): Model<any> {
+	if (fallback.provider !== VISION_ROUTE_MODEL.provider || fallback.id !== VISION_ROUTE_MODEL.id) {
+		throw new ModelContractViolationError(
+			`vision fallback ${fallback.provider}/${fallback.id} is not the known vision route model; refusing to synthesize a cross-provider model`,
+		);
+	}
+	return getVisionRouteModel(sessionModel);
+}
+
+function isThinkingEnabled(config: AgentLoopConfig): boolean {
+	return config.reasoning !== undefined;
+}
+
+/**
+ * Explicit per-request output cap, if the caller set one. Absent means the
+ * model default governs — the contract's thinking/output checks then apply
+ * only to explicitly requested values, so a contract cap below the model
+ * default denies nothing by itself (S3: no fail-always misconfiguration).
+ * Callers that need a hard ceiling set maxTokens explicitly per request.
+ */
+function resolveMaxOutputTokens(config: AgentLoopConfig): number | undefined {
+	const explicit = (config as { maxTokens?: unknown }).maxTokens;
+	return typeof explicit === "number" && Number.isSafeInteger(explicit) && explicit > 0 ? explicit : undefined;
+}
+
 /** True when a content part is an image block (internal {type:"image"} shape). */
 function isImageContentPart(part: unknown): boolean {
 	return typeof part === "object" && part !== null && (part as { type?: unknown }).type === "image";
@@ -633,12 +674,22 @@ export function isVisionRouteModel(model: { provider?: string; id?: string } | u
 
 /**
  * Build the vision-route model for a session model that cannot see images.
- * Preserves the session model's identity/headers so auth resolution keeps
- * working, but overrides provider/API/window with the Codex vision model.
+ * Overrides provider/API/window with the Codex vision model. Session
+ * headers and compat flags are explicitly dropped: they describe the session
+ * provider's auth surface and must never ride a cross-provider request (B1).
+ * Key resolution at the send boundary is strictly by routed provider.
  */
 export function getVisionRouteModel(model: Model<any>): Model<any> {
+	const {
+		headers: _droppedHeaders,
+		compat: _droppedCompat,
+		...rest
+	} = model as Model<any> & {
+		headers?: unknown;
+		compat?: unknown;
+	};
 	return {
-		...model,
+		...rest,
 		provider: VISION_ROUTE_MODEL.provider,
 		id: VISION_ROUTE_MODEL.id,
 		name: VISION_ROUTE_MODEL.name,
@@ -692,21 +743,126 @@ async function streamAssistantResponse(
 
 	const streamFunction = streamFn || streamSimple;
 
-	// Auto-route image-bearing turns to a vision-capable model (openai-codex/gpt-5.6-luna).
-	// DeepSeek and other text-only providers reject image_url parts with a 400
-	// ("unknown variant `image_url`, expected `text`"), so when the transcript
-	// carries image blocks and the configured model has no vision input, swap the
-	// whole request to the codex OAuth model for this turn only.
+	// Model contract (TB21 §7): every request must satisfy Allowed(r) at this
+	// final send boundary. The session model serves unless the transcript
+	// carries images it cannot read — then only the contract-declared vision
+	// fallback may serve. No silent second-model route: without a declared
+	// fallback the turn ends with a contract denial, not a cross-provider call.
 	const llmHasImages = llmMessages.some(
 		(m) => Array.isArray(m.content) && m.content.some((p: unknown) => isImageContentPart(p)),
 	);
+	const contract = config.modelContract;
 	let routeModel = config.model;
-	if (llmHasImages && !(config.model.input ?? []).includes("image")) {
+	let routeReason: RouteReason | "legacy-vision-route" | "native-or-single" = llmHasImages
+		? "native-or-single"
+		: "no-images";
+	let resolvedApiKey: string | undefined;
+	if (contract !== undefined) {
+		const decision = resolveRouteDecision({
+			contract,
+			sessionModel: {
+				provider: config.model.provider,
+				id: config.model.id,
+				input: config.model.input,
+			},
+			transcriptHasImages: llmHasImages,
+		});
+		if (decision.reason === "vision-fallback-denied") {
+			await emit({
+				type: "provider_denied",
+				deniedReason: "vision-fallback-denied",
+				attemptedProvider: config.model.provider,
+				attemptedModel: config.model.id,
+				routeReason: decision.reason,
+			});
+			throw new ModelContractViolationError(
+				"transcript carries images the session model cannot read and the contract declares no vision fallback",
+			);
+		}
+		routeReason = decision.reason;
+		if (decision.routed) {
+			// The contract names the exact fallback. buildVisionFallbackModel
+			// resolves it against the known route table (never a spread of the
+			// session model) and drops session headers/compat.
+			routeModel = buildVisionFallbackModel(config.model, decision.routeModel);
+		}
+		// Credential provenance: resolve the key ONCE here and reuse below,
+		// so expiring-token getters are invoked exactly once per request.
+		// The authOrigin the contract constrains is where the key actually
+		// comes from: dynamic getter asked for the routed provider => that
+		// provider; static config key => bound to the session provider.
+		// Cross-provider routes never fall back to the session key.
+		const routedNow = routeModel.provider !== config.model.provider;
+		let keyOrigin: string | undefined;
+		if (config.getApiKey) {
+			const fromGetter = await config.getApiKey(routeModel.provider);
+			if (fromGetter !== undefined) {
+				resolvedApiKey = fromGetter;
+				keyOrigin = routeModel.provider;
+			}
+		}
+		if (resolvedApiKey === undefined && !routedNow) {
+			resolvedApiKey = config.apiKey;
+			if (resolvedApiKey !== undefined) keyOrigin = config.model.provider;
+		}
+		try {
+			assertModelContract(contract, {
+				model: { provider: routeModel.provider, id: routeModel.id },
+				provider: routeModel.provider,
+				...(keyOrigin !== undefined ? { authOrigin: keyOrigin } : {}),
+				thinking: isThinkingEnabled(config),
+				maxOutputTokens: resolveMaxOutputTokens(config),
+			});
+		} catch (error) {
+			await emit({
+				type: "provider_denied",
+				deniedReason: "contract-violation",
+				attemptedProvider: routeModel.provider,
+				attemptedModel: routeModel.id,
+				routeReason,
+			});
+			throw error;
+		}
+	} else if (llmHasImages && !(config.model.input ?? []).includes("image")) {
+		// Legacy path: no contract configured. Preserved for existing callers;
+		// benchmark and single-model runs should set `modelContract` instead.
 		routeModel = getVisionRouteModel(config.model);
+		routeReason = "legacy-vision-route";
 	}
 
-	// Resolve API key (important for expiring tokens)
-	const resolvedApiKey = (config.getApiKey ? await config.getApiKey(routeModel.provider) : undefined) || config.apiKey;
+	// With a contract the key was already resolved exactly once in the branch
+	// above; without one the legacy getter-first behavior applies.
+	const routedCrossProvider = routeModel.provider !== config.model.provider;
+	if (contract === undefined) {
+		if (config.getApiKey) {
+			resolvedApiKey = (await config.getApiKey(routeModel.provider)) ?? config.apiKey;
+		} else {
+			resolvedApiKey = config.apiKey;
+		}
+	}
+	if (routedCrossProvider && resolvedApiKey === undefined) {
+		await emit({
+			type: "provider_denied",
+			deniedReason: "missing-credentials",
+			attemptedProvider: routeModel.provider,
+			attemptedModel: routeModel.id,
+			routeReason,
+		});
+		throw new ModelContractViolationError(
+			`vision route to ${routeModel.provider} has no credentials for that provider; refusing to reuse the session provider key`,
+		);
+	}
+
+	// Request ledger (TB21 §15 PR-2): classify every provider call before send.
+	// No prompt content, no keys — routing metadata only.
+	await emit({
+		type: "provider_request",
+		kind: routeReason === "vision-fallback" || routeReason === "legacy-vision-route" ? "vision-route" : "main",
+		provider: routeModel.provider,
+		model: routeModel.id,
+		routed: routedCrossProvider,
+		routeReason,
+	});
 
 	const response = await streamFunction(routeModel, llmContext, {
 		...config,
